@@ -99,7 +99,7 @@ jobs:
         run: sha256sum *.zip > checksums.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "tcpdump Plugin ${{ steps.version.outputs.tag }}"
