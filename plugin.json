@@ -1,0 +1,12 @@
+{
+    "id": "io.github.logsquirl.tcpdump",
+    "name": "tcpdump / pcap Viewer",
+    "version": "0.1.0",
+    "type": "ui",
+    "library": "logsquirl_tcpdump",
+    "api_version": 1,
+    "description": "Parse and display tcpdump/pcap capture files in a human-readable format",
+    "author": "LogSquirl Contributors",
+    "license": "GPL-3.0-or-later",
+    "icon": "icon.png"
+}
