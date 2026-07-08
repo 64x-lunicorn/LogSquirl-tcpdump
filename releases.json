@@ -1,4 +1,27 @@
 {
   "plugin_id": "io.github.logsquirl.tcpdump",
-  "releases": []
+  "releases": [
+    {
+      "version": "0.1.0",
+      "api_version": 1,
+      "release_notes": "Initial release: pcap parsing, protocol dissection (TCP/UDP/ICMP/ARP/TLS/HTTP/DNS/NMEA), stream tracking, payload preview, enhanced sidebar summary",
+      "assets": [
+        {
+          "platform": "macos",
+          "download_url": "https://github.com/64x-lunicorn/LogSquirl-tcpdump/releases/download/v0.1.0/logsquirl-tcpdump-0.1.0-macos-arm64.zip",
+          "sha256": ""
+        },
+        {
+          "platform": "linux",
+          "download_url": "https://github.com/64x-lunicorn/LogSquirl-tcpdump/releases/download/v0.1.0/logsquirl-tcpdump-0.1.0-linux-x64.zip",
+          "sha256": ""
+        },
+        {
+          "platform": "windows",
+          "download_url": "https://github.com/64x-lunicorn/LogSquirl-tcpdump/releases/download/v0.1.0/logsquirl-tcpdump-0.1.0-windows-x64.zip",
+          "sha256": ""
+        }
+      ]
+    }
+  ]
 }
