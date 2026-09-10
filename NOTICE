@@ -1,0 +1,21 @@
+LogSquirl Plugin — Third-Party and Component Notices
+====================================================
+
+This plugin as a whole is licensed under the GNU General Public License,
+version 3 or (at your option) any later version.  The complete license
+text is in the LICENSE file.
+
+    SPDX-License-Identifier: GPL-3.0-or-later
+
+Exception: the vendored Plugin SDK header
+-----------------------------------------
+
+The file `include/logsquirl_plugin_api.h` is NOT covered by the GPL.  It
+is vendored from LogSquirl and released under the MIT license, so that
+plugins of any license — proprietary or open source — can be built
+against the LogSquirl Plugin SDK without taking on GPL obligations.
+
+    SPDX-License-Identifier: MIT
+    Copyright (C) 2026 LogSquirl Contributors
+
+The full MIT permission notice is reproduced in the header file itself.

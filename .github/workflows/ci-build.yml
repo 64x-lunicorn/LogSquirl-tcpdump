@@ -112,10 +112,20 @@ jobs:
           install_name_tool -add_rpath @loader_path/../../../Frameworks "$DYLIB" 2>/dev/null || true
           install_name_tool -add_rpath @loader_path "$DYLIB" 2>/dev/null || true
 
+      # Stage the plugin flat: the release job zips this directory with
+      # `zip *`, which does not recurse, so a nested build/ subdirectory
+      # would be archived as an empty folder and the library would be lost.
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp build/${{ matrix.lib-name }} staging/
+          cp plugin.json staging/
+          cp icon.png staging/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            build/${{ matrix.lib-name }}
-            plugin.json
+          path: staging/
+          if-no-files-found: error
