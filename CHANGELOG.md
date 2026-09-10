@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-09-10
+
+### Fixed
+- **Release archives now contain the plugin library.** The v0.1.0 archives held
+  an empty `build/` directory and `plugin.json` only — the `.so`, `.dylib` and
+  `.dll` were missing on every platform, so the published plugin could not be
+  loaded at all. The artifact was uploaded as a nested path while the release
+  job archives with `zip *`, which does not recurse. Files are now staged flat,
+  and a missing library fails the build instead of shipping silently.
+
+### Added
+- Plugin icon, which `plugin.json` had always declared but the repository never
+  contained.
+
 ## [0.1.0] — 2026-07-08
 
 ### Added

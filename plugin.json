@@ -1,7 +1,7 @@
 {
     "id": "io.github.logsquirl.tcpdump",
     "name": "tcpdump / pcap Viewer",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "type": "ui",
     "library": "logsquirl_tcpdump",
     "api_version": 1,
