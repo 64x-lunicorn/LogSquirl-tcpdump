@@ -131,6 +131,8 @@ graph TD
 
 ## License
 
-GPL-3.0-or-later — see [LICENSE](LICENSE).
+GPL-3.0-or-later — see [LICENSE](LICENSE) for the full license text.
 
-The vendored `include/logsquirl_plugin_api.h` is MIT-licensed.
+The vendored `include/logsquirl_plugin_api.h` header is MIT-licensed, so
+plugins of any license can build against the LogSquirl Plugin SDK without
+taking on GPL obligations. See [NOTICE](NOTICE) for details.
