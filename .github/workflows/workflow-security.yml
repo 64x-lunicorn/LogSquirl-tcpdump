@@ -1,0 +1,32 @@
+name: "Workflow Security"
+
+# Identical in every LogSquirl plugin and managed by LogSquirl-Plugin-CI
+# (scripts/sync-plugin.sh): change the shared workflow there, not here.
+#
+# The weekly run picks up newly published advisories for the pinned actions.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/**'
+  schedule:
+    - cron: '17 4 * * 2'
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  security:
+    name: Security
+    uses: 64x-lunicorn/LogSquirl-Plugin-CI/.github/workflows/plugin-security.yml@5457e4a824bad3649cd2fb502249e8b2fd708f64 # v1.0.0
+    permissions:
+      contents: read
+      security-events: write # zizmor findings to code scanning
