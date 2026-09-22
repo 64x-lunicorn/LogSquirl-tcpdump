@@ -82,9 +82,9 @@ void SidebarWidget::onOpenClicked()
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
 
-    const auto filePath = QFileDialog::getOpenFileName(
-        this, "Open pcap Capture File", lastDir_,
-        "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+    const auto filePath
+        = QFileDialog::getOpenFileName( this, "Open pcap Capture File", lastDir_,
+                                        "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
 
     if ( filePath.isEmpty() ) {
         return;
@@ -96,8 +96,7 @@ void SidebarWidget::onOpenClicked()
 
 void SidebarWidget::openPcapFile( const QString& filePath )
 {
-    hostLog( LOGSQUIRL_LOG_INFO,
-             qPrintable( "Opening pcap file: " + filePath ) );
+    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Opening pcap file: " + filePath ) );
 
     // Parse the pcap file
     auto result = parsePcapFile( filePath.toStdString() );
@@ -106,9 +105,8 @@ void SidebarWidget::openPcapFile( const QString& filePath )
         summaryLabel_->setText( "Error: " + msg );
         hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( "pcap parse error: " + msg ) );
         if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification(
-                g_state.handle,
-                qPrintable( "Failed to open pcap: " + msg ) );
+            g_state.api->show_notification( g_state.handle,
+                                            qPrintable( "Failed to open pcap: " + msg ) );
         }
         return;
     }
@@ -119,8 +117,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     // Write to a temporary file that persists after the plugin is done
     // (LogSquirl will display it; user can save it if they want)
     const auto baseName = QFileInfo( filePath ).completeBaseName();
-    const auto tempDir
-        = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
+    const auto tempDir = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
     const auto outPath = tempDir + "/logsquirl_tcpdump_" + baseName + ".log";
 
     QFile outFile( outPath );
@@ -174,8 +171,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     }
 
     // Sort protocols by count (descending)
-    std::vector<std::pair<std::string, int>> sortedProtos( protoCounts.begin(),
-                                                           protoCounts.end() );
+    std::vector<std::pair<std::string, int>> sortedProtos( protoCounts.begin(), protoCounts.end() );
     std::sort( sortedProtos.begin(), sortedProtos.end(),
                []( const auto& a, const auto& b ) { return a.second > b.second; } );
 
@@ -270,8 +266,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     html += "<br>";
 
     // Top IPs
-    html += QString( "<b>Endpoints</b> (%1 unique)<br>" )
-                .arg( uniqueIps.size() );
+    html += QString( "<b>Endpoints</b> (%1 unique)<br>" ).arg( uniqueIps.size() );
     int shown = 0;
     for ( const auto& [ ip, count ] : sortedIps ) {
         if ( shown >= 8 )
@@ -284,10 +279,10 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 
     summaryLabel_->setText( html );
 
-    hostLog( LOGSQUIRL_LOG_INFO,
-             qPrintable( QString( "Opened %1 packets from %2" )
-                             .arg( result.packets.size() )
-                             .arg( filePath ) ) );
+    hostLog(
+        LOGSQUIRL_LOG_INFO,
+        qPrintable(
+            QString( "Opened %1 packets from %2" ).arg( result.packets.size() ).arg( filePath ) ) );
 }
 
 } // namespace tcpdump

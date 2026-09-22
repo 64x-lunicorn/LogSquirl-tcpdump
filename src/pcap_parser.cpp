@@ -56,8 +56,8 @@ uint32_t read32( const uint8_t* p, bool swap )
     uint32_t v;
     std::memcpy( &v, p, 4 );
     if ( swap ) {
-        v = ( ( v >> 24 ) & 0xFF ) | ( ( v >> 8 ) & 0xFF00 )
-            | ( ( v << 8 ) & 0xFF0000 ) | ( ( v << 24 ) & 0xFF000000 );
+        v = ( ( v >> 24 ) & 0xFF ) | ( ( v >> 8 ) & 0xFF00 ) | ( ( v << 8 ) & 0xFF0000 )
+            | ( ( v << 24 ) & 0xFF000000 );
     }
     return v;
 }
@@ -82,8 +82,7 @@ uint16_t readBE16( const uint8_t* p )
 /// Read a big-endian uint32 (network byte order).
 uint32_t readBE32( const uint8_t* p )
 {
-    return ( static_cast<uint32_t>( p[ 0 ] ) << 24 )
-           | ( static_cast<uint32_t>( p[ 1 ] ) << 16 )
+    return ( static_cast<uint32_t>( p[ 0 ] ) << 24 ) | ( static_cast<uint32_t>( p[ 1 ] ) << 16 )
            | ( static_cast<uint32_t>( p[ 2 ] ) << 8 ) | p[ 3 ];
 }
 
@@ -111,10 +110,9 @@ std::string formatIpv4( const uint8_t* p )
 std::string formatIpv6( const uint8_t* p )
 {
     char buf[ 40 ];
-    std::snprintf( buf, sizeof( buf ), "%x:%x:%x:%x:%x:%x:%x:%x",
-                   readBE16( p ), readBE16( p + 2 ), readBE16( p + 4 ), readBE16( p + 6 ),
-                   readBE16( p + 8 ), readBE16( p + 10 ), readBE16( p + 12 ),
-                   readBE16( p + 14 ) );
+    std::snprintf( buf, sizeof( buf ), "%x:%x:%x:%x:%x:%x:%x:%x", readBE16( p ), readBE16( p + 2 ),
+                   readBE16( p + 4 ), readBE16( p + 6 ), readBE16( p + 8 ), readBE16( p + 10 ),
+                   readBE16( p + 12 ), readBE16( p + 14 ) );
     return buf;
 }
 
@@ -124,7 +122,7 @@ std::string tcpFlagStr( uint8_t flags )
 {
     std::string result = "[";
     bool first = true;
-    auto add = [&]( const char* name ) {
+    auto add = [ & ]( const char* name ) {
         if ( !first )
             result += ", ";
         result += name;
@@ -199,7 +197,7 @@ std::string detectHttp( const uint8_t* payload, size_t len )
         return {};
 
     // HTTP methods
-    auto startsWith = [&]( const char* prefix ) {
+    auto startsWith = [ & ]( const char* prefix ) {
         auto pLen = std::strlen( prefix );
         return len >= pLen && std::memcmp( payload, prefix, pLen ) == 0;
     };
@@ -337,8 +335,7 @@ std::string payloadPreview( const uint8_t* payload, size_t len )
     bool foundStart = false;
     for ( size_t i = 0; i + 2 < len; ++i ) {
         if ( payload[ i ] >= 0x20 && payload[ i ] < 0x7F && payload[ i + 1 ] >= 0x20
-             && payload[ i + 1 ] < 0x7F && payload[ i + 2 ] >= 0x20
-             && payload[ i + 2 ] < 0x7F ) {
+             && payload[ i + 1 ] < 0x7F && payload[ i + 2 ] >= 0x20 && payload[ i + 2 ] < 0x7F ) {
             start = i;
             foundStart = true;
             break;
@@ -376,8 +373,7 @@ std::string payloadPreview( const uint8_t* payload, size_t len )
     }
 
     // Skip if less than 40% printable (too binary to be useful)
-    if ( printableCount == 0
-         || static_cast<double>( printableCount ) / ( len - start ) < 0.4 ) {
+    if ( printableCount == 0 || static_cast<double>( printableCount ) / ( len - start ) < 0.4 ) {
         return {};
     }
 
@@ -509,8 +505,8 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " Len=" << pkt.payloadLen;
 
         // DNS detection (port 53 or port 5353 for mDNS)
-        if ( pkt.srcPort == 53 || pkt.dstPort == 53
-             || pkt.srcPort == 5353 || pkt.dstPort == 5353 ) {
+        if ( pkt.srcPort == 53 || pkt.dstPort == 53 || pkt.srcPort == 5353
+             || pkt.dstPort == 5353 ) {
             pkt.protocol = ( pkt.srcPort == 5353 || pkt.dstPort == 5353 ) ? "mDNS" : "DNS";
             auto dns = detectDns( payload, payloadSize );
             if ( !dns.empty() ) {
@@ -526,8 +522,8 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         else if ( pkt.dstPort == 123 || pkt.srcPort == 123 ) {
             pkt.protocol = "NTP";
         }
-        else if ( pkt.dstPort == 67 || pkt.dstPort == 68
-                  || pkt.srcPort == 67 || pkt.srcPort == 68 ) {
+        else if ( pkt.dstPort == 67 || pkt.dstPort == 68 || pkt.srcPort == 67
+                  || pkt.srcPort == 68 ) {
             pkt.protocol = "DHCP";
         }
         else {
@@ -700,8 +696,7 @@ static size_t findPcapMagicOffset( const uint8_t* data, size_t size )
     for ( size_t i = 0; i + 4 <= size && i <= limit; ++i ) {
         uint32_t candidate;
         std::memcpy( &candidate, data + i, 4 );
-        if ( candidate == PcapMagicLE || candidate == PcapMagicBE
-             || candidate == PcapNgMagic ) {
+        if ( candidate == PcapMagicLE || candidate == PcapMagicBE || candidate == PcapNgMagic ) {
             return i;
         }
     }
@@ -857,16 +852,17 @@ ParseResult parsePcap( const uint8_t* data, size_t size )
                 parseArp( pkt, networkData, networkRemaining );
             }
             else {
-                pkt.protocol = "ETH(0x" + ([&] {
-                    char b[ 5 ];
-                    std::snprintf( b, sizeof( b ), "%04X", etherType );
-                    return std::string( b );
-                })() + ")";
-                pkt.info = "EtherType 0x" + ([&] {
-                    char b[ 5 ];
-                    std::snprintf( b, sizeof( b ), "%04X", etherType );
-                    return std::string( b );
-                })();
+                pkt.protocol = "ETH(0x" + ( [ & ] {
+                                   char b[ 5 ];
+                                   std::snprintf( b, sizeof( b ), "%04X", etherType );
+                                   return std::string( b );
+                               } )()
+                               + ")";
+                pkt.info = "EtherType 0x" + ( [ & ] {
+                               char b[ 5 ];
+                               std::snprintf( b, sizeof( b ), "%04X", etherType );
+                               return std::string( b );
+                           } )();
             }
         }
 

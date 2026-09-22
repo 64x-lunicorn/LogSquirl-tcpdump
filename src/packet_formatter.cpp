@@ -39,7 +39,7 @@ std::string formatTcpFlags( uint8_t flags )
 {
     std::string result = "[";
     bool first = true;
-    auto add = [&]( const char* name ) {
+    auto add = [ & ]( const char* name ) {
         if ( !first )
             result += ", ";
         result += name;
@@ -63,15 +63,16 @@ std::string formatTcpFlags( uint8_t flags )
     return result;
 }
 
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec,
-                              uint32_t baseTimeUsec, int streamId )
+std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeUsec,
+                              int streamId )
 {
     // Calculate relative time from the first packet
     double relTime = 0.0;
     if ( pkt.timestampSec >= baseTimeSec ) {
-        relTime = static_cast<double>( pkt.timestampSec - baseTimeSec )
-                  + ( static_cast<double>( pkt.timestampUsec ) - static_cast<double>( baseTimeUsec ) )
-                        / 1000000.0;
+        relTime
+            = static_cast<double>( pkt.timestampSec - baseTimeSec )
+              + ( static_cast<double>( pkt.timestampUsec ) - static_cast<double>( baseTimeUsec ) )
+                    / 1000000.0;
     }
 
     // Use fixed-width columns like Wireshark's packet list
@@ -133,8 +134,7 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
         // Build canonical key: sort endpoints so both directions match
         auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
         auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
-        std::string key = ( epA < epB ) ? ( epA + "|" + epB )
-                                        : ( epB + "|" + epA );
+        std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
 
         auto it = streamMap.find( key );
         if ( it == streamMap.end() ) {

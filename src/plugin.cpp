@@ -92,9 +92,8 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 
     // Register a sidebar tab for pcap file management
     tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
-    api->register_sidebar_tab(
-        handle, "tcpdump",
-        static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
+    api->register_sidebar_tab( handle, "tcpdump",
+                               static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
 
     api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin ready." );
     return 0;
@@ -107,8 +106,7 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 
     if ( tcpdump::g_state.sidebarWidget ) {
         tcpdump::g_state.api->unregister_sidebar_tab(
-            tcpdump::g_state.handle,
-            static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
+            tcpdump::g_state.handle, static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
         delete tcpdump::g_state.sidebarWidget;
         tcpdump::g_state.sidebarWidget = nullptr;
     }

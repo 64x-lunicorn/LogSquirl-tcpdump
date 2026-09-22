@@ -58,7 +58,7 @@ private:
 
     QPushButton* openButton_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
-    QString lastDir_;  ///< Remembers the last browsed directory.
+    QString lastDir_; ///< Remembers the last browsed directory.
 };
 
 } // namespace tcpdump

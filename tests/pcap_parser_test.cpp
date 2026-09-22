@@ -62,8 +62,8 @@ std::vector<uint8_t> makeGlobalHeader( uint32_t linkType = DltEthernet )
 }
 
 /// Build a pcap packet header.
-std::vector<uint8_t> makePacketHeader( uint32_t tsSec, uint32_t tsUsec,
-                                        uint32_t capturedLen, uint32_t origLen )
+std::vector<uint8_t> makePacketHeader( uint32_t tsSec, uint32_t tsUsec, uint32_t capturedLen,
+                                       uint32_t origLen )
 {
     std::vector<uint8_t> hdr( 16, 0 );
     std::memcpy( hdr.data(), &tsSec, 4 );
@@ -134,9 +134,8 @@ SCENARIO( "Parsing a minimal pcap with a TCP SYN packet", "[pcap_parser]" )
     {
         auto globalHdr = makeGlobalHeader();
         auto pktData = makeTcpSynPacket();
-        auto pktHdr = makePacketHeader( 1000, 500000,
-                                         static_cast<uint32_t>( pktData.size() ),
-                                         static_cast<uint32_t>( pktData.size() ) );
+        auto pktHdr = makePacketHeader( 1000, 500000, static_cast<uint32_t>( pktData.size() ),
+                                        static_cast<uint32_t>( pktData.size() ) );
 
         std::vector<uint8_t> buf;
         buf.insert( buf.end(), globalHdr.begin(), globalHdr.end() );
@@ -265,7 +264,7 @@ SCENARIO( "Parsing a pcap with no packets", "[pcap_parser]" )
 namespace {
 
 std::vector<uint8_t> makeUdpPacket( uint16_t srcPort, uint16_t dstPort,
-                                     const std::vector<uint8_t>& payload )
+                                    const std::vector<uint8_t>& payload )
 {
     std::vector<uint8_t> pkt;
 
@@ -282,11 +281,11 @@ std::vector<uint8_t> makeUdpPacket( uint16_t srcPort, uint16_t dstPort,
     pkt.push_back( static_cast<uint8_t>( totalLen >> 8 ) );
     pkt.push_back( static_cast<uint8_t>( totalLen & 0xFF ) );
     pkt.insert( pkt.end(), { 0x00, 0x01, 0x00, 0x00 } ); // ID, flags, frag
-    pkt.push_back( 0x40 );                                // TTL=64
-    pkt.push_back( 0x11 );                                // UDP
-    pkt.insert( pkt.end(), { 0x00, 0x00 } );              // checksum
-    pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x0A } );  // 192.168.1.10
-    pkt.insert( pkt.end(), { 0x08, 0x08, 0x08, 0x08 } );  // 8.8.8.8
+    pkt.push_back( 0x40 );                               // TTL=64
+    pkt.push_back( 0x11 );                               // UDP
+    pkt.insert( pkt.end(), { 0x00, 0x00 } );             // checksum
+    pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x0A } ); // 192.168.1.10
+    pkt.insert( pkt.end(), { 0x08, 0x08, 0x08, 0x08 } ); // 8.8.8.8
 
     // UDP header (8 bytes)
     uint16_t udpLen = static_cast<uint16_t>( 8 + payload.size() );
@@ -326,8 +325,8 @@ std::vector<uint8_t> makeIcmpEchoPacket()
     pkt.insert( pkt.end(), { 0x0A, 0x00, 0x00, 0x02 } ); // 10.0.0.2
 
     // ICMP Echo Request (type=8, code=0)
-    pkt.push_back( 0x08 ); // type
-    pkt.push_back( 0x00 ); // code
+    pkt.push_back( 0x08 );                   // type
+    pkt.push_back( 0x00 );                   // code
     pkt.insert( pkt.end(), { 0x00, 0x00 } ); // checksum
     pkt.insert( pkt.end(), { 0x00, 0x01 } ); // identifier
     pkt.insert( pkt.end(), { 0x00, 0x01 } ); // sequence
@@ -369,16 +368,15 @@ std::vector<uint8_t> makeArpPacket()
 
 /// Build a complete pcap buffer from global header + N packets.
 std::vector<uint8_t> buildPcap( uint32_t linkType,
-                                 const std::vector<std::vector<uint8_t>>& packets )
+                                const std::vector<std::vector<uint8_t>>& packets )
 {
     auto globalHdr = makeGlobalHeader( linkType );
     std::vector<uint8_t> buf( globalHdr.begin(), globalHdr.end() );
 
     uint32_t tsSec = 1000;
     for ( const auto& pktData : packets ) {
-        auto pktHdr = makePacketHeader( tsSec, 0,
-                                         static_cast<uint32_t>( pktData.size() ),
-                                         static_cast<uint32_t>( pktData.size() ) );
+        auto pktHdr = makePacketHeader( tsSec, 0, static_cast<uint32_t>( pktData.size() ),
+                                        static_cast<uint32_t>( pktData.size() ) );
         buf.insert( buf.end(), pktHdr.begin(), pktHdr.end() );
         buf.insert( buf.end(), pktData.begin(), pktData.end() );
         tsSec++;
@@ -387,8 +385,7 @@ std::vector<uint8_t> buildPcap( uint32_t linkType,
 }
 
 /// Build a Linux SLL2 wrapper (20 bytes) around a network-layer payload.
-std::vector<uint8_t> wrapSll2( uint16_t etherType,
-                                const std::vector<uint8_t>& payload )
+std::vector<uint8_t> wrapSll2( uint16_t etherType, const std::vector<uint8_t>& payload )
 {
     std::vector<uint8_t> pkt;
     // SLL2 header: ethertype at offset 0, rest is padding
@@ -401,7 +398,7 @@ std::vector<uint8_t> wrapSll2( uint16_t etherType,
 
 /// Build a minimal IPv4 + TCP SYN payload (no Ethernet header).
 std::vector<uint8_t> makeRawIpv4Tcp( const uint8_t srcIp[ 4 ], const uint8_t dstIp[ 4 ],
-                                      uint16_t srcPort, uint16_t dstPort )
+                                     uint16_t srcPort, uint16_t dstPort )
 {
     std::vector<uint8_t> pkt;
 
@@ -424,9 +421,9 @@ std::vector<uint8_t> makeRawIpv4Tcp( const uint8_t srcIp[ 4 ], const uint8_t dst
     pkt.push_back( static_cast<uint8_t>( dstPort & 0xFF ) );
     pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } ); // Seq
     pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } ); // Ack
-    pkt.push_back( 0x50 );                                // data offset=5
-    pkt.push_back( 0x02 );                                // SYN
-    pkt.insert( pkt.end(), { 0xFF, 0xFF } );              // Window
+    pkt.push_back( 0x50 );                               // data offset=5
+    pkt.push_back( 0x02 );                               // SYN
+    pkt.insert( pkt.end(), { 0xFF, 0xFF } );             // Window
     pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } ); // Checksum + Urgent
 
     return pkt;
@@ -470,18 +467,17 @@ SCENARIO( "DNS query is detected on port 53", "[pcap_parser]" )
     {
         // Minimal DNS query: header(12) + QNAME(13) + QTYPE(2) + QCLASS(2)
         std::vector<uint8_t> dns = {
-            0x00, 0x01,  // Transaction ID
-            0x01, 0x00,  // Flags: standard query
-            0x00, 0x01,  // QDCOUNT = 1
-            0x00, 0x00,  // ANCOUNT = 0
-            0x00, 0x00,  // NSCOUNT = 0
-            0x00, 0x00,  // ARCOUNT = 0
+            0x00, 0x01, // Transaction ID
+            0x01, 0x00, // Flags: standard query
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x00, // ANCOUNT = 0
+            0x00, 0x00, // NSCOUNT = 0
+            0x00, 0x00, // ARCOUNT = 0
             // QNAME: example.com
-            0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
-            0x03, 'c', 'o', 'm',
-            0x00,        // end of name
-            0x00, 0x01,  // QTYPE: A
-            0x00, 0x01   // QCLASS: IN
+            0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm',
+            0x00,       // end of name
+            0x00, 0x01, // QTYPE: A
+            0x00, 0x01  // QCLASS: IN
         };
 
         auto pktData = makeUdpPacket( 54321, 53, dns );
@@ -497,8 +493,7 @@ SCENARIO( "DNS query is detected on port 53", "[pcap_parser]" )
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "DNS" );
                 REQUIRE( result.packets[ 0 ].info.find( "Query" ) != std::string::npos );
-                REQUIRE( result.packets[ 0 ].info.find( "example.com" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "example.com" ) != std::string::npos );
             }
         }
     }
@@ -522,8 +517,7 @@ SCENARIO( "Parsing an ICMP Echo Request", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "ICMP" );
-                REQUIRE( result.packets[ 0 ].info.find( "Echo request" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Echo request" ) != std::string::npos );
                 REQUIRE( result.packets[ 0 ].srcIp == "10.0.0.1" );
                 REQUIRE( result.packets[ 0 ].dstIp == "10.0.0.2" );
             }
@@ -551,8 +545,7 @@ SCENARIO( "Parsing an ARP Request", "[pcap_parser]" )
                 REQUIRE( result.packets[ 0 ].protocol == "ARP" );
                 REQUIRE( result.packets[ 0 ].info.find( "Who has 192.168.1.100" )
                          != std::string::npos );
-                REQUIRE( result.packets[ 0 ].info.find( "Tell 192.168.1.1" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Tell 192.168.1.1" ) != std::string::npos );
             }
         }
     }
@@ -601,9 +594,8 @@ SCENARIO( "Parsing pcap with text preamble from adb/tcpdump", "[pcap_parser]" )
                                "tcpdump: verbose output suppressed\n";
         auto globalHdr = makeGlobalHeader( DltEthernet );
         auto pktData = makeTcpSynPacket();
-        auto pktHdr = makePacketHeader( 1000, 0,
-                                         static_cast<uint32_t>( pktData.size() ),
-                                         static_cast<uint32_t>( pktData.size() ) );
+        auto pktHdr = makePacketHeader( 1000, 0, static_cast<uint32_t>( pktData.size() ),
+                                        static_cast<uint32_t>( pktData.size() ) );
 
         std::vector<uint8_t> buf( preamble.begin(), preamble.end() );
         buf.insert( buf.end(), globalHdr.begin(), globalHdr.end() );
@@ -865,8 +857,7 @@ SCENARIO( "TLS ClientHello is detected in TCP payload", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "TLS" );
-                REQUIRE( result.packets[ 0 ].info.find( "Client Hello" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Client Hello" ) != std::string::npos );
             }
         }
     }
@@ -931,8 +922,7 @@ SCENARIO( "HTTP GET request is detected in TCP payload", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "HTTP" );
-                REQUIRE( result.packets[ 0 ].info.find( "GET /index.html" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "GET /index.html" ) != std::string::npos );
             }
         }
     }
@@ -953,8 +943,7 @@ SCENARIO( "Truncated IPv4 header is handled gracefully", "[pcap_parser]" )
         pkt.push_back( 0x00 );
 
         // Only 10 bytes of IPv4 (needs 20)
-        pkt.insert( pkt.end(), { 0x45, 0x00, 0x00, 0x28, 0x00, 0x01,
-                                  0x00, 0x00, 0x40, 0x06 } );
+        pkt.insert( pkt.end(), { 0x45, 0x00, 0x00, 0x28, 0x00, 0x01, 0x00, 0x00, 0x40, 0x06 } );
 
         auto buf = buildPcap( DltEthernet, { pkt } );
 
@@ -967,8 +956,7 @@ SCENARIO( "Truncated IPv4 header is handled gracefully", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "IPv4" );
-                REQUIRE( result.packets[ 0 ].info.find( "Truncated" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Truncated" ) != std::string::npos );
             }
         }
     }
@@ -1067,10 +1055,9 @@ SCENARIO( "Payload preview shows full text without truncation", "[pcap_parser]" 
         pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
 
         // Long text payload (120 chars)
-        std::string longText =
-            "07-08 10:29:23.549  7182  7413 W HERE_CARLO: "
-            "[carlo] /workspace/coresdk/carlo/location_engine.cpp:42 "
-            "initializing module";
+        std::string longText = "07-08 10:29:23.549  7182  7413 W HERE_CARLO: "
+                               "[carlo] /workspace/coresdk/carlo/location_engine.cpp:42 "
+                               "initializing module";
         pkt.insert( pkt.end(), longText.begin(), longText.end() );
 
         // Fix IP total length
@@ -1289,8 +1276,7 @@ SCENARIO( "Valid NMEA sentence is detected in TCP payload", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "NMEA" );
-                REQUIRE( result.packets[ 0 ].info.find( "$GAGSV" )
-                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "$GAGSV" ) != std::string::npos );
             }
         }
     }
@@ -1334,8 +1320,8 @@ SCENARIO( "ADB $WRTE frames are not misidentified as NMEA", "[pcap_parser]" )
         pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
 
         // ADB-like payload: "$WRTEJ" + binary (no comma → not NMEA)
-        pkt.insert( pkt.end(), { '$', 'W', 'R', 'T', 'E', 'J', 0x00, 0x02,
-                                  0x00, 0x80, 0x01, 0x00, 0x00, 0x00 } );
+        pkt.insert( pkt.end(), { '$', 'W', 'R', 'T', 'E', 'J', 0x00, 0x02, 0x00, 0x80, 0x01, 0x00,
+                                 0x00, 0x00 } );
         // Add enough printable text after to pass the 40% threshold
         std::string logLine = "07-08 10:29:23.549  7182  7413 W TAG: some log message here";
         pkt.insert( pkt.end(), logLine.begin(), logLine.end() );
