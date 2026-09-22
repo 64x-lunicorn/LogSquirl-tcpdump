@@ -59,7 +59,7 @@ void hostLog( int level, const char* message )
 static const LogSquirlPluginInfo kPluginInfo = {
     /* id          */ "io.github.logsquirl.tcpdump",
     /* name        */ "tcpdump / pcap Viewer",
-    /* version     */ "0.1.0",
+    /* version     */ LOGSQUIRL_PLUGIN_VERSION,
     /* description */ "Parse and display tcpdump/pcap capture files",
     /* author      */ "LogSquirl Contributors",
     /* license     */ "GPL-3.0-or-later",
