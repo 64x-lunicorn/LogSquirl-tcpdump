@@ -1,115 +1,41 @@
-# ============================================================================
-# CI Release — Build all platforms, create GitHub Release with ZIP artifacts
-#
-# Triggered by pushing a tag like v0.1.0, v1.0.0-beta.1, etc.
-# Can also be triggered manually via workflow_dispatch.
-# ============================================================================
-name: CI Release
+name: "CI Release"
 
+# Identical in every LogSquirl plugin and managed by LogSquirl-Plugin-CI
+# (scripts/sync-plugin.sh): change the shared workflow there, not here.
+#
+# Publishes the CI Build of the tagged commit; it does not build. Set the
+# version in plugin.json and CMakeLists.txt and add its CHANGELOG section on
+# main, then push the tag.
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
+  # Dispatch it from the tag ("Use workflow from: <tag>"): the `release`
+  # environment holding the signing secrets admits only v* tags.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.1.0)"
+        description: "The release tag this workflow is dispatched from (e.g. v1.2.0)"
         required: true
-        type: string
+      ci-run-id:
+        description: "Run ID of the CI Build push run for the tagged commit (leave empty to find it)"
+        required: false
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
+concurrency:
+  group: ci-release-${{ github.ref }}
+  cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+permissions: {}
 
 jobs:
-  build:
-    uses: ./.github/workflows/ci-build.yml
-    secrets: inherit
-
   release:
-    name: Create GitHub Release
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Determine version
-        id: version
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          VERSION="${TAG#v}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-          if echo "$TAG" | grep -qE '-(alpha|beta|rc)'; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download Linux artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: plugin-linux-x64
-          path: artifacts/linux
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: plugin-macos-arm64
-          path: artifacts/macos
-
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: plugin-windows-x64
-          path: artifacts/windows
-
-      - name: Package ZIPs
-        shell: bash
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          mkdir -p release
-
-          cd artifacts/linux
-          zip "../../release/logsquirl-tcpdump-${VERSION}-linux-x64.zip" *
-          cd ../..
-
-          cd artifacts/macos
-          zip "../../release/logsquirl-tcpdump-${VERSION}-macos-arm64.zip" *
-          cd ../..
-
-          cd artifacts/windows
-          zip "../../release/logsquirl-tcpdump-${VERSION}-windows-x64.zip" *
-          cd ../..
-
-      - name: Generate checksums
-        working-directory: release
-        run: sha256sum *.zip > checksums.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: "tcpdump Plugin ${{ steps.version.outputs.tag }}"
-          prerelease: ${{ steps.version.outputs.prerelease }}
-          generate_release_notes: true
-          files: |
-            release/*.zip
-            release/checksums.txt
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: release/*.zip
+    name: Release
+    uses: 64x-lunicorn/LogSquirl-Plugin-CI/.github/workflows/plugin-release.yml@3d2354f1745857e0abc2528a5cf246b9250b1fcd # v1.0.1
+    permissions:
+      contents: write # create the release
+      actions: read # the CI Build run and its artifacts
+      id-token: write # Sigstore signature and attestations
+      attestations: write
+    with:
+      tag: ${{ inputs.tag }}
+      ci-run-id: ${{ inputs.ci-run-id }}

@@ -1,0 +1,5 @@
+# clang-format for the Format job of the shared CI Build; the same version as
+# LogSquirl's (.github/requirements/clang-format.in there), since the plugins
+# use LogSquirl's .clang-format. CI installs the hash-locked clang-format.txt;
+# after a change here, regenerate it with the command at the top of that file.
+clang-format==23.1.1

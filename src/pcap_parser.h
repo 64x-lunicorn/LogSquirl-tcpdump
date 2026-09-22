@@ -79,11 +79,11 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 
 /// Represents a single parsed network packet.
 struct PacketRecord {
-    uint32_t number = 0;         ///< 1-based packet index
-    uint32_t timestampSec = 0;   ///< Seconds since epoch
-    uint32_t timestampUsec = 0;  ///< Microseconds fraction
-    uint32_t capturedLen = 0;    ///< Bytes captured
-    uint32_t originalLen = 0;    ///< Original packet length on the wire
+    uint32_t number = 0;        ///< 1-based packet index
+    uint32_t timestampSec = 0;  ///< Seconds since epoch
+    uint32_t timestampUsec = 0; ///< Microseconds fraction
+    uint32_t capturedLen = 0;   ///< Bytes captured
+    uint32_t originalLen = 0;   ///< Original packet length on the wire
 
     // Parsed protocol fields (populated if applicable)
     std::string srcMac;
@@ -104,10 +104,10 @@ struct PacketRecord {
     uint8_t tcpFlags = 0;
     uint16_t tcpWindow = 0;
 
-    uint32_t payloadLen = 0;     ///< Application payload bytes
+    uint32_t payloadLen = 0; ///< Application payload bytes
 
-    std::string protocol;        ///< High-level protocol name ("TCP", "UDP", …)
-    std::string info;            ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
+    std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
+    std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
 
     std::vector<uint8_t> rawData; ///< Raw packet bytes (up to capturedLen)
 };

@@ -1,9 +1,23 @@
+# Identical in every LogSquirl plugin and managed by LogSquirl-Plugin-CI.
+#
+# The workflows here only call LogSquirl-Plugin-CI's shared workflows, which
+# pin every third-party action themselves; so this entry mostly moves the
+# three shared-workflow pins, together, to a new LogSquirl-Plugin-CI release.
+# Those skip the cooldown: a week-old wait would only delay a fix of our own.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      exclude:
+        - "64x-lunicorn/*"
     labels:
       - "ci"
       - "dependencies"
+    groups:
+      plugin-ci:
+        patterns:
+          - "64x-lunicorn/LogSquirl-Plugin-CI*"

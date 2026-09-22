@@ -46,8 +46,8 @@ namespace tcpdump {
  * @param streamId      Conversation/stream index (0-based, -1 if not applicable).
  * @return Formatted line.
  */
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec,
-                              uint32_t baseTimeUsec, int streamId );
+std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeUsec,
+                              int streamId );
 
 /**
  * Format all packets into a vector of lines.  Includes a column header
