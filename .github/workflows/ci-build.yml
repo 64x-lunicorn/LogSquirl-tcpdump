@@ -19,6 +19,6 @@ permissions: {}
 jobs:
   ci:
     name: CI
-    uses: 64x-lunicorn/LogSquirl-Plugin-CI/.github/workflows/plugin-build.yml@217ac03dd27cd7275edb754863d48f22c5edad38 # v1.0.3
+    uses: 64x-lunicorn/LogSquirl-Plugin-CI/.github/workflows/plugin-build.yml@c1358e25cc28fd55a1fffab42dbd5b72663e0979 # v1.0.4
     permissions:
       contents: read
