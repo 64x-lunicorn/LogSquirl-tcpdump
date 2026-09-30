@@ -28,9 +28,14 @@
 #pragma once
 
 #include <QLabel>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QThreadPool>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <atomic>
+#include <memory>
 
 namespace tcpdump {
 
@@ -44,7 +49,14 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
  *
  * Contains:
  *   - "Open pcap…" button (opens a file dialog)
+ *   - progress bar and Cancel button, while a capture is converted
  *   - Summary label showing the last capture's stats
+ *
+ * A capture is converted on a worker thread, so that a large one neither
+ * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
+ * the widget cancels a running conversion and waits for it: no code of the
+ * plugin runs on the worker thread afterwards, and the host may unload the
+ * library.
  */
 class SidebarWidget : public QWidget {
     Q_OBJECT
@@ -52,18 +64,46 @@ class SidebarWidget : public QWidget {
 public:
     /// Construct with an optional parent.
     explicit SidebarWidget( QWidget* parent = nullptr );
+    ~SidebarWidget() override;
+
+    /// Convert a pcap file in the background, then open the text in LogSquirl.
+    void openPcapFile( const QString& filePath );
+
+    /// Stop a running conversion; nothing is opened then.
+    void cancel();
+
+    /// Whether a conversion is running.
+    bool isConverting() const
+    {
+        return converting_;
+    }
 
 private Q_SLOTS:
     /// Show a file dialog and open the selected pcap file.
     void onOpenClicked();
 
 private:
-    /// Parse a pcap file, write a formatted text file, and open it in LogSquirl.
-    void openPcapFile( const QString& filePath );
+    /// Show the outcome of a conversion and return to idle.
+    void finishConversion( const QString& filePath, const QString& outPath,
+                           ConversionResult result );
+    /// Show the idle or the converting controls.
+    void setConverting( bool converting );
 
     QPushButton* openButton_ = nullptr;
+    QPushButton* cancelButton_ = nullptr;
+    QProgressBar* progressBar_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
     QString lastDir_; ///< Remembers the last browsed directory.
+
+    bool converting_ = false;
+    /// Counts started conversions; only the last one's outcome is shown.
+    quint64 generation_ = 0;
+    /// Cancels the running conversion.
+    std::shared_ptr<std::atomic_bool> cancelRunning_;
+    /// Output file of the running conversion, which no tab shows yet.
+    QString runningOutput_;
+    /// One worker thread, owned here so that it can be waited for.
+    QThreadPool pool_;
 };
 
 } // namespace tcpdump

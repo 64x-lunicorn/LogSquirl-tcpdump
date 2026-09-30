@@ -31,7 +31,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(LOGSQUIRL_PLUGIN_VERSION="${PROJECT_VERSION}")
 
 # ── Find Qt6 ──────────────────────────────────────────────────────────────
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Widgets)
 qt_standard_project_setup()
 
 # ── Plugin shared library ─────────────────────────────────────────────────
@@ -65,6 +65,7 @@ target_include_directories(logsquirl_tcpdump
 target_link_libraries(logsquirl_tcpdump
     PRIVATE
         Qt6::Core
+        Qt6::Concurrent
         Qt6::Widgets
 )
 

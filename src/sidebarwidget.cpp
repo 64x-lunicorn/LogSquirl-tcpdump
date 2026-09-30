@@ -34,14 +34,20 @@
 #include "plugin.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QLocale>
 #include <QMessageBox>
+#include <QPromise>
 #include <QStandardPaths>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <exception>
 #include <map>
+#include <new>
 #include <vector>
 
 namespace tcpdump {
@@ -49,6 +55,8 @@ namespace tcpdump {
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
 {
+    pool_.setMaxThreadCount( 1 );
+
     auto* layout = new QVBoxLayout( this );
     layout->setContentsMargins( 8, 8, 8, 8 );
     layout->setSpacing( 6 );
@@ -59,18 +67,51 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
     // Open button
     openButton_ = new QPushButton( "Open pcap\xe2\x80\xa6" );
+    openButton_->setObjectName( "openButton" );
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
     layout->addWidget( openButton_ );
 
     connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::onOpenClicked );
 
+    // Progress of a running conversion, and a way to stop it
+    progressBar_ = new QProgressBar;
+    progressBar_->setObjectName( "progress" );
+    progressBar_->setRange( 0, 1000 );
+    progressBar_->setTextVisible( false );
+    layout->addWidget( progressBar_ );
+
+    cancelButton_ = new QPushButton( "Cancel" );
+    cancelButton_->setObjectName( "cancelButton" );
+    cancelButton_->setToolTip( "Stop reading the capture" );
+    layout->addWidget( cancelButton_ );
+    connect( cancelButton_, &QPushButton::clicked, this, &SidebarWidget::cancel );
+
     // Summary label
     summaryLabel_ = new QLabel( "No capture loaded." );
+    summaryLabel_->setObjectName( "summary" );
+    summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
     layout->addWidget( summaryLabel_ );
 
     // Push everything up
     layout->addStretch();
+
+    setConverting( false );
+}
+
+SidebarWidget::~SidebarWidget()
+{
+    // The host unloads the library right after the plugin is shut down:
+    // the worker must be done with it before.
+    if ( cancelRunning_ ) {
+        cancelRunning_->store( true );
+    }
+    pool_.waitForDone();
+
+    // A running conversion's file never reached a tab.
+    if ( !runningOutput_.isEmpty() ) {
+        QFile::remove( runningOutput_ );
+    }
 }
 
 void SidebarWidget::onOpenClicked()
@@ -93,6 +134,9 @@ void SidebarWidget::onOpenClicked()
 
 void SidebarWidget::openPcapFile( const QString& filePath )
 {
+    if ( converting_ ) {
+        return;
+    }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
 
     // Write to a temporary file that persists after the plugin is done
@@ -101,14 +145,110 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     const auto tempDir = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
     const auto outPath = tempDir + "/logsquirl_tcpdump_" + baseName + ".log";
 
-    // Parse the capture and write it out packet by packet
-    const auto result = convertPcap( filePath, outPath );
-    if ( result.status != ConversionResult::Status::Converted ) {
+    const auto generation = ++generation_;
+    auto cancelled = std::make_shared<std::atomic_bool>( false );
+    cancelRunning_ = cancelled;
+    runningOutput_ = outPath;
+    setConverting( true );
+    summaryLabel_->setText(
+        QString( "Reading %1\xe2\x80\xa6" ).arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
+
+    // The watcher lives on this thread, so its signals are delivered here.
+    auto* watcher = new QFutureWatcher<ConversionResult>( this );
+    connect( watcher, &QFutureWatcher<ConversionResult>::progressValueChanged, this,
+             [ this, generation ]( int permille ) {
+                 if ( generation == generation_ ) {
+                     progressBar_->setValue( permille );
+                 }
+             } );
+    connect( watcher, &QFutureWatcher<ConversionResult>::finished, this,
+             [ this, watcher, generation, cancelled, filePath, outPath ] {
+                 watcher->deleteLater();
+                 ConversionResult result;
+                 if ( watcher->future().resultCount() > 0 ) {
+                     result = watcher->result();
+                 }
+                 else {
+                     result.error = "The conversion ended without a result";
+                 }
+                 // Cancel wins even over a conversion that had just finished.
+                 if ( cancelled->load() && result.status == ConversionResult::Status::Converted ) {
+                     QFile::remove( outPath );
+                     result.status = ConversionResult::Status::Cancelled;
+                 }
+                 if ( generation == generation_ ) {
+                     finishConversion( filePath, outPath, std::move( result ) );
+                 }
+             } );
+
+    watcher->setFuture( QtConcurrent::run( &pool_, [ filePath, outPath, cancelled ](
+                                                       QPromise<ConversionResult>& promise ) {
+        promise.setProgressRange( 0, 1000 );
+        ConversionResult result;
+        try {
+            result = convertPcap( filePath, outPath, cancelled.get(), [ &promise ]( int permille ) {
+                promise.setProgressValue( permille );
+            } );
+        } catch ( const std::bad_alloc& ) {
+            QFile::remove( outPath );
+            result = ConversionResult();
+            result.error = "Not enough memory to read the capture";
+        } catch ( const std::exception& e ) {
+            QFile::remove( outPath );
+            result = ConversionResult();
+            result.error = QString::fromUtf8( e.what() );
+        } catch ( ... ) {
+            QFile::remove( outPath );
+            result = ConversionResult();
+            result.error = "Unknown error";
+        }
+        promise.addResult( std::move( result ) );
+    } ) );
+}
+
+void SidebarWidget::cancel()
+{
+    if ( !converting_ || !cancelRunning_ ) {
+        return;
+    }
+    cancelRunning_->store( true );
+    cancelButton_->setEnabled( false );
+    summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
+}
+
+void SidebarWidget::setConverting( bool converting )
+{
+    converting_ = converting;
+    openButton_->setEnabled( !converting );
+    cancelButton_->setEnabled( converting );
+    cancelButton_->setHidden( !converting );
+    progressBar_->setHidden( !converting );
+    progressBar_->setValue( 0 );
+}
+
+void SidebarWidget::finishConversion( const QString& filePath, const QString& outPath,
+                                      ConversionResult result )
+{
+    cancelRunning_.reset();
+    runningOutput_.clear();
+    setConverting( false );
+
+    switch ( result.status ) {
+    case ConversionResult::Status::Cancelled:
+        summaryLabel_->setText( "Cancelled." );
+        hostLog( LOGSQUIRL_LOG_INFO, "Cancelled opening " + filePath );
+        return;
+
+    case ConversionResult::Status::Failed: {
         const auto& msg = result.error;
-        summaryLabel_->setText( "Error: " + msg );
+        summaryLabel_->setText( "Error: " + msg.toHtmlEscaped() );
         hostLog( LOGSQUIRL_LOG_ERROR, "pcap parse error: " + msg );
         hostNotify( "Failed to open pcap: " + msg );
         return;
+    }
+
+    case ConversionResult::Status::Converted:
+        break;
     }
 
     // Open in LogSquirl viewer

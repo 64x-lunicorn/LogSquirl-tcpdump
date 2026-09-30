@@ -155,7 +155,7 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 {
     guarded( "shutdown", [] {
         auto& st = tcpdump::g_state;
-        tcpdump::hostLog( LOGSQUIRL_LOG_INFO, "tcpdump plugin shutting down\u2026" );
+        tcpdump::hostLog( LOGSQUIRL_LOG_INFO, "tcpdump plugin shutting down\xe2\x80\xa6" );
 
         if ( st.sidebarWidget ) {
             if ( st.api && st.handle ) {

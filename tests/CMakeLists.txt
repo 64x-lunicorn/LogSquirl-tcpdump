@@ -22,6 +22,7 @@ add_executable(logsquirl_tcpdump_tests
     socks_test.cpp
     streaming_test.cpp
     plugin_test.cpp
+    sidebarwidget_test.cpp
     packet_formatter_test.cpp
 )
 
@@ -39,6 +40,7 @@ target_link_libraries(logsquirl_tcpdump_tests
     PRIVATE
         Catch2::Catch2
         Qt6::Core
+        Qt6::Concurrent
         Qt6::Widgets
 )
 
