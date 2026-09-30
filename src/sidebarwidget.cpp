@@ -131,8 +131,11 @@ void SidebarWidget::onOpenClicked()
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
 
-    // The dialog runs its own event loop, in which the plugin may be shut
-    // down and this widget deleted.
+    // The dialog runs its own event loop, in which this widget may be
+    // deleted, e.g. with a parent that is closed meanwhile: then there is
+    // nothing left to open the file for.  This does not help if the plugin
+    // is unloaded while the dialog is open: the code this call returns into
+    // is gone then, and only the host can prevent that.
     const QPointer<SidebarWidget> self( this );
     const auto filePath
         = QFileDialog::getOpenFileName( this, "Open pcap Capture File", lastDir_,

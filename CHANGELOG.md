@@ -85,8 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No exception can escape into LogSquirl from the plugin's entry points or
   the conversion; a failing initialisation is logged and cleaned up.
 - Shutting the plugin down while a capture is being read stops the reading
-  and waits for it, and closing the file dialog after the plugin was shut
-  down no longer touches the deleted sidebar.
+  and waits for it.
 
 ## [0.1.1] — 2026-09-10
 
