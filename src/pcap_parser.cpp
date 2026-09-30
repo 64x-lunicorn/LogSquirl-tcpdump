@@ -1240,6 +1240,11 @@ bool MemorySource::skip( uint64_t n )
 
 size_t PcapReader::read( uint8_t* dst, size_t n )
 {
+    // An empty record reads into a buffer whose data() may be null, and
+    // memcpy() must not be given a null pointer even for 0 bytes.
+    if ( n == 0 ) {
+        return 0;
+    }
     size_t got = 0;
     if ( headPos_ < head_.size() ) {
         got = std::min( n, head_.size() - headPos_ );

@@ -114,6 +114,26 @@ SCENARIO( "A record longer than what is dissected is skipped, not loaded", "[pca
     }
 }
 
+SCENARIO( "A record of zero bytes is read without copying anything", "[pcap_parser]" )
+{
+    GIVEN( "a capture whose first record is empty" )
+    {
+        // The packet buffer is still unallocated then: its data() may be null,
+        // and must not be handed to memcpy, not even for 0 bytes.
+        auto file = pcapFile( { { Bytes{} }, { udpPacket( 2222 ) } } );
+
+        THEN( "the empty record and the next one are parsed" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.ok );
+            REQUIRE_FALSE( result.truncated );
+            REQUIRE( result.packets.size() == 2 );
+            REQUIRE( result.packets[ 0 ].capturedLen == 0 );
+            REQUIRE( result.packets[ 1 ].dstPort == 2222 );
+        }
+    }
+}
+
 SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]" )
 {
     GIVEN( "packets whose times are not in order, as in a merged capture" )
