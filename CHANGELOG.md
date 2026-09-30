@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-30
+
 ### Added
 - **SOCKS4 and SOCKS5 handshakes are described** on the usual proxy ports
   (1080, 1081, 3128, 9050, 9051): greeting and method choice, connect, bind
@@ -29,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The sidebar summary says when a capture ends in the middle of a packet.
 
 ### Changed
+- **Requires LogSquirl 26.10.0 or later.** This release is built with the Qt of
+  LogSquirl 26.10.0 (Qt 6.11.3); an older LogSquirl cannot load it.
 - The payload preview shows every byte from the start of the payload,
   printable ones as themselves and all others as a dot, instead of skipping
   to the first run of text and collapsing binary runs to a space. It stops
@@ -145,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD** — GitHub Actions workflows for build (Linux, macOS, Windows)
   and tag-triggered releases with per-platform ZIP artifacts.
 
-[Unreleased]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/releases/tag/v0.1.0
