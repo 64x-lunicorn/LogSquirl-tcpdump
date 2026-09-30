@@ -858,12 +858,13 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.dstIp = formatIpv4( data + 16 );
 
     // Use the IP total length field, not raw remaining bytes, to exclude
-    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).
-    auto totalLen = readBE16( data + 2 );
-    if ( totalLen > remaining )
-        totalLen = static_cast<uint16_t>( remaining );
-    if ( totalLen < ihl )
-        return;
+    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A total length
+    // of 0, or one too small for the header, is what TSO/GSO hands to the
+    // capture for outgoing packets: like Wireshark, take the captured bytes.
+    size_t totalLen = readBE16( data + 2 );
+    if ( totalLen < ihl || totalLen > remaining ) {
+        totalLen = remaining;
+    }
 
     parseTransport( pkt, data + ihl, totalLen - ihl );
 }
@@ -885,9 +886,12 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 
     // Use the IPv6 payload length field, not raw remaining bytes, to exclude
     // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).
+    // A payload length of 0 is a jumbogram, or a TSO/GSO packet captured on
+    // its way out: take the captured bytes.
     auto payloadLen = static_cast<size_t>( readBE16( data + 4 ) );
-    if ( payloadLen > remaining - 40 )
+    if ( payloadLen == 0 || payloadLen > remaining - 40 ) {
         payloadLen = remaining - 40;
+    }
 
     parseTransport( pkt, data + 40, payloadLen );
 }

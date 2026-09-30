@@ -18,6 +18,7 @@ add_executable(logsquirl_tcpdump_tests
     tests_main.cpp
     plugininfo_test.cpp
     pcap_parser_test.cpp
+    pcap_layers_test.cpp
     packet_formatter_test.cpp
 )
 
