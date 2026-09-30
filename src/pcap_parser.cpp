@@ -590,24 +590,32 @@ std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, u
     return message;
 }
 
-/// Build ASCII preview of payload, skipping leading binary bytes.
-/// Starts from the first printable run of >= 3 chars (to skip binary headers).
-/// Non-printable runs are collapsed to a single space instead of dots.
-/// Returns empty if the payload is predominantly binary.
+/// Longest payload preview, in characters, before it is cut with an ellipsis.
+constexpr size_t kMaxPreviewChars = 200;
+
+/// Build an ASCII preview of a payload: printable bytes as themselves,
+/// every other byte as a dot, at most kMaxPreviewChars characters followed
+/// by an ellipsis.  Returns empty if the payload is predominantly binary
+/// (less than 40% printable), where a preview would only be dots.
 std::string payloadPreview( const uint8_t* payload, size_t len )
 {
-    std::string preview;
+    auto isPrintable = []( uint8_t c ) { return c >= 0x20 && c < 0x7F; };
 
-    for ( size_t i = 0; i < len; ++i ) {
-        auto c = payload[ i ];
-        if ( c >= 0x20 && c < 0x7F ) {
-            preview += static_cast<char>( c );
-        }
-        else {
-            preview += '.';
-        }
+    const auto printable
+        = static_cast<size_t>( std::count_if( payload, payload + len, isPrintable ) );
+    if ( printable == 0 || printable * 10 < len * 4 ) {
+        return {};
     }
 
+    const size_t shown = std::min( len, kMaxPreviewChars );
+    std::string preview;
+    preview.reserve( shown + 3 );
+    for ( size_t i = 0; i < shown; ++i ) {
+        preview += isPrintable( payload[ i ] ) ? static_cast<char>( payload[ i ] ) : '.';
+    }
+    if ( len > shown ) {
+        preview += "\xe2\x80\xa6"; // …
+    }
     return preview;
 }
 

@@ -106,3 +106,51 @@ SCENARIO( "The IP length fields bound the transport data", "[pcap_parser]" )
         }
     }
 }
+
+SCENARIO( "Payload previews are capped", "[pcap_parser]" )
+{
+    GIVEN( "a TCP segment with 1000 bytes of text" )
+    {
+        const std::string longText( 1000, 'x' );
+        auto file = pcapOf(
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 40001, text( longText ) ) ) ) } );
+
+        THEN( "the preview shows the first 200 characters and an ellipsis" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            const auto& info = result.packets[ 0 ].info;
+            const auto preview = info.substr( info.find( " | " ) + 3 );
+            REQUIRE( preview == std::string( 200, 'x' ) + "\xe2\x80\xa6" );
+        }
+    }
+
+    GIVEN( "a text payload of exactly 200 characters" )
+    {
+        const std::string exact( 200, 'y' );
+        auto file = pcapOf(
+            { eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 40000, 40001, text( exact ) ) ) ) } );
+
+        THEN( "it is shown without an ellipsis" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            const auto& info = result.packets[ 0 ].info;
+            REQUIRE( info.substr( info.find( " | " ) + 3 ) == exact );
+        }
+    }
+
+    GIVEN( "a mostly binary payload with a little text in front" )
+    {
+        auto payload = text( "GET" ) + Bytes( 5000, 0x00 );
+        auto file
+            = pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 40001, payload ) ) ) } );
+
+        THEN( "no preview is shown" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].info.find( " | " ) == std::string::npos );
+        }
+    }
+}

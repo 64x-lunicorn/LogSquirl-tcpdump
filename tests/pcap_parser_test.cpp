@@ -1154,7 +1154,7 @@ SCENARIO( "Payload preview shows dots for binary bytes", "[pcap_parser]" )
     }
 }
 
-SCENARIO( "Predominantly binary payload still shows preview with dots", "[pcap_parser]" )
+SCENARIO( "Predominantly binary payload is suppressed", "[pcap_parser]" )
 {
     GIVEN( "a TCP packet with mostly binary payload" )
     {
@@ -1206,12 +1206,12 @@ SCENARIO( "Predominantly binary payload still shows preview with dots", "[pcap_p
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "the info line shows a preview with ABC and dots" )
+            THEN( "the info line has no payload preview (binary suppressed)" )
             {
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
-                REQUIRE( result.packets[ 0 ].info.find( " | " ) != std::string::npos );
-                REQUIRE( result.packets[ 0 ].info.find( "ABC" ) != std::string::npos );
+                // No " | " separator means no preview was appended
+                REQUIRE( result.packets[ 0 ].info.find( " | " ) == std::string::npos );
             }
         }
     }
