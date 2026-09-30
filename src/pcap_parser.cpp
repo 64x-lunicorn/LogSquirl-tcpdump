@@ -614,8 +614,12 @@ std::string detectNmea( const uint8_t* payload, size_t len )
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
-void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+/// Parse the transport layer from the @p remaining captured bytes at
+/// @p data.  @p wireLen is its length on the wire according to the IP
+/// header, more than @p remaining if the capture was cut at the snaplen.
+void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, size_t wireLen )
 {
+    wireLen = std::max( wireLen, remaining );
     if ( pkt.ipProtocol == IpProtoTcp && remaining >= 20 ) {
         pkt.protocol = "TCP";
         pkt.srcPort = readBE16( data );
@@ -641,8 +645,10 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
             return;
         }
 
+        // Len is the payload on the wire, as Wireshark shows it; only the
+        // captured part of it can be looked at.
         const size_t payloadSize = ( dataOffset <= remaining ) ? remaining - dataOffset : 0;
-        pkt.payloadLen = static_cast<uint32_t>( payloadSize );
+        pkt.payloadLen = static_cast<uint32_t>( wireLen >= dataOffset ? wireLen - dataOffset : 0 );
         if ( pkt.payloadLen > 0 ) {
             oss << " Len=" << pkt.payloadLen;
         }
@@ -867,10 +873,13 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A total length
     // of 0, or one too small for the header, is what TSO/GSO hands to the
     // capture for outgoing packets: like Wireshark, take the captured bytes.
+    // A total length beyond the captured bytes is a capture cut at the
+    // snaplen: the lengths shown still come from the header.
     size_t totalLen = readBE16( data + 2 );
-    if ( totalLen < ihl || totalLen > remaining ) {
+    if ( totalLen < ihl ) {
         totalLen = remaining;
     }
+    const size_t capturedLen = std::min( totalLen, remaining );
 
     // Only the first fragment starts with the transport header; the data
     // of a later one merely continues it.
@@ -880,7 +889,7 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         return;
     }
 
-    parseTransport( pkt, data + ihl, totalLen - ihl );
+    parseTransport( pkt, data + ihl, capturedLen - ihl, totalLen - ihl );
 }
 
 // ── Parse IPv6 header ────────────────────────────────────────────────────
@@ -900,12 +909,14 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     // Use the IPv6 payload length field, not raw remaining bytes, to exclude
     // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A payload
     // length of 0 is a jumbogram, or a TSO/GSO packet captured on its way
-    // out: take the captured bytes.
+    // out: take the captured bytes.  One beyond the captured bytes is a
+    // capture cut at the snaplen: the lengths shown still come from it.
     auto payloadLen = static_cast<size_t>( readBE16( data + 4 ) );
-    if ( payloadLen == 0 || payloadLen > remaining - 40 ) {
+    if ( payloadLen == 0 ) {
         payloadLen = remaining - 40;
     }
-    const size_t end = 40 + payloadLen;
+    const size_t wireEnd = 40 + payloadLen;
+    const size_t end = std::min( wireEnd, remaining );
 
     // Walk the extension headers to the upper-layer protocol.  Each one is
     // checked against the end of the packet before it is read.
@@ -931,7 +942,7 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
             break;
         default: // The upper-layer protocol, or one this parser does not walk
             pkt.ipProtocol = next;
-            parseTransport( pkt, data + offset, end - offset );
+            parseTransport( pkt, data + offset, end - offset, wireEnd - offset );
             return;
         }
 

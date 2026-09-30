@@ -616,3 +616,56 @@ SCENARIO( "A TCP segment without flags shows [none]", "[pcap_parser]" )
         }
     }
 }
+
+SCENARIO( "Len is taken from the IP header when the capture was cut at the snaplen",
+          "[pcap_parser]" )
+{
+    const auto payload = text( std::string( 1460, 'a' ) );
+
+    GIVEN( "an IPv4 TCP segment of 1460 bytes captured with -s 96" )
+    {
+        auto frame = eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 40001, payload ) ) );
+        frame.resize( 96 );
+        auto result = parse( pcapOf( { frame } ) );
+
+        THEN( "Len is the segment's length, and only the captured bytes are previewed" )
+        {
+            REQUIRE( result.packets.size() == 1 );
+            const auto& pkt = result.packets[ 0 ];
+            REQUIRE( pkt.payloadLen == 1460 );
+            REQUIRE( pkt.info.find( "Len=1460" ) != std::string::npos );
+            REQUIRE( pkt.info.find( " | " + std::string( 96 - 54, 'a' ) ) != std::string::npos );
+            REQUIRE( pkt.info.find( std::string( 96 - 54 + 1, 'a' ) ) == std::string::npos );
+        }
+    }
+
+    GIVEN( "an IPv6 TCP segment of 1000 bytes behind a hop-by-hop header, cut at 120 bytes" )
+    {
+        auto frame
+            = eth( EthertypeIpv6,
+                   ipv6( 0, ipv6Options( IpProtoTcp, tcp( 40000, 40001,
+                                                          text( std::string( 1000, 'b' ) ) ) ) ) );
+        frame.resize( 120 );
+        auto result = parse( pcapOf( { frame } ) );
+
+        THEN( "Len is the segment's length" )
+        {
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].payloadLen == 1000 );
+            REQUIRE( result.packets[ 0 ].info.find( "Len=1000" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "an IPv4 packet cut off inside its TCP header" )
+    {
+        auto frame = eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 40001, payload ) ) );
+        frame.resize( 14 + 20 + 10 );
+        auto result = parse( pcapOf( { frame } ) );
+
+        THEN( "no TCP fields are made up" )
+        {
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].srcPort == 0 );
+        }
+    }
+}
