@@ -40,6 +40,7 @@
 #include <QFutureWatcher>
 #include <QLocale>
 #include <QMessageBox>
+#include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -130,16 +131,29 @@ void SidebarWidget::onOpenClicked()
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
 
+    // The dialog runs its own event loop, in which the plugin may be shut
+    // down and this widget deleted.
+    const QPointer<SidebarWidget> self( this );
     const auto filePath
         = QFileDialog::getOpenFileName( this, "Open pcap Capture File", lastDir_,
                                         "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+    if ( !self ) {
+        return;
+    }
 
     if ( filePath.isEmpty() ) {
         return;
     }
 
     lastDir_ = QFileInfo( filePath ).absolutePath();
-    openPcapFile( filePath );
+    try {
+        openPcapFile( filePath );
+    } catch ( const std::exception& e ) {
+        // An exception must not escape a Qt slot.
+        hostLog(
+            LOGSQUIRL_LOG_ERROR,
+            QString( "Opening %1 failed: %2" ).arg( filePath, QString::fromUtf8( e.what() ) ) );
+    }
 }
 
 void SidebarWidget::openPcapFile( const QString& filePath )
