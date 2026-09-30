@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **SOCKS4 and SOCKS5 handshakes are described** on the usual proxy ports
+  (1080, 1081, 3128, 9050, 9051): greeting and method choice, connect, bind
+  and UDP associate requests and their replies with destination and bound
+  address, SOCKS4/4a requests with user id and domain, and the RFC 1929
+  username/password exchange — user name and password included, since they
+  cross the wire in clear text. Only messages whose length matches their
+  fields exactly, travelling towards or away from the proxy port as they
+  should, are labelled.
+- **Nanosecond captures.** Files with nanosecond timestamps (magic
+  `0xa1b23c4d`, e.g. from `tcpdump --time-stamp-precision=nano`) are read in
+  either byte order, and their Time column shows nine decimals.
+- **Progress and Cancel.** While a capture is read, the sidebar shows a
+  progress bar and a Cancel button.
+- IPv6 extension headers (hop-by-hop, routing, fragment, destination options,
+  authentication) are walked to the TCP, UDP or ICMPv6 layer behind them.
+- Stacked VLAN tags are stripped, including 802.1ad (QinQ) service tags
+  (`0x88a8`, `0x9100`), also in Linux cooked captures.
+- DLT_LOOP loopback captures are read.
+- The sidebar summary says when a capture ends in the middle of a packet.
+
+### Changed
+- The payload preview shows every byte from the start of the payload,
+  printable ones as themselves and all others as a dot, instead of skipping
+  to the first run of text and collapsing binary runs to a space. It stops
+  after 200 characters with an ellipsis, and payloads that are mostly binary
+  still get none.
+- Each capture's text is written to its own new file, `<name>.log`, in a
+  new `logsquirl-tcpdump-XXXXXX` directory in the temporary directory that
+  only you can enter, and removed when LogSquirl quits. When the plugin is
+  disabled or updated while LogSquirl keeps running, the files are kept for
+  the tabs that still show them.
+- A pcap header past the start of the file is accepted only behind text, as
+  tcpdump's stderr puts it there, and only if it is a valid header; a stray
+  magic number in other data is no longer taken for a capture. A file with a
+  pcap format version other than 2.x is rejected with that version named.
+- Bytes outside printable ASCII in HTTP lines, DNS names, NMEA sentences and
+  SOCKS fields are shown as `\xNN`, so every packet stays on one line.
+
+### Fixed
+- **Large captures no longer freeze or crash LogSquirl.** The whole file was
+  read into memory, every packet copied once more, and all lines formatted on
+  the GUI thread before any was written, so a multi-GB capture froze
+  LogSquirl and then took it down when memory ran out. Captures are now read,
+  formatted and written packet by packet on a worker thread, and a corrupt
+  packet length no longer makes the plugin allocate up to 4 GiB.
+- **The temporary text file could be used against you.** It had a fixed name
+  in the shared temporary directory, was opened with truncation and readable
+  by everyone: another local user could have it overwrite a file of theirs
+  choosing through a symlink, or read your capture's text. A second capture
+  with the same name also overwrote the file a tab still showed, and nothing
+  ever removed the files.
+- Ethernet padding and link-layer trailers are no longer counted as payload:
+  transport data ends where the IPv4 total length or IPv6 payload length
+  says. Outgoing packets captured with TSO/GSO, whose lengths read 0, fall
+  back to the captured bytes as in Wireshark.
+- BSD loopback (DLT_NULL) captures from a big-endian machine were dissected as
+  IPv6 throughout, because the address family was read in the byte order of
+  the machine running LogSquirl. It is now read in the capture's byte order,
+  and the AF_INET6 values of the BSDs and macOS (24, 28, 30) are recognised;
+  an unknown family is shown as such instead of being taken for IPv6.
+- IPv4 fragments after the first, and IPv6 fragments with a non-zero offset,
+  are shown as fragments instead of being parsed as TCP or UDP with ports
+  and flags made up from payload bytes.
+- A TCP header shorter than 20 bytes is flagged as bogus, and no payload is
+  taken from it; before, its header bytes were shown as payload.
+- A packet earlier than the first one shows its negative relative time
+  instead of 0, and the summary's duration is measured from the earliest to
+  the latest packet, so a capture out of time order no longer shows a
+  duration of about 136 years.
+- File names, protocol names and addresses in the sidebar summary are no
+  longer rendered as markup.
+- Log messages, notifications and the path of the opened text file reach
+  LogSquirl as UTF-8, so captures in folders with non-ASCII names open and
+  are reported correctly on systems whose local encoding is not UTF-8.
+- No exception can escape into LogSquirl from the plugin's entry points or
+  the conversion; a failing initialisation is logged and cleaned up.
+- Shutting the plugin down while a capture is being read stops the reading
+  and waits for it, and closing the file dialog after the plugin was shut
+  down no longer touches the deleted sidebar.
+
 ## [0.1.1] — 2026-09-10
 
 ### Fixed

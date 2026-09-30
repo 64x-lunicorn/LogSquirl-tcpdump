@@ -39,10 +39,10 @@ have the log open in.
 
 | Reads the capture | Shows the story |
 | :--- | :--- |
-| **Standard libpcap files.** `.pcap`, `.cap`, `.dmp`, both endiannesses, with a text preamble scan for `adb exec-out tcpdump` output. | **Wireshark-style columns.** No., Stream, Time, Source, Destination, Protocol, Len, Info — TCP flags in bracket notation. |
-| **Protocol dissection.** IPv4, IPv6, TCP, UDP, ICMP, ICMPv6 and ARP. | **Conversations, not packets.** Stream IDs from the IP+port 4-tuple, so both directions filter together. |
-| **Application layers.** TLS handshakes, HTTP requests and responses, DNS with domain names, NMEA 0183 sentences. | **Payload you can skim.** Printable text shown, binary runs collapsed, mostly-binary payloads suppressed. |
-| **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback; 802.1Q VLAN tags stripped transparently. | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second and file size. |
+| **Standard libpcap files.** `.pcap`, `.cap`, `.dmp`, both endiannesses, microsecond and nanosecond timestamps, with a text preamble scan for `adb exec-out tcpdump` output. Read packet by packet in the background, so multi-GB captures work and can be cancelled. | **Wireshark-style columns.** No., Stream, Time, Source, Destination, Protocol, Len, Info — TCP flags in bracket notation. |
+| **Protocol dissection.** IPv4, IPv6 with its extension headers, TCP, UDP, ICMP, ICMPv6 and ARP; IP fragments after the first are shown as such. | **Conversations, not packets.** Stream IDs from the IP+port 4-tuple, so both directions filter together. |
+| **Application layers.** TLS handshakes, HTTP requests and responses, DNS with domain names, NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials. | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
+| **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback (DLT_NULL, DLT_LOOP); stacked 802.1Q and QinQ tags stripped transparently. | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second and file size. |
 
 Port-based hints cover SSH, FTP, SMTP, IMAP, MySQL, PostgreSQL, Redis, MongoDB,
 MQTT, AMQP, Kafka, ADB and twenty more.
@@ -85,8 +85,11 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 1. Open LogSquirl
 2. In the sidebar, select the **tcpdump** tab
 3. Click **Open pcap…** and select a `.pcap`, `.cap`, or `.dmp` file
-4. The parsed packets will open as a text log in LogSquirl's viewer
-5. Use LogSquirl's built-in search, filters, and highlighters on the
+4. The parsed packets will open as a text log in LogSquirl's viewer. A
+   progress bar shows how far a large capture is read; **Cancel** stops it
+5. The text is written to a new file in a private temporary directory,
+   readable by you only, and removed when LogSquirl quits
+6. Use LogSquirl's built-in search, filters, and highlighters on the
    packet data
 
 ## Example Output
@@ -103,7 +106,7 @@ No.    Stream Time           Source                                  Destination
 ## Prerequisites
 
 - **LogSquirl** ≥ 26.03 with the plugin system enabled
-- **Qt6** (Core + Widgets) — same version LogSquirl was built with
+- **Qt6** (Core, Concurrent, Widgets) — same version LogSquirl was built with
 - **CMake** ≥ 3.16
 - A C++17-capable compiler (GCC ≥ 9, Clang ≥ 14, MSVC ≥ 19.29)
 
@@ -143,14 +146,15 @@ cd build && ctest --output-on-failure
 ```mermaid
 graph TD
     A[User clicks Open pcap…] --> B[QFileDialog]
-    B --> C[pcap_parser: parsePcapFile]
-    C --> D[Parse global header]
-    D --> E[Walk packet records]
-    E --> F[Parse Ethernet / link layer]
-    F --> G[Parse IPv4 / IPv6 / ARP]
-    G --> H[Parse TCP / UDP / ICMP]
-    H --> I[packet_formatter: formatAllPackets]
-    I --> J[Write .log temp file]
+    B --> C[Worker thread: pcap_converter]
+    C --> D[PcapReader: global header]
+    D --> E[Next packet record]
+    E --> F[Link layer, VLAN tags]
+    F --> G[IPv4 / IPv6 + extension headers / ARP]
+    G --> H[TCP / UDP / ICMP, application layer]
+    H --> I[PacketFormatter: one line]
+    I --> J[Append to private .log file]
+    J --> E
     J --> K[host API: open_file]
     K --> L[LogSquirl main viewer]
 ```
