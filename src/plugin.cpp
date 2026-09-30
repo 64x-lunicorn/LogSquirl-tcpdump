@@ -41,6 +41,8 @@
 #include "plugin.h"
 #include "sidebarwidget.h"
 
+#include <QCoreApplication>
+
 #include <exception>
 
 // ── Global state ─────────────────────────────────────────────────────────
@@ -128,6 +130,7 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     tcpdump::g_state.api = api;
     tcpdump::g_state.handle = handle;
     tcpdump::g_state.initialised = true;
+    tcpdump::g_state.quitting = false;
 
     const bool ok = guarded( "initialisation", [ api, handle ] {
         api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin initialising\xe2\x80\xa6" );
@@ -136,6 +139,16 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
         tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
         api->register_sidebar_tab( handle, "tcpdump",
                                    static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
+
+        // The host shuts the plugin down both when LogSquirl quits (after
+        // aboutToQuit) and when the plugin is disabled or updated at runtime,
+        // with the tabs left open; only in the first case may the temporary
+        // files go.  The widget as context ends the connection with it,
+        // before the library is unloaded.
+        if ( auto* app = QCoreApplication::instance() ) {
+            QObject::connect( app, &QCoreApplication::aboutToQuit, tcpdump::g_state.sidebarWidget,
+                              [] { tcpdump::g_state.quitting = true; } );
+        }
 
         api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin ready." );
     } );
@@ -160,6 +173,9 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         if ( st.sidebarWidget ) {
             if ( st.api && st.handle ) {
                 st.api->unregister_sidebar_tab( st.handle, static_cast<void*>( st.sidebarWidget ) );
+            }
+            if ( st.quitting ) {
+                st.sidebarWidget->removeTempFiles();
             }
             delete st.sidebarWidget;
             st.sidebarWidget = nullptr;

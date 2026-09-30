@@ -30,6 +30,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QStringList>
 #include <QThreadPool>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -72,6 +73,17 @@ public:
     /// Stop a running conversion; nothing is opened then.
     void cancel();
 
+    /// Create the temporary files below @p dir instead of the system's
+    /// temporary directory (for tests).
+    void setTempRoot( const QString& dir )
+    {
+        tempRoot_ = dir;
+    }
+
+    /// Remove the text files opened in tabs so far, with their directories.
+    /// Only for when LogSquirl quits: until then, the tabs show the files.
+    void removeTempFiles();
+
     /// Whether a conversion is running.
     bool isConverting() const
     {
@@ -84,7 +96,7 @@ private Q_SLOTS:
 
 private:
     /// Show the outcome of a conversion and return to idle.
-    void finishConversion( const QString& filePath, const QString& outPath,
+    void finishConversion( const QString& filePath, const QString& outDir, const QString& outPath,
                            ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
@@ -100,8 +112,12 @@ private:
     quint64 generation_ = 0;
     /// Cancels the running conversion.
     std::shared_ptr<std::atomic_bool> cancelRunning_;
-    /// Output file of the running conversion, which no tab shows yet.
-    QString runningOutput_;
+    /// Where the private temporary directories are created.
+    QString tempRoot_;
+    /// Temporary directory of the running conversion, which no tab shows yet.
+    QString runningDir_;
+    /// Temporary directories of the files opened in tabs.
+    QStringList tabDirs_;
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
 };

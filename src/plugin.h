@@ -42,6 +42,7 @@ struct PluginState {
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for pcap control.
     bool initialised = false;               ///< True between init() and shutdown().
+    bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
 };
 
 /// Singleton plugin state.  Defined in plugin.cpp.

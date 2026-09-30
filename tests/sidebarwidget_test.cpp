@@ -28,6 +28,7 @@
 #include "pcapbuilder.h"
 #include "sidebarwidget.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
@@ -86,6 +87,7 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
     {
         FakeHost host;
         SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
         const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
 
         WHEN( "the capture is opened" )
@@ -124,6 +126,7 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
     {
         FakeHost host;
         SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
         const auto junk = writeCapture( dir, "junk.pcap", Bytes( 64, 0xEE ) );
 
         WHEN( "it is opened" )
@@ -151,6 +154,7 @@ SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
     {
         FakeHost host;
         auto widget = std::make_unique<SidebarWidget>();
+        widget->setTempRoot( dir.path() );
         widget->openPcapFile( writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
         REQUIRE( widget->isConverting() );
 
@@ -176,6 +180,100 @@ SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
             {
                 REQUIRE( host.openedFiles.isEmpty() );
             }
+        }
+    }
+}
+
+SCENARIO( "each conversion writes a new private file", "[sidebar]" )
+{
+    QTemporaryDir captures;
+    QTemporaryDir tempRoot;
+    REQUIRE( captures.isValid() );
+    REQUIRE( tempRoot.isValid() );
+    QDir( captures.path() ).mkdir( "a" );
+    QDir( captures.path() ).mkdir( "b" );
+
+    GIVEN( "a sidebar whose temporary files go below a test directory" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( tempRoot.path() );
+
+        WHEN( "two captures with the same name are opened one after the other" )
+        {
+            widget.openPcapFile( writeCapture( captures, "a/capture.pcap", captureOf( 1 ) ) );
+            REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
+            widget.openPcapFile( writeCapture( captures, "b/capture.pcap", captureOf( 2 ) ) );
+            REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 2; } ) );
+            const auto first = host.openedFiles.at( 0 );
+            const auto second = host.openedFiles.at( 1 );
+
+            THEN( "each gets its own file, named after the capture, and the first is kept" )
+            {
+                REQUIRE( first != second );
+                REQUIRE( QFileInfo( first ).fileName() == "capture.log" );
+                REQUIRE( QFileInfo( second ).fileName() == "capture.log" );
+                QFile out( first );
+                REQUIRE( out.open( QIODevice::ReadOnly ) );
+                REQUIRE( out.readAll().count( '\n' ) == 2 ); // header + 1 packet
+            }
+
+            THEN( "each lives in its own directory below the temporary root" )
+            {
+                const auto dir = QFileInfo( first ).absoluteDir();
+                REQUIRE( QFileInfo( dir.absolutePath() ).absolutePath()
+                         == QFileInfo( tempRoot.path() ).absoluteFilePath() );
+                REQUIRE( dir.dirName().startsWith( "logsquirl-tcpdump-" ) );
+            }
+
+#ifdef Q_OS_UNIX
+            THEN( "only the user can read the file and enter its directory" )
+            {
+                const QFileDevice::Permissions groupOrOther
+                    = QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+                      | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+                REQUIRE( ( QFile::permissions( first ) & groupOrOther ) == 0 );
+                REQUIRE( ( QFile::permissions( QFileInfo( first ).absolutePath() ) & groupOrOther )
+                         == 0 );
+            }
+#endif
+        }
+
+        WHEN( "a conversion fails" )
+        {
+            widget.openPcapFile( writeCapture( captures, "junk.pcap", Bytes( 64, 0xEE ) ) );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "its temporary directory is removed" )
+            {
+                REQUIRE( QDir( tempRoot.path() ).isEmpty() );
+            }
+        }
+
+        WHEN( "a conversion is cancelled" )
+        {
+            widget.openPcapFile( writeCapture( captures, "big.pcap", captureOf( 20000 ) ) );
+            widget.cancel();
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "its temporary directory is removed" )
+            {
+                REQUIRE( QDir( tempRoot.path() ).isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a sidebar that is destroyed while it converts" )
+    {
+        FakeHost host;
+        auto widget = std::make_unique<SidebarWidget>();
+        widget->setTempRoot( tempRoot.path() );
+        widget->openPcapFile( writeCapture( captures, "big.pcap", captureOf( 20000 ) ) );
+        widget.reset();
+
+        THEN( "the unfinished conversion's directory is removed" )
+        {
+            REQUIRE( QDir( tempRoot.path() ).isEmpty() );
         }
     }
 }

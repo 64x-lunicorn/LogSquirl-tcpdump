@@ -50,8 +50,9 @@ struct ConversionResult {
 };
 
 /**
- * Convert the pcap file @p inputPath into a text file at @p outputPath, one
- * line per packet, reading and writing packet by packet.
+ * Convert the pcap file @p inputPath into a new text file at @p outputPath,
+ * one line per packet, reading and writing packet by packet.  The output
+ * file must not exist yet; it is created readable by the user only.
  *
  * @param cancel    If set, checked between packets; stops the conversion.
  * @param progress  If set, called with the share of the input read so far,

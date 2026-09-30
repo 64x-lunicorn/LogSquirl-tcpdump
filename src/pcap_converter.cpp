@@ -84,11 +84,13 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
     result.header = reader.header();
 
     QFile output( outputPath );
-    if ( !output.open( QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text ) ) {
+    // Never write into an existing file or through a link planted in its place.
+    if ( !output.open( QIODevice::WriteOnly | QIODevice::NewOnly | QIODevice::Text ) ) {
         result.error
             = QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() );
         return result;
     }
+    output.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
     auto fail = [ &output, &result ]( const QString& error ) {
         output.remove();
         result.status = ConversionResult::Status::Failed;

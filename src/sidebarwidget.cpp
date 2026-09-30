@@ -42,6 +42,7 @@
 #include <QMessageBox>
 #include <QPromise>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -54,6 +55,7 @@ namespace tcpdump {
 
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
+    , tempRoot_( QDir::tempPath() )
 {
     pool_.setMaxThreadCount( 1 );
 
@@ -109,9 +111,17 @@ SidebarWidget::~SidebarWidget()
     pool_.waitForDone();
 
     // A running conversion's file never reached a tab.
-    if ( !runningOutput_.isEmpty() ) {
-        QFile::remove( runningOutput_ );
+    if ( !runningDir_.isEmpty() ) {
+        QDir( runningDir_ ).removeRecursively();
     }
+}
+
+void SidebarWidget::removeTempFiles()
+{
+    for ( const auto& dir : std::as_const( tabDirs_ ) ) {
+        QDir( dir ).removeRecursively();
+    }
+    tabDirs_.clear();
 }
 
 void SidebarWidget::onOpenClicked()
@@ -139,19 +149,32 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
 
-    // Write to a temporary file that persists after the plugin is done
-    // (LogSquirl will display it; user can save it if they want)
-    const auto baseName = QFileInfo( filePath ).completeBaseName();
-    const auto tempDir = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
-    const auto outPath = tempDir + "/logsquirl_tcpdump_" + baseName + ".log";
+    // Write to a new file in a new directory that only the user can enter,
+    // so that no other user can read the capture's text or plant a file or
+    // link in its place, and no earlier tab's file is overwritten.  It is
+    // kept for its tab until LogSquirl quits.
+    QTemporaryDir tempDir( tempRoot_ + "/logsquirl-tcpdump-XXXXXX" );
+    if ( !tempDir.isValid() ) {
+        ConversionResult result;
+        result.error = "Cannot create a temporary directory: " + tempDir.errorString();
+        finishConversion( filePath, {}, {}, std::move( result ) );
+        return;
+    }
+    tempDir.setAutoRemove( false );
+    const auto outDir = tempDir.path();
+    auto baseName = QFileInfo( filePath ).completeBaseName();
+    if ( baseName.isEmpty() ) {
+        baseName = "capture";
+    }
+    const auto outPath = tempDir.filePath( baseName + ".log" );
 
     const auto generation = ++generation_;
     auto cancelled = std::make_shared<std::atomic_bool>( false );
     cancelRunning_ = cancelled;
-    runningOutput_ = outPath;
+    runningDir_ = outDir;
     setConverting( true );
-    summaryLabel_->setText(
-        QString( "Reading %1\xe2\x80\xa6" ).arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
+    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
+                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
 
     // The watcher lives on this thread, so its signals are delivered here.
     auto* watcher = new QFutureWatcher<ConversionResult>( this );
@@ -162,7 +185,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
                  }
              } );
     connect( watcher, &QFutureWatcher<ConversionResult>::finished, this,
-             [ this, watcher, generation, cancelled, filePath, outPath ] {
+             [ this, watcher, generation, cancelled, filePath, outDir, outPath ] {
                  watcher->deleteLater();
                  ConversionResult result;
                  if ( watcher->future().resultCount() > 0 ) {
@@ -172,12 +195,17 @@ void SidebarWidget::openPcapFile( const QString& filePath )
                      result.error = "The conversion ended without a result";
                  }
                  // Cancel wins even over a conversion that had just finished.
-                 if ( cancelled->load() && result.status == ConversionResult::Status::Converted ) {
-                     QFile::remove( outPath );
+                 if ( cancelled->load() ) {
                      result.status = ConversionResult::Status::Cancelled;
                  }
+                 if ( result.status != ConversionResult::Status::Converted ) {
+                     QDir( outDir ).removeRecursively();
+                 }
                  if ( generation == generation_ ) {
-                     finishConversion( filePath, outPath, std::move( result ) );
+                     finishConversion( filePath, outDir, outPath, std::move( result ) );
+                 }
+                 else if ( result.status == ConversionResult::Status::Converted ) {
+                     QDir( outDir ).removeRecursively(); // outdated: never shown
                  }
              } );
 
@@ -190,15 +218,12 @@ void SidebarWidget::openPcapFile( const QString& filePath )
                 promise.setProgressValue( permille );
             } );
         } catch ( const std::bad_alloc& ) {
-            QFile::remove( outPath );
             result = ConversionResult();
             result.error = "Not enough memory to read the capture";
         } catch ( const std::exception& e ) {
-            QFile::remove( outPath );
             result = ConversionResult();
             result.error = QString::fromUtf8( e.what() );
         } catch ( ... ) {
-            QFile::remove( outPath );
             result = ConversionResult();
             result.error = "Unknown error";
         }
@@ -226,11 +251,11 @@ void SidebarWidget::setConverting( bool converting )
     progressBar_->setValue( 0 );
 }
 
-void SidebarWidget::finishConversion( const QString& filePath, const QString& outPath,
-                                      ConversionResult result )
+void SidebarWidget::finishConversion( const QString& filePath, const QString& outDir,
+                                      const QString& outPath, ConversionResult result )
 {
     cancelRunning_.reset();
-    runningOutput_.clear();
+    runningDir_.clear();
     setConverting( false );
 
     switch ( result.status ) {
@@ -252,6 +277,7 @@ void SidebarWidget::finishConversion( const QString& filePath, const QString& ou
     }
 
     // Open in LogSquirl viewer
+    tabDirs_.append( outDir );
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
     }

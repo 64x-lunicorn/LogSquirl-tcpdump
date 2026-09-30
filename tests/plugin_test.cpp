@@ -25,8 +25,15 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "pcapbuilder.h"
 #include "plugin.h"
 #include "sidebarwidget.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QTemporaryDir>
 
 using tcpdump_test::FakeHost;
 
@@ -132,5 +139,83 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
 
         // The host would not call shutdown() after a failed init, but it must be harmless.
         REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
+    }
+}
+
+namespace {
+
+QString writeCaptureFile( const QTemporaryDir& dir )
+{
+    using namespace tcpdump_test;
+    const auto bytes = pcapOf(
+        { eth( tcpdump::EthertypeIpv4, ipv4( tcpdump::IpProtoUdp, udp( 1, 2, text( "x" ) ) ) ) } );
+    const auto path = dir.filePath( "capture.pcap" );
+    QFile file( path );
+    REQUIRE( file.open( QIODevice::WriteOnly ) );
+    file.write( reinterpret_cast<const char*>( bytes.data() ),
+                static_cast<qint64>( bytes.size() ) );
+    return path;
+}
+
+/** Initialise the plugin, open a capture through its sidebar, return the opened file. */
+QString openCapture( FakeHost& host, const QString& capture, const QString& tempRoot )
+{
+    REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+    auto* sidebar = tcpdump::g_state.sidebarWidget;
+    sidebar->setTempRoot( tempRoot );
+    const auto before = host.openedFiles.size();
+    sidebar->openPcapFile( capture );
+    REQUIRE( tcpdump_test::waitFor(
+        [ &host, before ] { return host.openedFiles.size() == before + 1; } ) );
+    return host.openedFiles.last();
+}
+
+} // namespace
+
+SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
+{
+    QTemporaryDir captures;
+    QTemporaryDir tempRoot;
+    REQUIRE( captures.isValid() );
+    REQUIRE( tempRoot.isValid() );
+    const auto capture = writeCaptureFile( captures );
+
+    GIVEN( "an initialised plugin that opened a capture in a tab" )
+    {
+        FakeHost host;
+        const auto opened = openCapture( host, capture, tempRoot.path() );
+
+        WHEN( "LogSquirl quits, which shuts the plugin down" )
+        {
+            QMetaObject::invokeMethod( QCoreApplication::instance(), "aboutToQuit" );
+            logsquirl_plugin_shutdown();
+
+            THEN( "the temporary file and its directory are removed" )
+            {
+                REQUIRE_FALSE( QFileInfo::exists( opened ) );
+                REQUIRE( QDir( tempRoot.path() ).isEmpty() );
+            }
+
+            AND_WHEN( "the plugin is loaded again and later disabled" )
+            {
+                const auto reopened = openCapture( host, capture, tempRoot.path() );
+                logsquirl_plugin_shutdown();
+
+                THEN( "the earlier quit does not make it remove the new tab's file" )
+                {
+                    REQUIRE( QFileInfo::exists( reopened ) );
+                }
+            }
+        }
+
+        WHEN( "the plugin is disabled or updated while LogSquirl keeps running" )
+        {
+            logsquirl_plugin_shutdown();
+
+            THEN( "the file is kept for its open tab" )
+            {
+                REQUIRE( QFileInfo::exists( opened ) );
+            }
+        }
     }
 }
