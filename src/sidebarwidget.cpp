@@ -158,6 +158,8 @@ void SidebarWidget::onOpenClicked()
 
 void SidebarWidget::openPcapFile( const QString& filePath )
 {
+    // One conversion at a time (Open is disabled meanwhile), so the outcome
+    // that arrives is always that of the running one.
     if ( converting_ ) {
         return;
     }
@@ -182,7 +184,6 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     }
     const auto outPath = tempDir.filePath( baseName + ".log" );
 
-    const auto generation = ++generation_;
     auto cancelled = std::make_shared<std::atomic_bool>( false );
     cancelRunning_ = cancelled;
     runningDir_ = outDir;
@@ -192,14 +193,10 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 
     // The watcher lives on this thread, so its signals are delivered here.
     auto* watcher = new QFutureWatcher<ConversionResult>( this );
-    connect( watcher, &QFutureWatcher<ConversionResult>::progressValueChanged, this,
-             [ this, generation ]( int permille ) {
-                 if ( generation == generation_ ) {
-                     progressBar_->setValue( permille );
-                 }
-             } );
+    connect( watcher, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
+             &QProgressBar::setValue );
     connect( watcher, &QFutureWatcher<ConversionResult>::finished, this,
-             [ this, watcher, generation, cancelled, filePath, outDir, outPath ] {
+             [ this, watcher, cancelled, filePath, outDir, outPath ] {
                  watcher->deleteLater();
                  ConversionResult result;
                  if ( watcher->future().resultCount() > 0 ) {
@@ -215,12 +212,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
                  if ( result.status != ConversionResult::Status::Converted ) {
                      QDir( outDir ).removeRecursively();
                  }
-                 if ( generation == generation_ ) {
-                     finishConversion( filePath, outDir, outPath, std::move( result ) );
-                 }
-                 else if ( result.status == ConversionResult::Status::Converted ) {
-                     QDir( outDir ).removeRecursively(); // outdated: never shown
-                 }
+                 finishConversion( filePath, outDir, outPath, std::move( result ) );
              } );
 
     watcher->setFuture( QtConcurrent::run( &pool_, [ filePath, outPath, cancelled ](

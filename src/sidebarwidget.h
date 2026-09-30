@@ -108,8 +108,6 @@ private:
     QString lastDir_; ///< Remembers the last browsed directory.
 
     bool converting_ = false;
-    /// Counts started conversions; only the last one's outcome is shown.
-    quint64 generation_ = 0;
     /// Cancels the running conversion.
     std::shared_ptr<std::atomic_bool> cancelRunning_;
     /// Where the private temporary directories are created.
