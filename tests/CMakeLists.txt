@@ -21,6 +21,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     socks_test.cpp
     streaming_test.cpp
+    plugin_test.cpp
     packet_formatter_test.cpp
 )
 

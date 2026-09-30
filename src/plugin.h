@@ -28,6 +28,8 @@
 
 #include "logsquirl_plugin_api.h"
 
+#include <QString>
+
 namespace tcpdump {
 class SidebarWidget;
 } // namespace tcpdump
@@ -45,7 +47,12 @@ struct PluginState {
 /// Singleton plugin state.  Defined in plugin.cpp.
 extern PluginState g_state;
 
-/// Convenience: log via host API.  No-op if the plugin is not initialised.
-void hostLog( int level, const char* message );
+/// Log a message through the host API (no-op if not initialised).
+/// The host decodes the message as UTF-8.
+void hostLog( int level, const QString& message );
+
+/// Show a host notification (no-op if not initialised).
+/// The host decodes the message as UTF-8.
+void hostNotify( const QString& message );
 
 } // namespace tcpdump

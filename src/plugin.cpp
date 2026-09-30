@@ -41,15 +41,24 @@
 #include "plugin.h"
 #include "sidebarwidget.h"
 
+#include <exception>
+
 // ── Global state ─────────────────────────────────────────────────────────
 
 namespace tcpdump {
 PluginState g_state;
 
-void hostLog( int level, const char* message )
+void hostLog( int level, const QString& message )
 {
     if ( g_state.api && g_state.handle ) {
-        g_state.api->log_message( g_state.handle, level, message );
+        g_state.api->log_message( g_state.handle, level, message.toUtf8().constData() );
+    }
+}
+
+void hostNotify( const QString& message )
+{
+    if ( g_state.api && g_state.handle ) {
+        g_state.api->show_notification( g_state.handle, message.toUtf8().constData() );
     }
 }
 } // namespace tcpdump
@@ -67,9 +76,41 @@ static const LogSquirlPluginInfo kPluginInfo = {
     /* api_version */ LOGSQUIRL_PLUGIN_API_VERSION,
 };
 
+// ── Internal helpers ─────────────────────────────────────────────────────
+
+/// Log that work for the host failed.
+static void logFailure( const char* what, const char* reason ) noexcept
+{
+    try {
+        tcpdump::hostLog( LOGSQUIRL_LOG_ERROR, QStringLiteral( "tcpdump plugin: %1 failed: %2" )
+                                                   .arg( what, QString::fromUtf8( reason ) ) );
+    } catch ( ... ) {
+        // Nothing left to report it with.
+    }
+}
+
+/// Run work for the host, logging instead of throwing: the host is C, and
+/// an exception escaping into it would terminate LogSquirl.
+/// Returns false if it threw.
+template <typename Work>
+static bool guarded( const char* what, Work&& work ) noexcept
+{
+    try {
+        work();
+        return true;
+    } catch ( const std::exception& e ) {
+        logFailure( what, e.what() );
+    } catch ( ... ) {
+        logFailure( what, "unknown exception" );
+    }
+    return false;
+}
+
 // ── Exported C entry points ──────────────────────────────────────────────
 
 extern "C" {
+
+LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void );
 
 /// Return static plugin metadata.
 LOGSQUIRL_PLUGIN_EXPORT const LogSquirlPluginInfo* logsquirl_plugin_get_info( void )
@@ -88,28 +129,42 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     tcpdump::g_state.handle = handle;
     tcpdump::g_state.initialised = true;
 
-    api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin initialising\xe2\x80\xa6" );
+    const bool ok = guarded( "initialisation", [ api, handle ] {
+        api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin initialising\xe2\x80\xa6" );
 
-    // Register a sidebar tab for pcap file management
-    tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
-    api->register_sidebar_tab( handle, "tcpdump",
-                               static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
+        // Register a sidebar tab for pcap file management
+        tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
+        api->register_sidebar_tab( handle, "tcpdump",
+                                   static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
 
-    api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin ready." );
+        api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin ready." );
+    } );
+
+    if ( !ok ) {
+        // The tab may not have been registered: just delete the widget.
+        delete tcpdump::g_state.sidebarWidget;
+        tcpdump::g_state.sidebarWidget = nullptr;
+        logsquirl_plugin_shutdown();
+        return 1;
+    }
     return 0;
 }
 
 /// Shut down the plugin — unregister sidebar and release resources.
 LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 {
-    tcpdump::hostLog( LOGSQUIRL_LOG_INFO, "tcpdump plugin shutting down\xe2\x80\xa6" );
+    guarded( "shutdown", [] {
+        auto& st = tcpdump::g_state;
+        tcpdump::hostLog( LOGSQUIRL_LOG_INFO, "tcpdump plugin shutting down\u2026" );
 
-    if ( tcpdump::g_state.sidebarWidget ) {
-        tcpdump::g_state.api->unregister_sidebar_tab(
-            tcpdump::g_state.handle, static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
-        delete tcpdump::g_state.sidebarWidget;
-        tcpdump::g_state.sidebarWidget = nullptr;
-    }
+        if ( st.sidebarWidget ) {
+            if ( st.api && st.handle ) {
+                st.api->unregister_sidebar_tab( st.handle, static_cast<void*>( st.sidebarWidget ) );
+            }
+            delete st.sidebarWidget;
+            st.sidebarWidget = nullptr;
+        }
+    } );
 
     tcpdump::g_state.api = nullptr;
     tcpdump::g_state.handle = nullptr;

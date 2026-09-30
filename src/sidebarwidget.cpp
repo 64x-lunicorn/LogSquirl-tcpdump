@@ -93,7 +93,7 @@ void SidebarWidget::onOpenClicked()
 
 void SidebarWidget::openPcapFile( const QString& filePath )
 {
-    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Opening pcap file: " + filePath ) );
+    hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
 
     // Write to a temporary file that persists after the plugin is done
     // (LogSquirl will display it; user can save it if they want)
@@ -106,26 +106,21 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     if ( result.status != ConversionResult::Status::Converted ) {
         const auto& msg = result.error;
         summaryLabel_->setText( "Error: " + msg );
-        hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( "pcap parse error: " + msg ) );
-        if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification( g_state.handle,
-                                            qPrintable( "Failed to open pcap: " + msg ) );
-        }
+        hostLog( LOGSQUIRL_LOG_ERROR, "pcap parse error: " + msg );
+        hostNotify( "Failed to open pcap: " + msg );
         return;
     }
 
     // Open in LogSquirl viewer
     if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, qPrintable( outPath ), 0 );
+        g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
     }
 
     summaryLabel_->setText(
         summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(), result ) );
 
-    hostLog(
-        LOGSQUIRL_LOG_INFO,
-        qPrintable(
-            QString( "Opened %1 packets from %2" ).arg( result.stats.packets ).arg( filePath ) ) );
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Opened %1 packets from %2" ).arg( result.stats.packets ).arg( filePath ) );
 }
 
 namespace {
