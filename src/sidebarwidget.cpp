@@ -39,7 +39,6 @@
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QLocale>
-#include <QMessageBox>
 #include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
@@ -50,6 +49,7 @@
 #include <exception>
 #include <map>
 #include <new>
+#include <utility>
 #include <vector>
 
 namespace tcpdump {

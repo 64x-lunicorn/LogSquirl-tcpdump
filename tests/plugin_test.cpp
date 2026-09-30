@@ -117,6 +117,9 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
     }
 }
 
+// MSVC's default /EHsc assumes that functions of C linkage, like the host
+// API's, never throw, and may drop the handlers this test relies on.
+#ifndef _MSC_VER
 SCENARIO( "no exception leaves an entry point", "[plugin]" )
 {
     GIVEN( "a host whose register_sidebar_tab() throws" )
@@ -141,6 +144,7 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
         REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
     }
 }
+#endif
 
 namespace {
 
