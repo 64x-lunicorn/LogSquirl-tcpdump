@@ -25,6 +25,7 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "sidebarwidget.h"
 
@@ -274,6 +275,43 @@ SCENARIO( "each conversion writes a new private file", "[sidebar]" )
         THEN( "the unfinished conversion's directory is removed" )
         {
             REQUIRE( QDir( tempRoot.path() ).isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
+{
+    GIVEN( "a capture whose file name, protocol and endpoint contain markup" )
+    {
+        tcpdump::ConversionResult result;
+        tcpdump::PacketRecord pkt;
+        pkt.protocol = "<i>P</i>";
+        pkt.srcIp = "<img src=x>";
+        result.stats.add( pkt );
+
+        WHEN( "the summary is built" )
+        {
+            const auto html = tcpdump::summaryHtml( "<b>a&b</b>.pcap", 100, result );
+
+            THEN( "each is escaped" )
+            {
+                REQUIRE( html.contains( "&lt;b&gt;a&amp;b&lt;/b&gt;.pcap" ) );
+                REQUIRE( html.contains( "&lt;i&gt;P&lt;/i&gt;" ) );
+                REQUIRE( html.contains( "&lt;img src=x&gt;" ) );
+                REQUIRE_FALSE( html.contains( "<img" ) );
+                REQUIRE_FALSE( html.contains( "<i>" ) );
+            }
+        }
+    }
+
+    GIVEN( "a capture that was cut off" )
+    {
+        tcpdump::ConversionResult result;
+        result.truncated = true;
+
+        THEN( "the summary says so" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "cut.pcap", 100, result ).contains( "cut off" ) );
         }
     }
 }

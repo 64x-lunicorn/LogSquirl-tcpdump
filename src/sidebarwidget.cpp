@@ -350,9 +350,10 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
         ppsStr = QString::number( pps, 'f', 0 );
     }
 
-    // Build summary HTML
+    // Build summary HTML; anything from the file or its name is escaped,
+    // since the label renders markup
     QString html;
-    html += QString( "<b>%1</b><br>" ).arg( fileName );
+    html += QString( "<b>%1</b><br>" ).arg( fileName.toHtmlEscaped() );
     html += QString( "<hr>" );
 
     // General stats
@@ -363,6 +364,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
     html += QString( "Link type: %1<br>" ).arg( linkName );
+    if ( result.truncated ) {
+        html += "<i>The capture was cut off in the middle of a packet.</i><br>";
+    }
     html += "<br>";
 
     // Protocol breakdown
@@ -372,7 +376,7 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
         const auto pct
             = static_cast<double>( count ) / static_cast<double>( stats.packets ) * 100.0;
         html += QString( "%1: %2 (%3%, %4)<br>" )
-                    .arg( QString::fromStdString( proto ) )
+                    .arg( QString::fromStdString( proto ).toHtmlEscaped() )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
                     .arg( pct, 0, 'f', 1 )
                     .arg( formatBytes( bytes ) );
@@ -386,7 +390,7 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
         if ( shown >= 8 )
             break;
         html += QString( "%1: %2 pkts<br>" )
-                    .arg( QString::fromStdString( ip ) )
+                    .arg( QString::fromStdString( ip ).toHtmlEscaped() )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }
