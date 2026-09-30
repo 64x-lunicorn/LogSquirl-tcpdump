@@ -29,6 +29,7 @@
 #include "pcap_parser.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -326,258 +327,267 @@ const char* portToProtocol( uint16_t port )
     }
 }
 
-/// Detect SOCKS4/SOCKS5 proxy protocol handshake messages.
-/// Only matches when at least one port is a known SOCKS/proxy port.
-std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, uint16_t dstPort )
+/// Format a protocol code as "0xNN".
+std::string hexCode( uint8_t code )
 {
-    // Only try SOCKS detection on known proxy ports
-    auto isSocksPort = []( uint16_t port ) {
-        return port == 1080 || port == 1081 || port == 3128 || port == 9050 || port == 9051;
-    };
-    if ( !isSocksPort( srcPort ) && !isSocksPort( dstPort ) )
+    char buf[ 8 ];
+    std::snprintf( buf, sizeof( buf ), "0x%02X", code );
+    return buf;
+}
+
+/// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
+/// that a field can neither break the line nor hide what it contains.
+/// Within quotes, '"' is escaped too.
+std::string escapeBytes( const uint8_t* p, size_t len, bool quoted )
+{
+    std::string out;
+    out.reserve( len );
+    for ( size_t i = 0; i < len; ++i ) {
+        const auto c = p[ i ];
+        if ( c == '\\' || ( quoted && c == '"' ) ) {
+            out += '\\';
+            out += static_cast<char>( c );
+        }
+        else if ( c >= 0x20 && c < 0x7F ) {
+            out += static_cast<char>( c );
+        }
+        else {
+            out += "\\x" + hexCode( c ).substr( 2 );
+        }
+    }
+    return out;
+}
+
+std::string quotedBytes( const uint8_t* p, size_t len )
+{
+    return '"' + escapeBytes( p, len, true ) + '"';
+}
+
+bool isSocksPort( uint16_t port )
+{
+    return port == 1080 || port == 1081 || port == 3128 || port == 9050 || port == 9051;
+}
+
+const char* socks5MethodName( uint8_t method )
+{
+    switch ( method ) {
+    case 0x00:
+        return "No Authentication";
+    case 0x01:
+        return "GSSAPI";
+    case 0x02:
+        return "Username/Password";
+    case 0xFF:
+        return "No Acceptable Methods";
+    default:
+        return "Unknown";
+    }
+}
+
+std::string socks5Method( uint8_t method )
+{
+    return std::string( socks5MethodName( method ) ) + " (" + hexCode( method ) + ")";
+}
+
+/// The address of a SOCKS5 request or reply at @p p (address type first),
+/// if the message ends exactly behind it: "<type>", "<host>:<port>".
+bool socks5Address( const uint8_t* p, size_t len, std::string& type, std::string& address )
+{
+    if ( len < 1 ) {
+        return false;
+    }
+    switch ( p[ 0 ] ) {
+    case 0x01:
+        if ( len != 1 + 4 + 2 ) {
+            return false;
+        }
+        type = "IPv4";
+        address = formatIpv4( p + 1 ) + ":" + std::to_string( readBE16( p + 5 ) );
+        return true;
+    case 0x03: {
+        if ( len < 2 ) {
+            return false;
+        }
+        const size_t nameLen = p[ 1 ];
+        if ( nameLen == 0 || len != 2 + nameLen + 2 ) {
+            return false;
+        }
+        type = "Domain";
+        address = escapeBytes( p + 2, nameLen, false ) + ":"
+                  + std::to_string( readBE16( p + 2 + nameLen ) );
+        return true;
+    }
+    case 0x04:
+        if ( len != 1 + 16 + 2 ) {
+            return false;
+        }
+        type = "IPv6";
+        address = formatIpv6( p + 1 ) + ":" + std::to_string( readBE16( p + 17 ) );
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// A SOCKS message sent by the client to the proxy, or empty if the payload
+/// does not have the exact shape of one.
+std::string socksClientMessage( const uint8_t* p, size_t len )
+{
+    if ( len < 2 ) {
         return {};
+    }
 
-    if ( len < 2 )
+    // SOCKS5 greeting (RFC 1928): 05 <nmethods> <methods...>
+    if ( p[ 0 ] == 0x05 && p[ 1 ] > 0 && len == 2 + static_cast<size_t>( p[ 1 ] ) ) {
+        std::string methods;
+        for ( size_t i = 2; i < len; ++i ) {
+            if ( !methods.empty() ) {
+                methods += ", ";
+            }
+            methods += socks5Method( p[ i ] );
+        }
+        return "SOCKS5 Client Greeting, Version: 5, Methods: " + std::to_string( p[ 1 ] ) + " ["
+               + methods + "]";
+    }
+
+    // SOCKS5 request: 05 <cmd> 00 <atyp> <address> <port>
+    if ( p[ 0 ] == 0x05 && len >= 4 && p[ 2 ] == 0x00 && p[ 1 ] >= 0x01 && p[ 1 ] <= 0x03 ) {
+        std::string type;
+        std::string address;
+        if ( socks5Address( p + 3, len - 3, type, address ) ) {
+            static const char* const kCommands[] = { "Connect", "Bind", "UDP Associate" };
+            return "SOCKS5 Connect, Version: 5, Command: " + std::string( kCommands[ p[ 1 ] - 1 ] )
+                   + " (" + hexCode( p[ 1 ] ) + "), Address Type: " + type
+                   + ", Destination: " + address;
+        }
         return {};
-
-    auto ver = payload[ 0 ];
-
-    // ── SOCKS5 (RFC 1928) ────────────────────────────────────────────────
-    if ( ver == 0x05 ) {
-        // Client greeting: 05 <nmethods> <method bytes...>
-        auto nMethods = payload[ 1 ];
-        if ( len >= static_cast<size_t>( 2 + nMethods ) && nMethods > 0 && nMethods <= 4 ) {
-            // Heuristic: all method bytes should be 0x00–0x03 or 0xFF
-            bool looksLikeGreeting = true;
-            for ( uint8_t i = 0; i < nMethods; ++i ) {
-                auto m = payload[ 2 + i ];
-                if ( m > 0x03 && m != 0xFF ) {
-                    looksLikeGreeting = false;
-                    break;
-                }
-            }
-            if ( looksLikeGreeting && len == static_cast<size_t>( 2 + nMethods ) ) {
-                std::string methods;
-                for ( uint8_t i = 0; i < nMethods; ++i ) {
-                    if ( !methods.empty() )
-                        methods += ", ";
-                    switch ( payload[ 2 + i ] ) {
-                    case 0x00:
-                        methods += "No Authentication (0x00)";
-                        break;
-                    case 0x01:
-                        methods += "GSSAPI (0x01)";
-                        break;
-                    case 0x02:
-                        methods += "Username/Password (0x02)";
-                        break;
-                    case 0xFF:
-                        methods += "No Acceptable Methods (0xFF)";
-                        break;
-                    default:
-                        methods += "Unknown (0x" + std::to_string( payload[ 2 + i ] ) + ")";
-                        break;
-                    }
-                }
-                return "SOCKS5 Client Greeting, Version: 5, Methods: " + std::to_string( nMethods )
-                       + " [" + methods + "]";
-            }
-        }
-
-        // Connect request: 05 01 00 <atyp> <addr> <port>
-        if ( len >= 10 && payload[ 1 ] == 0x01 && payload[ 2 ] == 0x00 ) {
-            auto atyp = payload[ 3 ];
-            std::string target;
-            std::string atypStr;
-            if ( atyp == 0x01 && len >= 10 ) {
-                atypStr = "IPv4";
-                target = formatIpv4( payload + 4 );
-                auto port = readBE16( payload + 8 );
-                target += ":" + std::to_string( port );
-            }
-            else if ( atyp == 0x03 && len >= 7 ) {
-                atypStr = "Domain";
-                auto domainLen = payload[ 4 ];
-                if ( len >= static_cast<size_t>( 5 + domainLen + 2 ) ) {
-                    target = std::string( reinterpret_cast<const char*>( payload + 5 ), domainLen );
-                    auto port = readBE16( payload + 5 + domainLen );
-                    target += ":" + std::to_string( port );
-                }
-            }
-            else if ( atyp == 0x04 && len >= 22 ) {
-                atypStr = "IPv6";
-                target = formatIpv6( payload + 4 );
-                auto port = readBE16( payload + 20 );
-                target += ":" + std::to_string( port );
-            }
-            if ( !target.empty() )
-                return "SOCKS5 Connect, Version: 5, Command: Connect (0x01), "
-                       "Address Type: "
-                       + atypStr + ", Destination: " + target;
-            return "SOCKS5 Connect Request, Version: 5, Command: Connect (0x01)";
-        }
-
-        // Connect reply: 05 <status> 00 <atyp> <addr> <port>
-        if ( len >= 4 && payload[ 2 ] == 0x00 && payload[ 1 ] != 0x01 ) {
-            const char* status = nullptr;
-            uint8_t code = payload[ 1 ];
-            switch ( code ) {
-            case 0x00:
-                status = "Succeeded";
-                break;
-            case 0x01:
-                status = "General Failure";
-                break;
-            case 0x02:
-                status = "Not Allowed by Ruleset";
-                break;
-            case 0x03:
-                status = "Network Unreachable";
-                break;
-            case 0x04:
-                status = "Host Unreachable";
-                break;
-            case 0x05:
-                status = "Connection Refused";
-                break;
-            case 0x06:
-                status = "TTL Expired";
-                break;
-            case 0x07:
-                status = "Command Not Supported";
-                break;
-            case 0x08:
-                status = "Address Type Not Supported";
-                break;
-            default:
-                status = "Unknown";
-                break;
-            }
-            std::string result = "SOCKS5 Reply, Version: 5, Status: ";
-            result += status;
-            result += " (0x0" + std::to_string( code ) + ")";
-
-            // Extract bound address from reply
-            auto atyp = payload[ 3 ];
-            if ( atyp == 0x01 && len >= 10 ) {
-                result += ", Bound: " + formatIpv4( payload + 4 ) + ":"
-                          + std::to_string( readBE16( payload + 8 ) );
-            }
-            else if ( atyp == 0x04 && len >= 22 ) {
-                result += ", Bound: " + formatIpv6( payload + 4 ) + ":"
-                          + std::to_string( readBE16( payload + 20 ) );
-            }
-            return result;
-        }
-
-        // Server method selection: 05 <method> (2+ bytes, after other checks failed)
-        {
-            const char* method = nullptr;
-            switch ( payload[ 1 ] ) {
-            case 0x00:
-                method = "No Authentication (0x00)";
-                break;
-            case 0x02:
-                method = "Username/Password (0x02)";
-                break;
-            case 0xFF:
-                method = "No Acceptable Methods (0xFF)";
-                break;
-            default:
-                break;
-            }
-            if ( method )
-                return std::string( "SOCKS5 Server Choice, Version: 5, Method: " ) + method;
-            return "SOCKS5 Server Choice, Version: 5, Method: Unknown (0x"
-                   + std::to_string( payload[ 1 ] ) + ")";
-        }
     }
 
-    // SOCKS5 Username/Password auth (RFC 1929, version byte = 0x01)
-    if ( ver == 0x01 && len >= 2 ) {
-        auto ulen = payload[ 1 ];
-        if ( len >= static_cast<size_t>( 2 + ulen + 1 ) ) {
-            // Auth request: 01 <ulen> <username> <plen> <password>
-            std::string user( reinterpret_cast<const char*>( payload + 2 ), ulen );
-            auto plen = payload[ 2 + ulen ];
-            std::string pass;
-            if ( len >= static_cast<size_t>( 2 + ulen + 1 + plen ) ) {
-                pass = std::string( reinterpret_cast<const char*>( payload + 3 + ulen ), plen );
-            }
-            return "SOCKS5 Auth Request, User: \"" + user + "\", Pass: \"" + pass + "\"";
+    // Username/password request (RFC 1929): 01 <ulen> <user> <plen> <password>
+    if ( p[ 0 ] == 0x01 ) {
+        const size_t userLen = p[ 1 ];
+        if ( len < 2 + userLen + 1 ) {
+            return {};
         }
-        // Auth response: 01 <status> (2 bytes)
-        if ( len == 2 ) {
-            return payload[ 1 ] == 0x00 ? "SOCKS5 Auth Response, Status: Success (0x00)"
-                                        : "SOCKS5 Auth Response, Status: Failure (0x"
-                                              + std::to_string( payload[ 1 ] ) + ")";
+        const size_t passLen = p[ 2 + userLen ];
+        if ( len != 2 + userLen + 1 + passLen ) {
+            return {};
         }
+        return "SOCKS5 Auth Request, User: " + quotedBytes( p + 2, userLen )
+               + ", Pass: " + quotedBytes( p + 3 + userLen, passLen );
     }
 
-    // ── SOCKS4 / SOCKS4a ────────────────────────────────────────────────
-    if ( ver == 0x04 && len >= 8 ) {
-        auto cmd = payload[ 1 ];
-        if ( cmd == 0x01 || cmd == 0x02 ) {
-            auto port = readBE16( payload + 2 );
-            auto ip = formatIpv4( payload + 4 );
-            std::string cmdStr = ( cmd == 0x01 ) ? "Connect (0x01)" : "Bind (0x02)";
-
-            // Extract userid (null-terminated after the 8-byte header)
-            std::string userid;
-            for ( size_t i = 8; i < len; ++i ) {
-                if ( payload[ i ] == 0x00 )
-                    break;
-                userid += static_cast<char>( payload[ i ] );
+    // SOCKS4 / SOCKS4a request: 04 <cmd> <port> <ip> <userid> 00 [<domain> 00]
+    if ( p[ 0 ] == 0x04 && len >= 9 && ( p[ 1 ] == 0x01 || p[ 1 ] == 0x02 ) && p[ len - 1 ] == 0 ) {
+        const auto* userEnd = static_cast<const uint8_t*>( std::memchr( p + 8, 0, len - 8 ) );
+        const auto userLen = static_cast<size_t>( userEnd - ( p + 8 ) );
+        const size_t domainStart = 8 + userLen + 1;
+        // SOCKS4a: the address 0.0.0.x (x != 0) says a domain follows.
+        const bool socks4a = p[ 4 ] == 0 && p[ 5 ] == 0 && p[ 6 ] == 0 && p[ 7 ] != 0;
+        size_t domainLen = 0;
+        if ( socks4a ) {
+            if ( domainStart >= len ) {
+                return {};
             }
-
-            std::string result = "SOCKS4, Version: 4, Command: " + cmdStr + ", Destination: " + ip
-                                 + ":" + std::to_string( port );
-            if ( !userid.empty() )
-                result += ", User: \"" + userid + "\"";
-
-            // SOCKS4a: if IP is 0.0.0.x (x != 0), domain follows after userid's null
-            if ( payload[ 4 ] == 0 && payload[ 5 ] == 0 && payload[ 6 ] == 0
-                 && payload[ 7 ] != 0 ) {
-                // Find the null after userid, then domain follows
-                size_t domStart = 8;
-                while ( domStart < len && payload[ domStart ] != 0x00 )
-                    domStart++;
-                domStart++; // skip the null
-                if ( domStart < len ) {
-                    std::string domain;
-                    for ( size_t i = domStart; i < len && payload[ i ] != 0x00; ++i )
-                        domain += static_cast<char>( payload[ i ] );
-                    if ( !domain.empty() )
-                        result += ", Domain: " + domain;
-                }
+            domainLen = len - 1 - domainStart;
+            if ( domainLen == 0 || std::memchr( p + domainStart, 0, domainLen ) != nullptr ) {
+                return {};
             }
-            return result;
         }
-    }
+        else if ( domainStart != len ) {
+            return {};
+        }
 
-    // SOCKS4 reply: 00 <status> <port> <ip>
-    if ( ver == 0x00 && len >= 8 ) {
-        auto status = payload[ 1 ];
-        auto port = readBE16( payload + 2 );
-        auto ip = formatIpv4( payload + 4 );
-        const char* statusStr = nullptr;
-        if ( status == 0x5A )
-            statusStr = "Request Granted (0x5A)";
-        else if ( status == 0x5B )
-            statusStr = "Request Rejected (0x5B)";
-        else if ( status == 0x5C )
-            statusStr = "Failed, Cannot Connect to identd (0x5C)";
-        else if ( status == 0x5D )
-            statusStr = "Failed, identd Mismatch (0x5D)";
-        if ( statusStr ) {
-            std::string result = std::string( "SOCKS4 Reply, Status: " ) + statusStr;
-            if ( port != 0 || ip != "0.0.0.0" )
-                result += ", Bound: " + ip + ":" + std::to_string( port );
-            return result;
+        std::string result
+            = "SOCKS4, Version: 4, Command: " + std::string( p[ 1 ] == 0x01 ? "Connect" : "Bind" )
+              + " (" + hexCode( p[ 1 ] ) + "), Destination: " + formatIpv4( p + 4 ) + ":"
+              + std::to_string( readBE16( p + 2 ) );
+        if ( userLen > 0 ) {
+            result += ", User: " + quotedBytes( p + 8, userLen );
         }
+        if ( socks4a ) {
+            result += ", Domain: " + escapeBytes( p + domainStart, domainLen, false );
+        }
+        return result;
     }
 
     return {};
+}
+
+/// A SOCKS message sent by the proxy to the client, or empty if the payload
+/// does not have the exact shape of one.
+std::string socksServerMessage( const uint8_t* p, size_t len )
+{
+    if ( len < 2 ) {
+        return {};
+    }
+
+    // SOCKS5 method choice: 05 <method>
+    if ( p[ 0 ] == 0x05 && len == 2 ) {
+        return "SOCKS5 Server Choice, Version: 5, Method: " + socks5Method( p[ 1 ] );
+    }
+
+    // SOCKS5 reply: 05 <status> 00 <atyp> <address> <port>
+    if ( p[ 0 ] == 0x05 && len >= 4 && p[ 2 ] == 0x00 ) {
+        std::string type;
+        std::string address;
+        if ( !socks5Address( p + 3, len - 3, type, address ) ) {
+            return {};
+        }
+        static const char* const kStatus[] = {
+            "Succeeded",           "General Failure",       "Not Allowed by Ruleset",
+            "Network Unreachable", "Host Unreachable",      "Connection Refused",
+            "TTL Expired",         "Command Not Supported", "Address Type Not Supported",
+        };
+        const auto code = p[ 1 ];
+        const char* status
+            = code < sizeof( kStatus ) / sizeof( kStatus[ 0 ] ) ? kStatus[ code ] : "Unknown";
+        return "SOCKS5 Reply, Version: 5, Status: " + std::string( status ) + " (" + hexCode( code )
+               + "), Bound: " + address;
+    }
+
+    // Username/password response (RFC 1929): 01 <status>
+    if ( p[ 0 ] == 0x01 && len == 2 ) {
+        return "SOCKS5 Auth Response, Status: "
+               + std::string( p[ 1 ] == 0x00 ? "Success" : "Failure" ) + " (" + hexCode( p[ 1 ] )
+               + ")";
+    }
+
+    // SOCKS4 reply: 00 <status> <port> <ip>
+    if ( p[ 0 ] == 0x00 && len == 8 && p[ 1 ] >= 0x5A && p[ 1 ] <= 0x5D ) {
+        static const char* const kStatus[] = {
+            "Request Granted",
+            "Request Rejected",
+            "Failed, Cannot Connect to identd",
+            "Failed, identd Mismatch",
+        };
+        std::string result = "SOCKS4 Reply, Status: " + std::string( kStatus[ p[ 1 ] - 0x5A ] )
+                             + " (" + hexCode( p[ 1 ] ) + ")";
+        const auto port = readBE16( p + 2 );
+        const auto ip = formatIpv4( p + 4 );
+        if ( port != 0 || ip != "0.0.0.0" ) {
+            result += ", Bound: " + ip + ":" + std::to_string( port );
+        }
+        return result;
+    }
+
+    return {};
+}
+
+/// Detect SOCKS4/SOCKS5 handshake messages (RFC 1928, RFC 1929, SOCKS4/4a).
+/// Only on a known proxy port, and only a payload with the exact shape of a
+/// message the client sends to that port, or the proxy sends from it.
+/// User names and passwords are shown: they cross the wire in clear text.
+std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, uint16_t dstPort )
+{
+    std::string message;
+    if ( isSocksPort( dstPort ) ) {
+        message = socksClientMessage( payload, len );
+    }
+    if ( message.empty() && isSocksPort( srcPort ) ) {
+        message = socksServerMessage( payload, len );
+    }
+    return message;
 }
 
 /// Build ASCII preview of payload, skipping leading binary bytes.
