@@ -143,6 +143,27 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
         // The host would not call shutdown() after a failed init, but it must be harmless.
         REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
     }
+
+    GIVEN( "a host that fails after the sidebar tab was registered" )
+    {
+        FakeHost host;
+        host.failLogContaining = "ready";
+
+        WHEN( "the plugin is initialised" )
+        {
+            int rc = 0;
+            REQUIRE_NOTHROW( rc = logsquirl_plugin_init( host.api(), &host ) );
+
+            THEN( "initialisation fails and the tab is unregistered before its widget goes" )
+            {
+                REQUIRE( rc != 0 );
+                REQUIRE( host.sidebarTabs.isEmpty() );
+                REQUIRE( tcpdump::g_state.sidebarWidget == nullptr );
+            }
+        }
+
+        REQUIRE_NOTHROW( logsquirl_plugin_shutdown() );
+    }
 }
 #endif
 

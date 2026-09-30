@@ -41,6 +41,7 @@ struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for pcap control.
+    bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
     bool initialised = false;               ///< True between init() and shutdown().
     bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
 };

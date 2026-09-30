@@ -65,7 +65,12 @@ public:
     {
         api_.api_version = LOGSQUIRL_PLUGIN_API_VERSION;
         api_.log_message = []( void* handle, int, const char* message ) {
-            self( handle )->logs << QString::fromUtf8( message );
+            auto* host = self( handle );
+            const auto text = QString::fromUtf8( message );
+            if ( !host->failLogContaining.isEmpty() && text.contains( host->failLogContaining ) ) {
+                throw std::runtime_error( "cannot log that" );
+            }
+            host->logs << text;
         };
         api_.get_config_dir
             = []( void* handle ) { return self( handle )->configDirUtf8_.constData(); };
@@ -116,6 +121,9 @@ public:
 
     /** Make register_sidebar_tab() throw, as a misbehaving host might. */
     bool failSidebarTab = false;
+
+    /** Make log_message() throw for a message containing this text. */
+    QString failLogContaining;
 
     /** The host API table, to pass to logsquirl_plugin_init(). */
     const LogSquirlHostApi* api() const

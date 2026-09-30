@@ -139,6 +139,7 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
         tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
         api->register_sidebar_tab( handle, "tcpdump",
                                    static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
+        tcpdump::g_state.sidebarTabRegistered = true;
 
         // The host shuts the plugin down both when LogSquirl quits (after
         // aboutToQuit) and when the plugin is disabled or updated at runtime,
@@ -154,9 +155,8 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     } );
 
     if ( !ok ) {
-        // The tab may not have been registered: just delete the widget.
-        delete tcpdump::g_state.sidebarWidget;
-        tcpdump::g_state.sidebarWidget = nullptr;
+        // Undo what was set up, in reverse: shutdown() unregisters the tab
+        // only if the host took it, then deletes the widget.
         logsquirl_plugin_shutdown();
         return 1;
     }
@@ -166,21 +166,32 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 /// Shut down the plugin — unregister sidebar and release resources.
 LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 {
+    auto& st = tcpdump::g_state;
+    // Each step on its own, so that one failing does not skip the others.
     guarded( "shutdown", [] {
-        auto& st = tcpdump::g_state;
         tcpdump::hostLog( LOGSQUIRL_LOG_INFO, "tcpdump plugin shutting down\xe2\x80\xa6" );
+    } );
 
-        if ( st.sidebarWidget ) {
+    // The host must let go of the tab before its widget is deleted.
+    if ( st.sidebarTabRegistered ) {
+        st.sidebarTabRegistered = false;
+        guarded( "unregistering the sidebar tab", [] {
+            auto& st = tcpdump::g_state;
             if ( st.api && st.handle ) {
                 st.api->unregister_sidebar_tab( st.handle, static_cast<void*>( st.sidebarWidget ) );
             }
+        } );
+    }
+    if ( st.sidebarWidget ) {
+        guarded( "shutdown", [] {
+            auto& st = tcpdump::g_state;
             if ( st.quitting ) {
                 st.sidebarWidget->removeTempFiles();
             }
             delete st.sidebarWidget;
-            st.sidebarWidget = nullptr;
-        }
-    } );
+        } );
+        st.sidebarWidget = nullptr;
+    }
 
     tcpdump::g_state.api = nullptr;
     tcpdump::g_state.handle = nullptr;
