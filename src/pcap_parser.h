@@ -64,6 +64,7 @@ struct PcapGlobalHeader {
 constexpr uint32_t DltNull = 0;        ///< BSD loopback
 constexpr uint32_t DltEthernet = 1;    ///< Ethernet
 constexpr uint32_t DltRaw = 101;       ///< Raw IP (no link-layer header)
+constexpr uint32_t DltLoop = 108;      ///< OpenBSD loopback (family in network byte order)
 constexpr uint32_t DltLinuxSll = 113;  ///< Linux cooked capture v1
 constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
 

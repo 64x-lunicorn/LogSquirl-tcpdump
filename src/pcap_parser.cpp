@@ -938,7 +938,9 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 }
 
 /// Dissect one captured packet of the given link-layer type into @p pkt.
-void dissect( PacketRecord& pkt, uint32_t linkType, const uint8_t* pktData, size_t pktRemaining )
+/// @p swap: the file is in the other byte order than this host.
+void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
+              size_t pktRemaining )
 {
     uint16_t etherType = 0;
     const uint8_t* networkData = nullptr;
@@ -982,13 +984,36 @@ void dissect( PacketRecord& pkt, uint32_t linkType, const uint8_t* pktData, size
         networkData = pktData + 20;
         networkRemaining = pktRemaining - 20;
     }
-    else if ( linkType == DltNull && pktRemaining >= 4 ) {
-        // BSD loopback: 4-byte family
-        uint32_t family = read32( pktData, false );
-        etherType = ( family == 2 ) ? EthertypeIpv4 : EthertypeIpv6;
-        pkt.etherType = etherType;
+    else if ( ( linkType == DltNull || linkType == DltLoop ) && pktRemaining >= 4 ) {
+        // BSD loopback: a 4-byte address family, in the byte order of the
+        // capturing host (DLT_NULL), which the file was written in, or in
+        // network byte order (DLT_LOOP).  Families are small numbers, so one
+        // that only fits in the upper half is in the other byte order, as
+        // Wireshark also assumes.
+        uint32_t family = linkType == DltLoop ? readBE32( pktData ) : read32( pktData, swap );
+        if ( ( family & 0xFFFF0000 ) != 0 ) {
+            family = read32( reinterpret_cast<const uint8_t*>( &family ), true );
+        }
         networkData = pktData + 4;
         networkRemaining = pktRemaining - 4;
+        switch ( family ) {
+        case 2: // AF_INET
+            etherType = EthertypeIpv4;
+            break;
+        case 10: // AF_INET6: Linux
+        case 23: // Windows
+        case 24: // NetBSD, OpenBSD, BSD/OS
+        case 28: // FreeBSD, DragonFly BSD
+        case 30: // macOS, iOS
+            etherType = EthertypeIpv6;
+            break;
+        default:
+            networkData = nullptr;
+            pkt.protocol = "Loopback";
+            pkt.info = "Address family " + std::to_string( family );
+            break;
+        }
+        pkt.etherType = etherType;
     }
     else {
         pkt.protocol = "Unknown";
@@ -1206,7 +1231,7 @@ bool PcapReader::next( PacketRecord& pkt )
     pkt.timestampNsec = static_cast<uint32_t>( fractionNs % 1000000000 );
     pkt.capturedLen = inclLen;
     pkt.originalLen = origLen;
-    dissect( pkt, header_.network, packet_.data(), kept );
+    dissect( pkt, header_.network, swap_, packet_.data(), kept );
     return true;
 }
 

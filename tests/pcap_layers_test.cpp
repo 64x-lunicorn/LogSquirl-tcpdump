@@ -280,3 +280,72 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
         }
     }
 }
+
+SCENARIO( "BSD loopback captures are read in the capture's byte order", "[pcap_parser]" )
+{
+    const auto v4 = ipv4( IpProtoUdp, udp( 1, 2 ) );
+    const auto v6 = ipv6( IpProtoUdp, udp( 3, 4 ) );
+
+    auto loopback = []( uint32_t family, bool bigEndian, const Bytes& payload ) {
+        Bytes b;
+        bigEndian ? putBE32( b, family ) : putLE32( b, family );
+        return b + payload;
+    };
+
+    for ( const bool bigEndian : { false, true } ) {
+        GIVEN( std::string( "a DLT_NULL capture in " ) + ( bigEndian ? "big" : "little" )
+               + "-endian byte order" )
+        {
+            FileOptions o;
+            o.linkType = DltNull;
+            o.bigEndian = bigEndian;
+            std::vector<Record> records{ { loopback( 2, bigEndian, v4 ) } };
+            for ( const uint32_t af6 : { 24u, 28u, 30u } ) {
+                records.push_back( { loopback( af6, bigEndian, v6 ) } );
+            }
+            records.push_back( { loopback( 99, bigEndian, v4 ) } );
+
+            THEN( "AF_INET is IPv4, the BSD AF_INET6 values are IPv6, others are unknown" )
+            {
+                auto result = parse( pcapFile( records, o ) );
+                REQUIRE( result.packets.size() == 5 );
+                REQUIRE( result.packets[ 0 ].srcPort == 1 );
+                REQUIRE( result.packets[ 0 ].etherType == EthertypeIpv4 );
+                for ( size_t i = 1; i <= 3; ++i ) {
+                    REQUIRE( result.packets[ i ].srcPort == 3 );
+                    REQUIRE( result.packets[ i ].etherType == EthertypeIpv6 );
+                }
+                REQUIRE( result.packets[ 4 ].srcIp.empty() );
+                REQUIRE( result.packets[ 4 ].info == "Address family 99" );
+            }
+        }
+    }
+
+    GIVEN( "a DLT_NULL capture whose family is in the other byte order than the file" )
+    {
+        FileOptions o;
+        o.linkType = DltNull;
+        auto file = pcapFile( { { loopback( 2, true, v4 ) } }, o );
+
+        THEN( "the family is still recognised" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].srcPort == 1 );
+        }
+    }
+
+    GIVEN( "a DLT_LOOP capture, whose family is always big-endian" )
+    {
+        FileOptions o;
+        o.linkType = DltLoop;
+        auto file = pcapFile( { { loopback( 30, true, v6 ) } }, o );
+
+        THEN( "it is read" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].srcPort == 3 );
+        }
+    }
+}

@@ -346,6 +346,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
     case 101:
         linkName = "Raw IP";
         break;
+    case 108:
+        linkName = "OpenBSD Loopback";
+        break;
     case 113:
         linkName = "Linux SLL";
         break;
