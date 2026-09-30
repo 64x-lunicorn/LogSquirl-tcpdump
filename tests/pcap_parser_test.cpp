@@ -1085,7 +1085,7 @@ SCENARIO( "Payload preview shows full text without truncation", "[pcap_parser]" 
     }
 }
 
-SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
+SCENARIO( "Payload preview shows dots for binary bytes", "[pcap_parser]" )
 {
     GIVEN( "a TCP packet with mixed binary and text payload" )
     {
@@ -1122,12 +1122,11 @@ SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
         pkt.insert( pkt.end(), { 0xFF, 0xFF } );
         pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
 
-        // Payload: text with binary bytes in between
-        // "Hello" + 5 binary bytes + "World"
+        // Payload: "Hello" + 3 binary bytes + "World" (mostly printable → above 40%)
         std::string text1 = "Hello";
-        std::string text2 = "World and more text here to meet threshold";
+        std::string text2 = "World and more text here to be above threshold!";
         pkt.insert( pkt.end(), text1.begin(), text1.end() );
-        pkt.insert( pkt.end(), { 0x00, 0x01, 0x02, 0x03, 0x04 } );
+        pkt.insert( pkt.end(), { 0x00, 0x01, 0x02 } );
         pkt.insert( pkt.end(), text2.begin(), text2.end() );
 
         uint16_t totalLen = static_cast<uint16_t>( pkt.size() - ipStart );
@@ -1140,7 +1139,7 @@ SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "binary bytes are collapsed to a single space, not dots" )
+            THEN( "binary bytes show as dots between the text parts" )
             {
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
@@ -1148,14 +1147,14 @@ SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
                 // Both text parts visible
                 REQUIRE( info.find( "Hello" ) != std::string::npos );
                 REQUIRE( info.find( "World" ) != std::string::npos );
-                // No runs of dots
-                REQUIRE( info.find( "....." ) == std::string::npos );
+                // Dots for binary bytes
+                REQUIRE( info.find( "..." ) != std::string::npos );
             }
         }
     }
 }
 
-SCENARIO( "Predominantly binary payload is suppressed", "[pcap_parser]" )
+SCENARIO( "Predominantly binary payload still shows preview with dots", "[pcap_parser]" )
 {
     GIVEN( "a TCP packet with mostly binary payload" )
     {
@@ -1192,7 +1191,7 @@ SCENARIO( "Predominantly binary payload is suppressed", "[pcap_parser]" )
         pkt.insert( pkt.end(), { 0xFF, 0xFF } );
         pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
 
-        // Payload: 3 printable chars then 50 binary bytes (< 40% printable)
+        // Payload: 3 printable chars then 50 binary bytes
         pkt.insert( pkt.end(), { 'A', 'B', 'C' } );
         for ( int i = 0; i < 50; ++i )
             pkt.push_back( static_cast<uint8_t>( i ) );
@@ -1207,12 +1206,12 @@ SCENARIO( "Predominantly binary payload is suppressed", "[pcap_parser]" )
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "the info line has no payload preview (binary suppressed)" )
+            THEN( "the info line shows a preview with ABC and dots" )
             {
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
-                // No " | " separator means no preview was appended
-                REQUIRE( result.packets[ 0 ].info.find( " | " ) == std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( " | " ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "ABC" ) != std::string::npos );
             }
         }
     }

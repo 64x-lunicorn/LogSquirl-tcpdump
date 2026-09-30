@@ -586,56 +586,16 @@ std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, u
 /// Returns empty if the payload is predominantly binary.
 std::string payloadPreview( const uint8_t* payload, size_t len )
 {
-    // Find the first interesting printable run (skip binary protocol headers)
-    size_t start = 0;
-    bool foundStart = false;
-    for ( size_t i = 0; i + 2 < len; ++i ) {
-        if ( payload[ i ] >= 0x20 && payload[ i ] < 0x7F && payload[ i + 1 ] >= 0x20
-             && payload[ i + 1 ] < 0x7F && payload[ i + 2 ] >= 0x20 && payload[ i + 2 ] < 0x7F ) {
-            start = i;
-            foundStart = true;
-            break;
-        }
-        if ( i > 128 )
-            return {}; // too much binary, give up
-    }
-    if ( !foundStart )
-        return {};
-
     std::string preview;
-    size_t printableCount = 0;
-    bool inBinaryRun = false;
 
-    for ( size_t i = start; i < len; ++i ) {
+    for ( size_t i = 0; i < len; ++i ) {
         auto c = payload[ i ];
         if ( c >= 0x20 && c < 0x7F ) {
-            inBinaryRun = false;
             preview += static_cast<char>( c );
-            printableCount++;
-        }
-        else if ( c == '\r' || c == '\n' ) {
-            if ( !inBinaryRun ) {
-                preview += ' ';
-                inBinaryRun = true;
-            }
         }
         else {
-            // Non-printable byte — collapse consecutive ones to a single space
-            if ( !inBinaryRun ) {
-                preview += ' ';
-                inBinaryRun = true;
-            }
+            preview += '.';
         }
-    }
-
-    // Skip if less than 40% printable (too binary to be useful)
-    if ( printableCount == 0 || static_cast<double>( printableCount ) / ( len - start ) < 0.4 ) {
-        return {};
-    }
-
-    // Trim trailing whitespace
-    while ( !preview.empty() && preview.back() == ' ' ) {
-        preview.pop_back();
     }
 
     return preview;
