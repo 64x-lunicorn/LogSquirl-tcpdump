@@ -73,7 +73,9 @@ constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
 constexpr uint16_t EthertypeIpv4 = 0x0800;
 constexpr uint16_t EthertypeIpv6 = 0x86DD;
 constexpr uint16_t EthertypeArp = 0x0806;
-constexpr uint16_t EthertypeVlan = 0x8100;
+constexpr uint16_t EthertypeVlan = 0x8100;       ///< 802.1Q customer tag
+constexpr uint16_t EthertypeQinQ = 0x88A8;       ///< 802.1ad service tag
+constexpr uint16_t EthertypeQinQLegacy = 0x9100; ///< Pre-standard QinQ tag
 
 constexpr uint8_t IpProtoIcmp = 1;
 constexpr uint8_t IpProtoTcp = 6;

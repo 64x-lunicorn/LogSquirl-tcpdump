@@ -1033,14 +1033,6 @@ void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pk
         pkt.etherType = etherType;
         networkData = pktData + 14;
         networkRemaining = pktRemaining - 14;
-
-        // Handle VLAN tag (802.1Q)
-        if ( etherType == EthertypeVlan && networkRemaining >= 4 ) {
-            etherType = readBE16( networkData + 2 );
-            pkt.etherType = etherType;
-            networkData += 4;
-            networkRemaining -= 4;
-        }
     }
     else if ( linkType == DltRaw && pktRemaining >= 1 ) {
         // Raw IP — determine version from first nibble
@@ -1098,6 +1090,19 @@ void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pk
     else {
         pkt.protocol = "Unknown";
         pkt.info = "Unsupported link-layer type " + std::to_string( linkType );
+    }
+
+    // Strip VLAN tags: 802.1Q, and 802.1ad (QinQ) service tags stacked
+    // around it.  Each tag is 2 bytes of tag control, then the EtherType of
+    // what follows.
+    for ( int tags = 0; networkData && tags < 8 && networkRemaining >= 4
+                        && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
+                             || etherType == EthertypeQinQLegacy );
+          ++tags ) {
+        etherType = readBE16( networkData + 2 );
+        pkt.etherType = etherType;
+        networkData += 4;
+        networkRemaining -= 4;
     }
 
     // Parse network and transport layers

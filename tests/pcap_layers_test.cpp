@@ -481,3 +481,63 @@ SCENARIO( "A TCP header shorter than 20 bytes is malformed", "[pcap_parser]" )
         }
     }
 }
+
+SCENARIO( "Stacked VLAN tags are stripped", "[pcap_parser]" )
+{
+    const auto ip = ipv4( IpProtoUdp, udp( 7, 8 ) );
+
+    auto parseOne = []( const Bytes& frame, uint32_t linkType = DltEthernet ) {
+        auto result = parse( pcapOf( { frame }, linkType ) );
+        REQUIRE( result.packets.size() == 1 );
+        return result.packets[ 0 ];
+    };
+
+    GIVEN( "a QinQ frame: an 802.1ad service tag around an 802.1Q customer tag" )
+    {
+        auto pkt = parseOne(
+            eth( EthertypeQinQ, vlanTag( 10, EthertypeVlan, vlanTag( 20, EthertypeIpv4, ip ) ) ) );
+
+        THEN( "the IPv4 packet inside is parsed" )
+        {
+            REQUIRE( pkt.etherType == EthertypeIpv4 );
+            REQUIRE( pkt.srcPort == 7 );
+        }
+    }
+
+    GIVEN( "three stacked 802.1Q tags, and a legacy 0x9100 tag" )
+    {
+        auto pkt = parseOne( eth(
+            0x9100,
+            vlanTag( 1, EthertypeVlan,
+                     vlanTag( 2, EthertypeVlan,
+                              vlanTag( 3, EthertypeVlan, vlanTag( 4, EthertypeIpv4, ip ) ) ) ) ) );
+
+        THEN( "the IPv4 packet inside is parsed" )
+        {
+            REQUIRE( pkt.srcPort == 7 );
+        }
+    }
+
+    GIVEN( "a tag cut off by the end of the frame" )
+    {
+        auto pkt = parseOne( eth( EthertypeVlan, Bytes{ 0x00 } ) );
+
+        THEN( "it is shown by its EtherType, without reading past the frame" )
+        {
+            REQUIRE( pkt.protocol == "ETH(0x8100)" );
+        }
+    }
+
+    GIVEN( "a VLAN-tagged packet in a Linux cooked capture" )
+    {
+        Bytes sll( 16, 0 );
+        sll[ 14 ] = 0x81;
+        sll[ 15 ] = 0x00;
+        auto pkt = parseOne( sll + vlanTag( 5, EthertypeIpv4, ip ), DltLinuxSll );
+
+        THEN( "the tag is stripped too" )
+        {
+            REQUIRE( pkt.srcPort == 7 );
+        }
+    }
+}
