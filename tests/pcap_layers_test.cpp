@@ -599,3 +599,20 @@ SCENARIO( "The pcap header is found only where it can really start", "[pcap_pars
         }
     }
 }
+
+SCENARIO( "A TCP segment without flags shows [none]", "[pcap_parser]" )
+{
+    GIVEN( "a TCP segment with no flag set" )
+    {
+        auto file
+            = pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 40001, {}, 5, 0 ) ) ) } );
+
+        THEN( "its flags read [none], as formatTcpFlags() renders them" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].info.find( "40000 \xe2\x86\x92 40001 [none] Seq=" )
+                     != std::string::npos );
+        }
+    }
+}

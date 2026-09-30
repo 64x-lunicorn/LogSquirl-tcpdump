@@ -117,6 +117,14 @@ struct PacketRecord {
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
 };
 
+/**
+ * Render TCP flags (SYN, ACK, FIN, RST, PSH, URG) as a bracket string.
+ *
+ * @param flags  TCP flags byte.
+ * @return String like "[SYN, ACK]", or "[none]" without flags, as tcpdump does.
+ */
+std::string formatTcpFlags( uint8_t flags );
+
 // ── Parser ───────────────────────────────────────────────────────────────
 
 /// Longest text preamble (e.g. tcpdump's stderr) searched for the pcap magic.

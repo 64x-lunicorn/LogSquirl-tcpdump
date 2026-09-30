@@ -149,34 +149,6 @@ std::string escapeBytes( const uint8_t* p, size_t len, bool quoted )
     return out;
 }
 
-// ── TCP flags as info string ─────────────────────────────────────────────
-
-std::string tcpFlagStr( uint8_t flags )
-{
-    std::string result = "[";
-    bool first = true;
-    auto add = [ & ]( const char* name ) {
-        if ( !first )
-            result += ", ";
-        result += name;
-        first = false;
-    };
-    if ( flags & 0x02 )
-        add( "SYN" );
-    if ( flags & 0x10 )
-        add( "ACK" );
-    if ( flags & 0x01 )
-        add( "FIN" );
-    if ( flags & 0x04 )
-        add( "RST" );
-    if ( flags & 0x08 )
-        add( "PSH" );
-    if ( flags & 0x20 )
-        add( "URG" );
-    result += "]";
-    return result;
-}
-
 // ── Application-layer protocol detection ─────────────────────────────────
 
 /// Detect TLS record and return a description (e.g. "ClientHello", "ServerHello").
@@ -657,8 +629,9 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 
         // Build base TCP info line
         std::ostringstream oss;
-        oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " " << tcpFlagStr( pkt.tcpFlags )
-            << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck << " Win=" << pkt.tcpWindow;
+        oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
+            << formatTcpFlags( pkt.tcpFlags ) << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck
+            << " Win=" << pkt.tcpWindow;
 
         // A header shorter than its 20 fixed bytes is malformed: where the
         // payload starts is unknown, so none is taken, like Wireshark.
@@ -1199,6 +1172,36 @@ size_t findPcapHeader( const uint8_t* data, size_t size, std::string& error )
 }
 
 } // anonymous namespace
+
+// ── TCP flags ────────────────────────────────────────────────────────────
+
+std::string formatTcpFlags( uint8_t flags )
+{
+    std::string result = "[";
+    bool first = true;
+    auto add = [ & ]( const char* name ) {
+        if ( !first )
+            result += ", ";
+        result += name;
+        first = false;
+    };
+    if ( flags & 0x02 )
+        add( "SYN" );
+    if ( flags & 0x10 )
+        add( "ACK" );
+    if ( flags & 0x01 )
+        add( "FIN" );
+    if ( flags & 0x04 )
+        add( "RST" );
+    if ( flags & 0x08 )
+        add( "PSH" );
+    if ( flags & 0x20 )
+        add( "URG" );
+    if ( first )
+        result += "none";
+    result += "]";
+    return result;
+}
 
 // ── Byte sources ─────────────────────────────────────────────────────────
 

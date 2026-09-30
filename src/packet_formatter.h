@@ -95,12 +95,4 @@ private:
 std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
                                            bool nanoseconds = false );
 
-/**
- * Render TCP flags (SYN, ACK, FIN, RST, PSH, URG) as a bracket string.
- *
- * @param flags  TCP flags byte.
- * @return String like "[SYN, ACK]".
- */
-std::string formatTcpFlags( uint8_t flags );
-
 } // namespace tcpdump

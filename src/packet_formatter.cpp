@@ -34,34 +34,6 @@
 
 namespace tcpdump {
 
-std::string formatTcpFlags( uint8_t flags )
-{
-    std::string result = "[";
-    bool first = true;
-    auto add = [ & ]( const char* name ) {
-        if ( !first )
-            result += ", ";
-        result += name;
-        first = false;
-    };
-    if ( flags & 0x02 )
-        add( "SYN" );
-    if ( flags & 0x10 )
-        add( "ACK" );
-    if ( flags & 0x01 )
-        add( "FIN" );
-    if ( flags & 0x04 )
-        add( "RST" );
-    if ( flags & 0x08 )
-        add( "PSH" );
-    if ( flags & 0x20 )
-        add( "URG" );
-    if ( first )
-        result += "none";
-    result += "]";
-    return result;
-}
-
 namespace {
 
 /// Width of the time column, with three more digits for nanoseconds.
