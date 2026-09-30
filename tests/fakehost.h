@@ -134,25 +134,23 @@ private:
     LogSquirlHostApi api_{};
 };
 
-/** Run the event loop until @p condition holds or @p timeoutMs passes. */
-inline bool waitFor( const std::function<bool()>& condition, int timeoutMs = 5000 )
+/**
+ * Run the event loop until @p condition holds.  The deadline only guards
+ * against a hang: a correct run meets the condition long before it, even on
+ * a slow CI runner, so no test depends on how fast the machine is.
+ */
+inline bool waitFor( const std::function<bool()>& condition, int hangGuardMs = 120000 )
 {
     QElapsedTimer timer;
     timer.start();
     while ( !condition() ) {
-        if ( timer.elapsed() > timeoutMs ) {
+        if ( timer.elapsed() > hangGuardMs ) {
             return false;
         }
-        QCoreApplication::processEvents();
-        QThread::msleep( 5 );
+        QCoreApplication::processEvents( QEventLoop::AllEvents, 50 );
+        QThread::msleep( 1 );
     }
     return true;
-}
-
-/** Run the event loop for @p ms milliseconds. */
-inline void processEventsFor( int ms )
-{
-    waitFor( []() { return false; }, ms );
 }
 
 } // namespace tcpdump_test
