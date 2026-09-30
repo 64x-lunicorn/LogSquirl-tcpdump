@@ -26,6 +26,8 @@
 
 #include "pcapbuilder.h"
 
+#include <algorithm>
+
 using namespace tcpdump;
 using namespace tcpdump_test;
 
@@ -151,6 +153,62 @@ SCENARIO( "Payload previews are capped", "[pcap_parser]" )
             auto result = parse( file );
             REQUIRE( result.packets.size() == 1 );
             REQUIRE( result.packets[ 0 ].info.find( " | " ) == std::string::npos );
+        }
+    }
+}
+
+SCENARIO( "Payload text never breaks the one-line-per-packet format", "[pcap_parser]" )
+{
+    auto noControlChars = []( const std::string& s ) {
+        return std::none_of( s.begin(), s.end(),
+                             []( char c ) { return static_cast<unsigned char>( c ) < 0x20; } );
+    };
+
+    GIVEN( "a DNS query for a name with a newline and an escape character in a label" )
+    {
+        Bytes dns{ 0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        dns = dns + Bytes{ 5, 'a', '\n', 'b', 0x1B, 'c', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1 };
+        auto file = pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 40000, 53, dns ) ) ) } );
+
+        THEN( "the name is shown with the control characters escaped" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            const auto& info = result.packets[ 0 ].info;
+            REQUIRE( noControlChars( info ) );
+            REQUIRE( info.find( "Query a\\x0Ab\\x1Bc.com" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "an HTTP request line with a control character" )
+    {
+        auto file = pcapOf( { eth(
+            EthertypeIpv4,
+            ipv4( IpProtoTcp, tcp( 40000, 80, text( "GET /\x1b[2J HTTP/1.1\r\n\r\n" ) ) ) ) } );
+
+        THEN( "the control character is escaped" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            const auto& info = result.packets[ 0 ].info;
+            REQUIRE( noControlChars( info ) );
+            REQUIRE( info.find( "GET /\\x1B[2J HTTP/1.1" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "an NMEA sentence with a tab and a byte above 0x7F" )
+    {
+        auto file = pcapOf(
+            { eth( EthertypeIpv4,
+                   ipv4( IpProtoUdp, udp( 40000, 10110, text( "$GPGGA,1\t2,\xff*47\r\n" ) ) ) ) } );
+
+        THEN( "both are escaped" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            const auto& info = result.packets[ 0 ].info;
+            REQUIRE( noControlChars( info ) );
+            REQUIRE( info.find( "$GPGGA,1\\x092,\\xFF*47" ) != std::string::npos );
         }
     }
 }

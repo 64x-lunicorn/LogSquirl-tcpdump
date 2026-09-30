@@ -117,6 +117,39 @@ std::string formatIpv6( const uint8_t* p )
     return buf;
 }
 
+// ── Payload text ─────────────────────────────────────────────────────────
+
+/// Format a protocol code as "0xNN".
+std::string hexCode( uint8_t code )
+{
+    char buf[ 8 ];
+    std::snprintf( buf, sizeof( buf ), "0x%02X", code );
+    return buf;
+}
+
+/// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
+/// that a field can neither break the line nor hide what it contains.
+/// Within quotes, '"' is escaped too.
+std::string escapeBytes( const uint8_t* p, size_t len, bool quoted )
+{
+    std::string out;
+    out.reserve( len );
+    for ( size_t i = 0; i < len; ++i ) {
+        const auto c = p[ i ];
+        if ( c == '\\' || ( quoted && c == '"' ) ) {
+            out += '\\';
+            out += static_cast<char>( c );
+        }
+        else if ( c >= 0x20 && c < 0x7F ) {
+            out += static_cast<char>( c );
+        }
+        else {
+            out += "\\x" + hexCode( c ).substr( 2 );
+        }
+    }
+    return out;
+}
+
 // ── TCP flags as info string ─────────────────────────────────────────────
 
 std::string tcpFlagStr( uint8_t flags )
@@ -191,6 +224,16 @@ std::string detectTls( const uint8_t* payload, size_t len )
     return {};
 }
 
+/// The first line of a payload, up to CR/LF and at most 120 bytes, escaped.
+std::string firstLine( const uint8_t* payload, size_t len )
+{
+    size_t end = 0;
+    while ( end < len && end < 120 && payload[ end ] != '\r' && payload[ end ] != '\n' ) {
+        ++end;
+    }
+    return escapeBytes( payload, end, false );
+}
+
 /// Detect HTTP request or response from payload start.
 std::string detectHttp( const uint8_t* payload, size_t len )
 {
@@ -206,25 +249,11 @@ std::string detectHttp( const uint8_t* payload, size_t len )
     if ( startsWith( "GET " ) || startsWith( "POST " ) || startsWith( "PUT " )
          || startsWith( "DELETE " ) || startsWith( "HEAD " ) || startsWith( "PATCH " )
          || startsWith( "OPTIONS " ) || startsWith( "CONNECT " ) ) {
-        // Extract the request line (up to \r\n or end)
-        std::string line;
-        for ( size_t i = 0; i < len && i < 120; ++i ) {
-            if ( payload[ i ] == '\r' || payload[ i ] == '\n' )
-                break;
-            line += static_cast<char>( payload[ i ] );
-        }
-        return line;
+        return firstLine( payload, len );
     }
 
     if ( startsWith( "HTTP/" ) ) {
-        // Response status line
-        std::string line;
-        for ( size_t i = 0; i < len && i < 120; ++i ) {
-            if ( payload[ i ] == '\r' || payload[ i ] == '\n' )
-                break;
-            line += static_cast<char>( payload[ i ] );
-        }
-        return line;
+        return firstLine( payload, len ); // the status line
     }
 
     return {};
@@ -252,7 +281,7 @@ std::string detectDns( const uint8_t* payload, size_t len )
             break;
         if ( !qname.empty() )
             qname += '.';
-        qname.append( reinterpret_cast<const char*>( payload + offset + 1 ), labelLen );
+        qname += escapeBytes( payload + offset + 1, labelLen, false );
         offset += labelLen + 1;
     }
 
@@ -325,37 +354,6 @@ const char* portToProtocol( uint16_t port )
     default:
         return nullptr;
     }
-}
-
-/// Format a protocol code as "0xNN".
-std::string hexCode( uint8_t code )
-{
-    char buf[ 8 ];
-    std::snprintf( buf, sizeof( buf ), "0x%02X", code );
-    return buf;
-}
-
-/// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
-/// that a field can neither break the line nor hide what it contains.
-/// Within quotes, '"' is escaped too.
-std::string escapeBytes( const uint8_t* p, size_t len, bool quoted )
-{
-    std::string out;
-    out.reserve( len );
-    for ( size_t i = 0; i < len; ++i ) {
-        const auto c = p[ i ];
-        if ( c == '\\' || ( quoted && c == '"' ) ) {
-            out += '\\';
-            out += static_cast<char>( c );
-        }
-        else if ( c >= 0x20 && c < 0x7F ) {
-            out += static_cast<char>( c );
-        }
-        else {
-            out += "\\x" + hexCode( c ).substr( 2 );
-        }
-    }
-    return out;
 }
 
 std::string quotedBytes( const uint8_t* p, size_t len )
@@ -619,6 +617,12 @@ std::string payloadPreview( const uint8_t* payload, size_t len )
     return preview;
 }
 
+/// ASCII letter, independent of the C locale (unlike std::isalpha).
+bool isAsciiAlpha( uint8_t c )
+{
+    return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' );
+}
+
 /// Detect NMEA 0183 sentences in payload (GPS: $GPGGA, $GNGSA, $GPGSV, etc.)
 /// Requires the mandatory comma after the 5-char sentence ID to avoid false
 /// positives on ADB protocol frames like $WRTE which also match $ + 5 alpha.
@@ -626,20 +630,12 @@ std::string detectNmea( const uint8_t* payload, size_t len )
 {
     // Scan for '$' + 5 alpha chars + ',' (NMEA 0183 mandatory format)
     for ( size_t i = 0; i + 7 < len; ++i ) {
-        if ( payload[ i ] == '$' && std::isalpha( payload[ i + 1 ] )
-             && std::isalpha( payload[ i + 2 ] ) && std::isalpha( payload[ i + 3 ] )
-             && std::isalpha( payload[ i + 4 ] ) && std::isalpha( payload[ i + 5 ] )
+        if ( payload[ i ] == '$' && isAsciiAlpha( payload[ i + 1 ] )
+             && isAsciiAlpha( payload[ i + 2 ] ) && isAsciiAlpha( payload[ i + 3 ] )
+             && isAsciiAlpha( payload[ i + 4 ] ) && isAsciiAlpha( payload[ i + 5 ] )
              && payload[ i + 6 ] == ',' ) {
-            // Found an NMEA sentence — extract until '*' checksum or CR/LF
-            std::string sentence;
-            for ( size_t j = i; j < len && j < i + 120; ++j ) {
-                auto c = payload[ j ];
-                if ( c == '\r' || c == '\n' ) {
-                    break;
-                }
-                sentence += static_cast<char>( c );
-            }
-            return sentence;
+            // Found an NMEA sentence — extract until CR/LF
+            return firstLine( payload + i, len - i );
         }
     }
     return {};
