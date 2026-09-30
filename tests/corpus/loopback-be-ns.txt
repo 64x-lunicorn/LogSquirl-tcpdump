@@ -1,0 +1,4 @@
+No.    Stream  Time              Source                                  Destination                             Protocol  Len    Info
+1      0       0.000000000       192.168.1.1                             192.168.1.2                             UDP       36     5000 → 5001 Len=4 | ping
+2      1       0.999999998       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      TCP       64     6000 → 6001 [SYN, ACK] Seq=1 Ack=0 Win=65535
+3      2       1.000000004       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      UDP       52     7000 → 7001 Len=0

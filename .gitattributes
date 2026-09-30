@@ -1,0 +1,2 @@
+tests/corpus/*.pcap binary
+tests/corpus/*.txt text eol=lf
