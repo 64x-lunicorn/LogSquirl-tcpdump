@@ -653,22 +653,29 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         pkt.tcpFlags = data[ 13 ];
         pkt.tcpWindow = readBE16( data + 14 );
 
-        auto dataOffset = static_cast<uint8_t>( ( data[ 12 ] >> 4 ) * 4 );
-        if ( dataOffset <= remaining ) {
-            pkt.payloadLen = static_cast<uint32_t>( remaining - dataOffset );
-        }
+        const auto dataOffset = static_cast<size_t>( data[ 12 ] >> 4 ) * 4;
 
         // Build base TCP info line
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " " << tcpFlagStr( pkt.tcpFlags )
             << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck << " Win=" << pkt.tcpWindow;
+
+        // A header shorter than its 20 fixed bytes is malformed: where the
+        // payload starts is unknown, so none is taken, like Wireshark.
+        if ( dataOffset < 20 ) {
+            oss << " [bogus TCP header length (" << dataOffset << ", must be at least 20)]";
+            pkt.info = oss.str();
+            return;
+        }
+
+        const size_t payloadSize = ( dataOffset <= remaining ) ? remaining - dataOffset : 0;
+        pkt.payloadLen = static_cast<uint32_t>( payloadSize );
         if ( pkt.payloadLen > 0 ) {
             oss << " Len=" << pkt.payloadLen;
         }
 
         // Application-layer detection on TCP payload
-        const uint8_t* payload = data + dataOffset;
-        size_t payloadSize = ( dataOffset <= remaining ) ? remaining - dataOffset : 0;
+        const uint8_t* payload = data + std::min( dataOffset, remaining );
 
         if ( payloadSize > 0 ) {
             // Try TLS

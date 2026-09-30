@@ -459,3 +459,25 @@ SCENARIO( "IPv4 fragments after the first are not parsed as TCP or UDP", "[pcap_
         }
     }
 }
+
+SCENARIO( "A TCP header shorter than 20 bytes is malformed", "[pcap_parser]" )
+{
+    GIVEN( "a TCP segment whose data offset says 12 bytes" )
+    {
+        auto file = pcapOf(
+            { eth( EthertypeIpv4,
+                   ipv4( IpProtoTcp, tcp( 40000, 80, text( "GET / HTTP/1.1\r\n" ), 3 ) ) ) } );
+
+        THEN( "no header bytes are taken for payload, and the length is flagged" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            const auto& pkt = result.packets[ 0 ];
+            REQUIRE( pkt.srcPort == 40000 );
+            REQUIRE( pkt.payloadLen == 0 );
+            REQUIRE( pkt.protocol == "TCP" );
+            REQUIRE( pkt.info.find( "bogus TCP header length (12" ) != std::string::npos );
+            REQUIRE( pkt.info.find( "GET" ) == std::string::npos );
+        }
+    }
+}
