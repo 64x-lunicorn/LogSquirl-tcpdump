@@ -105,7 +105,10 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 SidebarWidget::~SidebarWidget()
 {
     // The host unloads the library right after the plugin is shut down:
-    // the worker must be done with it before.
+    // the worker must be done with it before.  It checks the cancel flag
+    // between packets, and convertPcap() reads regular files only, so it
+    // cannot block on a FIFO or device; a regular file on a network share
+    // that stalls can still hold it up until the system gives up on it.
     if ( cancelRunning_ ) {
         cancelRunning_->store( true );
     }

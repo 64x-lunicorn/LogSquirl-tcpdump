@@ -249,3 +249,63 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
         }
     }
 }
+
+#ifdef Q_OS_UNIX
+#include <sys/stat.h>
+
+SCENARIO( "Only regular files are converted", "[converter]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a FIFO, which would block the reader until something writes to it" )
+    {
+        const auto fifo = dir.filePath( "capture.pcap" );
+        REQUIRE( ::mkfifo( QFile::encodeName( fifo ).constData(), 0600 ) == 0 );
+
+        THEN( "it is refused at once, with a message saying why" )
+        {
+            const auto result = convertPcap( fifo, dir.filePath( "out.log" ) );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.contains( "not a regular file" ) );
+            REQUIRE_FALSE( QFile::exists( dir.filePath( "out.log" ) ) );
+        }
+
+        AND_GIVEN( "a symbolic link to it" )
+        {
+            const auto link = dir.filePath( "link.pcap" );
+            REQUIRE( QFile::link( fifo, link ) );
+
+            THEN( "the link is refused too" )
+            {
+                const auto result = convertPcap( link, dir.filePath( "out.log" ) );
+                REQUIRE( result.status == ConversionResult::Status::Failed );
+                REQUIRE( result.error.contains( "not a regular file" ) );
+            }
+        }
+    }
+
+    GIVEN( "a character device" )
+    {
+        THEN( "it is refused" )
+        {
+            const auto result = convertPcap( "/dev/zero", dir.filePath( "out.log" ) );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.contains( "not a regular file" ) );
+        }
+    }
+
+    GIVEN( "a symbolic link to a capture" )
+    {
+        const auto capture = writeFile( dir, "real.pcap", pcapOf( { udpPacket( 1 ) } ) );
+        const auto link = dir.filePath( "alias.pcap" );
+        REQUIRE( QFile::link( capture, link ) );
+
+        THEN( "it is converted" )
+        {
+            REQUIRE( convertPcap( link, dir.filePath( "alias.log" ) ).status
+                     == ConversionResult::Status::Converted );
+        }
+    }
+}
+#endif

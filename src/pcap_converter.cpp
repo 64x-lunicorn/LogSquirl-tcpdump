@@ -27,8 +27,17 @@
 #include "packet_formatter.h"
 
 #include <QFile>
+#include <QFileInfo>
 
 #include <algorithm>
+
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace tcpdump {
 
@@ -62,6 +71,68 @@ private:
     QFile& file_;
 };
 
+/// The message for a path that is not a regular file.
+QString notRegular( const QString& path )
+{
+    return QStringLiteral( "%1 is not a regular file" ).arg( path );
+}
+
+/**
+ * Open @p path for reading if it is, or links to, a regular file.
+ *
+ * Reading a FIFO or a device can block for good, and a blocked worker would
+ * block the plugin's shutdown, which waits for it.  On Unix the file is
+ * opened without blocking and checked with fstat(), so that it cannot be
+ * swapped for a FIFO between the check and the opening.  Reading a regular
+ * file on a network share that stalls can still block; that is left to the
+ * operating system's timeouts.
+ */
+bool openRegularFile( const QString& path, QFile& file, QString& error )
+{
+    const QFileInfo info( path );
+    const auto target = info.canonicalFilePath(); // follows symbolic links
+    if ( target.isEmpty() ) {
+        error = QStringLiteral( "Cannot open file: %1 does not exist" ).arg( path );
+        return false;
+    }
+    if ( !QFileInfo( target ).isFile() ) {
+        error = notRegular( path );
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    const int fd
+        = ::open( QFile::encodeName( target ).constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
+    if ( fd < 0 ) {
+        error = QStringLiteral( "Cannot open file: %1" )
+                    .arg( QString::fromLocal8Bit( std::strerror( errno ) ) );
+        return false;
+    }
+    struct stat st;
+    if ( ::fstat( fd, &st ) != 0 || !S_ISREG( st.st_mode ) ) {
+        ::close( fd );
+        error = notRegular( path );
+        return false;
+    }
+    const int flags = ::fcntl( fd, F_GETFL );
+    if ( flags != -1 ) {
+        ::fcntl( fd, F_SETFL, flags & ~O_NONBLOCK );
+    }
+    if ( !file.open( fd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle ) ) {
+        ::close( fd );
+        error = QStringLiteral( "Cannot open file: %1" ).arg( file.errorString() );
+        return false;
+    }
+#else
+    file.setFileName( target );
+    if ( !file.open( QIODevice::ReadOnly ) ) {
+        error = QStringLiteral( "Cannot open file: %1" ).arg( file.errorString() );
+        return false;
+    }
+#endif
+    return true;
+}
+
 } // namespace
 
 ConversionResult convertPcap( const QString& inputPath, const QString& outputPath,
@@ -70,9 +141,8 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
 {
     ConversionResult result;
 
-    QFile input( inputPath );
-    if ( !input.open( QIODevice::ReadOnly ) ) {
-        result.error = QStringLiteral( "Cannot open file: %1" ).arg( input.errorString() );
+    QFile input;
+    if ( !openRegularFile( inputPath, input, result.error ) ) {
         return result;
     }
     FileSource source( input );
