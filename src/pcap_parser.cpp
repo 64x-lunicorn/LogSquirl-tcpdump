@@ -633,7 +633,15 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.srcIp = formatIpv4( data + 12 );
     pkt.dstIp = formatIpv4( data + 16 );
 
-    parseTransport( pkt, data + ihl, remaining - ihl );
+    // Use the IP total length field, not raw remaining bytes, to exclude
+    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).
+    auto totalLen = readBE16( data + 2 );
+    if ( totalLen > remaining )
+        totalLen = static_cast<uint16_t>( remaining );
+    if ( totalLen < ihl )
+        return;
+
+    parseTransport( pkt, data + ihl, totalLen - ihl );
 }
 
 // ── Parse IPv6 header ────────────────────────────────────────────────────
@@ -651,7 +659,13 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.srcIp = formatIpv6( data + 8 );
     pkt.dstIp = formatIpv6( data + 24 );
 
-    parseTransport( pkt, data + 40, remaining - 40 );
+    // Use the IPv6 payload length field, not raw remaining bytes, to exclude
+    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).
+    auto payloadLen = static_cast<size_t>( readBE16( data + 4 ) );
+    if ( payloadLen > remaining - 40 )
+        payloadLen = remaining - 40;
+
+    parseTransport( pkt, data + 40, payloadLen );
 }
 
 // ── Parse ARP ────────────────────────────────────────────────────────────
