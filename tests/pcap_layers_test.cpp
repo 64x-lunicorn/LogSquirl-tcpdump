@@ -541,3 +541,61 @@ SCENARIO( "Stacked VLAN tags are stripped", "[pcap_parser]" )
         }
     }
 }
+
+SCENARIO( "The pcap header is found only where it can really start", "[pcap_parser]" )
+{
+    const auto capture = pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 7, 8 ) ) ) } );
+
+    GIVEN( "binary data with a stray pcap magic in it" )
+    {
+        auto file = Bytes{ 0x00, 0x01, 0xFE, 0x42 } + capture;
+
+        THEN( "it is not taken for a capture" )
+        {
+            auto result = parse( file );
+            REQUIRE_FALSE( result.ok );
+            REQUIRE( result.error.find( "no pcap magic" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "a text preamble followed by a magic whose header is not a pcap header" )
+    {
+        auto bogus = capture;
+        bogus[ 4 ] = 0x09; // version 9.4
+        auto file = text( "tcpdump: listening on eth0\n" ) + bogus;
+
+        THEN( "it is rejected" )
+        {
+            auto result = parse( file );
+            REQUIRE_FALSE( result.ok );
+            REQUIRE( result.error.find( "no pcap magic" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "a text preamble with CRLF line ends and a tab, then a capture" )
+    {
+        auto file = text( "tcpdump: verbose output suppressed\r\n\tlistening\r\n" ) + capture;
+
+        THEN( "the capture is read" )
+        {
+            auto result = parse( file );
+            REQUIRE( result.ok );
+            REQUIRE( result.packets.size() == 1 );
+        }
+    }
+
+    GIVEN( "a capture with an unsupported version at the start of the file" )
+    {
+        FileOptions o;
+        o.versionMajor = 1;
+        o.versionMinor = 0;
+        auto file = pcapFile( {}, o );
+
+        THEN( "it is rejected, naming the version" )
+        {
+            auto result = parse( file );
+            REQUIRE_FALSE( result.ok );
+            REQUIRE( result.error.find( "version 1.0" ) != std::string::npos );
+        }
+    }
+}

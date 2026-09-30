@@ -1125,20 +1125,77 @@ void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pk
     }
 }
 
-/// Scan forward to find the pcap magic number.
-/// tcpdump via adb often prepends stderr text (e.g. "tcpdump: listening…")
-/// before the binary pcap data.  We search the first 4 KB for the magic.
-size_t findPcapMagicOffset( const uint8_t* data, size_t size )
+bool isPcapMagic( uint32_t magic )
 {
-    for ( size_t i = 0; i + 4 <= size && i <= kMaxPreamble; ++i ) {
-        uint32_t candidate;
-        std::memcpy( &candidate, data + i, 4 );
-        if ( candidate == PcapMagicLE || candidate == PcapMagicBE || candidate == PcapNsMagicLE
-             || candidate == PcapNsMagicBE || candidate == PcapNgMagic ) {
+    return magic == PcapMagicLE || magic == PcapMagicBE || magic == PcapNsMagicLE
+           || magic == PcapNsMagicBE;
+}
+
+/// A byte of the text tcpdump writes to stderr.
+bool isPreambleText( uint8_t c )
+{
+    return ( c >= 0x20 && c < 0x7F ) || c == '\t' || c == '\r' || c == '\n';
+}
+
+/// Whether the 24 bytes at @p p hold a pcap global header this parser reads:
+/// a pcap magic and format version 2.x, x <= 4 (all libpcap ever wrote).
+bool isPcapHeader( const uint8_t* p )
+{
+    uint32_t magic;
+    std::memcpy( &magic, p, 4 );
+    if ( !isPcapMagic( magic ) ) {
+        return false;
+    }
+    const bool swap = magic == PcapMagicBE || magic == PcapNsMagicBE;
+    return read16( p + 4, swap ) == 2 && read16( p + 6, swap ) <= 4;
+}
+
+/// Whether @p p (at least 12 bytes) starts a pcap-ng section header block.
+bool isPcapNgHeader( const uint8_t* p )
+{
+    uint32_t magic;
+    uint32_t byteOrder;
+    std::memcpy( &magic, p, 4 );
+    std::memcpy( &byteOrder, p + 8, 4 );
+    return magic == PcapNgMagic && ( byteOrder == 0x1A2B3C4D || byteOrder == 0x4D3C2B1A );
+}
+
+/**
+ * Find the pcap global header in the first bytes of a file.
+ *
+ * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
+ * e.g. "tcpdump: listening on …", into the output ahead of the capture.
+ * The header is therefore looked for behind up to kMaxPreamble bytes of
+ * text.  Past offset 0 it is only accepted when everything before it is
+ * text and it is a valid pcap header, not merely the 4 magic bytes: a
+ * stray magic in binary data, or in the text, must not be taken for a
+ * capture.  At offset 0 the magic decides, so that an unsupported version
+ * is reported as such.
+ *
+ * @return The offset of the header, or @p size if there is none; @p error
+ *         then says why.
+ */
+size_t findPcapHeader( const uint8_t* data, size_t size, std::string& error )
+{
+    for ( size_t i = 0; i + 24 <= size && i <= kMaxPreamble; ++i ) {
+        uint32_t magic;
+        std::memcpy( &magic, data + i, 4 );
+        if ( i == 0 && isPcapMagic( magic ) ) {
+            return 0;
+        }
+        if ( ( i == 0 && magic == PcapNgMagic ) || isPcapNgHeader( data + i ) ) {
+            error = "pcap-ng format is not yet supported";
+            return size;
+        }
+        if ( isPcapHeader( data + i ) ) {
             return i;
         }
+        if ( !isPreambleText( data[ i ] ) ) {
+            break; // binary data that is no pcap header: no text preamble
+        }
     }
-    return size; // not found
+    error = "Not a valid pcap file (no pcap magic found)";
+    return size;
 }
 
 } // anonymous namespace
@@ -1220,7 +1277,7 @@ bool PcapReader::skip( uint64_t n )
 bool PcapReader::open()
 {
     // Read what may hold a text preamble and the global header.
-    head_.resize( kMaxPreamble + 4 + 24 );
+    head_.resize( kMaxPreamble + 24 );
     size_t filled = 0;
     while ( filled < head_.size() ) {
         const auto got = source_.read( head_.data() + filled, head_.size() - filled );
@@ -1236,30 +1293,16 @@ bool PcapReader::open()
         return false;
     }
 
-    // Try to find pcap magic — may be past a text preamble from tcpdump stderr
-    const size_t magicOffset = findPcapMagicOffset( head_.data(), filled );
-    if ( magicOffset + 24 > filled ) {
-        error_ = "Not a valid pcap file (no pcap magic found)";
+    // Find the header — may be past a text preamble from tcpdump stderr
+    const size_t headerOffset = findPcapHeader( head_.data(), filled, error_ );
+    if ( headerOffset == filled ) {
         return false;
     }
-    const uint8_t* data = head_.data() + magicOffset;
+    const uint8_t* data = head_.data() + headerOffset;
 
     uint32_t magic;
     std::memcpy( &magic, data, 4 );
-    if ( magic == PcapMagicLE || magic == PcapNsMagicLE ) {
-        swap_ = false;
-    }
-    else if ( magic == PcapMagicBE || magic == PcapNsMagicBE ) {
-        swap_ = true;
-    }
-    else if ( magic == PcapNgMagic ) {
-        error_ = "pcap-ng format is not yet supported";
-        return false;
-    }
-    else {
-        error_ = "Not a valid pcap file (unknown magic number)";
-        return false;
-    }
+    swap_ = magic == PcapMagicBE || magic == PcapNsMagicBE;
 
     header_.magicNumber = magic;
     header_.versionMajor = read16( data + 4, swap_ );
@@ -1269,8 +1312,13 @@ bool PcapReader::open()
     header_.snaplen = read32( data + 16, swap_ );
     header_.network = read32( data + 20, swap_ );
     header_.nanoseconds = magic == PcapNsMagicLE || magic == PcapNsMagicBE;
+    if ( header_.versionMajor != 2 || header_.versionMinor > 4 ) {
+        error_ = "Unsupported pcap format version " + std::to_string( header_.versionMajor ) + "."
+                 + std::to_string( header_.versionMinor );
+        return false;
+    }
 
-    headPos_ = magicOffset + 24;
+    headPos_ = headerOffset + 24;
     bytesRead_ = headPos_;
     open_ = true;
     return true;
