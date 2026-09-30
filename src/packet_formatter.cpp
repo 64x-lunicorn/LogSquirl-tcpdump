@@ -27,7 +27,6 @@
 
 #include "packet_formatter.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <iomanip>
 #include <map>
@@ -95,12 +94,8 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     return oss.str();
 }
 
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
+std::string PacketFormatter::header()
 {
-    std::vector<std::string> lines;
-    lines.reserve( packets.size() + 1 );
-
-    // Column header
     std::ostringstream hdr;
     hdr << std::left;
     hdr << std::setw( 7 ) << "No.";
@@ -111,50 +106,46 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
     hdr << std::setw( 10 ) << "Protocol";
     hdr << std::setw( 7 ) << "Len";
     hdr << "Info";
-    lines.push_back( hdr.str() );
+    return hdr.str();
+}
 
-    if ( packets.empty() ) {
-        return lines;
+std::string PacketFormatter::format( const PacketRecord& pkt )
+{
+    if ( !haveBase_ ) {
+        haveBase_ = true;
+        baseTimeSec_ = pkt.timestampSec;
+        baseTimeUsec_ = pkt.timestampUsec;
+    }
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeUsec_, streamId( pkt ) );
+}
+
+int PacketFormatter::streamId( const PacketRecord& pkt )
+{
+    // Packets sharing the same IP+port 4-tuple (in either direction) belong
+    // to the same conversation.
+    if ( pkt.srcIp.empty() && pkt.dstIp.empty() ) {
+        return -1; // No IP layer (e.g. ARP) — no stream
     }
 
-    // Assign stream IDs: packets sharing the same IP+port 4-tuple
-    // (in either direction) belong to the same conversation.
-    std::map<std::string, int> streamMap;
-    std::vector<int> streamIds;
-    streamIds.reserve( packets.size() );
-    int nextStreamId = 0;
+    // Build canonical key: sort endpoints so both directions match
+    auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
+    auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
+    std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
 
+    const auto next = static_cast<int>( streams_.size() );
+    return streams_.emplace( std::move( key ), next ).first->second;
+}
+
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
+{
+    std::vector<std::string> lines;
+    lines.reserve( packets.size() + 1 );
+    lines.push_back( PacketFormatter::header() );
+
+    PacketFormatter formatter;
     for ( const auto& pkt : packets ) {
-        if ( pkt.srcIp.empty() && pkt.dstIp.empty() ) {
-            // No IP layer (e.g. ARP) — no stream
-            streamIds.push_back( -1 );
-            continue;
-        }
-
-        // Build canonical key: sort endpoints so both directions match
-        auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
-        auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
-        std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
-
-        auto it = streamMap.find( key );
-        if ( it == streamMap.end() ) {
-            streamMap[ key ] = nextStreamId;
-            streamIds.push_back( nextStreamId );
-            nextStreamId++;
-        }
-        else {
-            streamIds.push_back( it->second );
-        }
+        lines.push_back( formatter.format( pkt ) );
     }
-
-    auto baseTimeSec = packets.front().timestampSec;
-    auto baseTimeUsec = packets.front().timestampUsec;
-
-    for ( size_t i = 0; i < packets.size(); ++i ) {
-        lines.push_back(
-            formatPacketLine( packets[ i ], baseTimeSec, baseTimeUsec, streamIds[ i ] ) );
-    }
-
     return lines;
 }
 

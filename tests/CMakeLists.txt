@@ -20,6 +20,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_parser_test.cpp
     pcap_layers_test.cpp
     socks_test.cpp
+    streaming_test.cpp
     packet_formatter_test.cpp
 )
 
@@ -46,6 +47,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
+        "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
 )
 

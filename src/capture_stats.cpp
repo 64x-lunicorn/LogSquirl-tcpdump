@@ -1,0 +1,60 @@
+/*
+ * Copyright (C) 2026 LogSquirl Contributors
+ *
+ * This file is part of logsquirl-tcpdump.
+ *
+ * logsquirl-tcpdump is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * logsquirl-tcpdump is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with logsquirl-tcpdump.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file capture_stats.cpp
+ * @brief Implementation of the running capture statistics.
+ */
+
+#include "capture_stats.h"
+
+#include <algorithm>
+
+namespace tcpdump {
+
+void CaptureStats::add( const PacketRecord& pkt )
+{
+    const auto timeUs = static_cast<int64_t>( pkt.timestampSec ) * 1000000
+                        + static_cast<int64_t>( pkt.timestampUsec );
+    if ( packets == 0 ) {
+        firstTimeUs = lastTimeUs = timeUs;
+    }
+    else {
+        firstTimeUs = std::min( firstTimeUs, timeUs );
+        lastTimeUs = std::max( lastTimeUs, timeUs );
+    }
+
+    ++packets;
+    bytes += pkt.capturedLen;
+    ++protocolPackets[ pkt.protocol ];
+    protocolBytes[ pkt.protocol ] += pkt.capturedLen;
+    if ( !pkt.srcIp.empty() ) {
+        ++endpointPackets[ pkt.srcIp ];
+    }
+    if ( !pkt.dstIp.empty() ) {
+        ++endpointPackets[ pkt.dstIp ];
+    }
+}
+
+double CaptureStats::durationSeconds() const
+{
+    return static_cast<double>( lastTimeUs - firstTimeUs ) / 1e6;
+}
+
+} // namespace tcpdump

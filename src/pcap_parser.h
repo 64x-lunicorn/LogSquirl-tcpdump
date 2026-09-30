@@ -21,9 +21,10 @@
  * @file pcap_parser.h
  * @brief Parser for pcap and pcap-ng capture files.
  *
- * Reads the global header and per-packet records from a pcap file,
- * producing PacketRecord structs suitable for formatting.  Supports
- * both big-endian and little-endian byte orders (magic number).
+ * Reads the global header and per-packet records from a pcap capture,
+ * one packet at a time, producing PacketRecord structs suitable for
+ * formatting.  Supports both big-endian and little-endian byte orders
+ * (magic number).
  *
  * This is a pure parser — no Qt dependency.
  */
@@ -108,35 +109,121 @@ struct PacketRecord {
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
-
-    std::vector<uint8_t> rawData; ///< Raw packet bytes (up to capturedLen)
 };
 
 // ── Parser ───────────────────────────────────────────────────────────────
 
-/// Result of parsing a pcap file.
+/// Longest text preamble (e.g. tcpdump's stderr) searched for the pcap magic.
+constexpr size_t kMaxPreamble = 4096;
+
+/// Bytes of a packet that are dissected; the rest of a longer record is skipped.
+constexpr uint32_t kMaxDissectedBytes = 262144;
+
+/// Where a PcapReader reads the capture from.
+class ByteSource {
+public:
+    virtual ~ByteSource() = default;
+
+    /// Read up to @p n bytes into @p dst; returns how many, 0 at the end or on error.
+    virtual size_t read( uint8_t* dst, size_t n ) = 0;
+
+    /// Skip @p n bytes; false if the source ends first.  Reads them by default.
+    virtual bool skip( uint64_t n );
+};
+
+/// A ByteSource over a buffer in memory.
+class MemorySource : public ByteSource {
+public:
+    MemorySource( const uint8_t* data, size_t size )
+        : data_( data )
+        , size_( size )
+    {
+    }
+
+    size_t read( uint8_t* dst, size_t n ) override;
+    bool skip( uint64_t n ) override;
+
+private:
+    const uint8_t* data_;
+    size_t size_;
+    size_t pos_ = 0;
+};
+
+/**
+ * Reads a pcap capture one packet at a time, so that a capture of any size
+ * needs memory for one packet only.
+ */
+class PcapReader {
+public:
+    explicit PcapReader( ByteSource& source )
+        : source_( source )
+    {
+    }
+
+    /// Read the global header, after an optional text preamble.
+    /// On failure, error() says why.
+    bool open();
+
+    /// Read and dissect the next packet into @p pkt.  False at the end of the
+    /// capture, and when it ends in the middle of a record (see truncated()).
+    bool next( PacketRecord& pkt );
+
+    const PcapGlobalHeader& header() const
+    {
+        return header_;
+    }
+
+    const std::string& error() const
+    {
+        return error_;
+    }
+
+    /// Whether the capture ends in the middle of a record, as a capture that
+    /// was cut off does.  That record is not returned.
+    bool truncated() const
+    {
+        return truncated_;
+    }
+
+    /// Bytes of the source consumed so far, for progress.
+    uint64_t bytesRead() const
+    {
+        return bytesRead_;
+    }
+
+private:
+    size_t read( uint8_t* dst, size_t n );
+    bool skip( uint64_t n );
+
+    ByteSource& source_;
+    std::vector<uint8_t> head_; ///< Start of the source, searched for the magic.
+    size_t headPos_ = 0;        ///< Next unread byte in head_.
+    std::vector<uint8_t> packet_;
+    PcapGlobalHeader header_;
+    std::string error_;
+    bool swap_ = false;
+    bool open_ = false;
+    bool truncated_ = false;
+    uint32_t packetCount_ = 0;
+    uint64_t bytesRead_ = 0;
+};
+
+/// Result of parsing a whole pcap buffer.
 struct ParseResult {
     bool ok = false;
     std::string error;
     PcapGlobalHeader header;
     std::vector<PacketRecord> packets;
+    bool truncated = false; ///< The capture ends in the middle of a record.
 };
 
 /**
- * Parse a pcap file from a byte buffer.
+ * Parse a pcap capture held in memory, keeping every packet.
  *
  * @param data  Pointer to the raw pcap file contents.
  * @param size  Size of the buffer in bytes.
  * @return ParseResult with packets on success, or an error string.
  */
 ParseResult parsePcap( const uint8_t* data, size_t size );
-
-/**
- * Parse a pcap file from disk.
- *
- * @param filePath  Absolute or relative path to the .pcap / .cap file.
- * @return ParseResult with packets on success, or an error string.
- */
-ParseResult parsePcapFile( const std::string& filePath );
 
 } // namespace tcpdump

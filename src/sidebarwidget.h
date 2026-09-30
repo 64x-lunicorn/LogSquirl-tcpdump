@@ -34,6 +34,11 @@
 
 namespace tcpdump {
 
+struct ConversionResult;
+
+/// The capture summary shown in the sidebar, as rich text.
+QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionResult& result );
+
 /**
  * Sidebar widget displayed in the LogSquirl sidebar panel.
  *

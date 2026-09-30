@@ -39,6 +39,8 @@ add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/pcap_parser.cpp
     src/packet_formatter.cpp
+    src/capture_stats.cpp
+    src/pcap_converter.cpp
     src/sidebarwidget.cpp
 )
 

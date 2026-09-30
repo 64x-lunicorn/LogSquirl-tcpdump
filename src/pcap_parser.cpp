@@ -31,7 +31,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <sstream>
 
 namespace tcpdump {
@@ -938,18 +937,90 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.dstIp = targetIp;
 }
 
-} // anonymous namespace
+/// Dissect one captured packet of the given link-layer type into @p pkt.
+void dissect( PacketRecord& pkt, uint32_t linkType, const uint8_t* pktData, size_t pktRemaining )
+{
+    uint16_t etherType = 0;
+    const uint8_t* networkData = nullptr;
+    size_t networkRemaining = 0;
 
-// ── Public API ───────────────────────────────────────────────────────────
+    if ( linkType == DltEthernet && pktRemaining >= 14 ) {
+        pkt.dstMac = formatMac( pktData );
+        pkt.srcMac = formatMac( pktData + 6 );
+        etherType = readBE16( pktData + 12 );
+        pkt.etherType = etherType;
+        networkData = pktData + 14;
+        networkRemaining = pktRemaining - 14;
+
+        // Handle VLAN tag (802.1Q)
+        if ( etherType == EthertypeVlan && networkRemaining >= 4 ) {
+            etherType = readBE16( networkData + 2 );
+            pkt.etherType = etherType;
+            networkData += 4;
+            networkRemaining -= 4;
+        }
+    }
+    else if ( linkType == DltRaw && pktRemaining >= 1 ) {
+        // Raw IP — determine version from first nibble
+        auto version = static_cast<uint8_t>( pktData[ 0 ] >> 4 );
+        etherType = ( version == 6 ) ? EthertypeIpv6 : EthertypeIpv4;
+        pkt.etherType = etherType;
+        networkData = pktData;
+        networkRemaining = pktRemaining;
+    }
+    else if ( linkType == DltLinuxSll && pktRemaining >= 16 ) {
+        // Linux cooked capture v1: 16-byte header, ethertype at offset 14
+        etherType = readBE16( pktData + 14 );
+        pkt.etherType = etherType;
+        networkData = pktData + 16;
+        networkRemaining = pktRemaining - 16;
+    }
+    else if ( linkType == DltLinuxSll2 && pktRemaining >= 20 ) {
+        // Linux cooked capture v2: 20-byte header, ethertype at offset 0
+        etherType = readBE16( pktData );
+        pkt.etherType = etherType;
+        networkData = pktData + 20;
+        networkRemaining = pktRemaining - 20;
+    }
+    else if ( linkType == DltNull && pktRemaining >= 4 ) {
+        // BSD loopback: 4-byte family
+        uint32_t family = read32( pktData, false );
+        etherType = ( family == 2 ) ? EthertypeIpv4 : EthertypeIpv6;
+        pkt.etherType = etherType;
+        networkData = pktData + 4;
+        networkRemaining = pktRemaining - 4;
+    }
+    else {
+        pkt.protocol = "Unknown";
+        pkt.info = "Unsupported link-layer type " + std::to_string( linkType );
+    }
+
+    // Parse network and transport layers
+    if ( networkData ) {
+        if ( etherType == EthertypeIpv4 ) {
+            parseIpv4( pkt, networkData, networkRemaining );
+        }
+        else if ( etherType == EthertypeIpv6 ) {
+            parseIpv6( pkt, networkData, networkRemaining );
+        }
+        else if ( etherType == EthertypeArp ) {
+            parseArp( pkt, networkData, networkRemaining );
+        }
+        else {
+            char hex[ 8 ];
+            std::snprintf( hex, sizeof( hex ), "%04X", etherType );
+            pkt.protocol = std::string( "ETH(0x" ) + hex + ")";
+            pkt.info = std::string( "EtherType 0x" ) + hex;
+        }
+    }
+}
 
 /// Scan forward to find the pcap magic number.
 /// tcpdump via adb often prepends stderr text (e.g. "tcpdump: listening…")
 /// before the binary pcap data.  We search the first 4 KB for the magic.
-static size_t findPcapMagicOffset( const uint8_t* data, size_t size )
+size_t findPcapMagicOffset( const uint8_t* data, size_t size )
 {
-    constexpr size_t kMaxScan = 4096;
-    const size_t limit = std::min( size - 4, kMaxScan );
-    for ( size_t i = 0; i + 4 <= size && i <= limit; ++i ) {
+    for ( size_t i = 0; i + 4 <= size && i <= kMaxPreamble; ++i ) {
         uint32_t candidate;
         std::memcpy( &candidate, data + i, 4 );
         if ( candidate == PcapMagicLE || candidate == PcapMagicBE || candidate == PcapNgMagic ) {
@@ -959,198 +1030,200 @@ static size_t findPcapMagicOffset( const uint8_t* data, size_t size )
     return size; // not found
 }
 
-ParseResult parsePcap( const uint8_t* data, size_t size )
-{
-    ParseResult result;
+} // anonymous namespace
 
-    if ( size < 24 ) {
-        result.error = "File too small to be a valid pcap (< 24 bytes)";
-        return result;
+// ── Byte sources ─────────────────────────────────────────────────────────
+
+bool ByteSource::skip( uint64_t n )
+{
+    uint8_t scratch[ 4096 ];
+    while ( n > 0 ) {
+        const auto chunk = static_cast<size_t>( std::min<uint64_t>( n, sizeof( scratch ) ) );
+        const auto got = read( scratch, chunk );
+        if ( got == 0 ) {
+            return false;
+        }
+        n -= got;
+    }
+    return true;
+}
+
+size_t MemorySource::read( uint8_t* dst, size_t n )
+{
+    n = std::min( n, size_ - pos_ );
+    if ( n > 0 ) {
+        std::memcpy( dst, data_ + pos_, n );
+        pos_ += n;
+    }
+    return n;
+}
+
+bool MemorySource::skip( uint64_t n )
+{
+    if ( n > size_ - pos_ ) {
+        pos_ = size_;
+        return false;
+    }
+    pos_ += static_cast<size_t>( n );
+    return true;
+}
+
+// ── PcapReader ───────────────────────────────────────────────────────────
+
+size_t PcapReader::read( uint8_t* dst, size_t n )
+{
+    size_t got = 0;
+    if ( headPos_ < head_.size() ) {
+        got = std::min( n, head_.size() - headPos_ );
+        std::memcpy( dst, head_.data() + headPos_, got );
+        headPos_ += got;
+    }
+    while ( got < n ) {
+        const auto more = source_.read( dst + got, n - got );
+        if ( more == 0 ) {
+            break;
+        }
+        got += more;
+    }
+    bytesRead_ += got;
+    return got;
+}
+
+bool PcapReader::skip( uint64_t n )
+{
+    if ( headPos_ < head_.size() ) {
+        const auto fromHead
+            = static_cast<size_t>( std::min<uint64_t>( n, head_.size() - headPos_ ) );
+        headPos_ += fromHead;
+        bytesRead_ += fromHead;
+        n -= fromHead;
+    }
+    if ( n == 0 ) {
+        return true;
+    }
+    const bool ok = source_.skip( n );
+    bytesRead_ += n; // on failure the source is at its end anyway
+    return ok;
+}
+
+bool PcapReader::open()
+{
+    // Read what may hold a text preamble and the global header.
+    head_.resize( kMaxPreamble + 4 + 24 );
+    size_t filled = 0;
+    while ( filled < head_.size() ) {
+        const auto got = source_.read( head_.data() + filled, head_.size() - filled );
+        if ( got == 0 ) {
+            break;
+        }
+        filled += got;
+    }
+    head_.resize( filled );
+
+    if ( filled < 24 ) {
+        error_ = "File too small to be a valid pcap (< 24 bytes)";
+        return false;
     }
 
     // Try to find pcap magic — may be past a text preamble from tcpdump stderr
-    size_t magicOffset = findPcapMagicOffset( data, size );
-    if ( magicOffset + 24 > size ) {
-        result.error = "Not a valid pcap file (no pcap magic found)";
-        return result;
+    const size_t magicOffset = findPcapMagicOffset( head_.data(), filled );
+    if ( magicOffset + 24 > filled ) {
+        error_ = "Not a valid pcap file (no pcap magic found)";
+        return false;
     }
-
-    // Adjust data pointer past preamble
-    data += magicOffset;
-    size -= magicOffset;
+    const uint8_t* data = head_.data() + magicOffset;
 
     uint32_t magic;
     std::memcpy( &magic, data, 4 );
-
-    bool swap = false;
     if ( magic == PcapMagicLE ) {
-        swap = false;
+        swap_ = false;
     }
     else if ( magic == PcapMagicBE ) {
-        swap = true;
+        swap_ = true;
     }
     else if ( magic == PcapNgMagic ) {
-        result.error = "pcap-ng format is not yet supported";
-        return result;
+        error_ = "pcap-ng format is not yet supported";
+        return false;
     }
     else {
-        result.error = "Not a valid pcap file (unknown magic number)";
-        return result;
+        error_ = "Not a valid pcap file (unknown magic number)";
+        return false;
     }
 
-    // Parse global header
-    auto& hdr = result.header;
-    hdr.magicNumber = magic;
-    hdr.versionMajor = read16( data + 4, swap );
-    hdr.versionMinor = read16( data + 6, swap );
-    hdr.thiszone = readS32( data + 8, swap );
-    hdr.sigfigs = read32( data + 12, swap );
-    hdr.snaplen = read32( data + 16, swap );
-    hdr.network = read32( data + 20, swap );
+    header_.magicNumber = magic;
+    header_.versionMajor = read16( data + 4, swap_ );
+    header_.versionMinor = read16( data + 6, swap_ );
+    header_.thiszone = readS32( data + 8, swap_ );
+    header_.sigfigs = read32( data + 12, swap_ );
+    header_.snaplen = read32( data + 16, swap_ );
+    header_.network = read32( data + 20, swap_ );
 
-    // Walk packet records
-    size_t offset = 24;
-    uint32_t pktNum = 0;
-
-    while ( offset + 16 <= size ) {
-        // Packet header: ts_sec(4) ts_usec(4) incl_len(4) orig_len(4)
-        auto tsSec = read32( data + offset, swap );
-        auto tsUsec = read32( data + offset + 4, swap );
-        auto inclLen = read32( data + offset + 8, swap );
-        auto origLen = read32( data + offset + 12, swap );
-
-        offset += 16;
-
-        // Sanity check: captured length must not exceed remaining data
-        if ( inclLen > size - offset ) {
-            break; // Truncated file — stop parsing
-        }
-
-        pktNum++;
-        PacketRecord pkt;
-        pkt.number = pktNum;
-        pkt.timestampSec = tsSec;
-        pkt.timestampUsec = tsUsec;
-        pkt.capturedLen = inclLen;
-        pkt.originalLen = origLen;
-
-        // Store raw packet data
-        pkt.rawData.assign( data + offset, data + offset + inclLen );
-
-        const uint8_t* pktData = data + offset;
-        size_t pktRemaining = inclLen;
-
-        // Parse based on link-layer type
-        uint16_t etherType = 0;
-        const uint8_t* networkData = nullptr;
-        size_t networkRemaining = 0;
-
-        if ( hdr.network == DltEthernet && pktRemaining >= 14 ) {
-            pkt.dstMac = formatMac( pktData );
-            pkt.srcMac = formatMac( pktData + 6 );
-            etherType = readBE16( pktData + 12 );
-            pkt.etherType = etherType;
-            networkData = pktData + 14;
-            networkRemaining = pktRemaining - 14;
-
-            // Handle VLAN tag (802.1Q)
-            if ( etherType == EthertypeVlan && networkRemaining >= 4 ) {
-                etherType = readBE16( networkData + 2 );
-                pkt.etherType = etherType;
-                networkData += 4;
-                networkRemaining -= 4;
-            }
-        }
-        else if ( hdr.network == DltRaw && pktRemaining >= 1 ) {
-            // Raw IP — determine version from first nibble
-            auto version = static_cast<uint8_t>( pktData[ 0 ] >> 4 );
-            etherType = ( version == 6 ) ? EthertypeIpv6 : EthertypeIpv4;
-            pkt.etherType = etherType;
-            networkData = pktData;
-            networkRemaining = pktRemaining;
-        }
-        else if ( hdr.network == DltLinuxSll && pktRemaining >= 16 ) {
-            // Linux cooked capture v1: 16-byte header, ethertype at offset 14
-            etherType = readBE16( pktData + 14 );
-            pkt.etherType = etherType;
-            networkData = pktData + 16;
-            networkRemaining = pktRemaining - 16;
-        }
-        else if ( hdr.network == DltLinuxSll2 && pktRemaining >= 20 ) {
-            // Linux cooked capture v2: 20-byte header, ethertype at offset 0
-            etherType = readBE16( pktData );
-            pkt.etherType = etherType;
-            networkData = pktData + 20;
-            networkRemaining = pktRemaining - 20;
-        }
-        else if ( hdr.network == DltNull && pktRemaining >= 4 ) {
-            // BSD loopback: 4-byte family
-            uint32_t family = read32( pktData, false );
-            etherType = ( family == 2 ) ? EthertypeIpv4 : EthertypeIpv6;
-            pkt.etherType = etherType;
-            networkData = pktData + 4;
-            networkRemaining = pktRemaining - 4;
-        }
-        else {
-            pkt.protocol = "Unknown";
-            pkt.info = "Unsupported link-layer type " + std::to_string( hdr.network );
-        }
-
-        // Parse network and transport layers
-        if ( networkData ) {
-            if ( etherType == EthertypeIpv4 ) {
-                parseIpv4( pkt, networkData, networkRemaining );
-            }
-            else if ( etherType == EthertypeIpv6 ) {
-                parseIpv6( pkt, networkData, networkRemaining );
-            }
-            else if ( etherType == EthertypeArp ) {
-                parseArp( pkt, networkData, networkRemaining );
-            }
-            else {
-                pkt.protocol = "ETH(0x" + ( [ & ] {
-                                   char b[ 5 ];
-                                   std::snprintf( b, sizeof( b ), "%04X", etherType );
-                                   return std::string( b );
-                               } )()
-                               + ")";
-                pkt.info = "EtherType 0x" + ( [ & ] {
-                               char b[ 5 ];
-                               std::snprintf( b, sizeof( b ), "%04X", etherType );
-                               return std::string( b );
-                           } )();
-            }
-        }
-
-        result.packets.push_back( std::move( pkt ) );
-        offset += inclLen;
-    }
-
-    result.ok = true;
-    return result;
+    headPos_ = magicOffset + 24;
+    bytesRead_ = headPos_;
+    open_ = true;
+    return true;
 }
 
-ParseResult parsePcapFile( const std::string& filePath )
+bool PcapReader::next( PacketRecord& pkt )
 {
-    std::ifstream file( filePath, std::ios::binary | std::ios::ate );
-    if ( !file.is_open() ) {
-        ParseResult result;
-        result.error = "Cannot open file: " + filePath;
-        return result;
+    if ( !open_ ) {
+        return false;
     }
 
-    auto fileSize = static_cast<size_t>( file.tellg() );
-    file.seekg( 0, std::ios::beg );
+    // Packet header: ts_sec(4) ts_usec(4) incl_len(4) orig_len(4)
+    uint8_t recordHeader[ 16 ];
+    const auto got = read( recordHeader, sizeof( recordHeader ) );
+    if ( got < sizeof( recordHeader ) ) {
+        truncated_ = got > 0;
+        open_ = false;
+        return false;
+    }
+    const auto tsSec = read32( recordHeader, swap_ );
+    const auto tsUsec = read32( recordHeader + 4, swap_ );
+    const auto inclLen = read32( recordHeader + 8, swap_ );
+    const auto origLen = read32( recordHeader + 12, swap_ );
 
-    std::vector<uint8_t> buffer( fileSize );
-    if ( !file.read( reinterpret_cast<char*>( buffer.data() ),
-                     static_cast<std::streamsize>( fileSize ) ) ) {
-        ParseResult result;
-        result.error = "Failed to read file: " + filePath;
-        return result;
+    // Only the first kMaxDissectedBytes are looked at; the rest is skipped,
+    // so that a corrupt huge length costs no memory.
+    const auto kept = static_cast<size_t>( std::min<uint32_t>( inclLen, kMaxDissectedBytes ) );
+    packet_.resize( kept );
+    if ( read( packet_.data(), kept ) < kept || !skip( inclLen - kept ) ) {
+        // The file ends inside this record: stop, as the capture was cut off.
+        truncated_ = true;
+        open_ = false;
+        return false;
     }
 
-    return parsePcap( buffer.data(), buffer.size() );
+    pkt = PacketRecord();
+    pkt.number = ++packetCount_;
+    pkt.timestampSec = tsSec;
+    pkt.timestampUsec = tsUsec;
+    pkt.capturedLen = inclLen;
+    pkt.originalLen = origLen;
+    dissect( pkt, header_.network, packet_.data(), kept );
+    return true;
+}
+
+// ── Whole-buffer convenience ─────────────────────────────────────────────
+
+ParseResult parsePcap( const uint8_t* data, size_t size )
+{
+    ParseResult result;
+    MemorySource source( data, size );
+    PcapReader reader( source );
+    if ( !reader.open() ) {
+        result.error = reader.error();
+        return result;
+    }
+    result.header = reader.header();
+
+    PacketRecord pkt;
+    while ( reader.next( pkt ) ) {
+        result.packets.push_back( std::move( pkt ) );
+    }
+    result.truncated = reader.truncated();
+    result.ok = true;
+    return result;
 }
 
 } // namespace tcpdump

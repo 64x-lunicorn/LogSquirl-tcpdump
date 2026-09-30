@@ -32,6 +32,7 @@
 
 #include "pcap_parser.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,31 @@ namespace tcpdump {
  */
 std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeUsec,
                               int streamId );
+
+/**
+ * Formats the packets of one capture, one at a time and in capture order,
+ * so that a capture never needs to be held in memory as a whole.
+ *
+ * Remembers the first packet's time, which all times are relative to, and
+ * the conversations seen so far, to number the streams.
+ */
+class PacketFormatter {
+public:
+    /// The column header line.
+    static std::string header();
+
+    /// The line of the next packet of the capture.
+    std::string format( const PacketRecord& pkt );
+
+private:
+    /// Stream ID of the packet's conversation, -1 if it has none (no IP layer).
+    int streamId( const PacketRecord& pkt );
+
+    bool haveBase_ = false;
+    uint32_t baseTimeSec_ = 0;
+    uint32_t baseTimeUsec_ = 0;
+    std::map<std::string, int> streams_;
+};
 
 /**
  * Format all packets into a vector of lines.  Includes a column header

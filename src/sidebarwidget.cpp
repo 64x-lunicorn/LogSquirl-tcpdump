@@ -23,15 +23,14 @@
  *
  * When the user clicks "Open pcap…", the widget:
  *   1. Opens a file dialog for .pcap / .cap / .dmp files
- *   2. Parses the pcap with pcap_parser
- *   3. Formats packets into human-readable lines with packet_formatter
- *   4. Writes the result to a temporary .log file
- *   5. Opens the .log file in LogSquirl's main viewer
+ *   2. Converts the pcap packet by packet with pcap_converter: parses each
+ *      packet, formats it into a human-readable line, and writes the line
+ *      to a temporary .log file
+ *   3. Opens the .log file in LogSquirl's main viewer
  */
 
 #include "sidebarwidget.h"
-#include "packet_formatter.h"
-#include "pcap_parser.h"
+#include "pcap_converter.h"
 #include "plugin.h"
 
 #include <QDir>
@@ -40,12 +39,10 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QStandardPaths>
-#include <QTemporaryFile>
-#include <QTextStream>
 
 #include <algorithm>
 #include <map>
-#include <set>
+#include <vector>
 
 namespace tcpdump {
 
@@ -98,10 +95,16 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 {
     hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Opening pcap file: " + filePath ) );
 
-    // Parse the pcap file
-    auto result = parsePcapFile( filePath.toStdString() );
-    if ( !result.ok ) {
-        const auto msg = QString::fromStdString( result.error );
+    // Write to a temporary file that persists after the plugin is done
+    // (LogSquirl will display it; user can save it if they want)
+    const auto baseName = QFileInfo( filePath ).completeBaseName();
+    const auto tempDir = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
+    const auto outPath = tempDir + "/logsquirl_tcpdump_" + baseName + ".log";
+
+    // Parse the capture and write it out packet by packet
+    const auto result = convertPcap( filePath, outPath );
+    if ( result.status != ConversionResult::Status::Converted ) {
+        const auto& msg = result.error;
         summaryLabel_->setText( "Error: " + msg );
         hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( "pcap parse error: " + msg ) );
         if ( g_state.api && g_state.handle ) {
@@ -111,75 +114,50 @@ void SidebarWidget::openPcapFile( const QString& filePath )
         return;
     }
 
-    // Format packets to text lines
-    auto lines = formatAllPackets( result.packets );
-
-    // Write to a temporary file that persists after the plugin is done
-    // (LogSquirl will display it; user can save it if they want)
-    const auto baseName = QFileInfo( filePath ).completeBaseName();
-    const auto tempDir = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
-    const auto outPath = tempDir + "/logsquirl_tcpdump_" + baseName + ".log";
-
-    QFile outFile( outPath );
-    if ( !outFile.open( QIODevice::WriteOnly | QIODevice::Text ) ) {
-        summaryLabel_->setText( "Error: Cannot write temp file" );
-        hostLog( LOGSQUIRL_LOG_ERROR, "Failed to create temp output file" );
-        return;
-    }
-
-    QTextStream stream( &outFile );
-    for ( const auto& line : lines ) {
-        stream << QString::fromStdString( line ) << "\n";
-    }
-    outFile.close();
-
     // Open in LogSquirl viewer
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, qPrintable( outPath ), 0 );
     }
 
-    // Update summary with detailed capture info
-    double duration = 0.0;
-    if ( result.packets.size() >= 2 ) {
-        const auto& first = result.packets.front();
-        const auto& last = result.packets.back();
-        duration = static_cast<double>( last.timestampSec - first.timestampSec )
-                   + ( static_cast<double>( last.timestampUsec )
-                       - static_cast<double>( first.timestampUsec ) )
-                         / 1000000.0;
+    summaryLabel_->setText(
+        summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(), result ) );
+
+    hostLog(
+        LOGSQUIRL_LOG_INFO,
+        qPrintable(
+            QString( "Opened %1 packets from %2" ).arg( result.stats.packets ).arg( filePath ) ) );
+}
+
+namespace {
+
+QString formatBytes( uint64_t bytes )
+{
+    if ( bytes >= 1024 * 1024 ) {
+        return QString::number( static_cast<double>( bytes ) / ( 1024.0 * 1024.0 ), 'f', 1 )
+               + " MB";
     }
-
-    // Protocol breakdown
-    std::map<std::string, int> protoCounts;
-    std::map<std::string, uint64_t> protoBytes;
-    std::set<std::string> uniqueIps;
-    std::map<std::string, int> ipPacketCounts;
-    uint64_t totalBytes = 0;
-
-    for ( const auto& pkt : result.packets ) {
-        protoCounts[ pkt.protocol ]++;
-        protoBytes[ pkt.protocol ] += pkt.capturedLen;
-        totalBytes += pkt.capturedLen;
-        if ( !pkt.srcIp.empty() ) {
-            uniqueIps.insert( pkt.srcIp );
-            ipPacketCounts[ pkt.srcIp ]++;
-        }
-        if ( !pkt.dstIp.empty() ) {
-            uniqueIps.insert( pkt.dstIp );
-            ipPacketCounts[ pkt.dstIp ]++;
-        }
+    if ( bytes >= 1024 ) {
+        return QString::number( static_cast<double>( bytes ) / 1024.0, 'f', 1 ) + " KB";
     }
+    return QString::number( bytes ) + " B";
+}
 
-    // Sort protocols by count (descending)
-    std::vector<std::pair<std::string, int>> sortedProtos( protoCounts.begin(), protoCounts.end() );
-    std::sort( sortedProtos.begin(), sortedProtos.end(),
-               []( const auto& a, const auto& b ) { return a.second > b.second; } );
+/// Entries of @p counts by count, highest first.
+std::vector<std::pair<std::string, uint64_t>>
+byCount( const std::map<std::string, uint64_t>& counts )
+{
+    std::vector<std::pair<std::string, uint64_t>> sorted( counts.begin(), counts.end() );
+    std::stable_sort( sorted.begin(), sorted.end(),
+                      []( const auto& a, const auto& b ) { return a.second > b.second; } );
+    return sorted;
+}
 
-    // Sort IPs by packet count (descending), show top 6
-    std::vector<std::pair<std::string, int>> sortedIps( ipPacketCounts.begin(),
-                                                        ipPacketCounts.end() );
-    std::sort( sortedIps.begin(), sortedIps.end(),
-               []( const auto& a, const auto& b ) { return a.second > b.second; } );
+} // namespace
+
+QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionResult& result )
+{
+    const auto& stats = result.stats;
+    const double duration = stats.durationSeconds();
 
     // Link type name
     QString linkName;
@@ -204,36 +182,23 @@ void SidebarWidget::openPcapFile( const QString& filePath )
         break;
     }
 
-    // Format file size
-    auto fileSize = QFileInfo( filePath ).size();
-    QString sizeStr;
-    if ( fileSize >= 1024 * 1024 ) {
-        sizeStr = QString::number( fileSize / ( 1024.0 * 1024.0 ), 'f', 1 ) + " MB";
-    }
-    else if ( fileSize >= 1024 ) {
-        sizeStr = QString::number( fileSize / 1024.0, 'f', 1 ) + " KB";
-    }
-    else {
-        sizeStr = QString::number( fileSize ) + " B";
-    }
-
     // Packets per second
     QString ppsStr = "-";
     if ( duration > 0.0 ) {
-        auto pps = static_cast<double>( result.packets.size() ) / duration;
+        auto pps = static_cast<double>( stats.packets ) / duration;
         ppsStr = QString::number( pps, 'f', 0 );
     }
 
     // Build summary HTML
     QString html;
-    html += QString( "<b>%1</b><br>" ).arg( QFileInfo( filePath ).fileName() );
+    html += QString( "<b>%1</b><br>" ).arg( fileName );
     html += QString( "<hr>" );
 
     // General stats
     html += QString( "<b>Overview</b><br>" );
     html += QString( "Packets: <b>%1</b><br>" )
-                .arg( QLocale().toString( static_cast<qlonglong>( result.packets.size() ) ) );
-    html += QString( "File size: %1<br>" ).arg( sizeStr );
+                .arg( QLocale().toString( static_cast<qulonglong>( stats.packets ) ) );
+    html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
     html += QString( "Link type: %1<br>" ).arg( linkName );
@@ -241,48 +206,31 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 
     // Protocol breakdown
     html += "<b>Protocols</b><br>";
-    for ( const auto& [ proto, count ] : sortedProtos ) {
-        auto bytes = protoBytes[ proto ];
-        QString bytesStr;
-        if ( bytes >= 1024 * 1024 ) {
-            bytesStr = QString::number( bytes / ( 1024.0 * 1024.0 ), 'f', 1 ) + " MB";
-        }
-        else if ( bytes >= 1024 ) {
-            bytesStr = QString::number( bytes / 1024.0, 'f', 1 ) + " KB";
-        }
-        else {
-            bytesStr = QString::number( bytes ) + " B";
-        }
-
-        auto pct = ( result.packets.size() > 0 )
-                       ? static_cast<double>( count ) / result.packets.size() * 100.0
-                       : 0.0;
+    for ( const auto& [ proto, count ] : byCount( stats.protocolPackets ) ) {
+        const auto bytes = stats.protocolBytes.at( proto );
+        const auto pct
+            = static_cast<double>( count ) / static_cast<double>( stats.packets ) * 100.0;
         html += QString( "%1: %2 (%3%, %4)<br>" )
                     .arg( QString::fromStdString( proto ) )
-                    .arg( QLocale().toString( count ) )
+                    .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
                     .arg( pct, 0, 'f', 1 )
-                    .arg( bytesStr );
+                    .arg( formatBytes( bytes ) );
     }
     html += "<br>";
 
     // Top IPs
-    html += QString( "<b>Endpoints</b> (%1 unique)<br>" ).arg( uniqueIps.size() );
+    html += QString( "<b>Endpoints</b> (%1 unique)<br>" ).arg( stats.endpointPackets.size() );
     int shown = 0;
-    for ( const auto& [ ip, count ] : sortedIps ) {
+    for ( const auto& [ ip, count ] : byCount( stats.endpointPackets ) ) {
         if ( shown >= 8 )
             break;
         html += QString( "%1: %2 pkts<br>" )
                     .arg( QString::fromStdString( ip ) )
-                    .arg( QLocale().toString( count ) );
+                    .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }
 
-    summaryLabel_->setText( html );
-
-    hostLog(
-        LOGSQUIRL_LOG_INFO,
-        qPrintable(
-            QString( "Opened %1 packets from %2" ).arg( result.packets.size() ).arg( filePath ) ) );
+    return html;
 }
 
 } // namespace tcpdump

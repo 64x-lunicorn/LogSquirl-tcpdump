@@ -184,8 +184,8 @@ inline Bytes udp( uint16_t srcPort, uint16_t dstPort, const Bytes& payload = {},
 struct Record {
     Bytes data;
     uint32_t tsSec = 1000;
-    uint32_t tsFrac = 0; ///< Microseconds, or nanoseconds in a nanosecond file.
-    int inclLen = -1;    ///< -1: the size of data.
+    uint32_t tsFrac = 0;  ///< Microseconds, or nanoseconds in a nanosecond file.
+    int64_t inclLen = -1; ///< -1: the size of data.
 };
 
 struct FileOptions {
