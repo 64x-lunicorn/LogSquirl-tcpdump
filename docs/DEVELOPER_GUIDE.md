@@ -69,10 +69,17 @@ Qt UI that provides:
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool` and shows
 the outcome on the GUI thread. Each conversion writes to a new
-`logsquirl-tcpdump-XXXXXX` directory in the system's temporary directory;
-a failed or cancelled conversion removes it at once, and the directories of
-files opened in tabs are removed when LogSquirl quits. Destroying the widget
-cancels a running conversion and waits for the worker.
+`logsquirl-tcpdump-<pid>-XXXXXX` directory in the system's temporary
+directory (`tempdirs.h/cpp`); a failed or cancelled conversion removes it at
+once. The process ID in the name is the only record of the directories of
+files opened in tabs, so that it survives a runtime disable, update and
+re-enable of the plugin: when LogSquirl quits, every directory with this
+process's ID is removed, and at `init()` those of processes that no longer
+run (checked with `kill(pid, 0)` on Unix and `OpenProcess()` on Windows).
+Directories of running processes, links and, on Unix, other users'
+directories are left alone. Only regular files are read, so the worker
+cannot block on a FIFO or device; destroying the widget cancels a running
+conversion and waits for the worker.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab

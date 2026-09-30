@@ -41,6 +41,7 @@ add_library(logsquirl_tcpdump SHARED
     src/packet_formatter.cpp
     src/capture_stats.cpp
     src/pcap_converter.cpp
+    src/tempdirs.cpp
     src/sidebarwidget.cpp
 )
 

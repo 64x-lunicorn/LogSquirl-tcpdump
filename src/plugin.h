@@ -44,6 +44,7 @@ struct PluginState {
     bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
     bool initialised = false;               ///< True between init() and shutdown().
     bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
+    QString tempRoot;      ///< Where temporary directories go; empty: the system's (for tests).
 };
 
 /// Singleton plugin state.  Defined in plugin.cpp.

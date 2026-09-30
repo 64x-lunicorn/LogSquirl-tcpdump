@@ -185,9 +185,10 @@ QString writeCaptureFile( const QTemporaryDir& dir )
 /** Initialise the plugin, open a capture through its sidebar, return the opened file. */
 QString openCapture( FakeHost& host, const QString& capture, const QString& tempRoot )
 {
+    tcpdump::g_state.tempRoot = tempRoot;
     REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
     auto* sidebar = tcpdump::g_state.sidebarWidget;
-    sidebar->setTempRoot( tempRoot );
+    REQUIRE( sidebar->tempRoot() == tempRoot );
     const auto before = host.openedFiles.size();
     sidebar->openPcapFile( capture );
     REQUIRE( tcpdump_test::waitFor(
@@ -241,6 +242,76 @@ SCENARIO( "temporary files are removed only when LogSquirl quits", "[plugin]" )
             {
                 REQUIRE( QFileInfo::exists( opened ) );
             }
+
+            AND_WHEN( "it is enabled again, and LogSquirl quits later" )
+            {
+                REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+                QMetaObject::invokeMethod( QCoreApplication::instance(), "aboutToQuit" );
+                logsquirl_plugin_shutdown();
+
+                THEN( "the new instance removes the file the earlier one left for its tab" )
+                {
+                    REQUIRE_FALSE( QFileInfo::exists( opened ) );
+                    REQUIRE( QDir( tempRoot.path() ).isEmpty() );
+                }
+            }
         }
     }
+    tcpdump::g_state.tempRoot.clear();
+}
+
+SCENARIO( "temporary directories of LogSquirl processes that ended are swept", "[plugin]" )
+{
+    QTemporaryDir tempRoot;
+    REQUIRE( tempRoot.isValid() );
+    const QDir root( tempRoot.path() );
+
+    GIVEN( "directories left by a process that ended, and by one that runs" )
+    {
+        // No process has this ID: PIDs stay far below it on Linux and macOS,
+        // and on Windows it is a multiple of 4 no process gets in practice.
+        const QString dead = "logsquirl-tcpdump-2147483644-AbC123";
+#ifdef Q_OS_WIN
+        const QString alive = "logsquirl-tcpdump-4-AbC123"; // the System process
+#else
+        const QString alive = "logsquirl-tcpdump-1-AbC123"; // init / launchd
+#endif
+        const QString unrelated = "logsquirl-tcpdump-notapid";
+        for ( const auto& name : { dead, alive, unrelated } ) {
+            REQUIRE( root.mkpath( name + "/sub" ) );
+            QFile file( root.filePath( name + "/sub/capture.log" ) );
+            REQUIRE( file.open( QIODevice::WriteOnly ) );
+        }
+
+        WHEN( "the plugin is initialised" )
+        {
+            FakeHost host;
+            tcpdump::g_state.tempRoot = tempRoot.path();
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+            logsquirl_plugin_shutdown();
+
+            THEN( "only the ended process's directory is removed" )
+            {
+                REQUIRE_FALSE( root.exists( dead ) );
+                REQUIRE( root.exists( alive ) );
+                REQUIRE( root.exists( unrelated ) );
+            }
+        }
+
+        WHEN( "the plugin shuts down as LogSquirl quits" )
+        {
+            FakeHost host;
+            tcpdump::g_state.tempRoot = tempRoot.path();
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+            QMetaObject::invokeMethod( QCoreApplication::instance(), "aboutToQuit" );
+            logsquirl_plugin_shutdown();
+
+            THEN( "another running process's directory is kept" )
+            {
+                REQUIRE( root.exists( alive ) );
+                REQUIRE( root.exists( unrelated ) );
+            }
+        }
+    }
+    tcpdump::g_state.tempRoot.clear();
 }

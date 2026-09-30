@@ -30,7 +30,6 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QStringList>
 #include <QThreadPool>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -80,9 +79,11 @@ public:
         tempRoot_ = dir;
     }
 
-    /// Remove the text files opened in tabs so far, with their directories.
-    /// Only for when LogSquirl quits: until then, the tabs show the files.
-    void removeTempFiles();
+    /// The directory the temporary directories are created in.
+    const QString& tempRoot() const
+    {
+        return tempRoot_;
+    }
 
     /// Whether a conversion is running.
     bool isConverting() const
@@ -96,7 +97,7 @@ private Q_SLOTS:
 
 private:
     /// Show the outcome of a conversion and return to idle.
-    void finishConversion( const QString& filePath, const QString& outDir, const QString& outPath,
+    void finishConversion( const QString& filePath, const QString& outPath,
                            ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
@@ -114,8 +115,6 @@ private:
     QString tempRoot_;
     /// Temporary directory of the running conversion, which no tab shows yet.
     QString runningDir_;
-    /// Temporary directories of the files opened in tabs.
-    QStringList tabDirs_;
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
 };

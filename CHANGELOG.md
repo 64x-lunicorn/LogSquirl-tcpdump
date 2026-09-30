@@ -35,10 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after 200 characters with an ellipsis, and payloads that are mostly binary
   still get none.
 - Each capture's text is written to its own new file, `<name>.log`, in a
-  new `logsquirl-tcpdump-XXXXXX` directory in the temporary directory that
-  only you can enter, and removed when LogSquirl quits. When the plugin is
-  disabled or updated while LogSquirl keeps running, the files are kept for
-  the tabs that still show them.
+  new `logsquirl-tcpdump-<pid>-XXXXXX` directory in the temporary directory
+  that only you can enter, and removed when LogSquirl quits. When the plugin
+  is disabled or updated while LogSquirl keeps running, the files are kept
+  for the tabs that still show them, and the plugin, once enabled again,
+  still removes them at quit. Directories left behind by a LogSquirl that no
+  longer runs, e.g. after a crash, are removed when the plugin starts.
 - A pcap header past the start of the file is accepted only behind text, as
   tcpdump's stderr puts it there, and only if it is a valid header; a stray
   magic number in other data is no longer taken for a capture. A file with a

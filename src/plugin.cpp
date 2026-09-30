@@ -40,6 +40,7 @@
 
 #include "plugin.h"
 #include "sidebarwidget.h"
+#include "tempdirs.h"
 
 #include <QCoreApplication>
 
@@ -135,6 +136,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
     const bool ok = guarded( "initialisation", [ api, handle ] {
         api->log_message( handle, LOGSQUIRL_LOG_INFO, "tcpdump plugin initialising\xe2\x80\xa6" );
 
+        // Files of LogSquirl processes that ended without removing them,
+        // e.g. after a crash: no tab can show them any more.
+        tcpdump::removeStaleTempDirs( tcpdump::tempRoot() );
+
         // Register a sidebar tab for pcap file management
         tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
         api->register_sidebar_tab( handle, "tcpdump",
@@ -183,14 +188,17 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         } );
     }
     if ( st.sidebarWidget ) {
-        guarded( "shutdown", [] {
-            auto& st = tcpdump::g_state;
-            if ( st.quitting ) {
-                st.sidebarWidget->removeTempFiles();
-            }
-            delete st.sidebarWidget;
-        } );
+        // Deleting it stops a running conversion and waits for it.
+        guarded( "shutdown", [] { delete tcpdump::g_state.sidebarWidget; } );
         st.sidebarWidget = nullptr;
+    }
+
+    // The tabs close with LogSquirl: remove the files of every instance of
+    // the plugin in this process, also those of instances before a runtime
+    // disable or update, which only the directory names remember.
+    if ( st.quitting ) {
+        guarded( "removing temporary files",
+                 [] { tcpdump::removeOwnTempDirs( tcpdump::tempRoot() ); } );
     }
 
     tcpdump::g_state.api = nullptr;

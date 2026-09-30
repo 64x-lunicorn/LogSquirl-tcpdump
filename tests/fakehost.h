@@ -102,6 +102,7 @@ public:
     {
         tcpdump::g_state.api = nullptr;
         tcpdump::g_state.handle = nullptr;
+        tcpdump::g_state.tempRoot.clear();
     }
 
     FakeHost( const FakeHost& ) = delete;

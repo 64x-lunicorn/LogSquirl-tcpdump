@@ -33,6 +33,7 @@
 #include "packet_formatter.h"
 #include "pcap_converter.h"
 #include "plugin.h"
+#include "tempdirs.h"
 
 #include <QDir>
 #include <QFile>
@@ -50,14 +51,13 @@
 #include <exception>
 #include <map>
 #include <new>
-#include <utility>
 #include <vector>
 
 namespace tcpdump {
 
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
-    , tempRoot_( QDir::tempPath() )
+    , tempRoot_( tcpdump::tempRoot() )
 {
     pool_.setMaxThreadCount( 1 );
 
@@ -121,14 +121,6 @@ SidebarWidget::~SidebarWidget()
     }
 }
 
-void SidebarWidget::removeTempFiles()
-{
-    for ( const auto& dir : std::as_const( tabDirs_ ) ) {
-        QDir( dir ).removeRecursively();
-    }
-    tabDirs_.clear();
-}
-
 void SidebarWidget::onOpenClicked()
 {
     if ( lastDir_.isEmpty() ) {
@@ -176,11 +168,11 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     // so that no other user can read the capture's text or plant a file or
     // link in its place, and no earlier tab's file is overwritten.  It is
     // kept for its tab until LogSquirl quits.
-    QTemporaryDir tempDir( tempRoot_ + "/logsquirl-tcpdump-XXXXXX" );
+    QTemporaryDir tempDir( tempDirTemplate( tempRoot_ ) );
     if ( !tempDir.isValid() ) {
         ConversionResult result;
         result.error = "Cannot create a temporary directory: " + tempDir.errorString();
-        finishConversion( filePath, {}, {}, std::move( result ) );
+        finishConversion( filePath, {}, std::move( result ) );
         return;
     }
     tempDir.setAutoRemove( false );
@@ -219,7 +211,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
                  if ( result.status != ConversionResult::Status::Converted ) {
                      QDir( outDir ).removeRecursively();
                  }
-                 finishConversion( filePath, outDir, outPath, std::move( result ) );
+                 finishConversion( filePath, outPath, std::move( result ) );
              } );
 
     watcher->setFuture( QtConcurrent::run( &pool_, [ filePath, outPath, cancelled ](
@@ -264,8 +256,8 @@ void SidebarWidget::setConverting( bool converting )
     progressBar_->setValue( 0 );
 }
 
-void SidebarWidget::finishConversion( const QString& filePath, const QString& outDir,
-                                      const QString& outPath, ConversionResult result )
+void SidebarWidget::finishConversion( const QString& filePath, const QString& outPath,
+                                      ConversionResult result )
 {
     cancelRunning_.reset();
     runningDir_.clear();
@@ -289,8 +281,7 @@ void SidebarWidget::finishConversion( const QString& filePath, const QString& ou
         break;
     }
 
-    // Open in LogSquirl viewer
-    tabDirs_.append( outDir );
+    // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
     }

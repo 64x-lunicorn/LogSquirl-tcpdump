@@ -224,7 +224,9 @@ SCENARIO( "each conversion writes a new private file", "[sidebar]" )
                 const auto dir = QFileInfo( first ).absoluteDir();
                 REQUIRE( QFileInfo( dir.absolutePath() ).absolutePath()
                          == QFileInfo( tempRoot.path() ).absoluteFilePath() );
-                REQUIRE( dir.dirName().startsWith( "logsquirl-tcpdump-" ) );
+                REQUIRE(
+                    dir.dirName().startsWith( QString( "logsquirl-tcpdump-%1-" )
+                                                  .arg( QCoreApplication::applicationPid() ) ) );
             }
 
 #ifdef Q_OS_UNIX
