@@ -349,3 +349,113 @@ SCENARIO( "BSD loopback captures are read in the capture's byte order", "[pcap_p
         }
     }
 }
+
+SCENARIO( "IPv6 extension headers are walked to the transport layer", "[pcap_parser]" )
+{
+    auto parseOne = []( const Bytes& ipPacket ) {
+        auto result = parse( pcapOf( { eth( EthertypeIpv6, ipPacket ) } ) );
+        REQUIRE( result.packets.size() == 1 );
+        return result.packets[ 0 ];
+    };
+
+    GIVEN( "a UDP packet behind a hop-by-hop options header" )
+    {
+        auto pkt
+            = parseOne( ipv6( 0, ipv6Options( IpProtoUdp, udp( 5353, 5353, text( "abc" ) ) ) ) );
+
+        THEN( "the UDP layer is found" )
+        {
+            REQUIRE( pkt.ipProtocol == IpProtoUdp );
+            REQUIRE( pkt.srcPort == 5353 );
+            REQUIRE( pkt.payloadLen == 3 );
+        }
+    }
+
+    GIVEN( "a TCP segment behind hop-by-hop, destination options, routing and AH headers" )
+    {
+        Bytes ah{ IpProtoTcp, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0 }; // (2+2)*4 = 16 bytes
+        auto inner = ipv6Options(
+            60, ipv6Options( 43, ipv6Options( 51, ah + tcp( 40000, 22, text( "hi" ) ) ) ) );
+        auto pkt = parseOne( ipv6( 0, inner ) );
+
+        THEN( "the TCP layer and its payload are found" )
+        {
+            REQUIRE( pkt.srcPort == 40000 );
+            REQUIRE( pkt.dstPort == 22 );
+            REQUIRE( pkt.payloadLen == 2 );
+        }
+    }
+
+    GIVEN( "an extension header that claims more bytes than there are" )
+    {
+        Bytes bogus{ IpProtoUdp, 200, 0, 0, 0, 0, 0, 0 };
+        auto pkt = parseOne( ipv6( 0, bogus ) );
+
+        THEN( "it is reported as truncated" )
+        {
+            REQUIRE( pkt.protocol == "IPv6" );
+            REQUIRE( pkt.info.find( "Truncated" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "the first fragment of a UDP datagram" )
+    {
+        auto pkt
+            = parseOne( ipv6( 44, ipv6Fragment( IpProtoUdp, 0, true, udp( 1, 2, text( "x" ) ) ) ) );
+
+        THEN( "its UDP header is parsed" )
+        {
+            REQUIRE( pkt.protocol == "UDP" );
+            REQUIRE( pkt.srcPort == 1 );
+        }
+    }
+
+    GIVEN( "a later fragment, whose data merely looks like a UDP header" )
+    {
+        auto pkt = parseOne(
+            ipv6( 44, ipv6Fragment( IpProtoUdp, 185, false, udp( 1, 2, text( "x" ) ) ) ) );
+
+        THEN( "it is shown as a fragment, without ports" )
+        {
+            REQUIRE( pkt.protocol == "IPv6" );
+            REQUIRE( pkt.srcPort == 0 );
+            REQUIRE( pkt.info == "Fragment of IP protocol 17 (offset 1480, ID 0x0000CAFE)" );
+        }
+    }
+}
+
+SCENARIO( "IPv4 fragments after the first are not parsed as TCP or UDP", "[pcap_parser]" )
+{
+    auto parseOne = []( const Bytes& ipPacket ) {
+        auto result = parse( pcapOf( { eth( EthertypeIpv4, ipPacket ) } ) );
+        REQUIRE( result.packets.size() == 1 );
+        return result.packets[ 0 ];
+    };
+
+    GIVEN( "the first fragment of a TCP segment (more fragments, offset 0)" )
+    {
+        Ipv4Options o;
+        o.fragment = 0x2000;
+        auto pkt = parseOne( ipv4( IpProtoTcp, tcp( 40000, 80 ), o ) );
+
+        THEN( "its TCP header is parsed" )
+        {
+            REQUIRE( pkt.srcPort == 40000 );
+        }
+    }
+
+    GIVEN( "a later fragment of a TCP segment" )
+    {
+        Ipv4Options o;
+        o.fragment = 185; // 1480 bytes
+        auto pkt = parseOne( ipv4( IpProtoTcp, tcp( 40000, 80 ), o ) );
+
+        THEN( "it is shown as a fragment, without ports" )
+        {
+            REQUIRE( pkt.protocol == "IPv4" );
+            REQUIRE( pkt.srcPort == 0 );
+            REQUIRE( pkt.srcIp == "192.168.1.1" );
+            REQUIRE( pkt.info == "Fragment of IP protocol 6 (offset 1480, ID 0x1234)" );
+        }
+    }
+}

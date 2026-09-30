@@ -848,6 +848,19 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     }
 }
 
+// ── IP fragments ─────────────────────────────────────────────────────────
+
+/// Describe a fragment after the first, which holds no transport header.
+void describeFragment( PacketRecord& pkt, const char* ipVersion, uint8_t protocol, size_t offset,
+                       uint32_t id, int idBytes )
+{
+    char idHex[ 16 ];
+    std::snprintf( idHex, sizeof( idHex ), "0x%0*X", idBytes * 2, id );
+    pkt.protocol = ipVersion;
+    pkt.info = "Fragment of IP protocol " + std::to_string( protocol ) + " (offset "
+               + std::to_string( offset ) + ", ID " + idHex + ")";
+}
+
 // ── Parse IPv4 header ────────────────────────────────────────────────────
 
 void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
@@ -879,6 +892,14 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         totalLen = remaining;
     }
 
+    // Only the first fragment starts with the transport header; the data
+    // of a later one merely continues it.
+    const auto fragmentOffset = static_cast<size_t>( readBE16( data + 6 ) & 0x1FFF ) * 8;
+    if ( fragmentOffset != 0 ) {
+        describeFragment( pkt, "IPv4", pkt.ipProtocol, fragmentOffset, readBE16( data + 4 ), 2 );
+        return;
+    }
+
     parseTransport( pkt, data + ihl, totalLen - ihl );
 }
 
@@ -892,21 +913,73 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         return;
     }
 
-    pkt.ipProtocol = data[ 6 ];
     pkt.ipTtl = data[ 7 ]; // Hop limit
     pkt.srcIp = formatIpv6( data + 8 );
     pkt.dstIp = formatIpv6( data + 24 );
 
     // Use the IPv6 payload length field, not raw remaining bytes, to exclude
-    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).
-    // A payload length of 0 is a jumbogram, or a TSO/GSO packet captured on
-    // its way out: take the captured bytes.
+    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A payload
+    // length of 0 is a jumbogram, or a TSO/GSO packet captured on its way
+    // out: take the captured bytes.
     auto payloadLen = static_cast<size_t>( readBE16( data + 4 ) );
     if ( payloadLen == 0 || payloadLen > remaining - 40 ) {
         payloadLen = remaining - 40;
     }
+    const size_t end = 40 + payloadLen;
 
-    parseTransport( pkt, data + 40, payloadLen );
+    // Walk the extension headers to the upper-layer protocol.  Each one is
+    // checked against the end of the packet before it is read.
+    uint8_t next = data[ 6 ];
+    size_t offset = 40;
+    for ( int headers = 0; headers < 16; ++headers ) {
+        size_t length = 0;
+        switch ( next ) {
+        case 0:  // Hop-by-hop options
+        case 43: // Routing
+        case 60: // Destination options
+            if ( end - offset >= 2 ) {
+                length = ( static_cast<size_t>( data[ offset + 1 ] ) + 1 ) * 8;
+            }
+            break;
+        case 51: // Authentication header: length in 32-bit words, minus 2
+            if ( end - offset >= 2 ) {
+                length = ( static_cast<size_t>( data[ offset + 1 ] ) + 2 ) * 4;
+            }
+            break;
+        case 44: // Fragment
+            length = 8;
+            break;
+        default: // The upper-layer protocol, or one this parser does not walk
+            pkt.ipProtocol = next;
+            parseTransport( pkt, data + offset, end - offset );
+            return;
+        }
+
+        if ( length == 0 || length > end - offset ) {
+            pkt.ipProtocol = next;
+            pkt.protocol = "IPv6";
+            pkt.info = "Truncated IPv6 extension header " + std::to_string( next );
+            return;
+        }
+        const auto* header = data + offset;
+        const auto headerType = next;
+        next = header[ 0 ];
+        offset += length;
+
+        if ( headerType == 44 ) {
+            // Only the first fragment starts with the upper-layer header.
+            const auto fragmentOffset = static_cast<size_t>( readBE16( header + 2 ) >> 3 ) * 8;
+            if ( fragmentOffset != 0 ) {
+                pkt.ipProtocol = next;
+                describeFragment( pkt, "IPv6", next, fragmentOffset, readBE32( header + 4 ), 4 );
+                return;
+            }
+        }
+    }
+
+    pkt.ipProtocol = next;
+    pkt.protocol = "IPv6";
+    pkt.info = "Too many IPv6 extension headers";
 }
 
 // ── Parse ARP ────────────────────────────────────────────────────────────
