@@ -30,14 +30,14 @@ namespace tcpdump {
 
 void CaptureStats::add( const PacketRecord& pkt )
 {
-    const auto timeUs = static_cast<int64_t>( pkt.timestampSec ) * 1000000
-                        + static_cast<int64_t>( pkt.timestampUsec );
+    const auto timeNs = static_cast<int64_t>( pkt.timestampSec ) * 1000000000
+                        + static_cast<int64_t>( pkt.timestampNsec );
     if ( packets == 0 ) {
-        firstTimeUs = lastTimeUs = timeUs;
+        firstTimeNs = lastTimeNs = timeNs;
     }
     else {
-        firstTimeUs = std::min( firstTimeUs, timeUs );
-        lastTimeUs = std::max( lastTimeUs, timeUs );
+        firstTimeNs = std::min( firstTimeNs, timeNs );
+        lastTimeNs = std::max( lastTimeNs, timeNs );
     }
 
     ++packets;
@@ -54,7 +54,7 @@ void CaptureStats::add( const PacketRecord& pkt )
 
 double CaptureStats::durationSeconds() const
 {
-    return static_cast<double>( lastTimeUs - firstTimeUs ) / 1e6;
+    return static_cast<double>( lastTimeNs - firstTimeNs ) / 1e9;
 }
 
 } // namespace tcpdump

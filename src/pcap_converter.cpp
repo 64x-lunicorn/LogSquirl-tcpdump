@@ -104,14 +104,14 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
                && output.write( "\n", 1 ) == 1;
     };
 
-    if ( !writeLine( PacketFormatter::header() ) ) {
+    PacketFormatter formatter( result.header.nanoseconds );
+    if ( !writeLine( formatter.header() ) ) {
         return fail(
             QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
     }
 
     const auto inputSize = std::max<qint64>( input.size(), 1 );
     int lastPermille = -1;
-    PacketFormatter formatter;
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
         if ( cancel && cancel->load() ) {

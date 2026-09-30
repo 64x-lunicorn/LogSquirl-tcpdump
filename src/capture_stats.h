@@ -45,10 +45,10 @@ struct CaptureStats {
     std::map<std::string, uint64_t> protocolBytes;
     std::map<std::string, uint64_t> endpointPackets; ///< Packets per IP address.
 
-    /// Earliest and latest packet time, in microseconds since the epoch.
+    /// Earliest and latest packet time, in nanoseconds since the epoch.
     /// Packets need not be in time order, e.g. in a merged capture.
-    int64_t firstTimeUs = 0;
-    int64_t lastTimeUs = 0;
+    int64_t firstTimeNs = 0;
+    int64_t lastTimeNs = 0;
 
     /// Count @p pkt in.
     void add( const PacketRecord& pkt );

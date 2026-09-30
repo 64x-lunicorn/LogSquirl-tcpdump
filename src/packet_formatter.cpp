@@ -62,29 +62,52 @@ std::string formatTcpFlags( uint8_t flags )
     return result;
 }
 
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeUsec,
-                              int streamId )
-{
-    // Calculate relative time from the first packet
-    double relTime = 0.0;
-    if ( pkt.timestampSec >= baseTimeSec ) {
-        relTime
-            = static_cast<double>( pkt.timestampSec - baseTimeSec )
-              + ( static_cast<double>( pkt.timestampUsec ) - static_cast<double>( baseTimeUsec ) )
-                    / 1000000.0;
-    }
+namespace {
 
-    // Use fixed-width columns like Wireshark's packet list
-    char timeBuf[ 16 ];
-    std::snprintf( timeBuf, sizeof( timeBuf ), "%.6f", relTime );
+/// Width of the time column, with three more digits for nanoseconds.
+int timeWidth( bool nanoseconds )
+{
+    return nanoseconds ? 18 : 15;
+}
+
+/// @p deltaNs as seconds with 9 or 6 decimals, computed in integers so that
+/// neither precision nor range is lost.
+std::string formatRelativeTime( int64_t deltaNs, bool nanoseconds )
+{
+    const bool negative = deltaNs < 0;
+    const auto magnitude
+        = negative ? 0 - static_cast<uint64_t>( deltaNs ) : static_cast<uint64_t>( deltaNs );
+    const auto seconds = static_cast<unsigned long long>( magnitude / 1000000000 );
+    const auto fraction = magnitude % 1000000000;
+    char buf[ 40 ];
+    if ( nanoseconds ) {
+        std::snprintf( buf, sizeof( buf ), "%s%llu.%09llu", negative ? "-" : "", seconds,
+                       static_cast<unsigned long long>( fraction ) );
+    }
+    else {
+        std::snprintf( buf, sizeof( buf ), "%s%llu.%06llu", negative ? "-" : "", seconds,
+                       static_cast<unsigned long long>( fraction / 1000 ) );
+    }
+    return buf;
+}
+
+} // namespace
+
+std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
+                              int streamId, bool nanoseconds )
+{
+    // Time relative to the first packet; negative for an earlier packet
+    const int64_t deltaNs = ( static_cast<int64_t>( pkt.timestampSec ) - baseTimeSec ) * 1000000000
+                            + ( static_cast<int64_t>( pkt.timestampNsec ) - baseTimeNsec );
 
     std::string streamStr = ( streamId >= 0 ) ? std::to_string( streamId ) : "-";
 
+    // Use fixed-width columns like Wireshark's packet list
     std::ostringstream oss;
     oss << std::left;
     oss << std::setw( 7 ) << pkt.number;
     oss << std::setw( 8 ) << streamStr;
-    oss << std::setw( 15 ) << timeBuf;
+    oss << std::setw( timeWidth( nanoseconds ) ) << formatRelativeTime( deltaNs, nanoseconds );
     oss << std::setw( 40 ) << ( pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp );
     oss << std::setw( 40 ) << ( pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp );
     oss << std::setw( 10 ) << pkt.protocol;
@@ -94,13 +117,13 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     return oss.str();
 }
 
-std::string PacketFormatter::header()
+std::string PacketFormatter::header() const
 {
     std::ostringstream hdr;
     hdr << std::left;
     hdr << std::setw( 7 ) << "No.";
     hdr << std::setw( 8 ) << "Stream";
-    hdr << std::setw( 15 ) << "Time";
+    hdr << std::setw( timeWidth( nanoseconds_ ) ) << "Time";
     hdr << std::setw( 40 ) << "Source";
     hdr << std::setw( 40 ) << "Destination";
     hdr << std::setw( 10 ) << "Protocol";
@@ -114,9 +137,9 @@ std::string PacketFormatter::format( const PacketRecord& pkt )
     if ( !haveBase_ ) {
         haveBase_ = true;
         baseTimeSec_ = pkt.timestampSec;
-        baseTimeUsec_ = pkt.timestampUsec;
+        baseTimeNsec_ = pkt.timestampNsec;
     }
-    return formatPacketLine( pkt, baseTimeSec_, baseTimeUsec_, streamId( pkt ) );
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId( pkt ), nanoseconds_ );
 }
 
 int PacketFormatter::streamId( const PacketRecord& pkt )
@@ -136,13 +159,14 @@ int PacketFormatter::streamId( const PacketRecord& pkt )
     return streams_.emplace( std::move( key ), next ).first->second;
 }
 
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
+                                           bool nanoseconds )
 {
+    PacketFormatter formatter( nanoseconds );
     std::vector<std::string> lines;
     lines.reserve( packets.size() + 1 );
-    lines.push_back( PacketFormatter::header() );
+    lines.push_back( formatter.header() );
 
-    PacketFormatter formatter;
     for ( const auto& pkt : packets ) {
         lines.push_back( formatter.format( pkt ) );
     }

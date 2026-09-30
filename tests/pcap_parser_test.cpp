@@ -199,7 +199,7 @@ SCENARIO( "Parsing a minimal pcap with a TCP SYN packet", "[pcap_parser]" )
             {
                 const auto& pkt = result.packets[ 0 ];
                 REQUIRE( pkt.timestampSec == 1000 );
-                REQUIRE( pkt.timestampUsec == 500000 );
+                REQUIRE( pkt.timestampNsec == 500000000 );
             }
         }
     }

@@ -41,9 +41,11 @@ namespace tcpdump {
 // ── pcap global header ───────────────────────────────────────────────────
 
 /// pcap file magic numbers (host byte order after detection).
-constexpr uint32_t PcapMagicLE = 0xA1B2C3D4; ///< Little-endian pcap
-constexpr uint32_t PcapMagicBE = 0xD4C3B2A1; ///< Big-endian pcap (swapped)
-constexpr uint32_t PcapNgMagic = 0x0A0D0D0A; ///< pcap-ng section header
+constexpr uint32_t PcapMagicLE = 0xA1B2C3D4;   ///< pcap in host byte order
+constexpr uint32_t PcapMagicBE = 0xD4C3B2A1;   ///< pcap in swapped byte order
+constexpr uint32_t PcapNsMagicLE = 0xA1B23C4D; ///< Nanosecond pcap in host byte order
+constexpr uint32_t PcapNsMagicBE = 0x4D3CB2A1; ///< Nanosecond pcap in swapped byte order
+constexpr uint32_t PcapNgMagic = 0x0A0D0D0A;   ///< pcap-ng section header
 
 /// Parsed pcap global header.
 struct PcapGlobalHeader {
@@ -53,7 +55,8 @@ struct PcapGlobalHeader {
     int32_t thiszone = 0;
     uint32_t sigfigs = 0;
     uint32_t snaplen = 0;
-    uint32_t network = 0; ///< Link-layer type (DLT_*)
+    uint32_t network = 0;     ///< Link-layer type (DLT_*)
+    bool nanoseconds = false; ///< Timestamps have nanosecond, not microsecond, fractions.
 };
 
 // ── Link-layer types (subset of libpcap DLT_ constants) ─────────────────
@@ -82,7 +85,7 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 struct PacketRecord {
     uint32_t number = 0;        ///< 1-based packet index
     uint32_t timestampSec = 0;  ///< Seconds since epoch
-    uint32_t timestampUsec = 0; ///< Microseconds fraction
+    uint32_t timestampNsec = 0; ///< Fraction of the second, in nanoseconds
     uint32_t capturedLen = 0;   ///< Bytes captured
     uint32_t originalLen = 0;   ///< Original packet length on the wire
 

@@ -43,12 +43,14 @@ namespace tcpdump {
  *
  * @param pkt           Parsed packet record.
  * @param baseTimeSec   Seconds timestamp of the first packet.
- * @param baseTimeUsec  Microseconds timestamp of the first packet.
+ * @param baseTimeNsec  Nanoseconds fraction of the first packet's timestamp.
  * @param streamId      Conversation/stream index (0-based, -1 if not applicable).
+ * @param nanoseconds   Show the time to the nanosecond (a nanosecond capture)
+ *                      rather than to the microsecond.
  * @return Formatted line.
  */
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeUsec,
-                              int streamId );
+std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
+                              int streamId, bool nanoseconds = false );
 
 /**
  * Formats the packets of one capture, one at a time and in capture order,
@@ -59,8 +61,14 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
  */
 class PacketFormatter {
 public:
+    /// @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
+    explicit PacketFormatter( bool nanoseconds = false )
+        : nanoseconds_( nanoseconds )
+    {
+    }
+
     /// The column header line.
-    static std::string header();
+    std::string header() const;
 
     /// The line of the next packet of the capture.
     std::string format( const PacketRecord& pkt );
@@ -69,9 +77,10 @@ private:
     /// Stream ID of the packet's conversation, -1 if it has none (no IP layer).
     int streamId( const PacketRecord& pkt );
 
+    bool nanoseconds_;
     bool haveBase_ = false;
     uint32_t baseTimeSec_ = 0;
-    uint32_t baseTimeUsec_ = 0;
+    uint32_t baseTimeNsec_ = 0;
     std::map<std::string, int> streams_;
 };
 
@@ -79,10 +88,12 @@ private:
  * Format all packets into a vector of lines.  Includes a column header
  * as the first line.
  *
- * @param packets  Parsed packet records.
+ * @param packets      Parsed packet records.
+ * @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
  * @return Vector of formatted text lines.
  */
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets );
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
+                                           bool nanoseconds = false );
 
 /**
  * Render TCP flags (SYN, ACK, FIN, RST, PSH, URG) as a bracket string.

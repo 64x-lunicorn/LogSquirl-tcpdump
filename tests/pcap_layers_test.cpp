@@ -24,6 +24,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "packet_formatter.h"
 #include "pcapbuilder.h"
 
 #include <algorithm>
@@ -209,6 +210,73 @@ SCENARIO( "Payload text never breaks the one-line-per-packet format", "[pcap_par
             const auto& info = result.packets[ 0 ].info;
             REQUIRE( noControlChars( info ) );
             REQUIRE( info.find( "$GPGGA,1\\x092,\\xFF*47" ) != std::string::npos );
+        }
+    }
+}
+
+SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
+{
+    const auto packet = eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 1, 2 ) ) );
+
+    for ( const bool bigEndian : { false, true } ) {
+        GIVEN( std::string( "a nanosecond capture in " ) + ( bigEndian ? "big" : "little" )
+               + "-endian byte order" )
+        {
+            FileOptions o;
+            o.nanoseconds = true;
+            o.bigEndian = bigEndian;
+            auto file = pcapFile( { { packet, 1000, 5 }, { packet, 1000, 123456789 } }, o );
+
+            THEN( "its packets are parsed with their nanoseconds" )
+            {
+                auto result = parse( file );
+                REQUIRE( result.ok );
+                REQUIRE( result.header.nanoseconds );
+                REQUIRE( result.packets.size() == 2 );
+                REQUIRE( result.packets[ 1 ].timestampSec == 1000 );
+                REQUIRE( result.packets[ 1 ].timestampNsec == 123456789 );
+                REQUIRE( result.packets[ 1 ].srcPort == 1 );
+            }
+
+            THEN( "the relative time is shown to the nanosecond" )
+            {
+                auto result = parse( file );
+                PacketFormatter formatter( result.header.nanoseconds );
+                formatter.format( result.packets[ 0 ] );
+                const auto line = formatter.format( result.packets[ 1 ] );
+                REQUIRE( line.find( " 0.123456784 " ) != std::string::npos );
+                REQUIRE( formatter.header().find( "Time" ) != std::string::npos );
+            }
+        }
+    }
+
+    GIVEN( "a microsecond capture" )
+    {
+        auto file = pcapFile( { { packet, 1000, 5 }, { packet, 1001, 250000 } } );
+
+        THEN( "timestamps are kept in nanoseconds and shown to the microsecond" )
+        {
+            auto result = parse( file );
+            REQUIRE_FALSE( result.header.nanoseconds );
+            REQUIRE( result.packets[ 1 ].timestampNsec == 250000000 );
+            PacketFormatter formatter( false );
+            formatter.format( result.packets[ 0 ] );
+            REQUIRE( formatter.format( result.packets[ 1 ] ).find( " 1.249995 " )
+                     != std::string::npos );
+        }
+    }
+
+    GIVEN( "a packet earlier than the first one" )
+    {
+        auto file = pcapFile( { { packet, 1000, 500000 }, { packet, 999, 900000 } } );
+
+        THEN( "its relative time is negative instead of wrapping or reading zero" )
+        {
+            auto result = parse( file );
+            PacketFormatter formatter( false );
+            formatter.format( result.packets[ 0 ] );
+            REQUIRE( formatter.format( result.packets[ 1 ] ).find( " -0.600000 " )
+                     != std::string::npos );
         }
     }
 }

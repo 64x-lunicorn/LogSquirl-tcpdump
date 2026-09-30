@@ -129,7 +129,7 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
                                      { 1002, 250000 },
                                      { 1001, 0 } } ) {
             pkt.timestampSec = sec;
-            pkt.timestampUsec = usec;
+            pkt.timestampNsec = usec * 1000;
             stats.add( pkt );
         }
 

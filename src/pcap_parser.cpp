@@ -1023,7 +1023,8 @@ size_t findPcapMagicOffset( const uint8_t* data, size_t size )
     for ( size_t i = 0; i + 4 <= size && i <= kMaxPreamble; ++i ) {
         uint32_t candidate;
         std::memcpy( &candidate, data + i, 4 );
-        if ( candidate == PcapMagicLE || candidate == PcapMagicBE || candidate == PcapNgMagic ) {
+        if ( candidate == PcapMagicLE || candidate == PcapMagicBE || candidate == PcapNsMagicLE
+             || candidate == PcapNsMagicBE || candidate == PcapNgMagic ) {
             return i;
         }
     }
@@ -1135,10 +1136,10 @@ bool PcapReader::open()
 
     uint32_t magic;
     std::memcpy( &magic, data, 4 );
-    if ( magic == PcapMagicLE ) {
+    if ( magic == PcapMagicLE || magic == PcapNsMagicLE ) {
         swap_ = false;
     }
-    else if ( magic == PcapMagicBE ) {
+    else if ( magic == PcapMagicBE || magic == PcapNsMagicBE ) {
         swap_ = true;
     }
     else if ( magic == PcapNgMagic ) {
@@ -1157,6 +1158,7 @@ bool PcapReader::open()
     header_.sigfigs = read32( data + 12, swap_ );
     header_.snaplen = read32( data + 16, swap_ );
     header_.network = read32( data + 20, swap_ );
+    header_.nanoseconds = magic == PcapNsMagicLE || magic == PcapNsMagicBE;
 
     headPos_ = magicOffset + 24;
     bytesRead_ = headPos_;
@@ -1179,7 +1181,7 @@ bool PcapReader::next( PacketRecord& pkt )
         return false;
     }
     const auto tsSec = read32( recordHeader, swap_ );
-    const auto tsUsec = read32( recordHeader + 4, swap_ );
+    const auto tsFraction = read32( recordHeader + 4, swap_ );
     const auto inclLen = read32( recordHeader + 8, swap_ );
     const auto origLen = read32( recordHeader + 12, swap_ );
 
@@ -1196,8 +1198,12 @@ bool PcapReader::next( PacketRecord& pkt )
 
     pkt = PacketRecord();
     pkt.number = ++packetCount_;
-    pkt.timestampSec = tsSec;
-    pkt.timestampUsec = tsUsec;
+    // The fraction is kept in nanoseconds.  A corrupt one of a second or
+    // more is carried into the seconds.
+    const uint64_t fractionNs
+        = header_.nanoseconds ? tsFraction : static_cast<uint64_t>( tsFraction ) * 1000;
+    pkt.timestampSec = tsSec + static_cast<uint32_t>( fractionNs / 1000000000 );
+    pkt.timestampNsec = static_cast<uint32_t>( fractionNs % 1000000000 );
     pkt.capturedLen = inclLen;
     pkt.originalLen = origLen;
     dissect( pkt, header_.network, packet_.data(), kept );

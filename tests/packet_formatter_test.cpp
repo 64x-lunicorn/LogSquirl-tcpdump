@@ -78,7 +78,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         PacketRecord pkt1;
         pkt1.number = 1;
         pkt1.timestampSec = 1000;
-        pkt1.timestampUsec = 0;
+        pkt1.timestampNsec = 0;
         pkt1.srcIp = "192.168.1.1";
         pkt1.dstIp = "10.0.0.1";
         pkt1.srcPort = 80;
@@ -90,7 +90,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         PacketRecord pkt2;
         pkt2.number = 2;
         pkt2.timestampSec = 1000;
-        pkt2.timestampUsec = 500000;
+        pkt2.timestampNsec = 500000000;
         pkt2.srcIp = "10.0.0.1";
         pkt2.dstIp = "192.168.1.1";
         pkt2.srcPort = 443;
@@ -134,7 +134,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         PacketRecord pktA1;
         pktA1.number = 1;
         pktA1.timestampSec = 1000;
-        pktA1.timestampUsec = 0;
+        pktA1.timestampNsec = 0;
         pktA1.srcIp = "192.168.1.1";
         pktA1.dstIp = "10.0.0.1";
         pktA1.srcPort = 80;
@@ -146,7 +146,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         PacketRecord pktB1;
         pktB1.number = 2;
         pktB1.timestampSec = 1000;
-        pktB1.timestampUsec = 100000;
+        pktB1.timestampNsec = 100000000;
         pktB1.srcIp = "172.16.0.5";
         pktB1.dstIp = "8.8.8.8";
         pktB1.srcPort = 54321;
@@ -158,7 +158,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         PacketRecord pktA2;
         pktA2.number = 3;
         pktA2.timestampSec = 1000;
-        pktA2.timestampUsec = 200000;
+        pktA2.timestampNsec = 200000000;
         pktA2.srcIp = "10.0.0.1";
         pktA2.dstIp = "192.168.1.1";
         pktA2.srcPort = 443;
@@ -198,7 +198,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         PacketRecord arp;
         arp.number = 1;
         arp.timestampSec = 1000;
-        arp.timestampUsec = 0;
+        arp.timestampNsec = 0;
         arp.protocol = "ARP";
         arp.capturedLen = 42;
         arp.info = "Who has 192.168.1.100?";
