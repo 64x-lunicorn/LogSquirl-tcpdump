@@ -30,6 +30,7 @@
  */
 
 #include "sidebarwidget.h"
+#include "packet_formatter.h"
 #include "pcap_converter.h"
 #include "plugin.h"
 
@@ -399,7 +400,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
     html += "<br>";
 
     // Top IPs
-    html += QString( "<b>Endpoints</b> (%1 unique)<br>" ).arg( stats.endpointPackets.size() );
+    html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
+                .arg( stats.endpointLimitReached() ? "more than " : "" )
+                .arg( stats.endpointPackets.size() );
     int shown = 0;
     for ( const auto& [ ip, count ] : byCount( stats.endpointPackets ) ) {
         if ( shown >= 8 )
@@ -408,6 +411,17 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
                     .arg( QString::fromStdString( ip ).toHtmlEscaped() )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
+    }
+    if ( stats.endpointLimitReached() ) {
+        html += QString( "Other endpoints: %1 pkts<br>" )
+                    .arg( QLocale().toString(
+                        static_cast<qulonglong>( stats.otherEndpointPackets ) ) );
+    }
+    if ( result.streamLimitReached ) {
+        html += QString( "<br><i>More than %1 conversations: later ones show stream ? in the "
+                         "log.</i><br>" )
+                    .arg( QLocale().toString(
+                        static_cast<qulonglong>( PacketFormatter::kMaxStreams ) ) );
     }
 
     return html;

@@ -6,7 +6,7 @@ The plugin is structured into three layers:
 
 ### 1. pcap Parser (`pcap_parser.h/cpp`)
 Pure C++ (no Qt dependency). `PcapReader` reads libpcap captures from a
-`ByteSource` one record at a time, so memory does not grow with the file:
+`ByteSource` one record at a time, so the capture is never held in memory:
 - Detects byte order and timestamp precision from the magic number
   (`0xa1b2c3d4` µs, `0xa1b23c4d` ns, either byte order)
 - Finds the header behind a text preamble (e.g. `adb exec-out tcpdump`
@@ -43,9 +43,17 @@ packet, with 6 decimals, or 9 for a nanosecond capture.
 
 Stream IDs are computed from IP+port 4-tuples — both directions of a
 conversation share the same stream number. Non-TCP/UDP packets (ICMP,
-ARP) show `-` as stream.
+ARP) show `-` as stream. At most `PacketFormatter::kMaxStreams` (1,000,000)
+conversations are numbered; packets of later ones show `?`.
 
-`CaptureStats` collects the sidebar summary's counts packet by packet.
+`CaptureStats` collects the sidebar summary's counts packet by packet. It
+counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
+addresses, and those of further addresses as "other endpoints".
+
+Memory therefore grows with the conversations and addresses in a capture,
+not with its size, and both are capped (at roughly 100 MB and 10 MB), so a
+port scan or a busy NAT cannot exhaust it. The summary says when a cap was
+hit.
 
 ### 3. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture with `PcapReader`, formats each packet and

@@ -72,7 +72,9 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     const int64_t deltaNs = ( static_cast<int64_t>( pkt.timestampSec ) - baseTimeSec ) * 1000000000
                             + ( static_cast<int64_t>( pkt.timestampNsec ) - baseTimeNsec );
 
-    std::string streamStr = ( streamId >= 0 ) ? std::to_string( streamId ) : "-";
+    const std::string streamStr = streamId >= 0             ? std::to_string( streamId )
+                                  : streamId == kUnnumbered ? "?"
+                                                            : "-";
 
     // Use fixed-width columns like Wireshark's packet list
     std::ostringstream oss;
@@ -119,7 +121,7 @@ int PacketFormatter::streamId( const PacketRecord& pkt )
     // Packets sharing the same IP+port 4-tuple (in either direction) belong
     // to the same conversation.
     if ( pkt.srcIp.empty() && pkt.dstIp.empty() ) {
-        return -1; // No IP layer (e.g. ARP) — no stream
+        return kNoStream; // No IP layer (e.g. ARP) — no stream
     }
 
     // Build canonical key: sort endpoints so both directions match
@@ -127,8 +129,17 @@ int PacketFormatter::streamId( const PacketRecord& pkt )
     auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
     std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
 
+    const auto known = streams_.find( key );
+    if ( known != streams_.end() ) {
+        return known->second;
+    }
+    if ( streams_.size() >= maxStreams_ ) {
+        streamLimitReached_ = true;
+        return kUnnumbered;
+    }
     const auto next = static_cast<int>( streams_.size() );
-    return streams_.emplace( std::move( key ), next ).first->second;
+    streams_.emplace( std::move( key ), next );
+    return next;
 }
 
 std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,

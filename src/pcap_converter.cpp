@@ -215,6 +215,7 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
     output.close();
 
     result.truncated = reader.truncated();
+    result.streamLimitReached = formatter.streamLimitReached();
     result.status = ConversionResult::Status::Converted;
     return result;
 }

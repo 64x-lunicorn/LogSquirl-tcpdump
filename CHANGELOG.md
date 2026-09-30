@@ -52,7 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the GUI thread before any was written, so a multi-GB capture froze
   LogSquirl and then took it down when memory ran out. Captures are now read,
   formatted and written packet by packet on a worker thread, and a corrupt
-  packet length no longer makes the plugin allocate up to 4 GiB.
+  packet length no longer makes the plugin allocate up to 4 GiB. Stream
+  numbers are given to the first 1,000,000 conversations and endpoints are
+  counted for the first 100,000 addresses, so a port scan cannot exhaust
+  memory either; later conversations show stream `?`, further addresses are
+  counted as other endpoints, and the summary says when either happened.
 - **The temporary text file could be used against you.** It had a fixed name
   in the shared temporary directory, was opened with truncation and readable
   by everyone: another local user could have it overwrite a file of theirs

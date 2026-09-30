@@ -46,7 +46,8 @@ struct ConversionResult {
     QString error;
     PcapGlobalHeader header;
     CaptureStats stats;
-    bool truncated = false; ///< The capture ends in the middle of a packet.
+    bool truncated = false;          ///< The capture ends in the middle of a packet.
+    bool streamLimitReached = false; ///< Some conversations have no stream number.
 };
 
 /**

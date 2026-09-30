@@ -28,6 +28,7 @@
 
 #include "pcap_parser.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -39,11 +40,19 @@ namespace tcpdump {
  * not be kept in memory.
  */
 struct CaptureStats {
+    /// Addresses counted by default: some 10 MB of memory at most.
+    static constexpr size_t kMaxEndpoints = 100000;
+
     uint64_t packets = 0;
     uint64_t bytes = 0; ///< Captured bytes of all packets.
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
-    std::map<std::string, uint64_t> endpointPackets; ///< Packets per IP address.
+    /// Packets per IP address, for at most maxEndpoints addresses, so that a
+    /// scan of many addresses cannot exhaust memory.
+    std::map<std::string, uint64_t> endpointPackets;
+    /// Packets counted for addresses beyond maxEndpoints.
+    uint64_t otherEndpointPackets = 0;
+    size_t maxEndpoints = kMaxEndpoints;
 
     /// Earliest and latest packet time, in nanoseconds since the epoch.
     /// Packets need not be in time order, e.g. in a merged capture.
@@ -53,8 +62,17 @@ struct CaptureStats {
     /// Count @p pkt in.
     void add( const PacketRecord& pkt );
 
+    /// Whether some addresses were counted as other endpoints.
+    bool endpointLimitReached() const
+    {
+        return otherEndpointPackets > 0;
+    }
+
     /// Time between the earliest and the latest packet, in seconds.
     double durationSeconds() const;
+
+private:
+    void countEndpoint( const std::string& address );
 };
 
 } // namespace tcpdump

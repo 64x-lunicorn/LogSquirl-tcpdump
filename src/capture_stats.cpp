@@ -44,11 +44,24 @@ void CaptureStats::add( const PacketRecord& pkt )
     bytes += pkt.capturedLen;
     ++protocolPackets[ pkt.protocol ];
     protocolBytes[ pkt.protocol ] += pkt.capturedLen;
-    if ( !pkt.srcIp.empty() ) {
-        ++endpointPackets[ pkt.srcIp ];
+    countEndpoint( pkt.srcIp );
+    countEndpoint( pkt.dstIp );
+}
+
+void CaptureStats::countEndpoint( const std::string& address )
+{
+    if ( address.empty() ) {
+        return;
     }
-    if ( !pkt.dstIp.empty() ) {
-        ++endpointPackets[ pkt.dstIp ];
+    const auto known = endpointPackets.find( address );
+    if ( known != endpointPackets.end() ) {
+        ++known->second;
+    }
+    else if ( endpointPackets.size() < maxEndpoints ) {
+        endpointPackets.emplace( address, 1 );
+    }
+    else {
+        ++otherEndpointPackets;
     }
 }
 

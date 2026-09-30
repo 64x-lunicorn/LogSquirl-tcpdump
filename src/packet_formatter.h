@@ -38,13 +38,17 @@
 
 namespace tcpdump {
 
+constexpr int kNoStream = -1;   ///< Stream column "-": the packet has no IP layer.
+constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
+
 /**
  * Format a single packet as a one-line summary string.
  *
  * @param pkt           Parsed packet record.
  * @param baseTimeSec   Seconds timestamp of the first packet.
  * @param baseTimeNsec  Nanoseconds fraction of the first packet's timestamp.
- * @param streamId      Conversation/stream index (0-based, -1 if not applicable).
+ * @param streamId      Conversation/stream index (0-based), kNoStream if not
+ *                      applicable, kUnnumbered if not numbered.
  * @param nanoseconds   Show the time to the nanosecond (a nanosecond capture)
  *                      rather than to the microsecond.
  * @return Formatted line.
@@ -57,14 +61,27 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
  * so that a capture never needs to be held in memory as a whole.
  *
  * Remembers the first packet's time, which all times are relative to, and
- * the conversations seen so far, to number the streams.
+ * the conversations seen so far, to number the streams.  At most maxStreams
+ * conversations are numbered, so that a port scan or a busy NAT cannot
+ * exhaust memory; packets of later ones show "?" as their stream.
  */
 class PacketFormatter {
 public:
+    /// Conversations numbered by default: some 100 MB of memory at most.
+    static constexpr size_t kMaxStreams = 1000000;
+
     /// @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
-    explicit PacketFormatter( bool nanoseconds = false )
+    /// @param maxStreams   Conversations to number at most.
+    explicit PacketFormatter( bool nanoseconds = false, size_t maxStreams = kMaxStreams )
         : nanoseconds_( nanoseconds )
+        , maxStreams_( maxStreams )
     {
+    }
+
+    /// Whether a conversation went unnumbered because of maxStreams.
+    bool streamLimitReached() const
+    {
+        return streamLimitReached_;
     }
 
     /// The column header line.
@@ -74,10 +91,13 @@ public:
     std::string format( const PacketRecord& pkt );
 
 private:
-    /// Stream ID of the packet's conversation, -1 if it has none (no IP layer).
+    /// Stream ID of the packet's conversation, kNoStream if it has none (no
+    /// IP layer), kUnnumbered past maxStreams.
     int streamId( const PacketRecord& pkt );
 
     bool nanoseconds_;
+    size_t maxStreams_;
+    bool streamLimitReached_ = false;
     bool haveBase_ = false;
     uint32_t baseTimeSec_ = 0;
     uint32_t baseTimeNsec_ = 0;

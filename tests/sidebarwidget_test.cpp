@@ -315,3 +315,25 @@ SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
         }
     }
 }
+
+SCENARIO( "the summary says when a cap was hit", "[sidebar]" )
+{
+    GIVEN( "a capture with more streams and endpoints than are tracked" )
+    {
+        tcpdump::ConversionResult result;
+        result.stats.maxEndpoints = 1;
+        tcpdump::PacketRecord pkt;
+        pkt.protocol = "UDP";
+        pkt.srcIp = "10.0.0.1";
+        pkt.dstIp = "10.0.0.2";
+        result.stats.add( pkt );
+        result.streamLimitReached = true;
+
+        THEN( "both are noted" )
+        {
+            const auto html = tcpdump::summaryHtml( "many.pcap", 100, result );
+            REQUIRE( html.contains( "Other endpoints: 1 pkts" ) );
+            REQUIRE( html.contains( "stream ?" ) );
+        }
+    }
+}
