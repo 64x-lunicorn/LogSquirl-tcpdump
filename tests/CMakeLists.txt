@@ -18,6 +18,12 @@ add_executable(logsquirl_tcpdump_tests
     tests_main.cpp
     plugininfo_test.cpp
     pcap_parser_test.cpp
+    pcap_layers_test.cpp
+    socks_test.cpp
+    streaming_test.cpp
+    plugin_test.cpp
+    sidebarwidget_test.cpp
+    corpus_test.cpp
     packet_formatter_test.cpp
 )
 
@@ -35,6 +41,7 @@ target_link_libraries(logsquirl_tcpdump_tests
     PRIVATE
         Catch2::Catch2
         Qt6::Core
+        Qt6::Concurrent
         Qt6::Widgets
 )
 
@@ -44,7 +51,16 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
+        "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
+)
+
+# Captures and their expected text, for corpus_test.cpp
+target_compile_definitions(logsquirl_tcpdump_tests
+    PRIVATE
+        TCPDUMP_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
 )
 
 # ── Register with CTest ──────────────────────────────────────────────────

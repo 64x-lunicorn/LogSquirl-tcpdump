@@ -23,35 +23,44 @@
  *
  * When the user clicks "Open pcap…", the widget:
  *   1. Opens a file dialog for .pcap / .cap / .dmp files
- *   2. Parses the pcap with pcap_parser
- *   3. Formats packets into human-readable lines with packet_formatter
- *   4. Writes the result to a temporary .log file
- *   5. Opens the .log file in LogSquirl's main viewer
+ *   2. Converts the pcap packet by packet with pcap_converter: parses each
+ *      packet, formats it into a human-readable line, and writes the line
+ *      to a temporary .log file
+ *   3. Opens the .log file in LogSquirl's main viewer
  */
 
 #include "sidebarwidget.h"
 #include "packet_formatter.h"
-#include "pcap_parser.h"
+#include "pcap_converter.h"
 #include "plugin.h"
+#include "tempdirs.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QLocale>
-#include <QMessageBox>
+#include <QPointer>
+#include <QPromise>
 #include <QStandardPaths>
-#include <QTemporaryFile>
-#include <QTextStream>
+#include <QTemporaryDir>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <exception>
 #include <map>
-#include <set>
+#include <new>
+#include <vector>
 
 namespace tcpdump {
 
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
+    , tempRoot_( tcpdump::tempRoot() )
 {
+    pool_.setMaxThreadCount( 1 );
+
     auto* layout = new QVBoxLayout( this );
     layout->setContentsMargins( 8, 8, 8, 8 );
     layout->setSpacing( 6 );
@@ -62,18 +71,54 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
     // Open button
     openButton_ = new QPushButton( "Open pcap\xe2\x80\xa6" );
+    openButton_->setObjectName( "openButton" );
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
     layout->addWidget( openButton_ );
 
     connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::onOpenClicked );
 
+    // Progress of a running conversion, and a way to stop it
+    progressBar_ = new QProgressBar;
+    progressBar_->setObjectName( "progress" );
+    progressBar_->setRange( 0, 1000 );
+    progressBar_->setTextVisible( false );
+    layout->addWidget( progressBar_ );
+
+    cancelButton_ = new QPushButton( "Cancel" );
+    cancelButton_->setObjectName( "cancelButton" );
+    cancelButton_->setToolTip( "Stop reading the capture" );
+    layout->addWidget( cancelButton_ );
+    connect( cancelButton_, &QPushButton::clicked, this, &SidebarWidget::cancel );
+
     // Summary label
     summaryLabel_ = new QLabel( "No capture loaded." );
+    summaryLabel_->setObjectName( "summary" );
+    summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
     layout->addWidget( summaryLabel_ );
 
     // Push everything up
     layout->addStretch();
+
+    setConverting( false );
+}
+
+SidebarWidget::~SidebarWidget()
+{
+    // The host unloads the library right after the plugin is shut down:
+    // the worker must be done with it before.  It checks the cancel flag
+    // between packets, and convertPcap() reads regular files only, so it
+    // cannot block on a FIFO or device; a regular file on a network share
+    // that stalls can still hold it up until the system gives up on it.
+    if ( cancelRunning_ ) {
+        cancelRunning_->store( true );
+    }
+    pool_.waitForDone();
+
+    // A running conversion's file never reached a tab.
+    if ( !runningDir_.isEmpty() ) {
+        QDir( runningDir_ ).removeRecursively();
+    }
 }
 
 void SidebarWidget::onOpenClicked()
@@ -82,104 +127,202 @@ void SidebarWidget::onOpenClicked()
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
 
+    // The dialog runs its own event loop, in which this widget may be
+    // deleted, e.g. with a parent that is closed meanwhile: then there is
+    // nothing left to open the file for.  This does not help if the plugin
+    // is unloaded while the dialog is open: the code this call returns into
+    // is gone then, and only the host can prevent that.
+    const QPointer<SidebarWidget> self( this );
     const auto filePath
         = QFileDialog::getOpenFileName( this, "Open pcap Capture File", lastDir_,
                                         "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+    if ( !self ) {
+        return;
+    }
 
     if ( filePath.isEmpty() ) {
         return;
     }
 
     lastDir_ = QFileInfo( filePath ).absolutePath();
-    openPcapFile( filePath );
+    try {
+        openPcapFile( filePath );
+    } catch ( const std::exception& e ) {
+        // An exception must not escape a Qt slot.
+        hostLog(
+            LOGSQUIRL_LOG_ERROR,
+            QString( "Opening %1 failed: %2" ).arg( filePath, QString::fromUtf8( e.what() ) ) );
+    }
 }
 
 void SidebarWidget::openPcapFile( const QString& filePath )
 {
-    hostLog( LOGSQUIRL_LOG_INFO, qPrintable( "Opening pcap file: " + filePath ) );
+    // One conversion at a time (Open is disabled meanwhile), so the outcome
+    // that arrives is always that of the running one.
+    if ( converting_ ) {
+        return;
+    }
+    hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
 
-    // Parse the pcap file
-    auto result = parsePcapFile( filePath.toStdString() );
-    if ( !result.ok ) {
-        const auto msg = QString::fromStdString( result.error );
-        summaryLabel_->setText( "Error: " + msg );
-        hostLog( LOGSQUIRL_LOG_ERROR, qPrintable( "pcap parse error: " + msg ) );
-        if ( g_state.api && g_state.handle ) {
-            g_state.api->show_notification( g_state.handle,
-                                            qPrintable( "Failed to open pcap: " + msg ) );
+    // Write to a new file in a new directory that only the user can enter,
+    // so that no other user can read the capture's text or plant a file or
+    // link in its place, and no earlier tab's file is overwritten.  It is
+    // kept for its tab until LogSquirl quits.
+    QTemporaryDir tempDir( tempDirTemplate( tempRoot_ ) );
+    if ( !tempDir.isValid() ) {
+        ConversionResult result;
+        result.error = "Cannot create a temporary directory: " + tempDir.errorString();
+        finishConversion( filePath, {}, std::move( result ) );
+        return;
+    }
+    tempDir.setAutoRemove( false );
+    const auto outDir = tempDir.path();
+    auto baseName = QFileInfo( filePath ).completeBaseName();
+    if ( baseName.isEmpty() ) {
+        baseName = "capture";
+    }
+    const auto outPath = tempDir.filePath( baseName + ".log" );
+
+    auto cancelled = std::make_shared<std::atomic_bool>( false );
+    cancelRunning_ = cancelled;
+    runningDir_ = outDir;
+    setConverting( true );
+    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
+                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
+
+    // The watcher lives on this thread, so its signals are delivered here.
+    auto* watcher = new QFutureWatcher<ConversionResult>( this );
+    connect( watcher, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
+             &QProgressBar::setValue );
+    connect( watcher, &QFutureWatcher<ConversionResult>::finished, this,
+             [ this, watcher, cancelled, filePath, outDir, outPath ] {
+                 watcher->deleteLater();
+                 ConversionResult result;
+                 if ( watcher->future().resultCount() > 0 ) {
+                     result = watcher->result();
+                 }
+                 else {
+                     result.error = "The conversion ended without a result";
+                 }
+                 // Cancel wins even over a conversion that had just finished.
+                 if ( cancelled->load() ) {
+                     result.status = ConversionResult::Status::Cancelled;
+                 }
+                 if ( result.status != ConversionResult::Status::Converted ) {
+                     QDir( outDir ).removeRecursively();
+                 }
+                 finishConversion( filePath, outPath, std::move( result ) );
+             } );
+
+    watcher->setFuture( QtConcurrent::run( &pool_, [ filePath, outPath, cancelled ](
+                                                       QPromise<ConversionResult>& promise ) {
+        promise.setProgressRange( 0, 1000 );
+        ConversionResult result;
+        try {
+            result = convertPcap( filePath, outPath, cancelled.get(), [ &promise ]( int permille ) {
+                promise.setProgressValue( permille );
+            } );
+        } catch ( const std::bad_alloc& ) {
+            result = ConversionResult();
+            result.error = "Not enough memory to read the capture";
+        } catch ( const std::exception& e ) {
+            result = ConversionResult();
+            result.error = QString::fromUtf8( e.what() );
+        } catch ( ... ) {
+            result = ConversionResult();
+            result.error = "Unknown error";
         }
+        promise.addResult( std::move( result ) );
+    } ) );
+}
+
+void SidebarWidget::cancel()
+{
+    if ( !converting_ || !cancelRunning_ ) {
+        return;
+    }
+    cancelRunning_->store( true );
+    cancelButton_->setEnabled( false );
+    summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
+}
+
+void SidebarWidget::setConverting( bool converting )
+{
+    converting_ = converting;
+    openButton_->setEnabled( !converting );
+    cancelButton_->setEnabled( converting );
+    cancelButton_->setHidden( !converting );
+    progressBar_->setHidden( !converting );
+    progressBar_->setValue( 0 );
+}
+
+void SidebarWidget::finishConversion( const QString& filePath, const QString& outPath,
+                                      ConversionResult result )
+{
+    cancelRunning_.reset();
+    runningDir_.clear();
+    setConverting( false );
+
+    switch ( result.status ) {
+    case ConversionResult::Status::Cancelled:
+        summaryLabel_->setText( "Cancelled." );
+        hostLog( LOGSQUIRL_LOG_INFO, "Cancelled opening " + filePath );
+        return;
+
+    case ConversionResult::Status::Failed: {
+        const auto& msg = result.error;
+        summaryLabel_->setText( "Error: " + msg.toHtmlEscaped() );
+        hostLog( LOGSQUIRL_LOG_ERROR, "pcap parse error: " + msg );
+        hostNotify( "Failed to open pcap: " + msg );
         return;
     }
 
-    // Format packets to text lines
-    auto lines = formatAllPackets( result.packets );
-
-    // Write to a temporary file that persists after the plugin is done
-    // (LogSquirl will display it; user can save it if they want)
-    const auto baseName = QFileInfo( filePath ).completeBaseName();
-    const auto tempDir = QStandardPaths::writableLocation( QStandardPaths::TempLocation );
-    const auto outPath = tempDir + "/logsquirl_tcpdump_" + baseName + ".log";
-
-    QFile outFile( outPath );
-    if ( !outFile.open( QIODevice::WriteOnly | QIODevice::Text ) ) {
-        summaryLabel_->setText( "Error: Cannot write temp file" );
-        hostLog( LOGSQUIRL_LOG_ERROR, "Failed to create temp output file" );
-        return;
+    case ConversionResult::Status::Converted:
+        break;
     }
 
-    QTextStream stream( &outFile );
-    for ( const auto& line : lines ) {
-        stream << QString::fromStdString( line ) << "\n";
-    }
-    outFile.close();
-
-    // Open in LogSquirl viewer
+    // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, qPrintable( outPath ), 0 );
+        g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
     }
 
-    // Update summary with detailed capture info
-    double duration = 0.0;
-    if ( result.packets.size() >= 2 ) {
-        const auto& first = result.packets.front();
-        const auto& last = result.packets.back();
-        duration = static_cast<double>( last.timestampSec - first.timestampSec )
-                   + ( static_cast<double>( last.timestampUsec )
-                       - static_cast<double>( first.timestampUsec ) )
-                         / 1000000.0;
+    summaryLabel_->setText(
+        summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(), result ) );
+
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Opened %1 packets from %2" ).arg( result.stats.packets ).arg( filePath ) );
+}
+
+namespace {
+
+QString formatBytes( uint64_t bytes )
+{
+    if ( bytes >= 1024 * 1024 ) {
+        return QString::number( static_cast<double>( bytes ) / ( 1024.0 * 1024.0 ), 'f', 1 )
+               + " MB";
     }
-
-    // Protocol breakdown
-    std::map<std::string, int> protoCounts;
-    std::map<std::string, uint64_t> protoBytes;
-    std::set<std::string> uniqueIps;
-    std::map<std::string, int> ipPacketCounts;
-    uint64_t totalBytes = 0;
-
-    for ( const auto& pkt : result.packets ) {
-        protoCounts[ pkt.protocol ]++;
-        protoBytes[ pkt.protocol ] += pkt.capturedLen;
-        totalBytes += pkt.capturedLen;
-        if ( !pkt.srcIp.empty() ) {
-            uniqueIps.insert( pkt.srcIp );
-            ipPacketCounts[ pkt.srcIp ]++;
-        }
-        if ( !pkt.dstIp.empty() ) {
-            uniqueIps.insert( pkt.dstIp );
-            ipPacketCounts[ pkt.dstIp ]++;
-        }
+    if ( bytes >= 1024 ) {
+        return QString::number( static_cast<double>( bytes ) / 1024.0, 'f', 1 ) + " KB";
     }
+    return QString::number( bytes ) + " B";
+}
 
-    // Sort protocols by count (descending)
-    std::vector<std::pair<std::string, int>> sortedProtos( protoCounts.begin(), protoCounts.end() );
-    std::sort( sortedProtos.begin(), sortedProtos.end(),
-               []( const auto& a, const auto& b ) { return a.second > b.second; } );
+/// Entries of @p counts by count, highest first.
+std::vector<std::pair<std::string, uint64_t>>
+byCount( const std::map<std::string, uint64_t>& counts )
+{
+    std::vector<std::pair<std::string, uint64_t>> sorted( counts.begin(), counts.end() );
+    std::stable_sort( sorted.begin(), sorted.end(),
+                      []( const auto& a, const auto& b ) { return a.second > b.second; } );
+    return sorted;
+}
 
-    // Sort IPs by packet count (descending), show top 6
-    std::vector<std::pair<std::string, int>> sortedIps( ipPacketCounts.begin(),
-                                                        ipPacketCounts.end() );
-    std::sort( sortedIps.begin(), sortedIps.end(),
-               []( const auto& a, const auto& b ) { return a.second > b.second; } );
+} // namespace
+
+QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionResult& result )
+{
+    const auto& stats = result.stats;
+    const double duration = stats.durationSeconds();
 
     // Link type name
     QString linkName;
@@ -193,6 +336,9 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     case 101:
         linkName = "Raw IP";
         break;
+    case 108:
+        linkName = "OpenBSD Loopback";
+        break;
     case 113:
         linkName = "Linux SLL";
         break;
@@ -204,85 +350,72 @@ void SidebarWidget::openPcapFile( const QString& filePath )
         break;
     }
 
-    // Format file size
-    auto fileSize = QFileInfo( filePath ).size();
-    QString sizeStr;
-    if ( fileSize >= 1024 * 1024 ) {
-        sizeStr = QString::number( fileSize / ( 1024.0 * 1024.0 ), 'f', 1 ) + " MB";
-    }
-    else if ( fileSize >= 1024 ) {
-        sizeStr = QString::number( fileSize / 1024.0, 'f', 1 ) + " KB";
-    }
-    else {
-        sizeStr = QString::number( fileSize ) + " B";
-    }
-
     // Packets per second
     QString ppsStr = "-";
     if ( duration > 0.0 ) {
-        auto pps = static_cast<double>( result.packets.size() ) / duration;
+        auto pps = static_cast<double>( stats.packets ) / duration;
         ppsStr = QString::number( pps, 'f', 0 );
     }
 
-    // Build summary HTML
+    // Build summary HTML; anything from the file or its name is escaped,
+    // since the label renders markup
     QString html;
-    html += QString( "<b>%1</b><br>" ).arg( QFileInfo( filePath ).fileName() );
+    html += QString( "<b>%1</b><br>" ).arg( fileName.toHtmlEscaped() );
     html += QString( "<hr>" );
 
     // General stats
     html += QString( "<b>Overview</b><br>" );
     html += QString( "Packets: <b>%1</b><br>" )
-                .arg( QLocale().toString( static_cast<qlonglong>( result.packets.size() ) ) );
-    html += QString( "File size: %1<br>" ).arg( sizeStr );
+                .arg( QLocale().toString( static_cast<qulonglong>( stats.packets ) ) );
+    html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
     html += QString( "Link type: %1<br>" ).arg( linkName );
+    if ( result.truncated ) {
+        html += "<i>The capture was cut off in the middle of a packet.</i><br>";
+    }
     html += "<br>";
 
     // Protocol breakdown
     html += "<b>Protocols</b><br>";
-    for ( const auto& [ proto, count ] : sortedProtos ) {
-        auto bytes = protoBytes[ proto ];
-        QString bytesStr;
-        if ( bytes >= 1024 * 1024 ) {
-            bytesStr = QString::number( bytes / ( 1024.0 * 1024.0 ), 'f', 1 ) + " MB";
-        }
-        else if ( bytes >= 1024 ) {
-            bytesStr = QString::number( bytes / 1024.0, 'f', 1 ) + " KB";
-        }
-        else {
-            bytesStr = QString::number( bytes ) + " B";
-        }
-
-        auto pct = ( result.packets.size() > 0 )
-                       ? static_cast<double>( count ) / result.packets.size() * 100.0
-                       : 0.0;
+    for ( const auto& [ proto, count ] : byCount( stats.protocolPackets ) ) {
+        const auto bytes = stats.protocolBytes.at( proto );
+        const auto pct
+            = static_cast<double>( count ) / static_cast<double>( stats.packets ) * 100.0;
         html += QString( "%1: %2 (%3%, %4)<br>" )
-                    .arg( QString::fromStdString( proto ) )
-                    .arg( QLocale().toString( count ) )
+                    .arg( QString::fromStdString( proto ).toHtmlEscaped() )
+                    .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
                     .arg( pct, 0, 'f', 1 )
-                    .arg( bytesStr );
+                    .arg( formatBytes( bytes ) );
     }
     html += "<br>";
 
     // Top IPs
-    html += QString( "<b>Endpoints</b> (%1 unique)<br>" ).arg( uniqueIps.size() );
+    html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
+                .arg( stats.endpointLimitReached() ? "more than " : "" )
+                .arg( stats.endpointPackets.size() );
     int shown = 0;
-    for ( const auto& [ ip, count ] : sortedIps ) {
+    for ( const auto& [ ip, count ] : byCount( stats.endpointPackets ) ) {
         if ( shown >= 8 )
             break;
         html += QString( "%1: %2 pkts<br>" )
-                    .arg( QString::fromStdString( ip ) )
-                    .arg( QLocale().toString( count ) );
+                    .arg( QString::fromStdString( ip ).toHtmlEscaped() )
+                    .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }
+    if ( stats.endpointLimitReached() ) {
+        html += QString( "Other endpoints: %1 pkts<br>" )
+                    .arg( QLocale().toString(
+                        static_cast<qulonglong>( stats.otherEndpointPackets ) ) );
+    }
+    if ( result.streamLimitReached ) {
+        html += QString( "<br><i>More than %1 conversations: later ones show stream ? in the "
+                         "log.</i><br>" )
+                    .arg( QLocale().toString(
+                        static_cast<qulonglong>( PacketFormatter::kMaxStreams ) ) );
+    }
 
-    summaryLabel_->setText( html );
-
-    hostLog(
-        LOGSQUIRL_LOG_INFO,
-        qPrintable(
-            QString( "Opened %1 packets from %2" ).arg( result.packets.size() ).arg( filePath ) ) );
+    return html;
 }
 
 } // namespace tcpdump

@@ -31,7 +31,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_definitions(LOGSQUIRL_PLUGIN_VERSION="${PROJECT_VERSION}")
 
 # ── Find Qt6 ──────────────────────────────────────────────────────────────
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Widgets)
 qt_standard_project_setup()
 
 # ── Plugin shared library ─────────────────────────────────────────────────
@@ -39,6 +39,9 @@ add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/pcap_parser.cpp
     src/packet_formatter.cpp
+    src/capture_stats.cpp
+    src/pcap_converter.cpp
+    src/tempdirs.cpp
     src/sidebarwidget.cpp
 )
 
@@ -63,6 +66,7 @@ target_include_directories(logsquirl_tcpdump
 target_link_libraries(logsquirl_tcpdump
     PRIVATE
         Qt6::Core
+        Qt6::Concurrent
         Qt6::Widgets
 )
 

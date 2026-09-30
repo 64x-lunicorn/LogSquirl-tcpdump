@@ -28,6 +28,8 @@
 
 #include "logsquirl_plugin_api.h"
 
+#include <QString>
+
 namespace tcpdump {
 class SidebarWidget;
 } // namespace tcpdump
@@ -39,13 +41,21 @@ struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for pcap control.
+    bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
     bool initialised = false;               ///< True between init() and shutdown().
+    bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.
+    QString tempRoot;      ///< Where temporary directories go; empty: the system's (for tests).
 };
 
 /// Singleton plugin state.  Defined in plugin.cpp.
 extern PluginState g_state;
 
-/// Convenience: log via host API.  No-op if the plugin is not initialised.
-void hostLog( int level, const char* message );
+/// Log a message through the host API (no-op if not initialised).
+/// The host decodes the message as UTF-8.
+void hostLog( int level, const QString& message );
+
+/// Show a host notification (no-op if not initialised).
+/// The host decodes the message as UTF-8.
+void hostNotify( const QString& message );
 
 } // namespace tcpdump

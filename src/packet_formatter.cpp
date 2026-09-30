@@ -27,7 +27,6 @@
 
 #include "packet_formatter.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <iomanip>
 #include <map>
@@ -35,57 +34,54 @@
 
 namespace tcpdump {
 
-std::string formatTcpFlags( uint8_t flags )
+namespace {
+
+/// Width of the time column, with three more digits for nanoseconds.
+int timeWidth( bool nanoseconds )
 {
-    std::string result = "[";
-    bool first = true;
-    auto add = [ & ]( const char* name ) {
-        if ( !first )
-            result += ", ";
-        result += name;
-        first = false;
-    };
-    if ( flags & 0x02 )
-        add( "SYN" );
-    if ( flags & 0x10 )
-        add( "ACK" );
-    if ( flags & 0x01 )
-        add( "FIN" );
-    if ( flags & 0x04 )
-        add( "RST" );
-    if ( flags & 0x08 )
-        add( "PSH" );
-    if ( flags & 0x20 )
-        add( "URG" );
-    if ( first )
-        result += "none";
-    result += "]";
-    return result;
+    return nanoseconds ? 18 : 15;
 }
 
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeUsec,
-                              int streamId )
+/// @p deltaNs as seconds with 9 or 6 decimals, computed in integers so that
+/// neither precision nor range is lost.
+std::string formatRelativeTime( int64_t deltaNs, bool nanoseconds )
 {
-    // Calculate relative time from the first packet
-    double relTime = 0.0;
-    if ( pkt.timestampSec >= baseTimeSec ) {
-        relTime
-            = static_cast<double>( pkt.timestampSec - baseTimeSec )
-              + ( static_cast<double>( pkt.timestampUsec ) - static_cast<double>( baseTimeUsec ) )
-                    / 1000000.0;
+    const bool negative = deltaNs < 0;
+    const auto magnitude
+        = negative ? 0 - static_cast<uint64_t>( deltaNs ) : static_cast<uint64_t>( deltaNs );
+    const auto seconds = static_cast<unsigned long long>( magnitude / 1000000000 );
+    const auto fraction = magnitude % 1000000000;
+    char buf[ 40 ];
+    if ( nanoseconds ) {
+        std::snprintf( buf, sizeof( buf ), "%s%llu.%09llu", negative ? "-" : "", seconds,
+                       static_cast<unsigned long long>( fraction ) );
     }
+    else {
+        std::snprintf( buf, sizeof( buf ), "%s%llu.%06llu", negative ? "-" : "", seconds,
+                       static_cast<unsigned long long>( fraction / 1000 ) );
+    }
+    return buf;
+}
+
+} // namespace
+
+std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
+                              int streamId, bool nanoseconds )
+{
+    // Time relative to the first packet; negative for an earlier packet
+    const int64_t deltaNs = ( static_cast<int64_t>( pkt.timestampSec ) - baseTimeSec ) * 1000000000
+                            + ( static_cast<int64_t>( pkt.timestampNsec ) - baseTimeNsec );
+
+    const std::string streamStr = streamId >= 0             ? std::to_string( streamId )
+                                  : streamId == kUnnumbered ? "?"
+                                                            : "-";
 
     // Use fixed-width columns like Wireshark's packet list
-    char timeBuf[ 16 ];
-    std::snprintf( timeBuf, sizeof( timeBuf ), "%.6f", relTime );
-
-    std::string streamStr = ( streamId >= 0 ) ? std::to_string( streamId ) : "-";
-
     std::ostringstream oss;
     oss << std::left;
     oss << std::setw( 7 ) << pkt.number;
     oss << std::setw( 8 ) << streamStr;
-    oss << std::setw( 15 ) << timeBuf;
+    oss << std::setw( timeWidth( nanoseconds ) ) << formatRelativeTime( deltaNs, nanoseconds );
     oss << std::setw( 40 ) << ( pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp );
     oss << std::setw( 40 ) << ( pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp );
     oss << std::setw( 10 ) << pkt.protocol;
@@ -95,66 +91,68 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     return oss.str();
 }
 
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
+std::string PacketFormatter::header() const
 {
-    std::vector<std::string> lines;
-    lines.reserve( packets.size() + 1 );
-
-    // Column header
     std::ostringstream hdr;
     hdr << std::left;
     hdr << std::setw( 7 ) << "No.";
     hdr << std::setw( 8 ) << "Stream";
-    hdr << std::setw( 15 ) << "Time";
+    hdr << std::setw( timeWidth( nanoseconds_ ) ) << "Time";
     hdr << std::setw( 40 ) << "Source";
     hdr << std::setw( 40 ) << "Destination";
     hdr << std::setw( 10 ) << "Protocol";
     hdr << std::setw( 7 ) << "Len";
     hdr << "Info";
-    lines.push_back( hdr.str() );
+    return hdr.str();
+}
 
-    if ( packets.empty() ) {
-        return lines;
+std::string PacketFormatter::format( const PacketRecord& pkt )
+{
+    if ( !haveBase_ ) {
+        haveBase_ = true;
+        baseTimeSec_ = pkt.timestampSec;
+        baseTimeNsec_ = pkt.timestampNsec;
+    }
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId( pkt ), nanoseconds_ );
+}
+
+int PacketFormatter::streamId( const PacketRecord& pkt )
+{
+    // Packets sharing the same IP+port 4-tuple (in either direction) belong
+    // to the same conversation.
+    if ( pkt.srcIp.empty() && pkt.dstIp.empty() ) {
+        return kNoStream; // No IP layer (e.g. ARP) — no stream
     }
 
-    // Assign stream IDs: packets sharing the same IP+port 4-tuple
-    // (in either direction) belong to the same conversation.
-    std::map<std::string, int> streamMap;
-    std::vector<int> streamIds;
-    streamIds.reserve( packets.size() );
-    int nextStreamId = 0;
+    // Build canonical key: sort endpoints so both directions match
+    auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
+    auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
+    std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
+
+    const auto known = streams_.find( key );
+    if ( known != streams_.end() ) {
+        return known->second;
+    }
+    if ( streams_.size() >= maxStreams_ ) {
+        streamLimitReached_ = true;
+        return kUnnumbered;
+    }
+    const auto next = static_cast<int>( streams_.size() );
+    streams_.emplace( std::move( key ), next );
+    return next;
+}
+
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
+                                           bool nanoseconds )
+{
+    PacketFormatter formatter( nanoseconds );
+    std::vector<std::string> lines;
+    lines.reserve( packets.size() + 1 );
+    lines.push_back( formatter.header() );
 
     for ( const auto& pkt : packets ) {
-        if ( pkt.srcIp.empty() && pkt.dstIp.empty() ) {
-            // No IP layer (e.g. ARP) — no stream
-            streamIds.push_back( -1 );
-            continue;
-        }
-
-        // Build canonical key: sort endpoints so both directions match
-        auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
-        auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
-        std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
-
-        auto it = streamMap.find( key );
-        if ( it == streamMap.end() ) {
-            streamMap[ key ] = nextStreamId;
-            streamIds.push_back( nextStreamId );
-            nextStreamId++;
-        }
-        else {
-            streamIds.push_back( it->second );
-        }
+        lines.push_back( formatter.format( pkt ) );
     }
-
-    auto baseTimeSec = packets.front().timestampSec;
-    auto baseTimeUsec = packets.front().timestampUsec;
-
-    for ( size_t i = 0; i < packets.size(); ++i ) {
-        lines.push_back(
-            formatPacketLine( packets[ i ], baseTimeSec, baseTimeUsec, streamIds[ i ] ) );
-    }
-
     return lines;
 }
 

@@ -199,7 +199,7 @@ SCENARIO( "Parsing a minimal pcap with a TCP SYN packet", "[pcap_parser]" )
             {
                 const auto& pkt = result.packets[ 0 ];
                 REQUIRE( pkt.timestampSec == 1000 );
-                REQUIRE( pkt.timestampUsec == 500000 );
+                REQUIRE( pkt.timestampNsec == 500000000 );
             }
         }
     }
@@ -1085,7 +1085,7 @@ SCENARIO( "Payload preview shows full text without truncation", "[pcap_parser]" 
     }
 }
 
-SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
+SCENARIO( "Payload preview shows dots for binary bytes", "[pcap_parser]" )
 {
     GIVEN( "a TCP packet with mixed binary and text payload" )
     {
@@ -1122,12 +1122,11 @@ SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
         pkt.insert( pkt.end(), { 0xFF, 0xFF } );
         pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
 
-        // Payload: text with binary bytes in between
-        // "Hello" + 5 binary bytes + "World"
+        // Payload: "Hello" + 3 binary bytes + "World" (mostly printable → above 40%)
         std::string text1 = "Hello";
-        std::string text2 = "World and more text here to meet threshold";
+        std::string text2 = "World and more text here to be above threshold!";
         pkt.insert( pkt.end(), text1.begin(), text1.end() );
-        pkt.insert( pkt.end(), { 0x00, 0x01, 0x02, 0x03, 0x04 } );
+        pkt.insert( pkt.end(), { 0x00, 0x01, 0x02 } );
         pkt.insert( pkt.end(), text2.begin(), text2.end() );
 
         uint16_t totalLen = static_cast<uint16_t>( pkt.size() - ipStart );
@@ -1140,7 +1139,7 @@ SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "binary bytes are collapsed to a single space, not dots" )
+            THEN( "binary bytes show as dots between the text parts" )
             {
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
@@ -1148,8 +1147,8 @@ SCENARIO( "Payload preview collapses binary runs to spaces", "[pcap_parser]" )
                 // Both text parts visible
                 REQUIRE( info.find( "Hello" ) != std::string::npos );
                 REQUIRE( info.find( "World" ) != std::string::npos );
-                // No runs of dots
-                REQUIRE( info.find( "....." ) == std::string::npos );
+                // Dots for binary bytes
+                REQUIRE( info.find( "..." ) != std::string::npos );
             }
         }
     }
@@ -1192,7 +1191,7 @@ SCENARIO( "Predominantly binary payload is suppressed", "[pcap_parser]" )
         pkt.insert( pkt.end(), { 0xFF, 0xFF } );
         pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
 
-        // Payload: 3 printable chars then 50 binary bytes (< 40% printable)
+        // Payload: 3 printable chars then 50 binary bytes
         pkt.insert( pkt.end(), { 'A', 'B', 'C' } );
         for ( int i = 0; i < 50; ++i )
             pkt.push_back( static_cast<uint8_t>( i ) );
@@ -1342,6 +1341,207 @@ SCENARIO( "ADB $WRTE frames are not misidentified as NMEA", "[pcap_parser]" )
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol != "NMEA" );
                 REQUIRE( result.packets[ 0 ].protocol == "ADB" );
+            }
+        }
+    }
+}
+
+// ── SOCKS Detection Tests ────────────────────────────────────────────────
+
+SCENARIO( "SOCKS5 client greeting is detected", "[pcap_parser]" )
+{
+    GIVEN( "a TCP packet with a SOCKS5 client greeting on port 1080" )
+    {
+        std::vector<uint8_t> pkt;
+
+        // Ethernet
+        pkt.insert( pkt.end(), { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 } );
+        pkt.insert( pkt.end(), { 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB } );
+        pkt.push_back( 0x08 );
+        pkt.push_back( 0x00 );
+
+        // IPv4
+        auto ipStart = pkt.size();
+        pkt.push_back( 0x45 );
+        pkt.push_back( 0x00 );
+        pkt.push_back( 0x00 );
+        pkt.push_back( 0x00 );
+        pkt.insert( pkt.end(), { 0x00, 0x01, 0x00, 0x00 } );
+        pkt.push_back( 0x40 );
+        pkt.push_back( 0x06 );
+        pkt.insert( pkt.end(), { 0x00, 0x00 } );
+        pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x01 } );
+        pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x02 } );
+
+        // TCP: src 50000 → dst 1080
+        pkt.push_back( 0xC3 );
+        pkt.push_back( 0x50 ); // 50000
+        pkt.push_back( 0x04 );
+        pkt.push_back( 0x38 ); // 1080
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x01 } );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
+        pkt.push_back( 0x50 );
+        pkt.push_back( 0x18 );
+        pkt.insert( pkt.end(), { 0xFF, 0xFF } );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
+
+        // SOCKS5 greeting: version=5, 2 methods: NoAuth(0x00), UserPass(0x02)
+        pkt.insert( pkt.end(), { 0x05, 0x02, 0x00, 0x02 } );
+
+        uint16_t totalLen = static_cast<uint16_t>( pkt.size() - ipStart );
+        pkt[ ipStart + 2 ] = static_cast<uint8_t>( totalLen >> 8 );
+        pkt[ ipStart + 3 ] = static_cast<uint8_t>( totalLen & 0xFF );
+
+        auto buf = buildPcap( DltEthernet, { pkt } );
+
+        WHEN( "parsing" )
+        {
+            auto result = parsePcap( buf.data(), buf.size() );
+
+            THEN( "protocol is SOCKS and info describes the greeting" )
+            {
+                REQUIRE( result.ok );
+                REQUIRE( result.packets.size() == 1 );
+                REQUIRE( result.packets[ 0 ].protocol == "SOCKS" );
+                REQUIRE( result.packets[ 0 ].info.find( "SOCKS5 Client Greeting" )
+                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Version: 5" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Methods: 2" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "No Authentication (0x00)" )
+                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Username/Password (0x02)" )
+                         != std::string::npos );
+            }
+        }
+    }
+}
+
+SCENARIO( "SOCKS5 connect request with IPv4 is detected", "[pcap_parser]" )
+{
+    GIVEN( "a TCP packet with SOCKS5 connect to 93.184.216.34:443" )
+    {
+        std::vector<uint8_t> pkt;
+
+        // Ethernet
+        pkt.insert( pkt.end(), { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 } );
+        pkt.insert( pkt.end(), { 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB } );
+        pkt.push_back( 0x08 );
+        pkt.push_back( 0x00 );
+
+        // IPv4
+        auto ipStart = pkt.size();
+        pkt.push_back( 0x45 );
+        pkt.push_back( 0x00 );
+        pkt.push_back( 0x00 );
+        pkt.push_back( 0x00 );
+        pkt.insert( pkt.end(), { 0x00, 0x01, 0x00, 0x00 } );
+        pkt.push_back( 0x40 );
+        pkt.push_back( 0x06 );
+        pkt.insert( pkt.end(), { 0x00, 0x00 } );
+        pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x01 } );
+        pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x02 } );
+
+        // TCP
+        pkt.push_back( 0xC3 );
+        pkt.push_back( 0x50 );
+        pkt.push_back( 0x04 );
+        pkt.push_back( 0x38 );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x01 } );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
+        pkt.push_back( 0x50 );
+        pkt.push_back( 0x18 );
+        pkt.insert( pkt.end(), { 0xFF, 0xFF } );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
+
+        // SOCKS5 Connect: ver=5, cmd=CONNECT(1), rsv=0, atyp=IPv4(1),
+        //                 addr=93.184.216.34, port=443
+        pkt.insert( pkt.end(), { 0x05, 0x01, 0x00, 0x01, 93, 184, 216, 34, 0x01, 0xBB } );
+
+        uint16_t totalLen = static_cast<uint16_t>( pkt.size() - ipStart );
+        pkt[ ipStart + 2 ] = static_cast<uint8_t>( totalLen >> 8 );
+        pkt[ ipStart + 3 ] = static_cast<uint8_t>( totalLen & 0xFF );
+
+        auto buf = buildPcap( DltEthernet, { pkt } );
+
+        WHEN( "parsing" )
+        {
+            auto result = parsePcap( buf.data(), buf.size() );
+
+            THEN( "info shows SOCKS5 Connect with target address and port" )
+            {
+                REQUIRE( result.ok );
+                REQUIRE( result.packets.size() == 1 );
+                REQUIRE( result.packets[ 0 ].protocol == "SOCKS" );
+                REQUIRE( result.packets[ 0 ].info.find( "SOCKS5 Connect" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Command: Connect" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Address Type: IPv4" )
+                         != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Destination: 93.184.216.34:443" )
+                         != std::string::npos );
+            }
+        }
+    }
+}
+
+SCENARIO( "SOCKS4 connect request is detected", "[pcap_parser]" )
+{
+    GIVEN( "a TCP packet with SOCKS4 connect to 10.0.0.1:80" )
+    {
+        std::vector<uint8_t> pkt;
+
+        // Ethernet
+        pkt.insert( pkt.end(), { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 } );
+        pkt.insert( pkt.end(), { 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB } );
+        pkt.push_back( 0x08 );
+        pkt.push_back( 0x00 );
+
+        // IPv4
+        auto ipStart = pkt.size();
+        pkt.push_back( 0x45 );
+        pkt.push_back( 0x00 );
+        pkt.push_back( 0x00 );
+        pkt.push_back( 0x00 );
+        pkt.insert( pkt.end(), { 0x00, 0x01, 0x00, 0x00 } );
+        pkt.push_back( 0x40 );
+        pkt.push_back( 0x06 );
+        pkt.insert( pkt.end(), { 0x00, 0x00 } );
+        pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x01 } );
+        pkt.insert( pkt.end(), { 0xC0, 0xA8, 0x01, 0x02 } );
+
+        // TCP
+        pkt.push_back( 0xC3 );
+        pkt.push_back( 0x50 );
+        pkt.push_back( 0x04 );
+        pkt.push_back( 0x38 );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x01 } );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
+        pkt.push_back( 0x50 );
+        pkt.push_back( 0x18 );
+        pkt.insert( pkt.end(), { 0xFF, 0xFF } );
+        pkt.insert( pkt.end(), { 0x00, 0x00, 0x00, 0x00 } );
+
+        // SOCKS4 Connect: ver=4, cmd=CONNECT(1), port=80, ip=10.0.0.1, userid="\0"
+        pkt.insert( pkt.end(), { 0x04, 0x01, 0x00, 0x50, 10, 0, 0, 1, 0x00 } );
+
+        uint16_t totalLen = static_cast<uint16_t>( pkt.size() - ipStart );
+        pkt[ ipStart + 2 ] = static_cast<uint8_t>( totalLen >> 8 );
+        pkt[ ipStart + 3 ] = static_cast<uint8_t>( totalLen & 0xFF );
+
+        auto buf = buildPcap( DltEthernet, { pkt } );
+
+        WHEN( "parsing" )
+        {
+            auto result = parsePcap( buf.data(), buf.size() );
+
+            THEN( "protocol is SOCKS and info shows SOCKS4 Connect" )
+            {
+                REQUIRE( result.ok );
+                REQUIRE( result.packets.size() == 1 );
+                REQUIRE( result.packets[ 0 ].protocol == "SOCKS" );
+                REQUIRE( result.packets[ 0 ].info.find( "SOCKS4" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Command: Connect" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info.find( "Destination: 10.0.0.1:80" )
+                         != std::string::npos );
             }
         }
     }

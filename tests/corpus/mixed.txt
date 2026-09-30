@@ -1,0 +1,22 @@
+No.    Stream  Time           Source                                  Destination                             Protocol  Len    Info
+1      0       0.000000       192.168.1.1                             192.168.1.2                             HTTP      54     50000 → 80 [SYN] Seq=1 Ack=0 Win=65535
+2      0       0.012345       192.168.1.1                             192.168.1.2                             HTTP      101    50000 → 80 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=47 | GET /index.html HTTP/1.1
+3      1       0.024690       192.168.1.1                             192.168.1.2                             HTTP      77     80 → 50000 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=19 | HTTP/1.1 200 OK
+4      2       0.037035       192.168.1.1                             192.168.1.2                             TLS       63     50001 → 443 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=9 [Client Hello]
+5      3       0.049380       192.168.1.1                             192.168.1.2                             DNS       71     40000 → 53 Len=29 Query example.com
+6      4       -0.938275      192.168.1.1                             192.168.1.2                             NMEA      67     40001 → 10110 Len=17 | $GPGGA,1,2,3*47
+7      5       0.074070       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      ICMPv6    70     Type=143
+8      6       0.086415       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      mDNS      75     5353 → 5353 Len=5
+9      5       0.098760       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      IPv6      72     Fragment of IP protocol 17 (offset 1480, ID 0x0000CAFE)
+10     7       0.111105       192.168.1.1                             192.168.1.2                             SSH       54     50002 → 22 [ACK, PSH] Seq=1 Ack=0 Win=65535
+11     8       0.123450       192.168.1.1                             192.168.1.2                             IPv4      48     Fragment of IP protocol 6 (offset 1480, ID 0x1234)
+12     9       0.135795       192.168.1.1                             192.168.1.2                             SOCKS     58     50003 → 1080 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=4 | SOCKS5 Client Greeting, Version: 5, Methods: 2 [No Authentication (0x00), Username/Password (0x02)]
+13     10      0.148140       192.168.1.1                             192.168.1.2                             SOCKS     56     1080 → 50003 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=2 | SOCKS5 Server Choice, Version: 5, Method: Username/Password (0x02)
+14     9       0.160485       192.168.1.1                             192.168.1.2                             SOCKS     66     50003 → 1080 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=12 | SOCKS5 Auth Request, User: "bob", Pass: "secret"
+15     9       0.172830       192.168.1.1                             192.168.1.2                             SOCKS     65     50003 → 1080 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=11 | SOCKS5 Connect, Version: 5, Command: Connect (0x01), Address Type: Domain, Destination: host:443
+16     10      0.185175       192.168.1.1                             192.168.1.2                             SOCKS     64     1080 → 50003 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=10 | SOCKS5 Reply, Version: 5, Status: Succeeded (0x00), Bound: 10.0.0.1:8080
+17     11      0.197520       192.168.1.1                             192.168.1.2                             TCP       354    50004 → 60000 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=300 | zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz…
+18     11      0.209865       192.168.1.1                             192.168.1.2                             TCP       156    50004 → 60000 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=102
+19     12      0.222210       192.168.1.1                             192.168.1.2                             TCP       57     50005 → 80 [ACK, PSH] Seq=1 Ack=0 Win=65535 [bogus TCP header length (8, must be at least 20)]
+20     8       0.234555       192.168.1.1                             192.168.1.2                             ICMP      42     Echo request
+21     13      0.246900       192.168.1.1                             192.168.1.100                           ARP       42     Who has 192.168.1.100? Tell 192.168.1.1

@@ -29,8 +29,8 @@
 #include "pcap_parser.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <sstream>
 
 namespace tcpdump {
@@ -116,32 +116,37 @@ std::string formatIpv6( const uint8_t* p )
     return buf;
 }
 
-// ── TCP flags as info string ─────────────────────────────────────────────
+// ── Payload text ─────────────────────────────────────────────────────────
 
-std::string tcpFlagStr( uint8_t flags )
+/// Format a protocol code as "0xNN".
+std::string hexCode( uint8_t code )
 {
-    std::string result = "[";
-    bool first = true;
-    auto add = [ & ]( const char* name ) {
-        if ( !first )
-            result += ", ";
-        result += name;
-        first = false;
-    };
-    if ( flags & 0x02 )
-        add( "SYN" );
-    if ( flags & 0x10 )
-        add( "ACK" );
-    if ( flags & 0x01 )
-        add( "FIN" );
-    if ( flags & 0x04 )
-        add( "RST" );
-    if ( flags & 0x08 )
-        add( "PSH" );
-    if ( flags & 0x20 )
-        add( "URG" );
-    result += "]";
-    return result;
+    char buf[ 8 ];
+    std::snprintf( buf, sizeof( buf ), "0x%02X", code );
+    return buf;
+}
+
+/// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
+/// that a field can neither break the line nor hide what it contains.
+/// Within quotes, '"' is escaped too.
+std::string escapeBytes( const uint8_t* p, size_t len, bool quoted )
+{
+    std::string out;
+    out.reserve( len );
+    for ( size_t i = 0; i < len; ++i ) {
+        const auto c = p[ i ];
+        if ( c == '\\' || ( quoted && c == '"' ) ) {
+            out += '\\';
+            out += static_cast<char>( c );
+        }
+        else if ( c >= 0x20 && c < 0x7F ) {
+            out += static_cast<char>( c );
+        }
+        else {
+            out += "\\x" + hexCode( c ).substr( 2 );
+        }
+    }
+    return out;
 }
 
 // ── Application-layer protocol detection ─────────────────────────────────
@@ -190,6 +195,16 @@ std::string detectTls( const uint8_t* payload, size_t len )
     return {};
 }
 
+/// The first line of a payload, up to CR/LF and at most 120 bytes, escaped.
+std::string firstLine( const uint8_t* payload, size_t len )
+{
+    size_t end = 0;
+    while ( end < len && end < 120 && payload[ end ] != '\r' && payload[ end ] != '\n' ) {
+        ++end;
+    }
+    return escapeBytes( payload, end, false );
+}
+
 /// Detect HTTP request or response from payload start.
 std::string detectHttp( const uint8_t* payload, size_t len )
 {
@@ -205,25 +220,11 @@ std::string detectHttp( const uint8_t* payload, size_t len )
     if ( startsWith( "GET " ) || startsWith( "POST " ) || startsWith( "PUT " )
          || startsWith( "DELETE " ) || startsWith( "HEAD " ) || startsWith( "PATCH " )
          || startsWith( "OPTIONS " ) || startsWith( "CONNECT " ) ) {
-        // Extract the request line (up to \r\n or end)
-        std::string line;
-        for ( size_t i = 0; i < len && i < 120; ++i ) {
-            if ( payload[ i ] == '\r' || payload[ i ] == '\n' )
-                break;
-            line += static_cast<char>( payload[ i ] );
-        }
-        return line;
+        return firstLine( payload, len );
     }
 
     if ( startsWith( "HTTP/" ) ) {
-        // Response status line
-        std::string line;
-        for ( size_t i = 0; i < len && i < 120; ++i ) {
-            if ( payload[ i ] == '\r' || payload[ i ] == '\n' )
-                break;
-            line += static_cast<char>( payload[ i ] );
-        }
-        return line;
+        return firstLine( payload, len ); // the status line
     }
 
     return {};
@@ -251,7 +252,7 @@ std::string detectDns( const uint8_t* payload, size_t len )
             break;
         if ( !qname.empty() )
             qname += '.';
-        qname.append( reinterpret_cast<const char*>( payload + offset + 1 ), labelLen );
+        qname += escapeBytes( payload + offset + 1, labelLen, false );
         offset += labelLen + 1;
     }
 
@@ -300,6 +301,8 @@ const char* portToProtocol( uint16_t port )
         return "IMAPS";
     case 995:
         return "POP3S";
+    case 1080:
+        return "SOCKS";
     case 3306:
         return "MySQL";
     case 5432:
@@ -324,65 +327,271 @@ const char* portToProtocol( uint16_t port )
     }
 }
 
-/// Build ASCII preview of payload, skipping leading binary bytes.
-/// Starts from the first printable run of >= 3 chars (to skip binary headers).
-/// Non-printable runs are collapsed to a single space instead of dots.
-/// Returns empty if the payload is predominantly binary.
+std::string quotedBytes( const uint8_t* p, size_t len )
+{
+    return '"' + escapeBytes( p, len, true ) + '"';
+}
+
+bool isSocksPort( uint16_t port )
+{
+    return port == 1080 || port == 1081 || port == 3128 || port == 9050 || port == 9051;
+}
+
+const char* socks5MethodName( uint8_t method )
+{
+    switch ( method ) {
+    case 0x00:
+        return "No Authentication";
+    case 0x01:
+        return "GSSAPI";
+    case 0x02:
+        return "Username/Password";
+    case 0xFF:
+        return "No Acceptable Methods";
+    default:
+        return "Unknown";
+    }
+}
+
+std::string socks5Method( uint8_t method )
+{
+    return std::string( socks5MethodName( method ) ) + " (" + hexCode( method ) + ")";
+}
+
+/// The address of a SOCKS5 request or reply at @p p (address type first),
+/// if the message ends exactly behind it: "<type>", "<host>:<port>".
+bool socks5Address( const uint8_t* p, size_t len, std::string& type, std::string& address )
+{
+    if ( len < 1 ) {
+        return false;
+    }
+    switch ( p[ 0 ] ) {
+    case 0x01:
+        if ( len != 1 + 4 + 2 ) {
+            return false;
+        }
+        type = "IPv4";
+        address = formatIpv4( p + 1 ) + ":" + std::to_string( readBE16( p + 5 ) );
+        return true;
+    case 0x03: {
+        if ( len < 2 ) {
+            return false;
+        }
+        const size_t nameLen = p[ 1 ];
+        if ( nameLen == 0 || len != 2 + nameLen + 2 ) {
+            return false;
+        }
+        type = "Domain";
+        address = escapeBytes( p + 2, nameLen, false ) + ":"
+                  + std::to_string( readBE16( p + 2 + nameLen ) );
+        return true;
+    }
+    case 0x04:
+        if ( len != 1 + 16 + 2 ) {
+            return false;
+        }
+        type = "IPv6";
+        address = formatIpv6( p + 1 ) + ":" + std::to_string( readBE16( p + 17 ) );
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// A SOCKS message sent by the client to the proxy, or empty if the payload
+/// does not have the exact shape of one.
+std::string socksClientMessage( const uint8_t* p, size_t len )
+{
+    if ( len < 2 ) {
+        return {};
+    }
+
+    // SOCKS5 greeting (RFC 1928): 05 <nmethods> <methods...>
+    if ( p[ 0 ] == 0x05 && p[ 1 ] > 0 && len == 2 + static_cast<size_t>( p[ 1 ] ) ) {
+        std::string methods;
+        for ( size_t i = 2; i < len; ++i ) {
+            if ( !methods.empty() ) {
+                methods += ", ";
+            }
+            methods += socks5Method( p[ i ] );
+        }
+        return "SOCKS5 Client Greeting, Version: 5, Methods: " + std::to_string( p[ 1 ] ) + " ["
+               + methods + "]";
+    }
+
+    // SOCKS5 request: 05 <cmd> 00 <atyp> <address> <port>
+    if ( p[ 0 ] == 0x05 && len >= 4 && p[ 2 ] == 0x00 && p[ 1 ] >= 0x01 && p[ 1 ] <= 0x03 ) {
+        std::string type;
+        std::string address;
+        if ( socks5Address( p + 3, len - 3, type, address ) ) {
+            static const char* const kCommands[] = { "Connect", "Bind", "UDP Associate" };
+            return "SOCKS5 Connect, Version: 5, Command: " + std::string( kCommands[ p[ 1 ] - 1 ] )
+                   + " (" + hexCode( p[ 1 ] ) + "), Address Type: " + type
+                   + ", Destination: " + address;
+        }
+        return {};
+    }
+
+    // Username/password request (RFC 1929): 01 <ulen> <user> <plen> <password>
+    if ( p[ 0 ] == 0x01 ) {
+        const size_t userLen = p[ 1 ];
+        if ( len < 2 + userLen + 1 ) {
+            return {};
+        }
+        const size_t passLen = p[ 2 + userLen ];
+        if ( len != 2 + userLen + 1 + passLen ) {
+            return {};
+        }
+        return "SOCKS5 Auth Request, User: " + quotedBytes( p + 2, userLen )
+               + ", Pass: " + quotedBytes( p + 3 + userLen, passLen );
+    }
+
+    // SOCKS4 / SOCKS4a request: 04 <cmd> <port> <ip> <userid> 00 [<domain> 00]
+    if ( p[ 0 ] == 0x04 && len >= 9 && ( p[ 1 ] == 0x01 || p[ 1 ] == 0x02 ) && p[ len - 1 ] == 0 ) {
+        const auto* userEnd = static_cast<const uint8_t*>( std::memchr( p + 8, 0, len - 8 ) );
+        const auto userLen = static_cast<size_t>( userEnd - ( p + 8 ) );
+        const size_t domainStart = 8 + userLen + 1;
+        // SOCKS4a: the address 0.0.0.x (x != 0) says a domain follows.
+        const bool socks4a = p[ 4 ] == 0 && p[ 5 ] == 0 && p[ 6 ] == 0 && p[ 7 ] != 0;
+        size_t domainLen = 0;
+        if ( socks4a ) {
+            if ( domainStart >= len ) {
+                return {};
+            }
+            domainLen = len - 1 - domainStart;
+            if ( domainLen == 0 || std::memchr( p + domainStart, 0, domainLen ) != nullptr ) {
+                return {};
+            }
+        }
+        else if ( domainStart != len ) {
+            return {};
+        }
+
+        std::string result
+            = "SOCKS4, Version: 4, Command: " + std::string( p[ 1 ] == 0x01 ? "Connect" : "Bind" )
+              + " (" + hexCode( p[ 1 ] ) + "), Destination: " + formatIpv4( p + 4 ) + ":"
+              + std::to_string( readBE16( p + 2 ) );
+        if ( userLen > 0 ) {
+            result += ", User: " + quotedBytes( p + 8, userLen );
+        }
+        if ( socks4a ) {
+            result += ", Domain: " + escapeBytes( p + domainStart, domainLen, false );
+        }
+        return result;
+    }
+
+    return {};
+}
+
+/// A SOCKS message sent by the proxy to the client, or empty if the payload
+/// does not have the exact shape of one.
+std::string socksServerMessage( const uint8_t* p, size_t len )
+{
+    if ( len < 2 ) {
+        return {};
+    }
+
+    // SOCKS5 method choice: 05 <method>
+    if ( p[ 0 ] == 0x05 && len == 2 ) {
+        return "SOCKS5 Server Choice, Version: 5, Method: " + socks5Method( p[ 1 ] );
+    }
+
+    // SOCKS5 reply: 05 <status> 00 <atyp> <address> <port>
+    if ( p[ 0 ] == 0x05 && len >= 4 && p[ 2 ] == 0x00 ) {
+        std::string type;
+        std::string address;
+        if ( !socks5Address( p + 3, len - 3, type, address ) ) {
+            return {};
+        }
+        static const char* const kStatus[] = {
+            "Succeeded",           "General Failure",       "Not Allowed by Ruleset",
+            "Network Unreachable", "Host Unreachable",      "Connection Refused",
+            "TTL Expired",         "Command Not Supported", "Address Type Not Supported",
+        };
+        const auto code = p[ 1 ];
+        const char* status
+            = code < sizeof( kStatus ) / sizeof( kStatus[ 0 ] ) ? kStatus[ code ] : "Unknown";
+        return "SOCKS5 Reply, Version: 5, Status: " + std::string( status ) + " (" + hexCode( code )
+               + "), Bound: " + address;
+    }
+
+    // Username/password response (RFC 1929): 01 <status>
+    if ( p[ 0 ] == 0x01 && len == 2 ) {
+        return "SOCKS5 Auth Response, Status: "
+               + std::string( p[ 1 ] == 0x00 ? "Success" : "Failure" ) + " (" + hexCode( p[ 1 ] )
+               + ")";
+    }
+
+    // SOCKS4 reply: 00 <status> <port> <ip>
+    if ( p[ 0 ] == 0x00 && len == 8 && p[ 1 ] >= 0x5A && p[ 1 ] <= 0x5D ) {
+        static const char* const kStatus[] = {
+            "Request Granted",
+            "Request Rejected",
+            "Failed, Cannot Connect to identd",
+            "Failed, identd Mismatch",
+        };
+        std::string result = "SOCKS4 Reply, Status: " + std::string( kStatus[ p[ 1 ] - 0x5A ] )
+                             + " (" + hexCode( p[ 1 ] ) + ")";
+        const auto port = readBE16( p + 2 );
+        const auto ip = formatIpv4( p + 4 );
+        if ( port != 0 || ip != "0.0.0.0" ) {
+            result += ", Bound: " + ip + ":" + std::to_string( port );
+        }
+        return result;
+    }
+
+    return {};
+}
+
+/// Detect SOCKS4/SOCKS5 handshake messages (RFC 1928, RFC 1929, SOCKS4/4a).
+/// Only on a known proxy port, and only a payload with the exact shape of a
+/// message the client sends to that port, or the proxy sends from it.
+/// User names and passwords are shown: they cross the wire in clear text.
+std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, uint16_t dstPort )
+{
+    std::string message;
+    if ( isSocksPort( dstPort ) ) {
+        message = socksClientMessage( payload, len );
+    }
+    if ( message.empty() && isSocksPort( srcPort ) ) {
+        message = socksServerMessage( payload, len );
+    }
+    return message;
+}
+
+/// Longest payload preview, in characters, before it is cut with an ellipsis.
+constexpr size_t kMaxPreviewChars = 200;
+
+/// Build an ASCII preview of a payload: printable bytes as themselves,
+/// every other byte as a dot, at most kMaxPreviewChars characters followed
+/// by an ellipsis.  Returns empty if the payload is predominantly binary
+/// (less than 40% printable), where a preview would only be dots.
 std::string payloadPreview( const uint8_t* payload, size_t len )
 {
-    // Find the first interesting printable run (skip binary protocol headers)
-    size_t start = 0;
-    bool foundStart = false;
-    for ( size_t i = 0; i + 2 < len; ++i ) {
-        if ( payload[ i ] >= 0x20 && payload[ i ] < 0x7F && payload[ i + 1 ] >= 0x20
-             && payload[ i + 1 ] < 0x7F && payload[ i + 2 ] >= 0x20 && payload[ i + 2 ] < 0x7F ) {
-            start = i;
-            foundStart = true;
-            break;
-        }
-        if ( i > 128 )
-            return {}; // too much binary, give up
-    }
-    if ( !foundStart )
-        return {};
+    auto isPrintable = []( uint8_t c ) { return c >= 0x20 && c < 0x7F; };
 
+    const auto printable
+        = static_cast<size_t>( std::count_if( payload, payload + len, isPrintable ) );
+    if ( printable == 0 || printable * 10 < len * 4 ) {
+        return {};
+    }
+
+    const size_t shown = std::min( len, kMaxPreviewChars );
     std::string preview;
-    size_t printableCount = 0;
-    bool inBinaryRun = false;
-
-    for ( size_t i = start; i < len; ++i ) {
-        auto c = payload[ i ];
-        if ( c >= 0x20 && c < 0x7F ) {
-            inBinaryRun = false;
-            preview += static_cast<char>( c );
-            printableCount++;
-        }
-        else if ( c == '\r' || c == '\n' ) {
-            if ( !inBinaryRun ) {
-                preview += ' ';
-                inBinaryRun = true;
-            }
-        }
-        else {
-            // Non-printable byte — collapse consecutive ones to a single space
-            if ( !inBinaryRun ) {
-                preview += ' ';
-                inBinaryRun = true;
-            }
-        }
+    preview.reserve( shown + 3 );
+    for ( size_t i = 0; i < shown; ++i ) {
+        preview += isPrintable( payload[ i ] ) ? static_cast<char>( payload[ i ] ) : '.';
     }
-
-    // Skip if less than 40% printable (too binary to be useful)
-    if ( printableCount == 0 || static_cast<double>( printableCount ) / ( len - start ) < 0.4 ) {
-        return {};
+    if ( len > shown ) {
+        preview += "\xe2\x80\xa6"; // …
     }
-
-    // Trim trailing whitespace
-    while ( !preview.empty() && preview.back() == ' ' ) {
-        preview.pop_back();
-    }
-
     return preview;
+}
+
+/// ASCII letter, independent of the C locale (unlike std::isalpha).
+bool isAsciiAlpha( uint8_t c )
+{
+    return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' );
 }
 
 /// Detect NMEA 0183 sentences in payload (GPS: $GPGGA, $GNGSA, $GPGSV, etc.)
@@ -392,20 +601,12 @@ std::string detectNmea( const uint8_t* payload, size_t len )
 {
     // Scan for '$' + 5 alpha chars + ',' (NMEA 0183 mandatory format)
     for ( size_t i = 0; i + 7 < len; ++i ) {
-        if ( payload[ i ] == '$' && std::isalpha( payload[ i + 1 ] )
-             && std::isalpha( payload[ i + 2 ] ) && std::isalpha( payload[ i + 3 ] )
-             && std::isalpha( payload[ i + 4 ] ) && std::isalpha( payload[ i + 5 ] )
+        if ( payload[ i ] == '$' && isAsciiAlpha( payload[ i + 1 ] )
+             && isAsciiAlpha( payload[ i + 2 ] ) && isAsciiAlpha( payload[ i + 3 ] )
+             && isAsciiAlpha( payload[ i + 4 ] ) && isAsciiAlpha( payload[ i + 5 ] )
              && payload[ i + 6 ] == ',' ) {
-            // Found an NMEA sentence — extract until '*' checksum or CR/LF
-            std::string sentence;
-            for ( size_t j = i; j < len && j < i + 120; ++j ) {
-                auto c = payload[ j ];
-                if ( c == '\r' || c == '\n' ) {
-                    break;
-                }
-                sentence += static_cast<char>( c );
-            }
-            return sentence;
+            // Found an NMEA sentence — extract until CR/LF
+            return firstLine( payload + i, len - i );
         }
     }
     return {};
@@ -413,8 +614,12 @@ std::string detectNmea( const uint8_t* payload, size_t len )
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
-void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+/// Parse the transport layer from the @p remaining captured bytes at
+/// @p data.  @p wireLen is its length on the wire according to the IP
+/// header, more than @p remaining if the capture was cut at the snaplen.
+void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, size_t wireLen )
 {
+    wireLen = std::max( wireLen, remaining );
     if ( pkt.ipProtocol == IpProtoTcp && remaining >= 20 ) {
         pkt.protocol = "TCP";
         pkt.srcPort = readBE16( data );
@@ -424,22 +629,32 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         pkt.tcpFlags = data[ 13 ];
         pkt.tcpWindow = readBE16( data + 14 );
 
-        auto dataOffset = static_cast<uint8_t>( ( data[ 12 ] >> 4 ) * 4 );
-        if ( dataOffset <= remaining ) {
-            pkt.payloadLen = static_cast<uint32_t>( remaining - dataOffset );
-        }
+        const auto dataOffset = static_cast<size_t>( data[ 12 ] >> 4 ) * 4;
 
         // Build base TCP info line
         std::ostringstream oss;
-        oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " " << tcpFlagStr( pkt.tcpFlags )
-            << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck << " Win=" << pkt.tcpWindow;
+        oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
+            << formatTcpFlags( pkt.tcpFlags ) << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck
+            << " Win=" << pkt.tcpWindow;
+
+        // A header shorter than its 20 fixed bytes is malformed: where the
+        // payload starts is unknown, so none is taken, like Wireshark.
+        if ( dataOffset < 20 ) {
+            oss << " [bogus TCP header length (" << dataOffset << ", must be at least 20)]";
+            pkt.info = oss.str();
+            return;
+        }
+
+        // Len is the payload on the wire, as Wireshark shows it; only the
+        // captured part of it can be looked at.
+        const size_t payloadSize = ( dataOffset <= remaining ) ? remaining - dataOffset : 0;
+        pkt.payloadLen = static_cast<uint32_t>( wireLen >= dataOffset ? wireLen - dataOffset : 0 );
         if ( pkt.payloadLen > 0 ) {
             oss << " Len=" << pkt.payloadLen;
         }
 
         // Application-layer detection on TCP payload
-        const uint8_t* payload = data + dataOffset;
-        size_t payloadSize = ( dataOffset <= remaining ) ? remaining - dataOffset : 0;
+        const uint8_t* payload = data + std::min( dataOffset, remaining );
 
         if ( payloadSize > 0 ) {
             // Try TLS
@@ -463,17 +678,25 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
                         oss << " | " << nmea;
                     }
                     else {
-                        // Port-based protocol hint
-                        auto proto = portToProtocol( pkt.srcPort );
-                        if ( !proto )
-                            proto = portToProtocol( pkt.dstPort );
-                        if ( proto )
-                            pkt.protocol = proto;
+                        // Try SOCKS proxy handshake
+                        auto socks = detectSocks( payload, payloadSize, pkt.srcPort, pkt.dstPort );
+                        if ( !socks.empty() ) {
+                            pkt.protocol = "SOCKS";
+                            oss << " | " << socks;
+                        }
+                        else {
+                            // Port-based protocol hint
+                            auto proto = portToProtocol( pkt.srcPort );
+                            if ( !proto )
+                                proto = portToProtocol( pkt.dstPort );
+                            if ( proto )
+                                pkt.protocol = proto;
 
-                        // ASCII payload preview for non-empty data
-                        auto preview = payloadPreview( payload, payloadSize );
-                        if ( !preview.empty() ) {
-                            oss << " | " << preview;
+                            // ASCII payload preview for non-empty data
+                            auto preview = payloadPreview( payload, payloadSize );
+                            if ( !preview.empty() ) {
+                                oss << " | " << preview;
+                            }
                         }
                     }
                 }
@@ -611,6 +834,19 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     }
 }
 
+// ── IP fragments ─────────────────────────────────────────────────────────
+
+/// Describe a fragment after the first, which holds no transport header.
+void describeFragment( PacketRecord& pkt, const char* ipVersion, uint8_t protocol, size_t offset,
+                       uint32_t id, int idBytes )
+{
+    char idHex[ 16 ];
+    std::snprintf( idHex, sizeof( idHex ), "0x%0*X", idBytes * 2, id );
+    pkt.protocol = ipVersion;
+    pkt.info = "Fragment of IP protocol " + std::to_string( protocol ) + " (offset "
+               + std::to_string( offset ) + ", ID " + idHex + ")";
+}
+
 // ── Parse IPv4 header ────────────────────────────────────────────────────
 
 void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
@@ -633,7 +869,27 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.srcIp = formatIpv4( data + 12 );
     pkt.dstIp = formatIpv4( data + 16 );
 
-    parseTransport( pkt, data + ihl, remaining - ihl );
+    // Use the IP total length field, not raw remaining bytes, to exclude
+    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A total length
+    // of 0, or one too small for the header, is what TSO/GSO hands to the
+    // capture for outgoing packets: like Wireshark, take the captured bytes.
+    // A total length beyond the captured bytes is a capture cut at the
+    // snaplen: the lengths shown still come from the header.
+    size_t totalLen = readBE16( data + 2 );
+    if ( totalLen < ihl ) {
+        totalLen = remaining;
+    }
+    const size_t capturedLen = std::min( totalLen, remaining );
+
+    // Only the first fragment starts with the transport header; the data
+    // of a later one merely continues it.
+    const auto fragmentOffset = static_cast<size_t>( readBE16( data + 6 ) & 0x1FFF ) * 8;
+    if ( fragmentOffset != 0 ) {
+        describeFragment( pkt, "IPv4", pkt.ipProtocol, fragmentOffset, readBE16( data + 4 ), 2 );
+        return;
+    }
+
+    parseTransport( pkt, data + ihl, capturedLen - ihl, totalLen - ihl );
 }
 
 // ── Parse IPv6 header ────────────────────────────────────────────────────
@@ -646,12 +902,75 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         return;
     }
 
-    pkt.ipProtocol = data[ 6 ];
     pkt.ipTtl = data[ 7 ]; // Hop limit
     pkt.srcIp = formatIpv6( data + 8 );
     pkt.dstIp = formatIpv6( data + 24 );
 
-    parseTransport( pkt, data + 40, remaining - 40 );
+    // Use the IPv6 payload length field, not raw remaining bytes, to exclude
+    // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A payload
+    // length of 0 is a jumbogram, or a TSO/GSO packet captured on its way
+    // out: take the captured bytes.  One beyond the captured bytes is a
+    // capture cut at the snaplen: the lengths shown still come from it.
+    auto payloadLen = static_cast<size_t>( readBE16( data + 4 ) );
+    if ( payloadLen == 0 ) {
+        payloadLen = remaining - 40;
+    }
+    const size_t wireEnd = 40 + payloadLen;
+    const size_t end = std::min( wireEnd, remaining );
+
+    // Walk the extension headers to the upper-layer protocol.  Each one is
+    // checked against the end of the packet before it is read.
+    uint8_t next = data[ 6 ];
+    size_t offset = 40;
+    for ( int headers = 0; headers < 16; ++headers ) {
+        size_t length = 0;
+        switch ( next ) {
+        case 0:  // Hop-by-hop options
+        case 43: // Routing
+        case 60: // Destination options
+            if ( end - offset >= 2 ) {
+                length = ( static_cast<size_t>( data[ offset + 1 ] ) + 1 ) * 8;
+            }
+            break;
+        case 51: // Authentication header: length in 32-bit words, minus 2
+            if ( end - offset >= 2 ) {
+                length = ( static_cast<size_t>( data[ offset + 1 ] ) + 2 ) * 4;
+            }
+            break;
+        case 44: // Fragment
+            length = 8;
+            break;
+        default: // The upper-layer protocol, or one this parser does not walk
+            pkt.ipProtocol = next;
+            parseTransport( pkt, data + offset, end - offset, wireEnd - offset );
+            return;
+        }
+
+        if ( length == 0 || length > end - offset ) {
+            pkt.ipProtocol = next;
+            pkt.protocol = "IPv6";
+            pkt.info = "Truncated IPv6 extension header " + std::to_string( next );
+            return;
+        }
+        const auto* header = data + offset;
+        const auto headerType = next;
+        next = header[ 0 ];
+        offset += length;
+
+        if ( headerType == 44 ) {
+            // Only the first fragment starts with the upper-layer header.
+            const auto fragmentOffset = static_cast<size_t>( readBE16( header + 2 ) >> 3 ) * 8;
+            if ( fragmentOffset != 0 ) {
+                pkt.ipProtocol = next;
+                describeFragment( pkt, "IPv6", next, fragmentOffset, readBE32( header + 4 ), 4 );
+                return;
+            }
+        }
+    }
+
+    pkt.ipProtocol = next;
+    pkt.protocol = "IPv6";
+    pkt.info = "Too many IPv6 extension headers";
 }
 
 // ── Parse ARP ────────────────────────────────────────────────────────────
@@ -682,219 +1001,412 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.dstIp = targetIp;
 }
 
-} // anonymous namespace
-
-// ── Public API ───────────────────────────────────────────────────────────
-
-/// Scan forward to find the pcap magic number.
-/// tcpdump via adb often prepends stderr text (e.g. "tcpdump: listening…")
-/// before the binary pcap data.  We search the first 4 KB for the magic.
-static size_t findPcapMagicOffset( const uint8_t* data, size_t size )
+/// Dissect one captured packet of the given link-layer type into @p pkt.
+/// @p swap: the file is in the other byte order than this host.
+void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
+              size_t pktRemaining )
 {
-    constexpr size_t kMaxScan = 4096;
-    const size_t limit = std::min( size - 4, kMaxScan );
-    for ( size_t i = 0; i + 4 <= size && i <= limit; ++i ) {
-        uint32_t candidate;
-        std::memcpy( &candidate, data + i, 4 );
-        if ( candidate == PcapMagicLE || candidate == PcapMagicBE || candidate == PcapNgMagic ) {
-            return i;
+    uint16_t etherType = 0;
+    const uint8_t* networkData = nullptr;
+    size_t networkRemaining = 0;
+
+    if ( linkType == DltEthernet && pktRemaining >= 14 ) {
+        pkt.dstMac = formatMac( pktData );
+        pkt.srcMac = formatMac( pktData + 6 );
+        etherType = readBE16( pktData + 12 );
+        pkt.etherType = etherType;
+        networkData = pktData + 14;
+        networkRemaining = pktRemaining - 14;
+    }
+    else if ( linkType == DltRaw && pktRemaining >= 1 ) {
+        // Raw IP — determine version from first nibble
+        auto version = static_cast<uint8_t>( pktData[ 0 ] >> 4 );
+        etherType = ( version == 6 ) ? EthertypeIpv6 : EthertypeIpv4;
+        pkt.etherType = etherType;
+        networkData = pktData;
+        networkRemaining = pktRemaining;
+    }
+    else if ( linkType == DltLinuxSll && pktRemaining >= 16 ) {
+        // Linux cooked capture v1: 16-byte header, ethertype at offset 14
+        etherType = readBE16( pktData + 14 );
+        pkt.etherType = etherType;
+        networkData = pktData + 16;
+        networkRemaining = pktRemaining - 16;
+    }
+    else if ( linkType == DltLinuxSll2 && pktRemaining >= 20 ) {
+        // Linux cooked capture v2: 20-byte header, ethertype at offset 0
+        etherType = readBE16( pktData );
+        pkt.etherType = etherType;
+        networkData = pktData + 20;
+        networkRemaining = pktRemaining - 20;
+    }
+    else if ( ( linkType == DltNull || linkType == DltLoop ) && pktRemaining >= 4 ) {
+        // BSD loopback: a 4-byte address family, in the byte order of the
+        // capturing host (DLT_NULL), which the file was written in, or in
+        // network byte order (DLT_LOOP).  Families are small numbers, so one
+        // that only fits in the upper half is in the other byte order, as
+        // Wireshark also assumes.
+        uint32_t family = linkType == DltLoop ? readBE32( pktData ) : read32( pktData, swap );
+        if ( ( family & 0xFFFF0000 ) != 0 ) {
+            family = read32( reinterpret_cast<const uint8_t*>( &family ), true );
+        }
+        networkData = pktData + 4;
+        networkRemaining = pktRemaining - 4;
+        switch ( family ) {
+        case 2: // AF_INET
+            etherType = EthertypeIpv4;
+            break;
+        case 10: // AF_INET6: Linux
+        case 23: // Windows
+        case 24: // NetBSD, OpenBSD, BSD/OS
+        case 28: // FreeBSD, DragonFly BSD
+        case 30: // macOS, iOS
+            etherType = EthertypeIpv6;
+            break;
+        default:
+            networkData = nullptr;
+            pkt.protocol = "Loopback";
+            pkt.info = "Address family " + std::to_string( family );
+            break;
+        }
+        pkt.etherType = etherType;
+    }
+    else {
+        pkt.protocol = "Unknown";
+        pkt.info = "Unsupported link-layer type " + std::to_string( linkType );
+    }
+
+    // Strip VLAN tags: 802.1Q, and 802.1ad (QinQ) service tags stacked
+    // around it.  Each tag is 2 bytes of tag control, then the EtherType of
+    // what follows.
+    for ( int tags = 0; networkData && tags < 8 && networkRemaining >= 4
+                        && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
+                             || etherType == EthertypeQinQLegacy );
+          ++tags ) {
+        etherType = readBE16( networkData + 2 );
+        pkt.etherType = etherType;
+        networkData += 4;
+        networkRemaining -= 4;
+    }
+
+    // Parse network and transport layers
+    if ( networkData ) {
+        if ( etherType == EthertypeIpv4 ) {
+            parseIpv4( pkt, networkData, networkRemaining );
+        }
+        else if ( etherType == EthertypeIpv6 ) {
+            parseIpv6( pkt, networkData, networkRemaining );
+        }
+        else if ( etherType == EthertypeArp ) {
+            parseArp( pkt, networkData, networkRemaining );
+        }
+        else {
+            char hex[ 8 ];
+            std::snprintf( hex, sizeof( hex ), "%04X", etherType );
+            pkt.protocol = std::string( "ETH(0x" ) + hex + ")";
+            pkt.info = std::string( "EtherType 0x" ) + hex;
         }
     }
-    return size; // not found
 }
+
+bool isPcapMagic( uint32_t magic )
+{
+    return magic == PcapMagicLE || magic == PcapMagicBE || magic == PcapNsMagicLE
+           || magic == PcapNsMagicBE;
+}
+
+/// A byte of the text tcpdump writes to stderr.
+bool isPreambleText( uint8_t c )
+{
+    return ( c >= 0x20 && c < 0x7F ) || c == '\t' || c == '\r' || c == '\n';
+}
+
+/// Whether the 24 bytes at @p p hold a pcap global header this parser reads:
+/// a pcap magic and format version 2.x, x <= 4 (all libpcap ever wrote).
+bool isPcapHeader( const uint8_t* p )
+{
+    uint32_t magic;
+    std::memcpy( &magic, p, 4 );
+    if ( !isPcapMagic( magic ) ) {
+        return false;
+    }
+    const bool swap = magic == PcapMagicBE || magic == PcapNsMagicBE;
+    return read16( p + 4, swap ) == 2 && read16( p + 6, swap ) <= 4;
+}
+
+/// Whether @p p (at least 12 bytes) starts a pcap-ng section header block.
+bool isPcapNgHeader( const uint8_t* p )
+{
+    uint32_t magic;
+    uint32_t byteOrder;
+    std::memcpy( &magic, p, 4 );
+    std::memcpy( &byteOrder, p + 8, 4 );
+    return magic == PcapNgMagic && ( byteOrder == 0x1A2B3C4D || byteOrder == 0x4D3C2B1A );
+}
+
+/**
+ * Find the pcap global header in the first bytes of a file.
+ *
+ * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
+ * e.g. "tcpdump: listening on …", into the output ahead of the capture.
+ * The header is therefore looked for behind up to kMaxPreamble bytes of
+ * text.  Past offset 0 it is only accepted when everything before it is
+ * text and it is a valid pcap header, not merely the 4 magic bytes: a
+ * stray magic in binary data, or in the text, must not be taken for a
+ * capture.  At offset 0 the magic decides, so that an unsupported version
+ * is reported as such.
+ *
+ * @return The offset of the header, or @p size if there is none; @p error
+ *         then says why.
+ */
+size_t findPcapHeader( const uint8_t* data, size_t size, std::string& error )
+{
+    for ( size_t i = 0; i + 24 <= size && i <= kMaxPreamble; ++i ) {
+        uint32_t magic;
+        std::memcpy( &magic, data + i, 4 );
+        if ( i == 0 && isPcapMagic( magic ) ) {
+            return 0;
+        }
+        if ( ( i == 0 && magic == PcapNgMagic ) || isPcapNgHeader( data + i ) ) {
+            error = "pcap-ng format is not yet supported";
+            return size;
+        }
+        if ( isPcapHeader( data + i ) ) {
+            return i;
+        }
+        if ( !isPreambleText( data[ i ] ) ) {
+            break; // binary data that is no pcap header: no text preamble
+        }
+    }
+    error = "Not a valid pcap file (no pcap magic found)";
+    return size;
+}
+
+} // anonymous namespace
+
+// ── TCP flags ────────────────────────────────────────────────────────────
+
+std::string formatTcpFlags( uint8_t flags )
+{
+    std::string result = "[";
+    bool first = true;
+    auto add = [ & ]( const char* name ) {
+        if ( !first )
+            result += ", ";
+        result += name;
+        first = false;
+    };
+    if ( flags & 0x02 )
+        add( "SYN" );
+    if ( flags & 0x10 )
+        add( "ACK" );
+    if ( flags & 0x01 )
+        add( "FIN" );
+    if ( flags & 0x04 )
+        add( "RST" );
+    if ( flags & 0x08 )
+        add( "PSH" );
+    if ( flags & 0x20 )
+        add( "URG" );
+    if ( first )
+        result += "none";
+    result += "]";
+    return result;
+}
+
+// ── Byte sources ─────────────────────────────────────────────────────────
+
+bool ByteSource::skip( uint64_t n )
+{
+    uint8_t scratch[ 4096 ];
+    while ( n > 0 ) {
+        const auto chunk = static_cast<size_t>( std::min<uint64_t>( n, sizeof( scratch ) ) );
+        const auto got = read( scratch, chunk );
+        if ( got == 0 ) {
+            return false;
+        }
+        n -= got;
+    }
+    return true;
+}
+
+size_t MemorySource::read( uint8_t* dst, size_t n )
+{
+    n = std::min( n, size_ - pos_ );
+    if ( n > 0 ) {
+        std::memcpy( dst, data_ + pos_, n );
+        pos_ += n;
+    }
+    return n;
+}
+
+bool MemorySource::skip( uint64_t n )
+{
+    if ( n > size_ - pos_ ) {
+        pos_ = size_;
+        return false;
+    }
+    pos_ += static_cast<size_t>( n );
+    return true;
+}
+
+// ── PcapReader ───────────────────────────────────────────────────────────
+
+size_t PcapReader::read( uint8_t* dst, size_t n )
+{
+    // An empty record reads into a buffer whose data() may be null, and
+    // memcpy() must not be given a null pointer even for 0 bytes.
+    if ( n == 0 ) {
+        return 0;
+    }
+    size_t got = 0;
+    if ( headPos_ < head_.size() ) {
+        got = std::min( n, head_.size() - headPos_ );
+        std::memcpy( dst, head_.data() + headPos_, got );
+        headPos_ += got;
+    }
+    while ( got < n ) {
+        const auto more = source_.read( dst + got, n - got );
+        if ( more == 0 ) {
+            break;
+        }
+        got += more;
+    }
+    bytesRead_ += got;
+    return got;
+}
+
+bool PcapReader::skip( uint64_t n )
+{
+    if ( headPos_ < head_.size() ) {
+        const auto fromHead
+            = static_cast<size_t>( std::min<uint64_t>( n, head_.size() - headPos_ ) );
+        headPos_ += fromHead;
+        bytesRead_ += fromHead;
+        n -= fromHead;
+    }
+    if ( n == 0 ) {
+        return true;
+    }
+    const bool ok = source_.skip( n );
+    bytesRead_ += n; // on failure the source is at its end anyway
+    return ok;
+}
+
+bool PcapReader::open()
+{
+    // Read what may hold a text preamble and the global header.
+    head_.resize( kMaxPreamble + 24 );
+    size_t filled = 0;
+    while ( filled < head_.size() ) {
+        const auto got = source_.read( head_.data() + filled, head_.size() - filled );
+        if ( got == 0 ) {
+            break;
+        }
+        filled += got;
+    }
+    head_.resize( filled );
+
+    if ( filled < 24 ) {
+        error_ = "File too small to be a valid pcap (< 24 bytes)";
+        return false;
+    }
+
+    // Find the header — may be past a text preamble from tcpdump stderr
+    const size_t headerOffset = findPcapHeader( head_.data(), filled, error_ );
+    if ( headerOffset == filled ) {
+        return false;
+    }
+    const uint8_t* data = head_.data() + headerOffset;
+
+    uint32_t magic;
+    std::memcpy( &magic, data, 4 );
+    swap_ = magic == PcapMagicBE || magic == PcapNsMagicBE;
+
+    header_.magicNumber = magic;
+    header_.versionMajor = read16( data + 4, swap_ );
+    header_.versionMinor = read16( data + 6, swap_ );
+    header_.thiszone = readS32( data + 8, swap_ );
+    header_.sigfigs = read32( data + 12, swap_ );
+    header_.snaplen = read32( data + 16, swap_ );
+    header_.network = read32( data + 20, swap_ );
+    header_.nanoseconds = magic == PcapNsMagicLE || magic == PcapNsMagicBE;
+    if ( header_.versionMajor != 2 || header_.versionMinor > 4 ) {
+        error_ = "Unsupported pcap format version " + std::to_string( header_.versionMajor ) + "."
+                 + std::to_string( header_.versionMinor );
+        return false;
+    }
+
+    headPos_ = headerOffset + 24;
+    bytesRead_ = headPos_;
+    open_ = true;
+    return true;
+}
+
+bool PcapReader::next( PacketRecord& pkt )
+{
+    if ( !open_ ) {
+        return false;
+    }
+
+    // Packet header: ts_sec(4) ts_usec(4) incl_len(4) orig_len(4)
+    uint8_t recordHeader[ 16 ];
+    const auto got = read( recordHeader, sizeof( recordHeader ) );
+    if ( got < sizeof( recordHeader ) ) {
+        truncated_ = got > 0;
+        open_ = false;
+        return false;
+    }
+    const auto tsSec = read32( recordHeader, swap_ );
+    const auto tsFraction = read32( recordHeader + 4, swap_ );
+    const auto inclLen = read32( recordHeader + 8, swap_ );
+    const auto origLen = read32( recordHeader + 12, swap_ );
+
+    // Only the first kMaxDissectedBytes are looked at; the rest is skipped,
+    // so that a corrupt huge length costs no memory.
+    const auto kept = static_cast<size_t>( std::min<uint32_t>( inclLen, kMaxDissectedBytes ) );
+    packet_.resize( kept );
+    if ( read( packet_.data(), kept ) < kept || !skip( inclLen - kept ) ) {
+        // The file ends inside this record: stop, as the capture was cut off.
+        truncated_ = true;
+        open_ = false;
+        return false;
+    }
+
+    pkt = PacketRecord();
+    pkt.number = ++packetCount_;
+    // The fraction is kept in nanoseconds.  A corrupt one of a second or
+    // more is carried into the seconds.
+    const uint64_t fractionNs
+        = header_.nanoseconds ? tsFraction : static_cast<uint64_t>( tsFraction ) * 1000;
+    pkt.timestampSec = tsSec + static_cast<uint32_t>( fractionNs / 1000000000 );
+    pkt.timestampNsec = static_cast<uint32_t>( fractionNs % 1000000000 );
+    pkt.capturedLen = inclLen;
+    pkt.originalLen = origLen;
+    dissect( pkt, header_.network, swap_, packet_.data(), kept );
+    return true;
+}
+
+// ── Whole-buffer convenience ─────────────────────────────────────────────
 
 ParseResult parsePcap( const uint8_t* data, size_t size )
 {
     ParseResult result;
-
-    if ( size < 24 ) {
-        result.error = "File too small to be a valid pcap (< 24 bytes)";
+    MemorySource source( data, size );
+    PcapReader reader( source );
+    if ( !reader.open() ) {
+        result.error = reader.error();
         return result;
     }
+    result.header = reader.header();
 
-    // Try to find pcap magic — may be past a text preamble from tcpdump stderr
-    size_t magicOffset = findPcapMagicOffset( data, size );
-    if ( magicOffset + 24 > size ) {
-        result.error = "Not a valid pcap file (no pcap magic found)";
-        return result;
-    }
-
-    // Adjust data pointer past preamble
-    data += magicOffset;
-    size -= magicOffset;
-
-    uint32_t magic;
-    std::memcpy( &magic, data, 4 );
-
-    bool swap = false;
-    if ( magic == PcapMagicLE ) {
-        swap = false;
-    }
-    else if ( magic == PcapMagicBE ) {
-        swap = true;
-    }
-    else if ( magic == PcapNgMagic ) {
-        result.error = "pcap-ng format is not yet supported";
-        return result;
-    }
-    else {
-        result.error = "Not a valid pcap file (unknown magic number)";
-        return result;
-    }
-
-    // Parse global header
-    auto& hdr = result.header;
-    hdr.magicNumber = magic;
-    hdr.versionMajor = read16( data + 4, swap );
-    hdr.versionMinor = read16( data + 6, swap );
-    hdr.thiszone = readS32( data + 8, swap );
-    hdr.sigfigs = read32( data + 12, swap );
-    hdr.snaplen = read32( data + 16, swap );
-    hdr.network = read32( data + 20, swap );
-
-    // Walk packet records
-    size_t offset = 24;
-    uint32_t pktNum = 0;
-
-    while ( offset + 16 <= size ) {
-        // Packet header: ts_sec(4) ts_usec(4) incl_len(4) orig_len(4)
-        auto tsSec = read32( data + offset, swap );
-        auto tsUsec = read32( data + offset + 4, swap );
-        auto inclLen = read32( data + offset + 8, swap );
-        auto origLen = read32( data + offset + 12, swap );
-
-        offset += 16;
-
-        // Sanity check: captured length must not exceed remaining data
-        if ( inclLen > size - offset ) {
-            break; // Truncated file — stop parsing
-        }
-
-        pktNum++;
-        PacketRecord pkt;
-        pkt.number = pktNum;
-        pkt.timestampSec = tsSec;
-        pkt.timestampUsec = tsUsec;
-        pkt.capturedLen = inclLen;
-        pkt.originalLen = origLen;
-
-        // Store raw packet data
-        pkt.rawData.assign( data + offset, data + offset + inclLen );
-
-        const uint8_t* pktData = data + offset;
-        size_t pktRemaining = inclLen;
-
-        // Parse based on link-layer type
-        uint16_t etherType = 0;
-        const uint8_t* networkData = nullptr;
-        size_t networkRemaining = 0;
-
-        if ( hdr.network == DltEthernet && pktRemaining >= 14 ) {
-            pkt.dstMac = formatMac( pktData );
-            pkt.srcMac = formatMac( pktData + 6 );
-            etherType = readBE16( pktData + 12 );
-            pkt.etherType = etherType;
-            networkData = pktData + 14;
-            networkRemaining = pktRemaining - 14;
-
-            // Handle VLAN tag (802.1Q)
-            if ( etherType == EthertypeVlan && networkRemaining >= 4 ) {
-                etherType = readBE16( networkData + 2 );
-                pkt.etherType = etherType;
-                networkData += 4;
-                networkRemaining -= 4;
-            }
-        }
-        else if ( hdr.network == DltRaw && pktRemaining >= 1 ) {
-            // Raw IP — determine version from first nibble
-            auto version = static_cast<uint8_t>( pktData[ 0 ] >> 4 );
-            etherType = ( version == 6 ) ? EthertypeIpv6 : EthertypeIpv4;
-            pkt.etherType = etherType;
-            networkData = pktData;
-            networkRemaining = pktRemaining;
-        }
-        else if ( hdr.network == DltLinuxSll && pktRemaining >= 16 ) {
-            // Linux cooked capture v1: 16-byte header, ethertype at offset 14
-            etherType = readBE16( pktData + 14 );
-            pkt.etherType = etherType;
-            networkData = pktData + 16;
-            networkRemaining = pktRemaining - 16;
-        }
-        else if ( hdr.network == DltLinuxSll2 && pktRemaining >= 20 ) {
-            // Linux cooked capture v2: 20-byte header, ethertype at offset 0
-            etherType = readBE16( pktData );
-            pkt.etherType = etherType;
-            networkData = pktData + 20;
-            networkRemaining = pktRemaining - 20;
-        }
-        else if ( hdr.network == DltNull && pktRemaining >= 4 ) {
-            // BSD loopback: 4-byte family
-            uint32_t family = read32( pktData, false );
-            etherType = ( family == 2 ) ? EthertypeIpv4 : EthertypeIpv6;
-            pkt.etherType = etherType;
-            networkData = pktData + 4;
-            networkRemaining = pktRemaining - 4;
-        }
-        else {
-            pkt.protocol = "Unknown";
-            pkt.info = "Unsupported link-layer type " + std::to_string( hdr.network );
-        }
-
-        // Parse network and transport layers
-        if ( networkData ) {
-            if ( etherType == EthertypeIpv4 ) {
-                parseIpv4( pkt, networkData, networkRemaining );
-            }
-            else if ( etherType == EthertypeIpv6 ) {
-                parseIpv6( pkt, networkData, networkRemaining );
-            }
-            else if ( etherType == EthertypeArp ) {
-                parseArp( pkt, networkData, networkRemaining );
-            }
-            else {
-                pkt.protocol = "ETH(0x" + ( [ & ] {
-                                   char b[ 5 ];
-                                   std::snprintf( b, sizeof( b ), "%04X", etherType );
-                                   return std::string( b );
-                               } )()
-                               + ")";
-                pkt.info = "EtherType 0x" + ( [ & ] {
-                               char b[ 5 ];
-                               std::snprintf( b, sizeof( b ), "%04X", etherType );
-                               return std::string( b );
-                           } )();
-            }
-        }
-
+    PacketRecord pkt;
+    while ( reader.next( pkt ) ) {
         result.packets.push_back( std::move( pkt ) );
-        offset += inclLen;
     }
-
+    result.truncated = reader.truncated();
     result.ok = true;
     return result;
-}
-
-ParseResult parsePcapFile( const std::string& filePath )
-{
-    std::ifstream file( filePath, std::ios::binary | std::ios::ate );
-    if ( !file.is_open() ) {
-        ParseResult result;
-        result.error = "Cannot open file: " + filePath;
-        return result;
-    }
-
-    auto fileSize = static_cast<size_t>( file.tellg() );
-    file.seekg( 0, std::ios::beg );
-
-    std::vector<uint8_t> buffer( fileSize );
-    if ( !file.read( reinterpret_cast<char*>( buffer.data() ),
-                     static_cast<std::streamsize>( fileSize ) ) ) {
-        ParseResult result;
-        result.error = "Failed to read file: " + filePath;
-        return result;
-    }
-
-    return parsePcap( buffer.data(), buffer.size() );
 }
 
 } // namespace tcpdump
