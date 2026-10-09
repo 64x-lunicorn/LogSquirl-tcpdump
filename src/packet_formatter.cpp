@@ -30,6 +30,9 @@
 
 #include "packet_formatter.h"
 
+#include "stream_labels.h"
+#include "tcp_analysis.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <sstream>
@@ -223,12 +226,16 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
     }
     PacketFormatter formatter( finest );
     StreamTracker tracker;
+    StreamLabels labels;
     std::vector<std::string> lines;
     lines.reserve( packets.size() + 1 );
     lines.push_back( formatter.header() );
 
-    for ( const auto& pkt : packets ) {
-        lines.push_back( formatter.format( pkt, tracker.track( pkt ).id ) );
+    for ( auto pkt : packets ) {
+        const auto stream = tracker.track( pkt );
+        analyseTcp( pkt, stream );
+        labels.apply( pkt, stream );
+        lines.push_back( formatter.format( pkt, stream.id ) );
     }
     return lines;
 }

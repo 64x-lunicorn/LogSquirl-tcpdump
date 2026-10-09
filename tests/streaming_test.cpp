@@ -257,6 +257,40 @@ SCENARIO( "The summary counts the packets cut at the snaplen", "[converter]" )
     }
 }
 
+SCENARIO( "The summary counts the TCP analysis markers per kind", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a segment sent three times and acknowledged twice alike" )
+    {
+        const auto data
+            = eth( EthertypeIpv4,
+                   ipv4( IpProtoTcp, tcp( 40000, 80, text( "ab" ), 5, 0x18, 1000, 5000 ) ) );
+        Ipv4Options back;
+        std::swap( back.src, back.dst );
+        const auto ack = eth( EthertypeIpv4,
+                              ipv4( IpProtoTcp, tcp( 80, 40000, {}, 5, 0x10, 5000, 1000 ), back ) );
+        const auto input = writeFile( dir, "lossy.pcap", pcapOf( { data, data, data, ack, ack } ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "the summary has each kind that occurs, with its count, in Wireshark's words" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                using Count = std::pair<std::string, uint64_t>;
+                REQUIRE(
+                    result.summary.tcpMarkers
+                    == std::vector<Count>{ { "TCP Retransmission", 2 }, { "TCP Dup ACK", 1 } } );
+            }
+        }
+    }
+}
+
 SCENARIO( "The summary names the earliest and latest packet time in UTC", "[converter]" )
 {
     QTemporaryDir dir;

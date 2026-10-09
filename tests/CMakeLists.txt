@@ -29,6 +29,8 @@ add_executable(logsquirl_tcpdump_tests
     packet_formatter_test.cpp
     payload_describer_test.cpp
     stream_tracker_test.cpp
+    stream_labels_test.cpp
+    tcp_analysis_test.cpp
     wire_bytes_test.cpp
 )
 
@@ -60,6 +62,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/payload_describer.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_labels.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
