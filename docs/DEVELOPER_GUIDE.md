@@ -88,7 +88,10 @@ the result becomes Cancelled and the output is removed.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:
-- "Open pcap…" button triggering a QFileDialog
+- "Open pcap…" button triggering a QFileDialog; `chooseAndOpen()` is also
+  what the `Plugins → tcpdump → Open pcap…` menu entry calls, which, unlike
+  the disabled button, can be chosen during a conversion and then only shows
+  a notification. Tests replace the dialog with `setFileChooser()`
 - A progress bar and Cancel button while a capture is converted
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints, packets per second, file size, link-layer type name

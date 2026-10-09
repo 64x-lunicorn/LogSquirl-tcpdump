@@ -84,7 +84,10 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 1. Open LogSquirl
 2. In the sidebar, select the **tcpdump** tab
-3. Click **Open pcap…** and select a `.pcap`, `.cap`, or `.dmp` file
+3. Click **Open pcap…** and select a `.pcap`, `.cap`, or `.dmp` file. The
+   same dialog opens from **Plugins → tcpdump → Open pcap…**, and so from
+   the Command Palette (`Ctrl+Shift+P`, `Cmd+Shift+P` on macOS); while a
+   capture is being read, it only says so
 4. The parsed packets will open as a text log in LogSquirl's viewer. A
    progress bar shows how far a large capture is read; **Cancel** stops it
 5. The text is written to a new file in a private temporary directory,
@@ -145,7 +148,7 @@ cd build && ctest --output-on-failure
 
 ```mermaid
 graph TD
-    A[User clicks Open pcap…] --> B[QFileDialog]
+    A[User chooses Open pcap…, sidebar or menu] --> B[QFileDialog]
     B --> C[Worker thread: pcap_converter]
     C --> D[PcapReader: global header]
     D --> E[Next packet record]

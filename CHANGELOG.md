@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Open pcap… in the Plugins menu.** `Plugins → tcpdump → Open pcap…`, and
+  so the Command Palette, opens the same dialog as the sidebar button. Chosen
+  while a capture is being read, it shows a notification instead.
+
 ### Changed
 - **One separator in the Info column.** The description of a payload follows
   the transport summary after ` | `, whatever the protocol: `Len=9 | Client

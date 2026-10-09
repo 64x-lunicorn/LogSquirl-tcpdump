@@ -35,6 +35,8 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 
+#include <vector>
+
 using tcpdump_test::FakeHost;
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
@@ -169,12 +171,16 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
 
 namespace {
 
-QString writeCaptureFile( const QTemporaryDir& dir )
+/** Write a capture of @p packets UDP packets into @p dir. */
+QString writeCaptureFile( const QTemporaryDir& dir, int packets = 1,
+                          const QString& name = "capture.pcap" )
 {
     using namespace tcpdump_test;
-    const auto bytes = pcapOf(
-        { eth( tcpdump::EthertypeIpv4, ipv4( tcpdump::IpProtoUdp, udp( 1, 2, text( "x" ) ) ) ) } );
-    const auto path = dir.filePath( "capture.pcap" );
+    const std::vector<Bytes> records(
+        static_cast<size_t>( packets ),
+        eth( tcpdump::EthertypeIpv4, ipv4( tcpdump::IpProtoUdp, udp( 1, 2, text( "x" ) ) ) ) );
+    const auto bytes = pcapOf( records );
+    const auto path = dir.filePath( name );
     QFile file( path );
     REQUIRE( file.open( QIODevice::WriteOnly ) );
     file.write( reinterpret_cast<const char*>( bytes.data() ),
@@ -312,6 +318,92 @@ SCENARIO( "temporary directories of LogSquirl processes that ended are swept", "
                 REQUIRE( root.exists( unrelated ) );
             }
         }
+    }
+    tcpdump::g_state.tempRoot.clear();
+}
+
+SCENARIO( "the capture dialog is also in the Plugins menu", "[plugin]" )
+{
+    QTemporaryDir captures;
+    QTemporaryDir tempRoot;
+    REQUIRE( captures.isValid() );
+    REQUIRE( tempRoot.isValid() );
+
+    GIVEN( "an initialised plugin" )
+    {
+        FakeHost host;
+        tcpdump::g_state.tempRoot = tempRoot.path();
+        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+        auto* sidebar = tcpdump::g_state.sidebarWidget;
+
+        // Stands in for the file dialog the Open button shows.
+        int dialogs = 0;
+        QString chosen;
+        sidebar->setFileChooser( [ &dialogs, &chosen ]( QWidget*, const QString& ) {
+            ++dialogs;
+            return chosen;
+        } );
+
+        THEN( "Plugins > tcpdump > Open pcap\xe2\x80\xa6 is registered" )
+        {
+            REQUIRE( host.menuActions.size() == 1 );
+            REQUIRE( host.menuActions.first().menuPath == "tcpdump" );
+            REQUIRE( host.menuActions.first().label
+                     == QString::fromUtf8( "Open pcap\xe2\x80\xa6" ) );
+        }
+
+        WHEN( "the entry is chosen and a capture selected" )
+        {
+            chosen = writeCaptureFile( captures );
+            host.menuActions.first().trigger();
+
+            THEN( "the sidebar's dialog is shown and the capture is opened in a tab" )
+            {
+                REQUIRE( dialogs == 1 );
+                REQUIRE(
+                    tcpdump_test::waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
+            }
+        }
+
+        WHEN( "the entry is chosen and the dialog cancelled" )
+        {
+            host.menuActions.first().trigger();
+
+            THEN( "nothing is converted" )
+            {
+                REQUIRE( dialogs == 1 );
+                REQUIRE_FALSE( sidebar->isConverting() );
+                REQUIRE( host.notifications.isEmpty() );
+            }
+        }
+
+        WHEN( "the entry is chosen while a capture is being converted" )
+        {
+            sidebar->openPcapFile( writeCaptureFile( captures, 20000, "big.pcap" ) );
+            REQUIRE( sidebar->isConverting() );
+            host.menuActions.first().trigger();
+
+            THEN( "no dialog is shown, and a notification says why" )
+            {
+                REQUIRE( dialogs == 0 );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "being read" ) );
+            }
+            sidebar->cancel();
+            REQUIRE( tcpdump_test::waitFor( [ sidebar ] { return !sidebar->isConverting(); } ) );
+        }
+
+        WHEN( "the plugin is unloaded" )
+        {
+            host.unloadPlugin();
+
+            THEN( "the entry goes with it" )
+            {
+                REQUIRE( host.menuActions.isEmpty() );
+            }
+        }
+
+        host.unloadPlugin();
     }
     tcpdump::g_state.tempRoot.clear();
 }
