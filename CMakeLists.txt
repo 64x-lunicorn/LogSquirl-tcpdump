@@ -47,6 +47,7 @@ add_library(logsquirl_tcpdump SHARED
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/sidebarwidget.cpp
+    src/follow_stream.cpp
 )
 
 # Qt MOC needs to know about our Q_OBJECT classes

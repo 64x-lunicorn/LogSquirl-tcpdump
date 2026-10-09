@@ -39,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Open pcap… in the Plugins menu.** `Plugins → tcpdump → Open pcap…`, and
   so the Command Palette, opens the same dialog as the sidebar button. Chosen
   while a capture is being read, it shows a notification instead.
+- **Follow stream.** With a packet line selected, `Plugins → tcpdump →
+  Follow stream` or the sidebar's *Follow stream* button opens LogSquirl's
+  Regex Lab with a pattern matching that TCP or UDP conversation's lines:
+  its stream number, addresses and ports, in either direction. Applied, it
+  filters the view to the conversation. No selection, a packet without a
+  stream or a line of another log give a notification saying why. Offered
+  on LogSquirl 26.11 and later only.
 
 ### Changed
 - **The sidebar summary follows the tab in front.** With several captures

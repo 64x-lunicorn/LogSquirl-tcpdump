@@ -24,6 +24,7 @@ add_executable(logsquirl_tcpdump_tests
     streaming_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    follow_stream_test.cpp
     corpus_test.cpp
     logformat_test.cpp
     packet_formatter_test.cpp
@@ -64,6 +65,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
+        "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
 )
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format

@@ -235,6 +235,8 @@ Qt UI that provides:
   the disabled button, can be chosen during a conversion and then only shows
   a notification. Tests replace the dialog with `setFileChooser()`
 - A progress bar and Cancel button while a capture is converted
+- A "Follow stream" button, created only when `g_state.hostCapabilities`
+  has the Regex Lab and the selected lines (see *Follow stream* below)
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints, the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
@@ -270,7 +272,8 @@ conversion and waits for the worker.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entry and the active-file callback with the host application. No exception may leave them: their work runs
+the menu entries (Open pcap…, and Follow stream where the host can serve
+it) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
@@ -289,6 +292,25 @@ Code that uses one of those functions checks the record first, and offers
 nothing that needs it otherwise; it never calls or reads a member the record
 does not report, not even to compare it with null, as an older host's table
 ends before it. Keep the pointer the host passed: never copy `*api`.
+
+#### Follow stream (`follow_stream.h/cpp`)
+`Plugins → tcpdump → Follow stream` and the sidebar button call
+`followSelectedStream()`, offered only on a host with `regexLab` and
+`selectedLogLines`. It reads the first selected Log Line through
+`get_selected_log_lines`, and `followStreamPattern()` turns it into a
+pattern for `open_regex_lab` (with Match case); the Lab's answer, the
+applied pattern or a cancel, is logged. The line is read with the Log
+Format's regex, which `follow_stream.cpp` repeats: keep the two the same.
+The pattern requires the line's stream number, its two addresses and the
+two ports at the start of a TCP or UDP Info (markers in brackets may come
+first), each pair in either order. The Stream column alone is not enough:
+TCP and UDP streams are numbered each from 0, and the Protocol column
+changes within a stream. Time columns are skipped with a lazy `.+?` and the
+rest of Info is not read, so a change there does not break the pattern. A
+line that is no packet line, one with stream `-` or `?`, no selection or a
+tab without a Log File give a notification with the reason instead.
+`follow_stream_test.cpp` checks the pattern against every corpus line and
+drives the menu entry and the button through the `FakeHost`.
 
 #### The plugin API header
 `include/logsquirl_plugin_api.h` is the host's

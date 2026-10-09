@@ -52,6 +52,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does)
+ *   - "Follow stream" button, as in Plugins > tcpdump, only on a host that
+ *     has the Regex Lab and tells the selected lines: g_state.hostCapabilities
+ *     when the widget is created
  *   - progress bar and Cancel button, while a capture is converted
  *   - Summary label showing the stats of the capture in the tab in front,
  *     or that the tab holds none; the summary of the first capture after

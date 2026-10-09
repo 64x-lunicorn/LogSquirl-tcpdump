@@ -37,7 +37,8 @@
  *      if it is older than LogSquirl 26.11 — we store the pointers and
  *      the host capabilities the size tells, create a SidebarWidget,
  *      register it as a sidebar tab, add Plugins > tcpdump >
- *      Open pcap… to the menu, and register for the host's active-file
+ *      Open pcap… to the menu (and Follow stream, on a host with the
+ *      Regex Lab and the selected lines), and register for the host's active-file
  *      notifications, so the sidebar shows the summary of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
@@ -47,6 +48,7 @@
  */
 
 #include "plugin.h"
+#include "follow_stream.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
 
@@ -138,6 +140,12 @@ static void openFromMenu( void* /* user_data */ )
     } );
 }
 
+/// Plugins > tcpdump > Follow stream: the same as the sidebar's button.
+static void followStreamFromMenu( void* /* user_data */ )
+{
+    guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
+}
+
 /// The host brought another tab to the front: show its capture's summary.
 static void onActiveFileChanged( void* /* user_data */, const char* filePath )
 {
@@ -193,6 +201,13 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
                                    nullptr );
+        // Only a host that has the Regex Lab and tells the selected lines
+        // can follow a stream.
+        if ( tcpdump::g_state.hostCapabilities.regexLab
+             && tcpdump::g_state.hostCapabilities.selectedLogLines ) {
+            api->register_menu_action( handle, "tcpdump", "Follow stream", &followStreamFromMenu,
+                                       nullptr );
+        }
 
         // The summary follows the tab in front.  There is no call to remove
         // the callback either: the host drops it with the plugin.

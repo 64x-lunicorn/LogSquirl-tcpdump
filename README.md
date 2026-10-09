@@ -99,7 +99,16 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    shows none
 7. Use LogSquirl's built-in search, filters, and highlighters on the
    packet data
-8. With the [Log Format](#log-format) installed, switch to the table view
+8. To follow a conversation, as Wireshark's *Follow TCP Stream* does, select
+   one of its packet lines and click **Follow stream** in the sidebar, or
+   choose **Plugins → tcpdump → Follow stream**. LogSquirl's Regex Lab opens
+   with a pattern that matches that TCP or UDP stream's lines: its number in
+   the Stream column, its two addresses and its two ports, in either
+   direction (TCP and UDP streams are numbered each on their own). Apply it,
+   and the filtered view shows the conversation alone. A line without a
+   stream (`-` or `?`), no selection, or a line of another log only shows a
+   notification saying why. Needs LogSquirl ≥ 26.11
+9. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Log Format

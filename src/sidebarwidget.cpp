@@ -28,11 +28,15 @@
  *      to a temporary .log file
  *   3. Opens the .log file in LogSquirl's main viewer
  *
+ * Its Follow stream button, on a host that offers it, opens the Regex Lab on
+ * the conversation of the selected packet line (see follow_stream.h).
+ *
  * It keeps each converted capture's summary under the path of its .log file
  * and shows the one of the tab in front, as the host reports tab switches.
  */
 
 #include "sidebarwidget.h"
+#include "follow_stream.h"
 #include "pcap_converter.h"
 #include "plugin.h"
 #include "tempdirs.h"
@@ -103,6 +107,25 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     layout->addWidget( openButton_ );
 
     connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
+
+    // Follow stream, as in the Plugins menu: only a host that has the Regex
+    // Lab and tells the selected lines gets it.
+    if ( g_state.hostCapabilities.regexLab && g_state.hostCapabilities.selectedLogLines ) {
+        auto* followButton = new QPushButton( "Follow stream" );
+        followButton->setObjectName( "followStreamButton" );
+        followButton->setToolTip( "Filter the conversation of the selected packet line in the "
+                                  "Regex Lab" );
+        layout->addWidget( followButton );
+        connect( followButton, &QPushButton::clicked, this, [] {
+            try {
+                followSelectedStream();
+            } catch ( const std::exception& e ) {
+                // An exception must not escape into Qt or the host.
+                hostLog( LOGSQUIRL_LOG_ERROR,
+                         "Follow stream failed: " + QString::fromUtf8( e.what() ) );
+            }
+        } );
+    }
 
     // Progress of a running conversion, and a way to stop it
     progressBar_ = new QProgressBar;
