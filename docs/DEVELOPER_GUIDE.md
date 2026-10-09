@@ -704,10 +704,11 @@ addresses as "other endpoints".
 Memory therefore grows with the conversations and addresses in a capture,
 not with its size, and both are capped, so a port scan or a busy NAT cannot
 exhaust it. By default the caps are 1,000,000 streams and 100,000
-addresses, roughly 150 MB and 10 MB; the options (`settings.h`,
+addresses, roughly 150 MB (and 70 MB more for the Conversations table's
+counts) and 10 MB; the options (`settings.h`,
 *Advanced* in the dialog) let the user raise each up to tenfold
 (`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
-addresses, roughly 1.5 GB and 100 MB) or lower it to 1. The summary says
+addresses, roughly 2.2 GB and 100 MB) or lower it to 1. The summary says
 when a cap was hit.
 
 #### The Log Format (`formats/tcpdump_log.json`)
@@ -937,6 +938,31 @@ export, conversation statistics):
   and ASCII on each line. The packet is read on the UI thread: at most
   `kCheckpointInterval` records from a local file.
 
+- **The Conversations table** (`conversations.h/cpp`, pure C++;
+  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter
+  next to the Stream Tracker, counts each numbered stream after the Stream
+  Labels ran (`add(pkt, stream)`): packets and wire bytes per direction,
+  its earliest and latest packet, the direction of its first packet (end
+  A is that packet's source) and its last label byte, 64 bytes per stream.
+  Packets of `kUnnumbered` streams are counted together, so the stream cap
+  bounds the table. `conversations()` takes the table as it stands, a
+  `Conversation` per stream, TCP's first: the ends come from
+  `StreamTracker::endpoints()`, which parses the stream's key (the tracker
+  keeps a pointer to each key, 8 bytes per stream), the protocol from
+  `StreamLabels::name()`. The Converter puts it into
+  `CaptureSummary::conversations` as a `shared_ptr<const vector>`, with
+  `otherStreamPackets`/`otherStreamBytes`: a snapshot never changes, a new
+  one (a live capture's) is a new vector, and a tab switch copies nothing.
+  `ConversationTable` (in the Packet Panel's splitter) shows it through
+  `ConversationModel`, which sorts an index vector by any column (ties by
+  transport and stream) and keeps the *Other streams* row last.
+  `SidebarWidget::showSummaryFor()` hands it the summary in front;
+  `SidebarWidget::updateSummary()` replaces a capture's summary and shows
+  it if in front, the table keeping its sort and selected conversation.
+  A click or *Filter on this conversation* opens the Regex Lab ("Filter")
+  with `conversationPattern()`, the Follow stream pattern built from the
+  row's stream number, addresses and ports.
+
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
 details entry and no polling; the panel says what it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
@@ -945,7 +971,11 @@ it against its line and an in-memory parse, and that its layers stay
 within its bytes; `packet_layers_test.cpp` checks layer and field names,
 values and offsets on built packets; `packet_panel_test.cpp` drives the
 panel through the `FakeHost` (scripted selection, active file, call count
-of `get_selected_log_lines`).
+of `get_selected_log_lines`). `conversations_test.cpp` checks the counts
+on built packets and that every row's pattern finds exactly its packets in
+every corpus text; `conversation_table_test.cpp` drives the table (sorting
+by every column, clicks, the stream cap's row, snapshot updates) through
+the `FakeHost`.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,

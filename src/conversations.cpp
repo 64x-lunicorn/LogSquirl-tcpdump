@@ -107,10 +107,10 @@ std::vector<Conversation> ConversationStats::conversations( const StreamTracker&
             row.bytesAToB = counts.bytes[ a ];
             row.packetsBToA = counts.packets[ b ];
             row.bytesBToA = counts.bytes[ b ];
-            row.startSeconds = secondsBetween( captureStartSec, captureStartNsec,
-                                               counts.firstSec, counts.firstNsec );
-            row.durationSeconds = secondsBetween( counts.firstSec, counts.firstNsec,
-                                                  counts.lastSec, counts.lastNsec );
+            row.startSeconds = secondsBetween( captureStartSec, captureStartNsec, counts.firstSec,
+                                               counts.firstNsec );
+            row.durationSeconds = secondsBetween( counts.firstSec, counts.firstNsec, counts.lastSec,
+                                                  counts.lastNsec );
             rows.push_back( std::move( row ) );
         }
     }

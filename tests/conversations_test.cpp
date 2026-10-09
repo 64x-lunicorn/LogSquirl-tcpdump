@@ -119,8 +119,7 @@ QString patternOf( const Conversation& row )
 }
 
 /// The row of stream @p stream of @p transport.
-const Conversation& rowOf( const std::vector<Conversation>& table, Transport transport,
-                           int stream )
+const Conversation& rowOf( const std::vector<Conversation>& table, Transport transport, int stream )
 {
     for ( const auto& row : table ) {
         if ( row.transport == transport && row.stream == stream ) {

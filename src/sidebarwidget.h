@@ -69,7 +69,8 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *     with the Regex Lab, a click on an endpoint or a protocol listed opens
  *     the Lab on its lines, as Wireshark's Apply as Filter
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
- *     packet of the line selected in the tab in front
+ *     packet of the line selected in the tab in front, and the
+ *     Conversations table of the capture in front
  *
  * The summaries of all captures converted while the plugin is loaded are
  * kept with their CaptureIndex, keyed by the text file written for each, so
@@ -112,6 +113,12 @@ public:
     /// tab holds no capture of this plugin.  While a capture is being read,
     /// the label keeps saying so.
     void showSummaryFor( const QString& filePath );
+
+    /// Replace the summary of the capture whose text is @p filePath with
+    /// @p summary, a snapshot taken anew (a live capture's), and show it if
+    /// that capture is in front: the summary and the Conversations table.
+    /// Does nothing for a file that holds no capture of this plugin.
+    void updateSummary( const QString& filePath, CaptureSummary summary );
 
     /// Stop a running conversion; nothing is opened then.
     void cancel();
@@ -174,6 +181,9 @@ private:
     FileChooser chooseFile_;       ///< Shows the file dialog.
     /// The captures converted so far, by the text file written for each.
     std::map<QString, ConvertedCapture> converted_;
+    /// The key in converted_ of the file in the tab in front, whether or not
+    /// it holds a capture.
+    QString frontKey_;
 
     bool converting_ = false;
     /// Cancels the running conversion.

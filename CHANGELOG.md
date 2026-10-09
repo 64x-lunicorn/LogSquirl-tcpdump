@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Converter now keeps every 10,000 packets, in pcap and pcapng alike, so
   no packet is held in memory. A capture file changed since it was
   opened is reported, not misread. Needs LogSquirl ≥ 26.11.
+- **Conversations table.** Below the packet in the Packet Panel, a row per
+  TCP and UDP stream, as Wireshark's *Statistics → Conversations*: Stream,
+  protocol (the Stream Label), address and port of ends A and B, packets
+  and bytes (on the wire) in all and each way, start and duration; sortable
+  by every column. A click on a row, or *Filter on this conversation*,
+  opens the Regex Lab with the pattern of the stream's lines, as Follow
+  stream builds it. The counts are taken while converting, for the
+  numbered streams only, so the stream cap bounds them (some 70 MB more at
+  the default cap of 1,000,000 streams); the packets of streams past it are
+  one row, *Other streams*. The table is part of the Capture Summary and
+  shows a new summary snapshot as it comes, keeping its sort and selection.
 - **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
   without checksum, key and sequence number, carrying IPv4, IPv6 or an
   Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by

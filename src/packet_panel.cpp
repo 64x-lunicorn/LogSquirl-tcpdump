@@ -24,6 +24,7 @@
 
 #include "packet_panel.h"
 
+#include "conversation_table.h"
 #include "plugin.h"
 #include "regex_lab.h"
 
@@ -175,6 +176,10 @@ PacketPanel::PacketPanel( QWidget* parent )
     dump_->setLineWrapMode( QPlainTextEdit::NoWrap );
     dump_->setFont( QFontDatabase::systemFont( QFontDatabase::FixedFont ) );
     splitter->addWidget( dump_ );
+
+    conversations_ = new ConversationTable;
+    conversations_->setObjectName( "conversationTable" );
+    splitter->addWidget( conversations_ );
     layout->addWidget( splitter, 1 );
 
     connect( tree_, &QTreeWidget::currentItemChanged, this,

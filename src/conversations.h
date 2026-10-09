@@ -84,8 +84,7 @@ public:
     /// @p captureStartNsec, the capture's earliest packet.  May be taken
     /// again while packets are still being added (a live capture).
     std::vector<Conversation> conversations( const StreamTracker& tracker,
-                                             const StreamLabels& labels,
-                                             int64_t captureStartSec,
+                                             const StreamLabels& labels, int64_t captureStartSec,
                                              uint32_t captureStartNsec ) const;
 
     /// Packets of streams past the stream cap, all together.

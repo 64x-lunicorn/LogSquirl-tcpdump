@@ -144,7 +144,21 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    while converting, so no packet is kept in memory. A capture file that
    was changed, moved or removed after it was opened is reported, not
    misread; open it again. Needs LogSquirl ≥ 26.11
-11. With the [Log Format](#log-format) installed, switch to the table view
+11. To see the capture's conversations, as Wireshark's *Statistics →
+   Conversations*, look at the **Conversations** table below the packet:
+   a row per TCP and UDP stream with its Stream (`TCP 3`, `UDP 0`), its
+   protocol (the label its stream was recognised by, else `TCP` or `UDP`),
+   ends A (which sent its first packet) and B with their ports, packets and
+   bytes in all and each way (bytes on the wire, as the Length column),
+   its start in seconds after the capture's first packet and its duration.
+   Click a column header to sort by it. Click a conversation, or choose
+   **Filter on this conversation** from its context menu, and the Regex
+   Lab opens with the pattern of that stream's lines, as **Follow stream**
+   builds it; apply it to filter the view (needs LogSquirl ≥ 26.11). The
+   table is counted while converting, for the streams that get a number:
+   past the stream cap (see [Options](#options)), the packets of all other
+   streams are one row, `?` *Other streams*
+12. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Options

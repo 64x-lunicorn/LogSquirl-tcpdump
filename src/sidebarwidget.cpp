@@ -43,6 +43,7 @@
  */
 
 #include "sidebarwidget.h"
+#include "conversation_table.h"
 #include "follow_stream.h"
 #include "packet_panel.h"
 #include "pcap_converter.h"
@@ -412,8 +413,11 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
 
 void SidebarWidget::showSummaryFor( const QString& filePath )
 {
-    const auto found = converted_.find( fileKey( filePath ) );
+    frontKey_ = fileKey( filePath );
+    const auto found = converted_.find( frontKey_ );
     packetPanel_->setCapture( found == converted_.end() ? nullptr : found->second.index );
+    packetPanel_->conversationTable()->setSummary(
+        found == converted_.end() ? nullptr : &found->second.summary );
 
     // The capture being read is shown in a tab of its own when it is done.
     if ( converting_ ) {
@@ -432,6 +436,19 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
                     .arg( kLogFormatHelpUrl );
     }
     summaryLabel_->setText( html );
+}
+
+void SidebarWidget::updateSummary( const QString& filePath, CaptureSummary summary )
+{
+    const auto key = fileKey( filePath );
+    const auto found = converted_.find( key );
+    if ( found == converted_.end() ) {
+        return;
+    }
+    found->second.summary = std::move( summary );
+    if ( key == frontKey_ ) {
+        showSummaryFor( filePath );
+    }
 }
 
 namespace {

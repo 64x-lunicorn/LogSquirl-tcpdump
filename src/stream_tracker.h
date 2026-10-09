@@ -157,8 +157,8 @@ class StreamTracker {
 public:
     /// Conversations numbered by default: some 150 MB of memory at most, and
     /// some 70 MB more for their counts in the Conversations table
-    /// (conversations.h).  The
-    /// options may raise it tenfold (kMaxStreamCap, some 1.5 GB) or lower it.
+    /// (conversations.h).  The options may raise it tenfold (kMaxStreamCap,
+    /// some 2.2 GB in all) or lower it.
     static constexpr size_t kMaxStreams = 1000000;
 
     explicit StreamTracker( size_t maxStreams = kMaxStreams )

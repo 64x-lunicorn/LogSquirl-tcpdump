@@ -31,6 +31,9 @@
  * nothing when it did not change; Plugins > tcpdump > Packet details reads
  * it at once.  The packet is found by the No. column of the first selected
  * line and read back from the capture file by a CaptureCursor.
+ *
+ * Below them, the Conversations table (conversation_table.h) lists the
+ * streams of the capture in front, from its Capture Summary.
  */
 
 #pragma once
@@ -55,6 +58,8 @@ class QTreeWidget;
 class QTreeWidgetItem;
 
 namespace tcpdump {
+
+class ConversationTable;
 
 /// The hex dump of @p bytes, 16 to a line: the offset, the bytes in hex in
 /// two groups of 8, then as ASCII, '.' for a byte that is not printable.
@@ -108,6 +113,12 @@ public:
     /// The panel's status line: the packet shown, or why there is none.
     QString statusText() const;
 
+    /// The Conversations table of the capture in front.
+    ConversationTable* conversationTable() const
+    {
+        return conversations_;
+    }
+
 protected:
     void showEvent( QShowEvent* event ) override;
     void hideEvent( QHideEvent* event ) override;
@@ -126,6 +137,7 @@ private:
     QLabel* status_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
+    ConversationTable* conversations_ = nullptr;
     QTimer timer_;
 
     std::shared_ptr<const CaptureIndex> index_;
