@@ -101,6 +101,15 @@ tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
 - TCP: TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in
   the right direction, on proxy ports), then the port hint
+- TLS: every record of a segment and every handshake message of a record
+  is named, in order, up to four, then `…`; a ClientHello adds its server
+  name, the highest version it offers (`supported_versions`, GREASE aside,
+  else its own) and its ALPN protocols, a ServerHello the version chosen.
+  `TlsReader` reads the fields: a read that does not fit fails, and a length
+  that claims more than there is yields what there is, so a record cut by
+  the snaplen or the segment is described as far as it goes. A version is
+  named only if known: a cut hello whose extensions end before a
+  `supported_versions` would have shown gets none
 - UDP: DNS and mDNS by port, SSDP, NTP, DHCP, then NMEA and the port hint
 - The port hint, the last entry of both tables, names the service of a
   well-known port from the name tables, the source port's before the
@@ -325,7 +334,9 @@ through the Payload Describer with a payload alone. `tests/corpus` holds capture
 convert to (`corpus_test.cpp`); run the tests with `TCPDUMP_UPDATE_CORPUS=1`
 to rewrite that text after an intended change of the output, and review the
 difference. The pcapng corpus capture, `interfaces.pcapng`, is made up byte
-for byte by `tests/make_pcapng_corpus.py`; the pcapng unit tests build their
+for byte by `tests/make_pcapng_corpus.py`; `tls.pcap` holds real TLS 1.3 and
+1.2 handshakes, which `tests/make_tls_corpus.py` runs through Python's
+`ssl` module in memory and frames in made-up TCP segments; the pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in

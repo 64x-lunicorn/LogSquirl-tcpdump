@@ -21,6 +21,7 @@ add_executable(logsquirl_tcpdump_tests
     pcapng_reader_test.cpp
     pcap_layers_test.cpp
     socks_test.cpp
+    tls_test.cpp
     streaming_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp

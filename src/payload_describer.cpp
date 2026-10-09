@@ -37,6 +37,7 @@
 #include <cstring>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace tcpdump {
 
@@ -80,11 +81,16 @@ std::string quotedBytes( const uint8_t* p, size_t len )
     return '"' + escapeBytes( p, len, true ) + '"';
 }
 
-/// The first line of a payload, up to CR/LF and at most 120 bytes, escaped.
+/// Longest first line, in bytes, before it is cut.
+constexpr size_t kMaxFirstLineBytes = 120;
+
+/// The first line of a payload, up to CR/LF and at most kMaxFirstLineBytes
+/// bytes, escaped.
 std::string firstLine( const uint8_t* payload, size_t len )
 {
     size_t end = 0;
-    while ( end < len && end < 120 && payload[ end ] != '\r' && payload[ end ] != '\n' ) {
+    while ( end < len && end < kMaxFirstLineBytes && payload[ end ] != '\r'
+            && payload[ end ] != '\n' ) {
         ++end;
     }
     return escapeBytes( payload, end, false );
@@ -221,48 +227,434 @@ std::string payloadPreview( const uint8_t* payload, size_t len )
 
 // ── TLS ──────────────────────────────────────────────────────────────────
 
-/// Detect TLS record and return a description (e.g. "ClientHello", "ServerHello").
-std::string detectTls( const uint8_t* payload, size_t len )
-{
-    // TLS record header: ContentType(1) Version(2) Length(2)
-    if ( len < 6 )
-        return {};
+/// Reads the fields of a TLS message from its bytes, never beyond them.
+/// A read that does not fit fails and leaves the reader as it was.
+class TlsReader {
+public:
+    TlsReader( const uint8_t* data, size_t len, bool complete = true )
+        : data_( data )
+        , len_( len )
+        , complete_( complete )
+    {
+    }
 
-    auto contentType = payload[ 0 ];
-    auto versionMajor = payload[ 1 ];
-    // Handshake content type = 0x16, version 0x0301..0x0304
-    if ( contentType == 0x16 && versionMajor == 0x03 ) {
-        // Handshake message type at offset 5
-        auto hsType = payload[ 5 ];
-        switch ( hsType ) {
-        case 1:
-            return "Client Hello";
-        case 2:
-            return "Server Hello";
-        case 11:
-            return "Certificate";
-        case 12:
-            return "Server Key Exchange";
-        case 14:
-            return "Server Hello Done";
-        case 16:
-            return "Client Key Exchange";
-        case 20:
-            return "Finished";
-        default:
-            return "Handshake";
+    bool u8( uint8_t& value )
+    {
+        if ( len_ - pos_ < 1 ) {
+            return false;
+        }
+        value = data_[ pos_++ ];
+        return true;
+    }
+
+    bool u16( uint16_t& value )
+    {
+        if ( len_ - pos_ < 2 ) {
+            return false;
+        }
+        value = readBE16( data_ + pos_ );
+        pos_ += 2;
+        return true;
+    }
+
+    bool u24( uint32_t& value )
+    {
+        if ( len_ - pos_ < 3 ) {
+            return false;
+        }
+        value = ( static_cast<uint32_t>( data_[ pos_ ] ) << 16 ) | readBE16( data_ + pos_ + 1 );
+        pos_ += 3;
+        return true;
+    }
+
+    bool skip( size_t n )
+    {
+        if ( len_ - pos_ < n ) {
+            return false;
+        }
+        pos_ += n;
+        return true;
+    }
+
+    /// Skip a field behind its 8-bit length.
+    bool skipVector8()
+    {
+        uint8_t n = 0;
+        return u8( n ) && skip( n );
+    }
+
+    /// The next @p n bytes as a reader of their own: as many of them as
+    /// there are, so a cut message is read as far as it goes.
+    TlsReader take( size_t n )
+    {
+        const size_t available = std::min( n, len_ - pos_ );
+        TlsReader part( data_ + pos_, available, available == n );
+        pos_ += available;
+        return part;
+    }
+
+    /// The next 8- or 16-bit length and the bytes it counts.
+    bool takeVector8( TlsReader& part )
+    {
+        uint8_t n = 0;
+        if ( !u8( n ) ) {
+            return false;
+        }
+        part = take( n );
+        return true;
+    }
+
+    bool takeVector16( TlsReader& part )
+    {
+        uint16_t n = 0;
+        if ( !u16( n ) ) {
+            return false;
+        }
+        part = take( n );
+        return true;
+    }
+
+    /// All the bytes this reader was taken for are there.
+    bool complete() const
+    {
+        return complete_;
+    }
+
+    /// All its bytes are there and read.
+    bool readToEnd() const
+    {
+        return complete_ && pos_ == len_;
+    }
+
+    size_t remaining() const
+    {
+        return len_ - pos_;
+    }
+    const uint8_t* here() const
+    {
+        return data_ + pos_;
+    }
+
+private:
+    const uint8_t* data_;
+    size_t len_;
+    size_t pos_ = 0;
+    bool complete_;
+};
+
+/// Most bytes of a hello field (a server name, the protocol list) shown,
+/// the same cap as a first line's.
+constexpr size_t kMaxTlsFieldBytes = kMaxFirstLineBytes;
+
+/// Most records and handshake messages named in one segment.
+constexpr size_t kMaxTlsMessages = 4;
+
+/// A protocol version as "TLS 1.3".
+std::string tlsVersionName( uint16_t version )
+{
+    switch ( version ) {
+    case 0x0300:
+        return "SSL 3.0";
+    case 0x0301:
+        return "TLS 1.0";
+    case 0x0302:
+        return "TLS 1.1";
+    case 0x0303:
+        return "TLS 1.2";
+    case 0x0304:
+        return "TLS 1.3";
+    default: {
+        char buf[ 16 ];
+        std::snprintf( buf, sizeof( buf ), "TLS 0x%04X", version );
+        return buf;
+    }
+    }
+}
+
+/// A GREASE value (RFC 8701), sent to keep servers tolerant, not meant.
+bool isGrease( uint16_t value )
+{
+    return ( value & 0x0F0F ) == 0x0A0A && ( value >> 8 ) == ( value & 0xFF );
+}
+
+/// @p len bytes as text, at most kMaxTlsFieldBytes of them, then an ellipsis.
+std::string tlsField( const uint8_t* p, size_t len )
+{
+    if ( len <= kMaxTlsFieldBytes ) {
+        return escapeBytes( p, len, false );
+    }
+    return escapeBytes( p, kMaxTlsFieldBytes, false ) + "\xe2\x80\xa6";
+}
+
+/// The host name of a server_name extension (RFC 6066), or empty.
+std::string tlsServerName( TlsReader data )
+{
+    TlsReader list( nullptr, 0 );
+    if ( !data.takeVector16( list ) ) {
+        return {};
+    }
+    uint8_t type = 0;
+    TlsReader name( nullptr, 0 );
+    while ( list.u8( type ) && list.takeVector16( name ) && name.complete() ) {
+        if ( type == 0 ) { // host_name
+            return tlsField( name.here(), name.remaining() );
         }
     }
-    if ( contentType == 0x17 && versionMajor == 0x03 ) {
-        return "Application Data";
-    }
-    if ( contentType == 0x15 && versionMajor == 0x03 ) {
-        return "Alert";
-    }
-    if ( contentType == 0x14 && versionMajor == 0x03 ) {
-        return "Change Cipher Spec";
-    }
     return {};
+}
+
+/// The protocols of an ALPN extension (RFC 7301), as "h2,http/1.1".
+std::string tlsAlpn( TlsReader data )
+{
+    TlsReader list( nullptr, 0 );
+    if ( !data.takeVector16( list ) ) {
+        return {};
+    }
+    std::string protocols;
+    size_t shown = 0;
+    TlsReader protocol( nullptr, 0 );
+    while ( list.takeVector8( protocol ) && protocol.complete() ) {
+        if ( shown + protocol.remaining() > kMaxTlsFieldBytes ) {
+            return protocols + ( protocols.empty() ? "" : "," ) + "\xe2\x80\xa6";
+        }
+        if ( !protocols.empty() ) {
+            protocols += ',';
+        }
+        protocols += escapeBytes( protocol.here(), protocol.remaining(), false );
+        shown += protocol.remaining();
+    }
+    return protocols;
+}
+
+/// The highest version of a ClientHello's supported_versions extension
+/// (RFC 8446), GREASE aside; 0 if it names none.
+uint16_t tlsHighestVersion( TlsReader data )
+{
+    TlsReader list( nullptr, 0 );
+    if ( !data.takeVector8( list ) ) {
+        return 0;
+    }
+    uint16_t highest = 0;
+    uint16_t version = 0;
+    while ( list.u16( version ) ) {
+        if ( !isGrease( version ) ) {
+            highest = std::max( highest, version );
+        }
+    }
+    return highest;
+}
+
+/// The extensions of a hello, read as far as they are there, each one
+/// whole; @p onExtension(type, data) is called for each.  True if all of
+/// them were read, so that a field one of them would have named is known
+/// to be absent.
+template <typename OnExtension>
+bool readTlsExtensions( TlsReader& hello, OnExtension onExtension )
+{
+    if ( hello.readToEnd() ) {
+        return true; // a hello without extensions
+    }
+    TlsReader extensions( nullptr, 0 );
+    if ( !hello.takeVector16( extensions ) ) {
+        return false;
+    }
+    uint16_t type = 0;
+    TlsReader data( nullptr, 0 );
+    while ( extensions.u16( type ) && extensions.takeVector16( data ) && data.complete() ) {
+        onExtension( type, data );
+    }
+    return extensions.readToEnd();
+}
+
+/// "Client Hello, SNI=example.com, TLS 1.3, ALPN=h2,http/1.1": the fields
+/// a ClientHello holds, each left out if absent or cut off.  The version is
+/// the highest the client offers.
+std::string tlsClientHello( TlsReader hello )
+{
+    std::string description = "Client Hello";
+    uint16_t legacyVersion = 0;
+    if ( !hello.u16( legacyVersion ) || !hello.skip( 32 ) || !hello.skipVector8() ) {
+        return description;
+    }
+    uint16_t cipherSuitesLength = 0;
+    if ( !hello.u16( cipherSuitesLength ) || !hello.skip( cipherSuitesLength )
+         || !hello.skipVector8() ) {
+        return description;
+    }
+
+    std::string serverName;
+    std::string protocols;
+    uint16_t version = 0;
+    const bool allRead = readTlsExtensions( hello, [ & ]( uint16_t type, TlsReader data ) {
+        if ( type == 0x0000 && serverName.empty() ) {
+            serverName = tlsServerName( data );
+        }
+        else if ( type == 0x002B && version == 0 ) {
+            version = tlsHighestVersion( data );
+        }
+        else if ( type == 0x0010 && protocols.empty() ) {
+            protocols = tlsAlpn( data );
+        }
+    } );
+    if ( version == 0 && allRead ) {
+        version = legacyVersion;
+    }
+
+    if ( !serverName.empty() ) {
+        description += ", SNI=" + serverName;
+    }
+    if ( version != 0 ) {
+        description += ", " + tlsVersionName( version );
+    }
+    if ( !protocols.empty() ) {
+        description += ", ALPN=" + protocols;
+    }
+    return description;
+}
+
+/// "Server Hello, TLS 1.3": the version the server chose, if it is there.
+std::string tlsServerHello( TlsReader hello )
+{
+    std::string description = "Server Hello";
+    uint16_t legacyVersion = 0;
+    if ( !hello.u16( legacyVersion ) || !hello.skip( 32 ) || !hello.skipVector8()
+         || !hello.skip( 2 + 1 ) ) { // cipher suite, compression method
+        return description;
+    }
+    uint16_t version = 0;
+    const bool allRead = readTlsExtensions( hello, [ & ]( uint16_t type, TlsReader data ) {
+        uint16_t selected = 0;
+        if ( type == 0x002B && data.u16( selected ) ) {
+            version = selected;
+        }
+    } );
+    if ( version == 0 && allRead ) {
+        version = legacyVersion;
+    }
+    if ( version != 0 ) {
+        description += ", " + tlsVersionName( version );
+    }
+    return description;
+}
+
+/// The name of a handshake message, with the fields of the hellos.
+std::string tlsHandshakeMessage( uint8_t type, TlsReader body )
+{
+    switch ( type ) {
+    case 0:
+        return "Hello Request";
+    case 1:
+        return tlsClientHello( body );
+    case 2:
+        return tlsServerHello( body );
+    case 4:
+        return "New Session Ticket";
+    case 8:
+        return "Encrypted Extensions";
+    case 11:
+        return "Certificate";
+    case 12:
+        return "Server Key Exchange";
+    case 13:
+        return "Certificate Request";
+    case 14:
+        return "Server Hello Done";
+    case 15:
+        return "Certificate Verify";
+    case 16:
+        return "Client Key Exchange";
+    case 20:
+        return "Finished";
+    default:
+        return "Handshake";
+    }
+}
+
+/// A TLS record header: a content type TLS knows and protocol version 3.x.
+bool isTlsRecordHeader( const uint8_t* p )
+{
+    return p[ 0 ] >= 0x14 && p[ 0 ] <= 0x17 && p[ 1 ] == 0x03;
+}
+
+/// Describe the TLS records of a segment, in order: "Server Hello, TLS 1.3,
+/// Change Cipher Spec, Application Data".  The payload must begin with a
+/// record; the records are named up to kMaxTlsMessages, then an ellipsis.
+/// A record cut short is named as far as it goes, and ends the list.
+std::string detectTls( const uint8_t* payload, size_t len )
+{
+    // A record header, and a handshake record's message type.
+    if ( len < 6 || !isTlsRecordHeader( payload ) ) {
+        return {};
+    }
+
+    std::vector<std::string> names;
+    bool afterChangeCipherSpec = false;
+    TlsReader segment( payload, len );
+    while ( names.size() <= kMaxTlsMessages && segment.remaining() >= 5
+            && isTlsRecordHeader( segment.here() ) ) {
+        uint8_t contentType = 0;
+        uint16_t length = 0;
+        segment.u8( contentType );
+        segment.skip( 2 );
+        segment.u16( length );
+        auto fragment = segment.take( length );
+
+        switch ( contentType ) {
+        case 0x14:
+            names.emplace_back( "Change Cipher Spec" );
+            afterChangeCipherSpec = true;
+            break;
+        case 0x15:
+            names.emplace_back( "Alert" );
+            break;
+        case 0x16: {
+            if ( afterChangeCipherSpec ) {
+                // The Finished message, encrypted with the new keys.
+                names.emplace_back( "Encrypted Handshake Message" );
+                break;
+            }
+            uint8_t type = 0;
+            uint32_t messageLength = 0;
+            if ( !fragment.u8( type ) ) {
+                names.emplace_back( "Handshake" );
+                break;
+            }
+            if ( !fragment.u24( messageLength ) ) {
+                names.push_back( tlsHandshakeMessage( type, TlsReader( nullptr, 0, false ) ) );
+                break;
+            }
+            for ( ;; ) {
+                auto message = fragment.take( messageLength );
+                names.push_back( tlsHandshakeMessage( type, message ) );
+                if ( !message.complete() || names.size() > kMaxTlsMessages || !fragment.u8( type )
+                     || !fragment.u24( messageLength ) ) {
+                    break;
+                }
+            }
+            break;
+        }
+        default:
+            names.emplace_back( "Application Data" );
+            break;
+        }
+
+        if ( !fragment.complete() ) {
+            break;
+        }
+    }
+
+    if ( names.size() > kMaxTlsMessages ) {
+        names.resize( kMaxTlsMessages );
+        names.emplace_back( "\xe2\x80\xa6" );
+    }
+    std::string description;
+    for ( const auto& name : names ) {
+        if ( !description.empty() ) {
+            description += ", ";
+        }
+        description += name;
+    }
+    return description;
 }
 
 // ── SOCKS ────────────────────────────────────────────────────────────────

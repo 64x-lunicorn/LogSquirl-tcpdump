@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TLS hellos name the server, the version and ALPN.** A ClientHello line
+  shows the server name the client asks for, the highest version it offers
+  and its application protocols, `Client Hello, SNI=example.com, TLS 1.3,
+  ALPN=h2,http/1.1`; an extension the hello lacks is left out. A
+  ServerHello shows the version chosen, `Server Hello, TLS 1.3`. A segment
+  holding several records, or a record several handshake messages, lists
+  them in order, `Server Hello, TLS 1.3, Change Cipher Spec, Application
+  Data`, up to four, then `…`; a handshake record after Change Cipher Spec
+  is an `Encrypted Handshake Message`. A record cut by the snaplen or the
+  segment is described as far as it was captured, never read beyond.
 - **Names for IP protocols, EtherTypes and more ports.** A packet that is not
   dissected further shows its protocol's name instead of a number: `IGMP`
   instead of `IP(2)`, and likewise GRE, ESP, AH, OSPF, PIM, VRRP, L2TP, SCTP
