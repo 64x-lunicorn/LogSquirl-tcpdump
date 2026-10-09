@@ -678,7 +678,8 @@ of the detectors and in-stream passes the tables use.
   (fixed bit, no long header bit, long enough for header protection) QUIC,
   `Protected Payload, DCID=…`, replacing the description after the
   ` | ` separator (`kDescriptionSeparator`). Likewise it records in
-  `StreamState::http2` that a TCP stream began with the HTTP/2 preface,
+  `StreamState::protocols` (bit `kHttp2`) that a TCP stream began with
+  the HTTP/2 preface,
   and labels the stream's later segments `HTTP2` when they begin with
   frame headers, naming the frames whose header lies in the kept bytes.
   A segment that begins inside a frame (its first bytes no plausible
@@ -691,8 +692,12 @@ of the detectors and in-stream passes the tables use.
   that, not the label's text, is what `describeInStream()` goes by. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
-- SSH's phases are kept in `StreamState::ssh`, one byte: bit 1, an SSH-2
-  banner was seen; bit `2 << d`, direction d sent its NEWKEYS. A NEWKEYS
+- SSH's phases are kept in `StreamState::protocols`: bit
+  `kSshBannerSeen`, an SSH-2 banner was seen; bit `sshEncrypted(d)`,
+  direction d sent its NEWKEYS. Every protocol a stream is found to speak
+  (HTTP/2, MQTT, SSH, WebSocket) takes bits of this one byte, named on
+  `StreamState`, not a field of its own: `StreamState` is paid once per
+  numbered stream. A NEWKEYS
   may complete a message the TCP Reassembly put together (a key exchange
   reply too long for one segment), so the bits are set by
   `rememberInStream()`, which the Converter runs after the reassembly, from
@@ -939,7 +944,7 @@ keeps to the rules and the message is at most 1 MiB), a DoIP message by its
 payload length (8 + its value; port 13400 only, if the header keeps to the
 pattern of version and inverse version), SSH as far as the stream's phase
 lets it (`tcpMessageExtent()` takes the `Stream`, `sshPhaseOf()` reads
-`StreamState::ssh`): a banner to its line end on any port, a binary packet
+`StreamState::protocols`): a banner to its line end on any port, a binary packet
 by its packet_length (4 + its value) once a banner was seen or framed
 before it in the bytes, a NEWKEYS with all the bytes after it, and in a
 direction past its NEWKEYS all its bytes as one whole message, so that no

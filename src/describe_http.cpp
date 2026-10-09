@@ -341,10 +341,10 @@ std::string detectHttp2Preface( const uint8_t* payload, size_t len )
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state )
 {
     if ( pkt.streamCue == StreamCue::Http2Preface ) {
-        state.http2 = true;
+        state.protocols |= StreamState::kHttp2;
         return;
     }
-    if ( !state.http2 ) {
+    if ( !( state.protocols & StreamState::kHttp2 ) ) {
         return;
     }
     const auto frames = http2Frames( pkt.payloadHead.data(), pkt.payloadHeadLen,

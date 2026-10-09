@@ -393,7 +393,7 @@ ReassembledMessages TcpReassembly::apply( PacketRecord& pkt, const Stream& strea
     }
 
     ReassembledMessages result;
-    if ( pkt.payloadLen > 0 && !state.http2 ) {
+    if ( pkt.payloadLen > 0 && !( state.protocols & StreamState::kHttp2 ) ) {
         const bool letGo = ( state.reassembly & letGoBit( direction ) ) != 0;
         state.reassembly &= static_cast<uint8_t>( ~letGoBit( direction ) );
         result = segment( pkt, stream, payload );

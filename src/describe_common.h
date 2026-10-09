@@ -328,19 +328,12 @@ std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bo
 std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
 
 /// How far one direction of an SSH connection is, as its stream's state
-/// says (StreamState::ssh).
+/// says (StreamState::kSshBannerSeen, StreamState::sshEncrypted()).
 enum class SshPhase {
     Unknown,   ///< No banner was seen: only a banner is framed.
     Clear,     ///< Before NEWKEYS: binary packets, by their packet_length.
     Encrypted, ///< After NEWKEYS: nothing to frame.
 };
-/// StreamState::ssh: an SSH-2 banner was seen on the stream.
-constexpr uint8_t kSshBannerSeen = 0x01;
-/// StreamState::ssh: direction @p direction sent its NEWKEYS.
-constexpr uint8_t sshEncryptedBit( unsigned direction )
-{
-    return static_cast<uint8_t>( 0x02u << direction );
-}
 /// The phase of @p direction of the stream @p state is of.
 SshPhase sshPhaseOf( const StreamState& state, unsigned direction );
 /// An SSH banner, to its line end; in the clear phase a binary packet, by

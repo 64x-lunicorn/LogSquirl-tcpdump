@@ -536,10 +536,10 @@ std::optional<size_t> frameSshMessage( const uint8_t* payload, size_t len, SshPh
 
 SshPhase sshPhaseOf( const StreamState& state, unsigned direction )
 {
-    if ( state.ssh & sshEncryptedBit( direction ) ) {
+    if ( state.protocols & StreamState::sshEncrypted( direction ) ) {
         return SshPhase::Encrypted;
     }
-    return ( state.ssh & kSshBannerSeen ) ? SshPhase::Clear : SshPhase::Unknown;
+    return ( state.protocols & StreamState::kSshBannerSeen ) ? SshPhase::Clear : SshPhase::Unknown;
 }
 
 void describeSshInStream( PacketRecord& pkt, const Stream& stream )
@@ -566,11 +566,11 @@ void describeSshInStream( PacketRecord& pkt, const Stream& stream )
 void rememberSshInStream( const PacketRecord& pkt, const Stream& stream )
 {
     if ( pkt.streamCue == StreamCue::SshBanner ) {
-        stream.state->ssh |= kSshBannerSeen;
+        stream.state->protocols |= StreamState::kSshBannerSeen;
     }
     else if ( pkt.streamCue == StreamCue::SshNewKeys ) {
-        stream.state->ssh
-            |= static_cast<uint8_t>( kSshBannerSeen | sshEncryptedBit( stream.direction ) );
+        stream.state->protocols |= static_cast<uint8_t>(
+            StreamState::kSshBannerSeen | StreamState::sshEncrypted( stream.direction ) );
     }
 }
 

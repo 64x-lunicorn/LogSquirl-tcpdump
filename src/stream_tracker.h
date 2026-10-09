@@ -106,19 +106,19 @@ struct TcpDirection {
  * the Payload Describer, the Stream Labels, …) keep their fields here, and
  * read and update them through the Stream the tracker hands out.  Every
  * byte added here is paid once per numbered stream, see kMaxStreams: 72
- * bytes today, the two TcpDirections taking most, and no byte is left
- * before the alignment adds 8.  A new
- * TCP connection on the same addresses and ports (see analyseTcp()) starts
- * from a fresh state, its HTTP/2, MQTT and SSH flags and label with it.
+ * bytes today, the two TcpDirections taking most, and 2 bytes are left
+ * before the alignment adds 8.  A protocol the stream was found to speak
+ * takes a bit of protocols, not a byte of its own.  A new TCP connection on
+ * the same addresses and ports (see analyseTcp()) starts from a fresh
+ * state, its protocols and label with it.
  */
 struct StreamState {
     /// TCP only: each direction, indexed by Stream::direction.
     TcpDirection tcp[ 2 ];
     QuicConnection quic; ///< UDP only.
-    /// TCP only: the stream began with the HTTP/2 connection preface.
-    bool http2 = false;
-    /// TCP only: the stream began with an MQTT CONNECT.
-    bool mqtt = false;
+    /// TCP only: what the Payload Describer learnt the stream speaks, from
+    /// a message that opens a protocol on it: StreamState::k… bits.
+    uint8_t protocols = 0;
     /// The protocol a detector recognised on the stream, as StreamLabels
     /// numbers it; 0 while none has.
     uint8_t label = 0;
@@ -127,10 +127,19 @@ struct StreamState {
     /// bit 4 << d, it let them go for lack of memory, which the direction's
     /// next segment says.
     uint8_t reassembly = 0;
-    /// TCP only: how far the stream's SSH connection is (describe_ssh.cpp):
-    /// bit 1, an SSH-2 banner was seen; bit 2 << d, direction d sent its
-    /// NEWKEYS, and what it sends after is encrypted.
-    uint8_t ssh = 0;
+
+    /// protocols: the stream began with the HTTP/2 connection preface.
+    static constexpr uint8_t kHttp2 = 0x01;
+    /// protocols: the stream began with an MQTT CONNECT.
+    static constexpr uint8_t kMqtt = 0x02;
+    /// protocols: an SSH-2 banner was seen on the stream (describe_ssh.cpp).
+    static constexpr uint8_t kSshBannerSeen = 0x04;
+    /// protocols: direction @p direction of the stream's SSH connection sent
+    /// its NEWKEYS, and what it sends after is encrypted (bits 0x08, 0x10).
+    static constexpr uint8_t sshEncrypted( unsigned direction )
+    {
+        return static_cast<uint8_t>( 0x08u << direction );
+    }
 };
 
 /// The stream a packet belongs to.

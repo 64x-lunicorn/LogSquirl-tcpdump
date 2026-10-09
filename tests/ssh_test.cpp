@@ -511,7 +511,7 @@ SCENARIO( "SSH is framed for the TCP Reassembly as far as its phase allows", "[s
 
     GIVEN( "a binary packet after the banner" )
     {
-        state.ssh = 0x01; // a banner seen
+        state.protocols = StreamState::kSshBannerSeen;
         THEN( "it is framed by its packet_length" )
         {
             const auto cut
@@ -538,7 +538,8 @@ SCENARIO( "SSH is framed for the TCP Reassembly as far as its phase allows", "[s
 
     GIVEN( "a direction after its NEWKEYS" )
     {
-        state.ssh = 0x03; // a banner seen, direction 0 sent NEWKEYS
+        state.protocols
+            = static_cast<uint8_t>( StreamState::kSshBannerSeen | StreamState::sshEncrypted( 0 ) );
         THEN( "all its bytes are whole, the other direction's still framed" )
         {
             const auto encrypted
@@ -580,8 +581,9 @@ SCENARIO( "Mangled SSH never breaks the describer", "[ssh][fuzz]" )
             REQUIRE( result.description.find( '\n' ) == std::string::npos );
             REQUIRE( result.description.size() < 4096 );
         }
-        for ( const uint8_t phase : { 0x00, 0x01, 0x03 } ) {
-            state.ssh = phase;
+        for ( const int phase : { 0, int( StreamState::kSshBannerSeen ),
+                                  StreamState::kSshBannerSeen | StreamState::sshEncrypted( 0 ) } ) {
+            state.protocols = static_cast<uint8_t>( phase );
             const Stream stream{ 0, &state, 0 };
             const auto extent
                 = tcpMessageExtent( bytes.data(), bytes.size(), kClientPort, kSshPort, 0, &stream );
