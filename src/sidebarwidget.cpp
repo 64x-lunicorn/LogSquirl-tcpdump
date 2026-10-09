@@ -31,6 +31,10 @@
  * Its Follow stream button, on a host that offers it, opens the Regex Lab on
  * the conversation of the selected packet line (see follow_stream.h).
  *
+ * The endpoints and protocols its summary lists are links, on a host that
+ * has the Regex Lab: a click opens the Lab with the pattern of their lines
+ * (see regex_lab.h).
+ *
  * It keeps each converted capture's summary under the path of its .log file
  * and shows the one of the tab in front, as the host reports tab switches.
  */
@@ -39,8 +43,10 @@
 #include "follow_stream.h"
 #include "pcap_converter.h"
 #include "plugin.h"
+#include "regex_lab.h"
 #include "tempdirs.h"
 
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLocale>
@@ -48,6 +54,7 @@
 #include <QPromise>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -65,6 +72,32 @@ const char* const kLogFormatHelpUrl
 
 /// What the summary says for a tab that shows no capture of the plugin.
 const char* const kNoCaptureText = "No capture in this tab.";
+
+/// The links of the summary that open a filter: this, then "endpoint/" or
+/// "protocol/" and the percent-encoded name.
+const char* const kFilterScheme = "tcpdump-filter:";
+const char* const kEndpointFilter = "endpoint/";
+const char* const kProtocolFilter = "protocol/";
+
+/// The pattern of the filter @p link opens; empty for any other link.
+QString filterPattern( const QString& link )
+{
+    if ( !link.startsWith( kFilterScheme ) ) {
+        return {};
+    }
+    const auto filter = link.mid( static_cast<qsizetype>( qstrlen( kFilterScheme ) ) );
+    const auto nameOf = []( const QString& rest, const char* kind ) {
+        return QString::fromUtf8(
+            QByteArray::fromPercentEncoding( rest.mid( qstrlen( kind ) ).toUtf8() ) );
+    };
+    if ( filter.startsWith( kEndpointFilter ) ) {
+        return endpointPattern( nameOf( filter, kEndpointFilter ) );
+    }
+    if ( filter.startsWith( kProtocolFilter ) ) {
+        return protocolPattern( nameOf( filter, kProtocolFilter ) );
+    }
+    return {};
+}
 
 /// One spelling of @p filePath, so that the path the host reports for a tab
 /// finds the file the plugin wrote: e.g. on macOS the temporary directory
@@ -145,7 +178,9 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
-    summaryLabel_->setOpenExternalLinks( true );
+    // Its links are opened here: filters in the Regex Lab, pages outside.
+    summaryLabel_->setTextInteractionFlags( Qt::LinksAccessibleByMouse );
+    connect( summaryLabel_, &QLabel::linkActivated, this, &SidebarWidget::openLink );
     layout->addWidget( summaryLabel_ );
 
     // Push everything up
@@ -266,6 +301,22 @@ void SidebarWidget::cancel()
     summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
 }
 
+void SidebarWidget::openLink( const QString& link )
+{
+    try {
+        const auto pattern = filterPattern( link );
+        if ( pattern.isEmpty() ) {
+            QDesktopServices::openUrl( QUrl( link ) );
+            return;
+        }
+        openRegexLab( "Filter", pattern );
+    } catch ( const std::exception& e ) {
+        // An exception must not escape into Qt or the host.
+        hostLog( LOGSQUIRL_LOG_ERROR,
+                 "Opening " + link + " failed: " + QString::fromUtf8( e.what() ) );
+    }
+}
+
 void SidebarWidget::setConverting( bool converting )
 {
     converting_ = converting;
@@ -338,7 +389,8 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
         return;
     }
     const auto& capture = found->second;
-    auto html = summaryHtml( capture.fileName, capture.fileSize, capture.summary );
+    auto html = summaryHtml( capture.fileName, capture.fileSize, capture.summary,
+                             g_state.hostCapabilities.regexLab );
     if ( capture.withFormatHint ) {
         html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
                          "Log Format: <a href=\"%1\">install it once</a>.</i>" )
@@ -361,6 +413,19 @@ QString formatBytes( uint64_t bytes )
     return QString::number( bytes ) + " B";
 }
 
+/// @p name as text, or, with @p link, as a link to the filter of @p kind.
+QString filterName( const std::string& name, const char* kind, bool link )
+{
+    const auto text = QString::fromStdString( name ).toHtmlEscaped();
+    if ( !link ) {
+        return text;
+    }
+    return QString( "<a href=\"%1%2%3\">%4</a>" )
+        .arg( QString( kFilterScheme ), QString( kind ),
+              QString::fromUtf8( QUrl::toPercentEncoding( QString::fromStdString( name ) ) ),
+              text );
+}
+
 /// Entries of @p counts by count, highest first.
 std::vector<std::pair<std::string, uint64_t>>
 byCount( const std::map<std::string, uint64_t>& counts )
@@ -373,7 +438,8 @@ byCount( const std::map<std::string, uint64_t>& counts )
 
 } // namespace
 
-QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary )
+QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
+                     bool filterLinks )
 {
     const double duration = summary.durationSeconds;
 
@@ -425,8 +491,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
         const auto bytes = summary.protocolBytes.at( proto );
         const auto pct
             = static_cast<double>( count ) / static_cast<double>( summary.packets ) * 100.0;
-        html += QString( "%1: %2 (%3%, %4)<br>" )
-                    .arg( QString::fromStdString( proto ).toHtmlEscaped() )
+        // The name is not put in with arg(), which would read a '%' in it.
+        html += filterName( proto, kProtocolFilter, filterLinks );
+        html += QString( ": %1 (%2%, %3)<br>" )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
                     .arg( pct, 0, 'f', 1 )
                     .arg( formatBytes( bytes ) );
@@ -441,8 +508,8 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     for ( const auto& [ ip, count ] : byCount( summary.endpointPackets ) ) {
         if ( shown >= 8 )
             break;
-        html += QString( "%1: %2 pkts<br>" )
-                    .arg( QString::fromStdString( ip ).toHtmlEscaped() )
+        html += filterName( ip, kEndpointFilter, filterLinks );
+        html += QString( ": %1 pkts<br>" )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }

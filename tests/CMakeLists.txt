@@ -25,6 +25,7 @@ add_executable(logsquirl_tcpdump_tests
     plugin_test.cpp
     sidebarwidget_test.cpp
     follow_stream_test.cpp
+    regex_lab_test.cpp
     corpus_test.cpp
     logformat_test.cpp
     packet_formatter_test.cpp

@@ -44,8 +44,11 @@
 
 namespace tcpdump {
 
-/// The capture summary shown in the sidebar, as rich text.
-QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary );
+/// The capture summary shown in the sidebar, as rich text.  With
+/// @p filterLinks, each endpoint and protocol listed is a link that
+/// SidebarWidget opens in the Regex Lab as a filter.
+QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
+                     bool filterLinks = false );
 
 /**
  * Sidebar widget displayed in the LogSquirl sidebar panel.
@@ -59,7 +62,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *   - Summary label showing the stats of the capture in the tab in front,
  *     or that the tab holds none; the summary of the first capture after
  *     the plugin is loaded also links to the README section on installing
- *     the Log Format, which the plugin cannot tell is installed
+ *     the Log Format, which the plugin cannot tell is installed; on a host
+ *     with the Regex Lab, a click on an endpoint or a protocol listed opens
+ *     the Lab on its lines, as Wireshark's Apply as Filter
  *
  * The summaries of all captures converted while the plugin is loaded are
  * kept, keyed by the text file written for each, so that a capture's tab
@@ -133,6 +138,8 @@ private:
         bool withFormatHint = false; ///< Links to the Log Format section.
     };
 
+    /// Open a link of the summary: a filter in the Regex Lab, or a web page.
+    void openLink( const QString& link );
     /// Show the outcome of a conversion and return to idle.
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.

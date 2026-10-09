@@ -108,7 +108,13 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    and the filtered view shows the conversation alone. A line without a
    stream (`-` or `?`), no selection, or a line of another log only shows a
    notification saying why. Needs LogSquirl ≥ 26.11
-9. With the [Log Format](#log-format) installed, switch to the table view
+9. To filter by an endpoint or a protocol, as Wireshark's *Apply as Filter*
+   from its statistics, click it in the sidebar summary: the Regex Lab opens
+   with a pattern that matches the lines with that address in the Source or
+   Destination column, or that name in the Protocol column (not where either
+   only appears in Info). Apply it to filter the view. Needs LogSquirl ≥
+   26.11; on an older one the summary lists them as plain text
+10. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Log Format

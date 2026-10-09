@@ -50,38 +50,12 @@ const QRegularExpression& portsRegex()
     return regex;
 }
 
-/// @p text matched literally; addresses hold no more than '.' and ':' that
-/// need it, but anything else is escaped as well.
-QString literal( const QString& text )
-{
-    QString escaped;
-    for ( const auto c : text ) {
-        if ( !c.isLetterOrNumber() && c != ':' ) {
-            escaped += '\\';
-        }
-        escaped += c;
-    }
-    return escaped;
-}
-
 /// "a<sep>b" or "b<sep>a", or just one of them when both are the same.
 QString eitherWay( const QString& a, const QString& b, const QString& separator )
 {
     const auto forth = a + separator + b;
     const auto back = b + separator + a;
     return forth == back ? forth : QString( "(?:%1|%2)" ).arg( forth, back );
-}
-
-/// What the Lab's user did with the pattern: logged, for the record.
-void regexLabClosed( void* /* user_data */, int result, const char* pattern, int /* flags */ )
-{
-    if ( result == LOGSQUIRL_REGEX_LAB_APPLIED ) {
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 "Follow stream: applied " + QString::fromUtf8( pattern ? pattern : "" ) );
-    }
-    else {
-        hostLog( LOGSQUIRL_LOG_INFO, "Follow stream: cancelled" );
-    }
 }
 
 /// Why get_selected_log_lines() returned no line, for the user.
@@ -126,8 +100,8 @@ FollowStream followStreamPattern( const QString& packetLine )
     // stream, so it is skipped with the Length.
     auto pattern
         = QString( R"(^\d+ +%1 +.+? %2 +\S+ +\d+ +)" )
-              .arg( stream, eitherWay( literal( match.captured( "source" ) ),
-                                       literal( match.captured( "destination" ) ), " +" ) );
+              .arg( stream, eitherWay( literalPattern( match.captured( "source" ) ),
+                                       literalPattern( match.captured( "destination" ) ), " +" ) );
     // The ports tell a TCP from a UDP stream of the same number between the
     // same hosts; a line without them still has the stream and addresses.
     const auto ports = portsRegex().match( match.captured( "body" ) );
@@ -162,12 +136,7 @@ void followSelectedStream()
         return;
     }
 
-    hostLog( LOGSQUIRL_LOG_INFO, "Follow stream: " + follow.pattern );
-    if ( st.api->open_regex_lab( st.handle, follow.pattern.toUtf8().constData(),
-                                 LOGSQUIRL_REGEX_LAB_MATCH_CASE, &regexLabClosed, nullptr )
-         != 0 ) {
-        hostNotify( "Follow stream: the Regex Lab did not open." );
-    }
+    openRegexLab( "Follow stream", follow.pattern );
 }
 
 } // namespace tcpdump

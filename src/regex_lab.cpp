@@ -19,12 +19,35 @@
 
 /**
  * @file regex_lab.cpp
- * @brief Patterns over the packet list.
+ * @brief Patterns over the packet list, and the Regex Lab that opens them.
  */
 
 #include "regex_lab.h"
+#include "plugin.h"
 
 namespace tcpdump {
+
+namespace {
+
+/// The columns of a packet line up to Source, as packetLineRegex() reads
+/// them: No., Stream, UTC Time (a date and a time), Time.  Each pattern
+/// requires the columns in place, so that it never matches inside Info.
+const char* const kUpToSource = R"(^\d+ +\S+ +\S+ \S+ +\S+ +)";
+
+/// What the user did with the Lab: logged, for the record.
+void regexLabClosed( void* user_data, int result, const char* pattern, int /* flags */ )
+{
+    const auto feature = QString::fromUtf8( static_cast<const char*>( user_data ) );
+    if ( result == LOGSQUIRL_REGEX_LAB_APPLIED ) {
+        hostLog( LOGSQUIRL_LOG_INFO,
+                 feature + ": applied " + QString::fromUtf8( pattern ? pattern : "" ) );
+    }
+    else {
+        hostLog( LOGSQUIRL_LOG_INFO, feature + ": cancelled" );
+    }
+}
+
+} // namespace
 
 const QRegularExpression& packetLineRegex()
 {
@@ -33,6 +56,49 @@ const QRegularExpression& packetLineRegex()
         R"(\d{2}:\d{2}:\d{2}\.\d++Z) ++(?<time>-?\d++\.\d++) ++(?<source>\S++) ++)"
         R"((?<destination>\S++) ++(?<protocol>\S++) ++(?<length>\d++) ++(?<body>.*)$)" );
     return regex;
+}
+
+QString literalPattern( const QString& text )
+{
+    QString escaped;
+    for ( const auto c : text ) {
+        if ( !c.isLetterOrNumber() && c != ':' ) {
+            escaped += '\\';
+        }
+        escaped += c;
+    }
+    return escaped;
+}
+
+QString endpointPattern( const QString& address )
+{
+    // Source, then Destination; the Protocol and Length columns after them
+    // pin the two in place.
+    return QString( R"(%1(?:%2 +\S+|\S+ +%2) +\S+ +\d+ )" )
+        .arg( kUpToSource, literalPattern( address ) );
+}
+
+QString protocolPattern( const QString& protocol )
+{
+    // An empty protocol shows as "-", as any empty column does.
+    return QString( R"(%1\S+ +\S+ +%2 +\d+ )" )
+        .arg( kUpToSource, literalPattern( protocol.isEmpty() ? "-" : protocol ) );
+}
+
+void openRegexLab( const char* feature, const QString& pattern )
+{
+    const auto& st = g_state;
+    if ( !st.api || !st.handle || !st.hostCapabilities.regexLab ) {
+        return;
+    }
+    const auto name = QString::fromUtf8( feature );
+    hostLog( LOGSQUIRL_LOG_INFO, name + ": " + pattern );
+    if ( st.api->open_regex_lab( st.handle, pattern.toUtf8().constData(),
+                                 LOGSQUIRL_REGEX_LAB_MATCH_CASE, &regexLabClosed,
+                                 const_cast<char*>( feature ) )
+         != 0 ) {
+        hostNotify( name + ": the Regex Lab did not open." );
+    }
 }
 
 } // namespace tcpdump

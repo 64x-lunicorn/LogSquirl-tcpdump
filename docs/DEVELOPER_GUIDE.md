@@ -238,7 +238,8 @@ Qt UI that provides:
 - A "Follow stream" button, created only when `g_state.hostCapabilities`
   has the Regex Lab and the selected lines (see *Follow stream* below)
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
-  top endpoints, the first and last packet time in UTC, packets per
+  top endpoints (on a host with `regexLab`, each protocol and endpoint is a
+  link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
   (comma-separated when there are several), and the number of packets cut
   at the snaplen when there are any
@@ -312,6 +313,23 @@ line that is no packet line, one with stream `-` or `?`, no selection or a
 tab without a Log File give a notification with the reason instead.
 `follow_stream_test.cpp` checks the pattern against every corpus line and
 drives the menu entry and the button through the `FakeHost`.
+
+#### Summary filters (`regex_lab.h/cpp`)
+`summaryHtml()` with `filterLinks`, which `showSummaryFor()` passes as
+`g_state.hostCapabilities.regexLab`, makes each protocol and endpoint of the
+summary a `tcpdump-filter:protocol/<name>` or `tcpdump-filter:endpoint/<name>`
+link, the name percent-encoded. The label opens no link itself: its
+`linkActivated` goes to `SidebarWidget::openLink()`, which opens a filter
+link's pattern with `openRegexLab()` and any other link, such as the README
+link, with `QDesktopServices`. `endpointPattern()` and `protocolPattern()`
+require the columns before Info as `packetLineRegex()` reads them, so they
+match a whole Source, Destination or Protocol column and never Info, and
+escape the name with `literalPattern()`. `openRegexLab()`, which Follow
+stream uses too, opens the Lab with Match case and logs the pattern, then
+the applied one or the cancel, under the feature's name ("Filter: …").
+`regex_lab_test.cpp` checks every endpoint and protocol of the summary of
+each corpus capture against the columns of its lines;
+`sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
 
 #### The plugin API header
 `include/logsquirl_plugin_api.h` is the host's
