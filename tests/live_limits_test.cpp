@@ -174,7 +174,11 @@ public:
             std::lock_guard<std::mutex> lock( mutex_ );
             snapshots_.push_back( snapshot );
         };
-        observer.firstPacket = [ this ]( const QString&, const QString& ) { opened = true; };
+        observer.firstPacket = [ this ]( const QString& logPath, const QString& rawPath ) {
+            std::lock_guard<std::mutex> lock( mutex_ );
+            texts_.emplace_back( logPath, rawPath );
+            opened = true;
+        };
         result_ = std::async(
             std::launch::async, [ this, outputRoot, options, observer, limits, clock ] {
                 return convertStream( source, QStringLiteral( "live" ), outputRoot, nullptr,
@@ -203,6 +207,12 @@ public:
         std::lock_guard<std::mutex> lock( mutex_ );
         return snapshots_;
     }
+    /// The text files to open, each with its raw file, in order.
+    std::vector<std::pair<QString, QString>> texts()
+    {
+        std::lock_guard<std::mutex> lock( mutex_ );
+        return texts_;
+    }
 
     std::atomic_bool stop{ false };
     std::atomic_bool opened{ false };
@@ -211,6 +221,7 @@ public:
 private:
     std::mutex mutex_;
     std::vector<LiveSnapshot> snapshots_;
+    std::vector<std::pair<QString, QString>> texts_;
     std::future<ConversionResult> result_;
 };
 
@@ -476,11 +487,35 @@ SCENARIO( "A ring buffer keeps the newest files, each a capture of its own", "[l
                 }
             }
 
-            THEN( "the text keeps the header and the lines of the packets kept" )
+            THEN( "each file has a text of its own, opened at its first line, never rewritten" )
             {
-                auto expected = linesFromFile( whole );
-                expected.erase( expected.begin() + 1, expected.begin() + 5 );
-                REQUIRE( readLines( result.outputPath ) == expected );
+                const auto all = linesFromFile( whole );
+                const auto texts = run.texts();
+                REQUIRE( texts.size() == 5 );
+                const QRegularExpression name( "^live_0000([1-5])_\\d{14}\\.log$" );
+                for ( size_t i = 0; i < texts.size(); ++i ) {
+                    const auto& [ logPath, rawPath ] = texts[ i ];
+                    CAPTURE( logPath );
+                    const auto match = name.match( QFileInfo( logPath ).fileName() );
+                    REQUIRE( match.hasMatch() );
+                    REQUIRE( match.captured( 1 ).toInt() == static_cast<int>( i ) + 1 );
+                    REQUIRE( QFileInfo( logPath ).completeBaseName()
+                             == QFileInfo( rawPath ).completeBaseName() );
+                    // The header and the lines of its two packets, also of a
+                    // file deleted since.
+                    const auto first = static_cast<qsizetype>( 1 + 2 * i );
+                    REQUIRE( readLines( logPath )
+                             == QStringList{ all.at( 0 ), all.at( first ), all.at( first + 1 ) } );
+                }
+                REQUIRE( result.outputPath == texts.back().first );
+                REQUIRE( dir.entryList( { "*.log" }, QDir::Files ).size() == 5 );
+            }
+
+            THEN( "the index keeps the checkpoints of the files kept only" )
+            {
+                const auto& checkpoints = result.index->checkpoints();
+                REQUIRE_FALSE( checkpoints.empty() );
+                REQUIRE( checkpoints.front().packetsBefore > result.index->rotatedAway() );
             }
 
             THEN( "a packet kept is read from its file; one rotated away says so" )

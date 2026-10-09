@@ -324,7 +324,12 @@ The interface and the filter are single-quoted for the device's shell, so
 a filter is always one argument of tcpdump and never shell syntax.
 tcpdump's stderr is kept in a file on the device and shown if the capture
 fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
-and removes its files.
+also when it comes before tcpdump has fully started, and removes its files.
+If LogSquirl crashes or is killed during a capture, nothing tells the
+device: tcpdump runs on until it next writes to the closed stream (its
+next captured packet), and its `logsquirl-*.pid`/`.err` files stay in
+`/data/local/tmp`, which `adb shell rm /data/local/tmp/logsquirl-*` (through
+`su -c` for a root capture) removes.
 
 #### Remote capture over SSH
 
@@ -335,22 +340,34 @@ Client*) and shows the traffic live. Type the **Host** as
 `[user@]host[:port]` (`[address]:port` for an IPv6 address with a port), or
 pick one of the `Host` entries of `~/.ssh/config` that name one host (no
 wildcards); press Enter to list its interfaces, which are what `tcpdump -D`
-lists on the server. Every ssh runs as
+lists on the server (run with `sudo -n` while *Run tcpdump with sudo -n* is
+on, and listed anew when it is turned on or off), or, if that lists
+nothing, what `ip -o link` lists, with what tcpdump said. Every ssh runs as
 
 ```
 ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p <port>] -- <user@host> <remote command>
 ```
 
-with nothing on stdin: **only your keys and the SSH agent are used**. ssh
-never asks for a password, a passphrase or whether to trust a host key, and
-the plugin never asks for or stores one. The remote command is a command
-line for the server's login shell (a POSIX shell: sh, bash, dash, zsh,
-ksh), the interface and the capture filter in single quotes, so nothing in
-them is run:
+so **only your keys and the SSH agent are used**: ssh never asks for a
+password, a passphrase or whether to trust a host key, and the plugin never
+asks for or stores one. The remote command runs `/bin/sh` on the server,
+whatever your login shell is (it only has to read one single-quoted word,
+as sh, bash, dash, zsh, ksh, csh and tcsh do; fish reads a `\` inside
+single quotes, so a filter with a backslash needs a POSIX login shell). The
+script `/bin/sh` runs has the interface and the capture filter in single
+quotes, so nothing in them is run:
 
 ```
-exec sudo -n tcpdump -i '<interface>' -s <snaplen> -U -w - '(<filter>) and not (host '"<client>"' and tcp port '"<SSH port>"')'
+exec /bin/sh -c '… [sudo -n] tcpdump -i <interface> -s <snaplen> -U -w - "(<filter>) and not (host <client> and tcp port <SSH port>)" & <watchdog> …'
 ```
+
+**Stop** ends tcpdump on the server too, also when it runs as root: ssh's
+stdin is a pipe the plugin holds open while the capture runs, and a
+watchdog in the script ends tcpdump once it closes, as Stop ends ssh or the
+connection drops (without a terminal the server sends no hangup, and
+tcpdump alone would notice only at its next packet). If LogSquirl itself
+is killed, the connection closes and the watchdog ends tcpdump all the
+same.
 
 Two options below the fields:
 
@@ -418,6 +435,12 @@ password argument is on the extcap's command line, which other users of
 the computer may see in its process list while it runs. The snaplen is not
 passed: an extcap has its own option for that, if any.
 
+On Windows an extcap that is a batch file (`.bat`, `.cmd`) is run by
+`cmd.exe`, which reads its arguments again, quoted or not. For such an
+extcap the capture filter, the interface and every argument's value must
+not hold `%`, `!`, `^`, `&`, `|`, `<`, `>`, `(`, `)`, `"` or a line break:
+Start says which one is in the way, and the plugin never runs it with one.
+
 #### Custom command
 
 The **Custom command** source runs a command you write and converts what it
@@ -429,8 +452,8 @@ a vendor tool, `nc -l 9999`, a capture on a router. Examples to start from
 
 ```
 tcpdump -i {interface} -U -w - {filter}
-adb exec-out tcpdump -i {interface} -s {snaplen} -U -w - {filter}
-ssh -o BatchMode=yes user@host tcpdump -i {interface} -s {snaplen} -U -w - {filter}
+adb exec-out tcpdump -i {interface:sh} -s {snaplen} -U -w - {filter:sh}
+ssh -o BatchMode=yes user@host tcpdump -i {interface:sh} -s {snaplen} -U -w - {filter:sh}
 ```
 
 The line is a program and its arguments, **split like a shell splits it,
@@ -444,12 +467,23 @@ in, so a filter with spaces or quotes is still one argument; `{filter}`
 alone is left out when the filter is empty. `{interface}` needs an
 interface (this computer's are suggested; type any).
 
+`adb shell`, `adb exec-out` and `ssh` do not pass their arguments on as
+they are: they join them with spaces into one line that **the device's or
+the server's shell** reads again, so a `{filter}` there would be shell
+syntax on the device or server (`;`, `$(…)` would run). After `adb` or
+`ssh` write **`{interface:sh}`** and **`{filter:sh}`**: their values are
+single-quoted for that POSIX shell (`'…'`, a `'` as `'\''`), so it reads
+each as one argument, as the examples do. `{filter:sh}` alone is left out
+for an empty filter, too.
+
 **Run through the shell** (off by default) hands the line to `/bin/sh -c`
 (Windows: `cmd.exe /c`) as it is, for pipes and redirections, e.g. `ssh
 router 'tcpdump -U -w - {filter}' | tee router.pcap`. Everything in the
 line then runs, as you. The placeholders are put in quoted as one word
 each (single quotes; on Windows double quotes, and an interface or filter
-with `"`, `%` or `!` is refused): write them outside of quotes.
+with `"`, `%` or `!` is refused): write them outside of quotes. A
+`{…:sh}` placeholder is quoted twice, for the remote shell and then for the
+local one.
 
 Commands can be **saved** under a name (**Save**; saving under an existing
 name replaces it), chosen again from the list, and **deleted**; they are
@@ -496,14 +530,16 @@ header, or a pcapng's section header and interfaces, are repeated at its
 start, so Wireshark opens any of them. When the N+1st file starts, the
 oldest is deleted.
 
-The capture's tab is bounded too: it keeps the lines of the packets in
-the files kept. When the oldest file is deleted, its packets' lines are
-cut from the start of the `.log`, and LogSquirl reloads the tab, as it does
-a log that was truncated (marks on those lines go). The packet numbers in
-the No. column go on across the files. A line still selected from before
-(or in another view) of a packet whose file was deleted shows *Rotated
-away* in the Packet Panel; Follow stream content starts at the first
-packet kept. **Save capture…** writes the files kept as one capture
+Each file has a text of its own, `<name>_00001_<time>.log`, …: when a new
+file starts, its text opens in a **new tab**, following it, once its first
+packet line is there, so no tab grows without bound. A text is never
+rewritten: the tabs of files the ring buffer has deleted stay open, as
+they are, until you close them, and their Packet Panel says *Rotated away*
+for their packets (their lines stay readable; only the packets' bytes are
+gone). The packet numbers in the No. column go on across the files.
+Follow stream content starts at the first packet kept. The `.log` files
+stay in the private temporary directory until LogSquirl quits; close the
+tabs of old files to let LogSquirl forget them. **Save capture…** writes the files kept as one capture
 (packets of the deleted files are gone); **Export packets…** copies the
 selected packets from the files they are in.
 

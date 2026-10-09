@@ -43,6 +43,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -136,20 +137,31 @@ SCENARIO( "The remote command line quotes the interface and the filter for the s
 
     THEN( "by default: sudo -n, and the SSH connection excluded as $SSH_CLIENT names it" )
     {
-        REQUIRE( sshRemoteCaptureCommand( choice )
-                 == "[ -n \"$SSH_CLIENT\" ] || { echo 'SSH_CLIENT is not set on the server, so "
-                    "the SSH connection cannot be excluded' >&2; exit 2; }; exec sudo -n tcpdump "
-                    "-i 'eth0' -s 1500 -U -w - '(port 80) and not (host '\"${SSH_CLIENT%% "
-                    "*}\"' and tcp port '\"${SSH_CLIENT##* }\"')'" );
+        const auto script = sshRemoteCaptureScript( choice );
+        REQUIRE( script.startsWith( "[ -n \"$SSH_CLIENT\" ] || { echo 'SSH_CLIENT is not set on "
+                                    "the server, so the SSH connection cannot be excluded' >&2; "
+                                    "exit 2; }; set -- $SSH_CLIENT; exec 3<&0; " ) );
+        REQUIRE( script.contains( "sudo -n tcpdump -i 'eth0' -s 1500 -U -w - '(port 80) and not "
+                                  "(host '\"$1\"' and tcp port '\"$3\"')' 3<&- &" ) );
+        REQUIRE( sshRemoteCaptureCommand( choice ) == "exec /bin/sh -c " + shellQuote( script ) );
     }
 
     THEN( "both options off: tcpdump as it is, the filter as it is" )
     {
         choice.options = { { kSshSudoOption, "false" }, { kSshExcludeOwnOption, "false" } };
-        REQUIRE( sshRemoteCaptureCommand( choice )
-                 == "exec tcpdump -i 'eth0' -s 1500 -U -w - 'port 80'" );
+        REQUIRE( sshRemoteCaptureScript( choice ).startsWith(
+            "exec 3<&0; tcpdump -i 'eth0' -s 1500 -U -w - 'port 80' 3<&- &" ) );
         choice.filter.clear();
-        REQUIRE( sshRemoteCaptureCommand( choice ) == "exec tcpdump -i 'eth0' -s 1500 -U -w -" );
+        REQUIRE( sshRemoteCaptureScript( choice ).startsWith(
+            "exec 3<&0; tcpdump -i 'eth0' -s 1500 -U -w - 3<&- &" ) );
+    }
+
+    THEN( "the script ends tcpdump once its stdin closes, and exits with tcpdump's status" )
+    {
+        const auto script = sshRemoteCaptureScript( choice );
+        REQUIRE( script.contains( "while IFS= read -r _; do :; done <&3; kill $pid;" ) );
+        REQUIRE( script.endsWith( "wait $pid; status=$?; kill $watchdog 2>/dev/null; exit "
+                                  "$status" ) );
     }
 }
 
@@ -270,6 +282,12 @@ struct FakeServer {
     QString sudo = "[ \"$1\" = -n ] || { echo 'fake sudo: -n missing' >&2; exit 97; }\n"
                    "shift; exec \"$@\"";
     bool tcpdump = true; ///< Whether the server has tcpdump.
+    bool ip = false;     ///< Whether the server has ip, listing two links.
+    /// Whether a capture's tcpdump runs until it is killed, logging it.
+    bool hang = false;
+    /// Whether the remote command runs in a process group of its own, with
+    /// ssh's stdin, as on a server: ending ssh does not end it.
+    bool detached = false;
 
     QString remote() const
     {
@@ -278,6 +296,11 @@ struct FakeServer {
     QString argvLog() const
     {
         return dir.filePath( "argv" );
+    }
+    QString tcpdumpLog() const
+    {
+        QFile file( dir.filePath( "tcpdump.log" ) );
+        return file.open( QIODevice::ReadOnly ) ? QString::fromUtf8( file.readAll() ) : QString();
     }
 
     /// Write the fake ssh, sudo and tcpdump: ssh logs its arguments, one per
@@ -301,8 +324,18 @@ struct FakeServer {
                            "98; }\n"
                            "for a in \"$@\"; do cmd=$a; done\n"
                            "%2\n"
-                           "SSH_CLIENT='10.9.8.7 50123 2222' PATH='%3' exec /bin/sh -c \"$cmd\"" )
-                      .arg( argvLog(), sshPrelude, remote() ) );
+                           "%3" )
+                      .arg( argvLog(), sshPrelude,
+                            detached
+                                ? QString( "exec 3<&0\n"
+                                           "SSH_CLIENT='10.9.8.7 50123 2222' PATH='%1' '%2' -e "
+                                           "'setpgrp(0,0); exec @ARGV or die' /bin/sh -c \"$cmd\" "
+                                           "<&3 3<&- &\n"
+                                           "wait $!" )
+                                      .arg( remote(), QStandardPaths::findExecutable( "perl" ) )
+                                : QString( "SSH_CLIENT='10.9.8.7 50123 2222' PATH='%1' exec "
+                                           "/bin/sh -c \"$cmd\"" )
+                                      .arg( remote() ) ) );
         scriptAt( QDir( remote() ).filePath( "sudo" ), sudo );
         if ( tcpdump ) {
             scriptAt( QDir( remote() ).filePath( "tcpdump" ),
@@ -310,8 +343,18 @@ struct FakeServer {
                                "Connected]\\n2.any (Pseudo-device that captures on all "
                                "interfaces) [Up, Running]\\n'; exit 0; fi\n"
                                "for a in \"$@\"; do printf '[%s]\\n' \"$a\" >&2; done\n"
-                               "/bin/cat '%1'" )
-                          .arg( pcap ) );
+                               "/bin/cat '%1'\n"
+                               "%2" )
+                          .arg( pcap, hang ? QString( "trap 'echo killed >>\"%1\"; exit 0' TERM\n"
+                                                      "echo running >>\"%1\"\n"
+                                                      "while :; do /bin/sleep 0.05; done" )
+                                                 .arg( dir.filePath( "tcpdump.log" ) )
+                                           : QString() ) );
+        }
+        if ( ip ) {
+            scriptAt( QDir( remote() ).filePath( "ip" ),
+                      "echo '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue'\n"
+                      "echo '2: eth0@if7: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500'" );
         }
         SshPrograms where;
         where.installed = { dir.filePath( "ssh" ) };
@@ -394,9 +437,35 @@ SCENARIO( "The SSH source lists and captures on a server through a fake ssh", "[
         REQUIRE( listing.targets[ 1 ].id == "any" );
         REQUIRE( listing.targets[ 1 ].description
                  == "Pseudo-device that captures on all interfaces" );
-        REQUIRE( server.loggedArgv()
-                 == "[-T]\n[-o]\n[BatchMode=yes]\n[-o]\n[ConnectTimeout=10]\n[-p]\n[2222]\n[--]\n"
-                    "[admin@srv]\n[tcpdump -D]\n" );
+        REQUIRE(
+            server.loggedArgv()
+            == "[-T]\n[-o]\n[BatchMode=yes]\n[-o]\n[ConnectTimeout=10]\n[-p]\n[2222]\n[--]\n"
+               "[admin@srv]\n[exec /bin/sh -c 'out=$(sudo -n tcpdump -D) && [ -n \"$out\" ] && "
+               "printf '\\''%s\\n'\\'' \"$out\" || ip -o link show']\n" );
+    }
+
+    THEN( "with the sudo option off, tcpdump -D runs without sudo" )
+    {
+        const auto listing = kind->listInterfacesWith( "srv", { { kSshSudoOption, "false" } },
+                                                       LiveSourceKind::kListTimeout );
+        REQUIRE( listing.error.isEmpty() );
+        REQUIRE( listing.targets.size() == 2 );
+        REQUIRE( server.loggedArgv().contains( "out=$(tcpdump -D)" ) );
+        REQUIRE_FALSE( server.loggedArgv().contains( "sudo" ) );
+    }
+
+    THEN( "the form lists anew, without sudo, when the sudo option is turned off" )
+    {
+        LiveCaptureForm form;
+        form.setSources( registryOf( kind ) );
+        form.setChoice( LiveChoice{ "ssh", "srv", "", "", kDefaultSnaplen, {} } );
+        REQUIRE( waitFor( [ & ] {
+            return !form.isListing() && server.loggedArgv().contains( "sudo -n tcpdump -D" );
+        } ) );
+        form.findChild<QCheckBox*>( "sshSudo" )->setChecked( false );
+        REQUIRE( waitFor( [ & ] {
+            return !form.isListing() && server.loggedArgv().contains( "out=$(tcpdump -D)" );
+        } ) );
     }
 
     THEN( "a typed host lists its interfaces in the form, which shows the options" )
@@ -437,6 +506,34 @@ SCENARIO( "The SSH source lists and captures on a server through a fake ssh", "[
         REQUIRE( stderrText.contains( "[96]" ) );
         REQUIRE(
             stderrText.contains( "[(udp port 9999) and not (host 10.9.8.7 and tcp port 2222)]" ) );
+        REQUIRE( sidebar.findChild<QLabel*>( "liveError" )->isHidden() );
+    }
+}
+
+SCENARIO( "Stop ends tcpdump on the server, not only the local ssh", "[ssh_source]" )
+{
+    FakeServer server;
+    server.hang = true;
+    server.detached = true;
+    const auto kind = std::make_shared<SshSourceKind>( server.write() );
+
+    for ( const bool sudo : { true, false } ) {
+        CAPTURE( sudo );
+        QFile::remove( server.dir.filePath( "tcpdump.log" ) );
+        FakeHost host;
+        QTemporaryDir temp;
+        SidebarWidget sidebar;
+        sidebar.setTempRoot( temp.path() );
+        sidebar.setLiveSources( registryOf( kind ) );
+        LiveChoice choice{ "ssh", "admin@srv", "eth0", "", 96, {} };
+        choice.options[ kSshSudoOption ] = sudo ? "true" : "false";
+        REQUIRE( sidebar.startLiveCapture( choice ) );
+        REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1; } ) );
+        REQUIRE( waitFor( [ & ] { return server.tcpdumpLog().contains( "running" ); } ) );
+
+        sidebar.stopLiveCapture();
+        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        REQUIRE( waitFor( [ & ] { return server.tcpdumpLog().contains( "killed" ); } ) );
         REQUIRE( sidebar.findChild<QLabel*>( "liveError" )->isHidden() );
     }
 }
@@ -501,6 +598,23 @@ SCENARIO( "What ssh, sudo and tcpdump fail with is reported with what to do", "[
             const auto error = kind.listInterfaces( "srv", LiveSourceKind::kListTimeout ).error;
             REQUIRE( error.contains( "exited with code 127" ) );
             REQUIRE( error.contains( "tcpdump is not installed on the server" ) );
+        }
+
+        AND_WHEN( "it has ip" )
+        {
+            server.ip = true;
+            const SshSourceKind withIp( server.write() );
+
+            THEN( "the interfaces are what ip -o link lists, with why tcpdump listed none" )
+            {
+                const auto listing = withIp.listInterfaces( "srv", LiveSourceKind::kListTimeout );
+                REQUIRE( listing.targets.size() == 2 );
+                REQUIRE( listing.targets[ 0 ].id == "lo" );
+                REQUIRE( listing.targets[ 1 ].id == "eth0" );
+                REQUIRE( listing.targets[ 1 ].description == "BROADCAST,MULTICAST,UP,LOWER_UP" );
+                REQUIRE( listing.error.contains( "ip -o link" ) );
+                REQUIRE( listing.error.contains( "tcpdump is not installed on the server" ) );
+            }
         }
 
         THEN( "so does a capture, behind sudo -n" )

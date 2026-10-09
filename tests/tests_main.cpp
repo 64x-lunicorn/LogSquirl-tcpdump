@@ -39,5 +39,8 @@ int main( int argc, char* argv[] )
     // runs a real capture program (tcpdump -D, adb devices) on this machine.
     tcpdump::SidebarWidget::setDefaultLiveSources(
         std::make_shared<tcpdump::LiveSourceRegistry>() );
-    return Catch::Session().run( argc, argv );
+    const auto failed = Catch::Session().run( argc, argv );
+    // The live captures sidebars retired end before the application does.
+    tcpdump::joinLiveCaptures();
+    return failed;
 }

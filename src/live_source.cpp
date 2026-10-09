@@ -31,20 +31,15 @@
 #include "local_source.h"
 #include "ssh_source.h"
 
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
 
 #include <algorithm>
 #include <mutex>
 #include <vector>
-
-#ifdef Q_OS_WIN
-#include <windows.h>
-#else
-#include <signal.h>
-#include <unistd.h>
-#endif
 
 namespace tcpdump {
 
@@ -101,16 +96,53 @@ QString liveLimitsProblem( const LiveLimits& limits )
     return {};
 }
 
+bool isRunnableProgram( const QString& path )
+{
+    const QFileInfo file( path );
+    return !path.isEmpty() && file.isFile() && file.isExecutable();
+}
+
+QString findProgram( const QString& fileName, const QStringList& directories )
+{
+    for ( const auto& dir : directories ) {
+        if ( dir.isEmpty() ) {
+            continue;
+        }
+        const auto path = QDir( dir ).filePath( fileName );
+        if ( isRunnableProgram( path ) ) {
+            return path;
+        }
+    }
+    return {};
+}
+
+bool liveOptionOn( const LiveOptions& options, const QString& name, bool byDefault )
+{
+    const auto value = options.value( name );
+    if ( value.compare( QLatin1String( "true" ), Qt::CaseInsensitive ) == 0 ) {
+        return true;
+    }
+    if ( value.compare( QLatin1String( "false" ), Qt::CaseInsensitive ) == 0 ) {
+        return false;
+    }
+    return byDefault;
+}
+
+bool hasControlCharacter( const QString& text, bool tabAllowed )
+{
+    return std::any_of( text.begin(), text.end(), [ tabAllowed ]( QChar c ) {
+        return c.category() == QChar::Other_Control && !( tabAllowed && c == QLatin1Char( '\t' ) );
+    } );
+}
+
 QString captureFilterProblem( const QString& filter )
 {
     const auto trimmed = filter.trimmed();
     if ( trimmed.isEmpty() ) {
         return {};
     }
-    for ( const auto c : trimmed ) {
-        if ( c.category() == QChar::Other_Control ) {
-            return QStringLiteral( "A capture filter is one line, without control characters." );
-        }
+    if ( hasControlCharacter( trimmed ) ) {
+        return QStringLiteral( "A capture filter is one line, without control characters." );
     }
     if ( trimmed.startsWith( QLatin1Char( '-' ) ) ) {
         return QStringLiteral( "A capture filter cannot start with '-': the capture program "
@@ -152,23 +184,6 @@ thread_local std::shared_ptr<const std::atomic_bool> scopeCancel;
 
 /// How often a listing looks whether it was cancelled.
 constexpr int kCancelPollMs = 20;
-
-/// Kill @p process and, on Unix, every process of its group.
-void killListing( QProcess& process )
-{
-#ifndef Q_OS_WIN
-    // Again until the group is gone: a process forking as the first
-    // signal comes may leave a child that did not get it.
-    const auto group = -static_cast<pid_t>( process.processId() );
-    QElapsedTimer killing;
-    killing.start();
-    while ( ::kill( group, SIGKILL ) == 0 && killing.elapsed() < 1000 ) {
-        process.waitForFinished( 10 );
-    }
-#endif
-    process.kill();
-    process.waitForFinished( 1000 );
-}
 
 } // namespace
 
@@ -215,34 +230,13 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
     }
 
     QProcess process;
-    process.setProcessChannelMode( QProcess::SeparateChannels );
-    // Nothing to answer a prompt with: a program that asks fails at once.
-    process.setStandardInputFile( QProcess::nullDevice() );
-#ifdef Q_OS_WIN
-    process.setCreateProcessArgumentsModifier(
-        []( QProcess::CreateProcessArguments* args ) { args->flags |= CREATE_NO_WINDOW; } );
-    if ( command.viaShell ) {
-        process.setProgram( qEnvironmentVariable( "COMSPEC", QStringLiteral( "cmd.exe" ) ) );
-        process.setNativeArguments( QStringLiteral( "/d /s /c \"%1\"" ).arg( command.program ) );
-    }
-#else
     // A group of its own, so that a timeout ends what it started too.
-    process.setChildProcessModifier( [] { ::setpgid( 0, 0 ); } );
-    if ( command.viaShell ) {
-        process.setProgram( QStringLiteral( "/bin/sh" ) );
-        process.setArguments( { QStringLiteral( "-c" ), command.program } );
-    }
-#endif
-    if ( !command.viaShell ) {
-        process.setProgram( command.program );
-        process.setArguments( command.arguments );
-    }
+    const auto group = newProcessGroup();
     QElapsedTimer clock;
     clock.start();
-    process.start();
-    if ( !process.waitForStarted( static_cast<int>( timeout.count() ) ) ) {
-        output.error = QStringLiteral( "Cannot start %1: %2" )
-                           .arg( command.displayName(), process.errorString() );
+    const auto start = startProcess( process, command, *group, timeout );
+    if ( !start.started ) {
+        output.error = start.error;
         return output;
     }
     // In slices, to see a cancel in time.
@@ -254,7 +248,10 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
         finished = finished || process.state() == QProcess::NotRunning;
     }
     if ( !finished ) {
-        killListing( process );
+        endProcessGroup( *group, &process, std::chrono::milliseconds( 0 ) );
+        // Reaped here, whatever the group did.
+        process.kill();
+        process.waitForFinished( 1000 );
         output.error
             = cancelled()
                   ? QStringLiteral( "Listing with %1 cancelled" ).arg( command.displayName() )

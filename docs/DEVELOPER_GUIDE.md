@@ -433,12 +433,22 @@ read through a `DeviceSource`:
   (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
   group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
   (2 s), and returns when the group is gone (a second more at most, for a
-  process of another user, as behind sudo, that cannot be killed). On
-  Windows the program is put in a job object with
-  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` right after it starts (what it
-  starts later is in the job too), and `terminate()` terminates the job;
+  process of another user, as behind sudo, that cannot be killed). A
+  group is never signalled with a pid of 0 or less (`kill(-0)` would
+  signal LogSquirl's own group). On Windows the program is started
+  suspended (`CREATE_SUSPENDED`, through the CreateProcess modifier, which
+  also hands over Qt's `PROCESS_INFORMATION`), put in a job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and only then resumed, so that
+  nothing it starts escapes the job; `terminate()` terminates the job, and
   closing the job's last handle, even as LogSquirl crashes, kills what is
-  left. The destructor terminates.
+  left. A job that cannot be created, set up or assigned is reported as a
+  stderr line, and ending the program then terminates its process tree
+  (children first, as `taskkill /T`). The destructor terminates.
+- **Shared.** `startProcess( process, command, group, timeout )` and
+  `endProcessGroup( group, leader, grace )` are how every capture program
+  and every listing (`runListing()`) is started and ended: one place for
+  the channels, the null stdin (or `ProcessCommand::stdinPipe`), the
+  console window, the group or job, the shell and the batch-file check.
 - **Stop.** The stop flag ends the stream, not the program: the
   conversion finalises (Converted), then the caller terminates the source,
   or destroys it. A Stop, or a shutdown, before the capture header has come
@@ -1641,14 +1651,21 @@ interfaces declared so far), and deletes the oldest files beyond
 a file covers, not the most. Each file is a `CapturePart`
 (`capture_index.h`): its path, the packets before it, where its records
 start in the stream, the header bytes ahead of them, and where each copied
-header record lay in the stream. The text keeps the lines of the packets
-in the files kept: the Converter notes where each file's lines start in
-the `.log` and, when a file is deleted, cuts its lines out of the file in
-place (`cutText()`, through a second, binary handle) and writes on at the
-new end. LogSquirl, which follows the tab, re-reads a file that changed in
-the range it indexed as it does a truncated log; marks on dropped lines
-go. A snapshot goes out right after each rotation, so the Packet Panel's
-index follows the files at once.
+header record lay in the stream. Each raw file has a text of its own,
+named after it (`<name>_00001_<time>.log`; without a ring buffer
+`<name>.log`): at a rotation the Converter closes the text, starts the
+next with the header, and calls `LiveObserver::firstPacket` again once its
+first packet line is flushed, so the sidebar opens it in a new followed
+tab (on the UI thread). A text is never rewritten (the maintainer's
+choice, over cutting the deleted file's lines out of one `.log` in place):
+the tabs of deleted files stay as they are until the user closes them,
+and every tab of the capture reads packets through the latest index, so
+their Packet Panel says *Rotated away*. The sidebar keeps the text files
+of the live capture (`liveKeys_`) and hands each the snapshots' summary
+and index. A snapshot goes out right after each rotation, so the Packet
+Panel's index follows the files at once; the Converter's own index drops
+the checkpoints of the deleted files then (`setCaptureParts()`), so a
+capture that runs for days keeps those of its files only.
 
 The `CaptureIndex` keeps the parts (`setCaptureParts()`, `parts()`,
 `partOf( number )`, `rotatedAway()`): its checkpoints stay in stream
@@ -1675,8 +1692,17 @@ ProcessCommand )` for a capture program), as a `ProcessSource` must be.
 `setLimits()` and `setClock()` before `start()` hand the conversion its
 `LiveLimits` and clock, the same for every source kind. The
 outcome is posted before the source is destroyed, so a program that takes
-up to `kTerminateGrace` to end does not delay it; the destructor stops and
-waits for the worker.
+up to `kTerminateGrace` to end does not delay it; `done()` follows once the
+source is gone (`isDone()`). The UI thread never waits for a worker: the
+sidebar hands a capture that may still run (the last one, as the next
+starts; its own, as it is destroyed) to `retireLiveCapture()`, which
+disconnects and stops it and keeps it until it is done; a restart from
+*Start live capture…* starts the next on the last one's `done()`, so that
+two capture programs never run at once. The plugin's shutdown is the one
+place that waits: `cancelListings()` first (a worker may be in a listing,
+e.g. adb's probe), `terminateCaptureProcesses()`, then `joinLiveCaptures()`
+stops and destroys every retired capture, whose destructor waits for its
+worker, before the library is unloaded.
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
@@ -1689,9 +1715,10 @@ knows none of them. A kind answers:
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
+| `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
 | `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
-| `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
+| `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a local shell's. Where a remote shell must read it (adb's device shell, the server's over ssh, which get one joined command line), every value is `shellQuote()`d for it, so that it is one argument there too: the Android and SSH kinds build their device and server scripts so, and a custom command says `{filter:sh}` |
 | `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
 
@@ -1754,13 +1781,22 @@ root`. `listInterfaces()` lists `any` and the device's interfaces, with the
 root or tcpdump guidance as its error. `makeSource()` probes again on the
 capture's worker thread (throwing, as a failed capture, without root or
 tcpdump) and runs `captureCommand()`: `adb -s <serial> exec-out 'exec
-2>/dev/null; [su -c] <script>'`, the script running tcpdump in the
-background with its stderr and pid in `logsquirl-<tag>.err`/`.pid` and
-waiting for it. Every word in a device command line goes through
-`shellQuote()` (POSIX single quotes). The stream is a Process Source that,
-as it goes, kills tcpdump by its pid file on the device (through su when it
-runs as root) and removes its files, and that reads the `.err` file for
-the error of a capture that ended before any byte came.
+2>/dev/null; [su -c] <script>'`, the script (`adbCaptureScript()`)
+running tcpdump in the background with its stderr and pid in
+`logsquirl-<tag>.err`/`.pid` (`AdbCaptureFiles`) and waiting for it. Every
+word in a device command line goes through `shellQuote()` (POSIX single
+quotes). The stream is a Process Source that, as it goes, ends tcpdump on
+the device (through su when it runs as root) and removes its files, and
+that reads the `.err` file for the error of a capture that ended before
+any byte came. While adb still runs, Stop runs `adbStopScript()`: it
+leaves a `.stop` mark first and then kills the pid if the script has left
+it; the script leaves its pid first and then looks for the mark, killing
+its own tcpdump if it is there, so a Stop between `&` and the pid file
+ends tcpdump too (the script removes the mark, the pid and, stopped so,
+the stderr file as it ends). After adb has ended by itself,
+`adbCleanupScript()` kills by the pid if it is still there and removes the
+files. A LogSquirl that crashes leaves tcpdump running until its next
+write to the dead stream, and the files in `/data/local/tmp`.
 `explainFailure()` maps adb's and tcpdump's errors to
 `adbAuthorizeGuidance()`, `adbConnectGuidance()`, `adbRootGuidance()`,
 `adbTcpdumpGuidance()`. `tests/adb_source_test.cpp` uses a fake `adb`
@@ -1780,14 +1816,27 @@ refuses what ssh could misread (a leading `-`, spaces, a bad port);
 `listDevices()` suggests `sshConfigHosts()`, the `Host` entries without
 `*`, `?` or `!`, described by their HostName, User and Port.
 `sshArguments()` is always `-T -o BatchMode=yes -o ConnectTimeout=10 [-p
-port] -- <destination> <remote command>`, so ssh never prompts (stdin is
-the null device too). `listInterfaces()` runs `tcpdump -D` remotely;
-`command()` runs `sshRemoteCaptureCommand( choice )`, a POSIX command line
-built with `shellQuote()` (single quotes, `'` as `'\''`): `exec [sudo -n]
-tcpdump -i '<if>' -s N -U -w - '<filter>'`, the filter extended, unless
-the option `excludeOwnConnection` is `false`, by `and not (host
-'"${SSH_CLIENT%% *}"' and tcp port '"${SSH_CLIENT##* }"')`, which the
-server's shell expands inside one argument. The options (`kSshSudoOption`
+port] -- <destination> <remote command>`, so ssh never prompts (a
+listing's stdin is the null device too). `listInterfacesWith( device,
+options, timeout )` runs `out=$([sudo -n ]tcpdump -D) && [ -n "$out" ] &&
+printf … || ip -o link show` with `/bin/sh` remotely, `sudo -n` as the sudo
+option says (the options widget emits `LiveOptionsWidget::listingChanged()`
+as it is toggled, and the form lists anew); lines of `ip -o link` are
+listed when tcpdump listed none, with what it wrote on stderr as the
+listing's error; `command()` runs `sshRemoteCaptureCommand( choice )`, `exec
+/bin/sh -c '<sshRemoteCaptureScript( choice )>'`, so that the POSIX shell
+runs the script whatever the login shell is. The script is built with
+`shellQuote()` (single quotes, `'` as `'\''`): `[sudo -n] tcpdump -i '<if>'
+-s N -U -w - '<filter>'` in the background, the filter extended, unless the
+option `excludeOwnConnection` is `false`, by `and not (host '"$1"' and tcp
+port '"$3"')` after `set -- $SSH_CLIENT`, which the shell expands inside
+one argument. A watchdog in the background reads the script's stdin (kept
+as fd 3) until it closes and then kills tcpdump (sudo relays the signal);
+the script waits for tcpdump, ends the watchdog and exits with tcpdump's
+status. The command has `ProcessCommand::stdinPipe` set: ssh's stdin is a
+pipe the plugin never writes to and `ProcessSource::terminate()` closes
+before it ends ssh, so Stop (or a dropped connection, or LogSquirl killed)
+ends the remote tcpdump, which sshd, without a pty, would not signal. The options (`kSshSudoOption`
 `sudo`, `kSshExcludeOwnOption`, both `true` unless set to `false`) are two
 checkboxes, `sshSudo` and `sshExcludeOwn`. `explainSshFailure()` maps ssh's,
 sudo's and tcpdump's stderr (unknown or changed host key, refused keys,
@@ -1796,7 +1845,9 @@ unreachable host) to what to do; listings add it to their error,
 `explainFailure()` to a failed capture's. Tests run a fake `ssh` that logs
 its argv, insists on `BatchMode=yes` and runs the remote command with
 `/bin/sh`, `$SSH_CLIENT` set and fake `sudo` and `tcpdump` alone on `PATH`,
-also with hostile interfaces and filters.
+also with hostile interfaces and filters; a `detached` one runs it in a
+process group of its own with ssh's stdin, as a server would, for Stop to
+be seen ending the remote tcpdump.
 
 The **Wireshark extcap** kind (`extcap_source.h/cpp`, id `extcap`) is
 `ExtcapSourceKind( ExtcapPlaces )`: the directories looked in, in order
@@ -1810,6 +1861,12 @@ the executables (a name found twice is the first's), anew on each call;
 asked in time, is a target with a `problem`); `listInterfaces()` asks the
 chosen one; `config( device, interface, timeout )` asks for
 `--extcap-config` and `--extcap-dlts`. Every question is a `runListing()`.
+On Windows a `.bat` or `.cmd` extcap runs through `cmd.exe`, which reads
+`%`, `!`, `^`, `&`, `|`, `<`, `>`, `(`, `)`, `"` and line breaks in its
+arguments even inside quotes (BatBadBut): `batchArgumentProblem()` refuses
+them, in `validate()` before Start and in `startProcess()` for every
+program, listings included; there is no escaping that holds for all of
+them.
 The protocol's sentences (`keyword {key=value}…`, `\}` escaped) are read
 by `parseExtcapSentences()`, bounded (`kMaxExtcapSentences`, lines of at
 most `kMaxExtcapLine`), into `parseExtcapInterfaces()`, `parseExtcapDlts()`
@@ -1864,9 +1921,13 @@ shell would, without running one (blanks; `'…'`; `"…"` with `\"` and `\\`;
 `|&;<>` (`shellOperator`), which is refused; then `{interface}`,
 `{filter}`, `{snaplen}` are replaced inside each word in one pass (a value
 holding a placeholder is not replaced again), a word that is `{filter}`
-alone dropped for an empty filter. With the shell, the line goes to
-`ProcessCommand::shell()`, each value `shellQuote()`d (Windows: in double
-quotes, a value with `"`, `%`, `!` or a trailing `\` refused). A command
+(or `{filter:sh}`) alone dropped for an empty filter. `{interface:sh}` and
+`{filter:sh}` put the value in `shellQuote()`d, for the remote shell that
+`adb shell`/`exec-out` and `ssh` join their arguments for (the examples use
+them). With the shell, the line goes to `ProcessCommand::shell()`, each
+value `shellQuote()`d (Windows: in double quotes, a value with `"`, `%`,
+`!` or a trailing `\` refused), a `{…:sh}` one quoted for the remote shell
+first. A command
 using `{interface}` needs one, not starting with `-`. The options widget
 (`commandSaved`, `commandLine`, `commandShell`, `commandShellWarning`,
 `commandName`, `commandSave`, `commandDelete`) writes the saved commands

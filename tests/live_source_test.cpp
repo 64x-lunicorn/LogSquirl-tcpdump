@@ -31,6 +31,7 @@
 #include "live_source.h"
 #include "settings.h"
 
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSettings>
@@ -42,6 +43,47 @@
 
 using namespace tcpdump;
 using namespace tcpdump_test;
+
+SCENARIO( "Yes-or-no options, control characters and programs are read one way", "[live_source]" )
+{
+    THEN( "an option is on for true, off for false, in any case, else as by default" )
+    {
+        const LiveOptions options{ { "a", "true" }, { "b", "FALSE" }, { "c", "maybe" } };
+        REQUIRE( liveOptionOn( options, "a", false ) );
+        REQUIRE_FALSE( liveOptionOn( options, "b", true ) );
+        REQUIRE( liveOptionOn( options, "c", true ) );
+        REQUIRE_FALSE( liveOptionOn( options, "missing", false ) );
+        REQUIRE( liveOptionValue( true ) == "true" );
+        REQUIRE( liveOptionValue( false ) == "false" );
+    }
+
+    THEN( "a line break is a control character, a tab only if it is not allowed" )
+    {
+        REQUIRE( hasControlCharacter( "a\nb" ) );
+        REQUIRE( hasControlCharacter( "a\tb" ) );
+        REQUIRE_FALSE( hasControlCharacter( "a\tb", true ) );
+        REQUIRE_FALSE( hasControlCharacter( "eth0" ) );
+    }
+
+    THEN( "a program is found in the first directory that has it, runnable" )
+    {
+        QTemporaryDir dir;
+        REQUIRE( QDir( dir.path() ).mkpath( "first" ) );
+        REQUIRE( QDir( dir.path() ).mkpath( "second" ) );
+        QFile plain( dir.filePath( "first/tool" ) );
+        REQUIRE( plain.open( QIODevice::WriteOnly ) );
+        plain.close();
+        QFile runnable( dir.filePath( "second/tool" ) );
+        REQUIRE( runnable.open( QIODevice::WriteOnly ) );
+        runnable.close();
+        REQUIRE( runnable.setPermissions( QFileDevice::ReadOwner | QFileDevice::ExeOwner ) );
+#ifndef Q_OS_WIN
+        REQUIRE( findProgram( "tool", { "", dir.filePath( "first" ), dir.filePath( "second" ) } )
+                 == dir.filePath( "second/tool" ) );
+#endif
+        REQUIRE( findProgram( "missing", { dir.filePath( "second" ) } ).isEmpty() );
+    }
+}
 
 SCENARIO( "Live Source Kinds are registered in one place, in order, by id", "[live_source]" )
 {

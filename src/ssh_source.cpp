@@ -34,7 +34,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QStandardPaths>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -49,8 +48,16 @@ const QStringList kSshOptions{ QStringLiteral( "-T" ), QStringLiteral( "-o" ),
                                QStringLiteral( "BatchMode=yes" ), QStringLiteral( "-o" ),
                                QStringLiteral( "ConnectTimeout=10" ) };
 
-/// What lists the server's interfaces.
-const QString kRemoteListing = QStringLiteral( "tcpdump -D" );
+/// What lists the server's interfaces, run by /bin/sh: tcpdump -D (behind
+/// sudo -n if @p sudo), and ip -o link if that lists nothing.
+QString remoteListing( bool sudo )
+{
+    const auto script
+        = QStringLiteral( "out=$(%1tcpdump -D) && [ -n \"$out\" ] && printf '%s\\n' \"$out\" || "
+                          "ip -o link show" )
+              .arg( sudo ? QStringLiteral( "sudo -n " ) : QString() );
+    return QStringLiteral( "exec /bin/sh -c " ) + shellQuote( script );
+}
 
 /// The exit code with which ssh reports its own failure (not the remote command's).
 constexpr int kSshFailed = 255;
@@ -58,13 +65,7 @@ constexpr int kSshFailed = 255;
 /// Whether the option @p name of @p options is on; both are on by default.
 bool optionOn( const LiveOptions& options, const QString& name )
 {
-    return options.value( name ) != QStringLiteral( "false" );
-}
-
-bool hasControl( const QString& text )
-{
-    return std::any_of( text.begin(), text.end(),
-                        []( QChar c ) { return c.category() == QChar::Other_Control; } );
+    return liveOptionOn( options, name, true );
 }
 
 /// One interface of `tcpdump -D`: "1.eth0 [Up, Running]", "2.any
@@ -80,6 +81,21 @@ bool parseInterface( const QString& line, LiveTarget& target )
     target.id = match.captured( 1 );
     const auto description = match.captured( 2 ).trimmed();
     target.description = description.isEmpty() ? match.captured( 3 ).trimmed() : description;
+    return true;
+}
+
+/// One interface of `ip -o link`: "2: eth0: <BROADCAST,UP> mtu 1500 …",
+/// "3: veth1@if4: <…>"; none if @p line is not one.
+bool parseLink( const QString& line, LiveTarget& target )
+{
+    static const QRegularExpression link(
+        QStringLiteral( "^\\s*\\d+:\\s+([^:@\\s]+)(?:@[^:\\s]*)?:\\s+<([^>]*)>" ) );
+    const auto match = link.match( line );
+    if ( !match.hasMatch() ) {
+        return false;
+    }
+    target.id = match.captured( 1 );
+    target.description = match.captured( 2 );
     return true;
 }
 
@@ -115,6 +131,8 @@ public:
         layout->addWidget( excludeOwn_ );
         setOptions( {} );
         connect( sudo_, &QCheckBox::toggled, this, &LiveOptionsWidget::changed );
+        // tcpdump -D is run with sudo -n, or without.
+        connect( sudo_, &QCheckBox::toggled, this, &LiveOptionsWidget::listingChanged );
         connect( excludeOwn_, &QCheckBox::toggled, this, &LiveOptionsWidget::changed );
     }
 
@@ -125,10 +143,8 @@ public:
     }
     LiveOptions options() const override
     {
-        const auto text
-            = []( bool on ) { return on ? QStringLiteral( "true" ) : QStringLiteral( "false" ); };
-        return { { kSshSudoOption, text( sudo_->isChecked() ) },
-                 { kSshExcludeOwnOption, text( excludeOwn_->isChecked() ) } };
+        return { { kSshSudoOption, liveOptionValue( sudo_->isChecked() ) },
+                 { kSshExcludeOwnOption, liveOptionValue( excludeOwn_->isChecked() ) } };
     }
 
 private:
@@ -147,7 +163,8 @@ SshDestination SshDestination::parse( const QString& device )
                                          "~/.ssh/config." );
         return parsed;
     }
-    if ( hasControl( text ) || text.contains( QRegularExpression( QStringLiteral( "\\s" ) ) ) ) {
+    if ( hasControlCharacter( text )
+         || text.contains( QRegularExpression( QStringLiteral( "\\s" ) ) ) ) {
         parsed.problem = QStringLiteral( "A host has no spaces: [user@]host[:port]." );
         return parsed;
     }
@@ -283,43 +300,58 @@ std::vector<LiveTarget> sshConfigHosts( const QString& configText )
     return hosts;
 }
 
-QString sshRemoteCaptureCommand( const LiveChoice& choice )
+QString sshRemoteCaptureScript( const LiveChoice& choice )
 {
     const bool excludeOwn = optionOn( choice.options, kSshExcludeOwnOption );
     QString filter;
     if ( excludeOwn ) {
-        // $SSH_CLIENT is "<client address> <client port> <server port>": the
-        // server's shell puts its first and last word between the quoted
-        // parts, as one argument.
+        // $SSH_CLIENT is "<client address> <client port> <server port>",
+        // split into $1 $2 $3 below: the shell puts the first and the last
+        // between the quoted parts, as one argument.
         const auto own = choice.filter.isEmpty()
                              ? QStringLiteral( "not (host " )
                              : QStringLiteral( "(%1) and not (host " ).arg( choice.filter );
-        filter = shellQuote( own ) + QStringLiteral( "\"${SSH_CLIENT%% *}\"" )
-                 + shellQuote( QStringLiteral( " and tcp port " ) )
-                 + QStringLiteral( "\"${SSH_CLIENT##* }\"" ) + shellQuote( QStringLiteral( ")" ) );
+        filter = shellQuote( own ) + QStringLiteral( "\"$1\"" )
+                 + shellQuote( QStringLiteral( " and tcp port " ) ) + QStringLiteral( "\"$3\"" )
+                 + shellQuote( QStringLiteral( ")" ) );
     }
     else if ( !choice.filter.isEmpty() ) {
         filter = shellQuote( choice.filter );
     }
 
-    QString line;
+    QString script;
     if ( excludeOwn ) {
-        line = QStringLiteral( "[ -n \"$SSH_CLIENT\" ] || { echo 'SSH_CLIENT is not set on the "
-                               "server, so the SSH connection cannot be excluded' >&2; exit 2; "
-                               "}; " );
+        script = QStringLiteral( "[ -n \"$SSH_CLIENT\" ] || { echo 'SSH_CLIENT is not set on the "
+                                 "server, so the SSH connection cannot be excluded' >&2; exit 2; "
+                                 "}; set -- $SSH_CLIENT; " );
     }
-    line += QStringLiteral( "exec " );
+    // tcpdump in the background, so that a watchdog can end it once stdin,
+    // which ssh holds open while it runs, closes: as Stop ends ssh, or the
+    // connection drops.  Without a terminal sshd sends no SIGHUP, and
+    // tcpdump would only notice at its next packet.
+    script += QStringLiteral( "exec 3<&0; " );
     if ( optionOn( choice.options, kSshSudoOption ) ) {
-        line += QStringLiteral( "sudo -n " );
+        script += QStringLiteral( "sudo -n " );
     }
     // -U: each packet written as it comes, not when a buffer is full.
-    line += QStringLiteral( "tcpdump -i %1 -s %2 -U -w -" )
-                .arg( shellQuote( choice.networkInterface ) )
-                .arg( choice.snaplen );
+    script += QStringLiteral( "tcpdump -i %1 -s %2 -U -w -" )
+                  .arg( shellQuote( choice.networkInterface ) )
+                  .arg( choice.snaplen );
     if ( !filter.isEmpty() ) {
-        line += QLatin1Char( ' ' ) + filter;
+        script += QLatin1Char( ' ' ) + filter;
     }
-    return line;
+    script += QStringLiteral( " 3<&- & pid=$!; "
+                              "{ while IFS= read -r _; do :; done <&3; kill $pid; } "
+                              ">/dev/null 2>&1 & watchdog=$!; exec 3<&-; "
+                              "wait $pid; status=$?; kill $watchdog 2>/dev/null; exit $status" );
+    return script;
+}
+
+QString sshRemoteCaptureCommand( const LiveChoice& choice )
+{
+    // Run by the POSIX shell whatever the login shell is, which only reads
+    // one single-quoted word.
+    return QStringLiteral( "exec /bin/sh -c " ) + shellQuote( sshRemoteCaptureScript( choice ) );
 }
 
 QString explainSshFailure( const QString& error )
@@ -412,15 +444,15 @@ SshSourceKind::SshSourceKind( SshPrograms where )
 QString SshSourceKind::program() const
 {
     for ( const auto& path : where_.installed ) {
-        const QFileInfo file( path );
-        if ( file.isFile() && file.isExecutable() ) {
+        if ( isRunnableProgram( path ) ) {
             return path;
         }
     }
-    if ( where_.searchPath.isEmpty() ) {
-        return {};
-    }
-    return QStandardPaths::findExecutable( QStringLiteral( "ssh" ), where_.searchPath );
+#ifdef Q_OS_WIN
+    return findProgram( QStringLiteral( "ssh.exe" ), where_.searchPath );
+#else
+    return findProgram( QStringLiteral( "ssh" ), where_.searchPath );
+#endif
 }
 
 QStringList SshSourceKind::sshArguments( const SshDestination& device,
@@ -484,6 +516,12 @@ LiveListing SshSourceKind::listDevices( std::chrono::milliseconds timeout ) cons
 LiveListing SshSourceKind::listInterfaces( const QString& device,
                                            std::chrono::milliseconds timeout ) const
 {
+    return listInterfacesWith( device, {}, timeout );
+}
+
+LiveListing SshSourceKind::listInterfacesWith( const QString& device, const LiveOptions& options,
+                                               std::chrono::milliseconds timeout ) const
+{
     LiveListing listing;
     const auto destination = SshDestination::parse( device );
     if ( !destination.problem.isEmpty() ) {
@@ -496,19 +534,38 @@ LiveListing SshSourceKind::listInterfaces( const QString& device,
         return listing;
     }
     const auto output = runListing(
-        { ssh, sshArguments( destination, kRemoteListing ), QStringLiteral( "ssh" ) }, timeout );
+        { ssh, sshArguments( destination, remoteListing( optionOn( options, kSshSudoOption ) ) ),
+          QStringLiteral( "ssh" ) },
+        timeout );
     if ( !output.error.isEmpty() ) {
         listing.error = output.error;
         return listing;
     }
+    bool fromIp = false;
     for ( const auto& line : output.out.split( QLatin1Char( '\n' ), Qt::SkipEmptyParts ) ) {
         LiveTarget target;
         if ( parseInterface( line, target ) ) {
             listing.targets.push_back( std::move( target ) );
         }
+        else if ( parseLink( line, target ) ) {
+            fromIp = true;
+            listing.targets.push_back( std::move( target ) );
+        }
     }
     const auto err = output.err.trimmed();
-    if ( output.exitCode != 0 ) {
+    if ( output.exitCode == 0 && fromIp ) {
+        // Listed, but tcpdump did not: what it said may keep it from capturing.
+        listing.error = QStringLiteral( "tcpdump -D listed nothing on %1; these are the "
+                                        "interfaces ip -o link lists." )
+                            .arg( destination.host );
+        if ( !err.isEmpty() ) {
+            listing.error += QStringLiteral( "\n" ) + err;
+            if ( const auto hint = explainSshFailure( err ); !hint.isEmpty() ) {
+                listing.error += QStringLiteral( "\n\n" ) + hint;
+            }
+        }
+    }
+    else if ( output.exitCode != 0 ) {
         listing.error = output.exitCode == kSshFailed
                             ? QStringLiteral( "ssh to %1 failed" ).arg( destination.host )
                             : QStringLiteral( "tcpdump -D on %1 exited with code %2" )
@@ -535,7 +592,7 @@ QString SshSourceKind::validate( const LiveChoice& choice ) const
     if ( const auto problem = SshDestination::parse( choice.device ).problem; !problem.isEmpty() ) {
         return problem;
     }
-    if ( hasControl( choice.networkInterface ) ) {
+    if ( hasControlCharacter( choice.networkInterface ) ) {
         return QStringLiteral( "An interface is one line, without control characters." );
     }
     return LiveSourceKind::validate( choice );
@@ -549,10 +606,13 @@ LiveOptionsWidget* SshSourceKind::makeOptionsWidget() const
 ProcessCommand SshSourceKind::command( const LiveChoice& choice ) const
 {
     const auto ssh = program();
-    return { ssh.isEmpty() ? QStringLiteral( "ssh" ) : ssh,
-             sshArguments( SshDestination::parse( choice.device ),
-                           sshRemoteCaptureCommand( choice ) ),
-             QStringLiteral( "ssh" ) };
+    ProcessCommand command{ ssh.isEmpty() ? QStringLiteral( "ssh" ) : ssh,
+                            sshArguments( SshDestination::parse( choice.device ),
+                                          sshRemoteCaptureCommand( choice ) ),
+                            QStringLiteral( "ssh" ) };
+    // Held open while ssh runs, for the remote watchdog; never written to.
+    command.stdinPipe = true;
+    return command;
 }
 
 QString SshSourceKind::explainFailure( const QString& error ) const

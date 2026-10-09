@@ -22,14 +22,18 @@
  * @brief The Custom command source: live capture from a command the user
  *        wrote, whose stdout is a pcap or pcapng stream.
  *
- * The command is one line, e.g. `ssh router tcpdump -i {interface} -U -w -
- * {filter}`, split into a program and its arguments like a POSIX shell
+ * The command is one line, e.g. `ssh router tcpdump -i {interface:sh} -U -w
+ * - {filter:sh}`, split into a program and its arguments like a POSIX shell
  * would split it, without running one (splitCommandLine()): quotes and
  * backslashes group and escape, nothing is expanded, no pipe or redirection
  * is made.  The placeholders {interface}, {filter} and {snaplen} are then
  * replaced inside the arguments, so a value is always part of one argument
  * and never read by a shell; an argument that is {filter} alone is left out
- * when the filter is empty.
+ * when the filter is empty.  adb shell, adb exec-out and ssh join their
+ * arguments into one line for the device's or the server's shell, which
+ * reads them again: {interface:sh} and {filter:sh} are the values
+ * single-quoted for that POSIX shell (shellQuote()), one word there too,
+ * as the examples use them.
  *
  * "Run through the shell" (off by default) hands the line to /bin/sh -c
  * (cmd.exe /c on Windows) as it is, for pipes and redirections: anything

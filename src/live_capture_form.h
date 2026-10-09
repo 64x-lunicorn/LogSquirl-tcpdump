@@ -113,6 +113,9 @@ public:
 
 signals:
     void changed();
+    /// An option changed how interfaces are listed (ssh's sudo): the form
+    /// lists them anew.
+    void listingChanged();
 };
 
 class LiveCaptureForm : public QWidget {

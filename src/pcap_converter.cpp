@@ -49,7 +49,6 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
-#include <deque>
 #include <exception>
 #include <new>
 #include <thread>
@@ -163,41 +162,6 @@ private:
     bool timedOut_ = false;
     uint64_t bytesRead_ = 0;
 };
-
-/**
- * Remove the bytes from @p from to @p to of the text file @p output is
- * writing, moving what follows them down, and go on writing at its new end.
- * Through a second handle: the text is written in text mode, the bytes are
- * moved as they are.
- */
-bool cutText( QFile& output, qint64 from, qint64 to )
-{
-    if ( !output.flush() ) {
-        return false;
-    }
-    QFile text( output.fileName() );
-    if ( !text.open( QIODevice::ReadWrite ) ) {
-        return false;
-    }
-    constexpr qint64 kChunk = 64 * 1024;
-    auto readAt = to;
-    auto writeAt = from;
-    for ( ;; ) {
-        if ( !text.seek( readAt ) ) {
-            return false;
-        }
-        const auto chunk = text.read( kChunk );
-        if ( chunk.isEmpty() ) {
-            break;
-        }
-        if ( !text.seek( writeAt ) || text.write( chunk ) != chunk.size() ) {
-            return false;
-        }
-        readAt += chunk.size();
-        writeAt += chunk.size();
-    }
-    return text.resize( writeAt ) && text.flush() && output.seek( writeAt );
-}
 
 /// The summary of a converted capture, from what was collected on the way.
 CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
@@ -407,23 +371,6 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     if ( baseName.isEmpty() ) {
         baseName = QStringLiteral( "capture" );
     }
-    QFile output( outputDir.filePath( baseName + QStringLiteral( ".log" ) ) );
-    // Never write into an existing file or through a link planted in its place.
-    if ( !output.open( QIODevice::WriteOnly | QIODevice::NewOnly | QIODevice::Text ) ) {
-        return failed(
-            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
-    }
-    output.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
-    auto writeFailed = [ &output ] {
-        return failed(
-            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
-    };
-    auto writeLine = [ &output ]( const std::string& line ) {
-        return output.write( line.data(), static_cast<qint64>( line.size() ) )
-                   == static_cast<qint64>( line.size() )
-               && output.write( "\n", 1 ) == 1;
-    };
-
     // A live capture's bytes, as they were read, next to its text: one
     // file, or a ring buffer's.
     std::optional<RawCapture> raw;
@@ -439,6 +386,34 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
             return rawFailed();
         }
     }
+    // The text of a raw file is named after it: <name>.log, or a ring
+    // buffer's <name>_00001_<time>.log, one per file.
+    auto textPath = [ & ] {
+        return outputDir.filePath( ( raw ? QFileInfo( raw->path() ).completeBaseName() : baseName )
+                                   + QStringLiteral( ".log" ) );
+    };
+
+    QFile output( textPath() );
+    auto writeFailed = [ &output ] {
+        return failed(
+            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
+    };
+    // Never write into an existing file or through a link planted in its place.
+    auto openText = [ &output ] {
+        if ( !output.open( QIODevice::WriteOnly | QIODevice::NewOnly | QIODevice::Text ) ) {
+            return false;
+        }
+        output.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
+        return true;
+    };
+    if ( !openText() ) {
+        return writeFailed();
+    }
+    auto writeLine = [ &output ]( const std::string& line ) {
+        return output.write( line.data(), static_cast<qint64>( line.size() ) )
+                   == static_cast<qint64>( line.size() )
+               && output.write( "\n", 1 ) == 1;
+    };
 
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
@@ -480,9 +455,6 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }
-    // Where the lines of each file of a ring buffer start in the text; the
-    // first file's after the header.
-    std::deque<qint64> fileLines{ output.pos() };
 
     auto index = std::make_shared<CaptureIndex>( options.checkpointInterval );
     // Live: what was written is made readable before every wait and at
@@ -552,34 +524,35 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         }
     };
     bool firstPacket = true;
+    // The text file written has no packet line yet: the next one opens it.
+    bool firstOfText = true;
     // A ring buffer's file ends after the packet that filled it, or the last
     // one before its duration was over, when the next packet comes: where
     // that packet's record ends, and the headers a file needs there.
     bool fileFull = false;
     uint64_t fileEnd = 0;
     CaptureHeaders fileHeaders;
-    // Start the next file; why not, if it cannot be.
+    // Start the next file, and the text of it; why not, if they cannot be.
+    // The text of a file is never rewritten: it stays as it is, also once
+    // its raw file is deleted, for its tab.
     auto rotate = [ & ]() -> std::optional<ConversionResult> {
         if ( !output.flush() ) {
             return writeFailed();
         }
+        output.close();
         if ( !raw->rotate( fileEnd, reader.packetsRead() - 1, fileHeaders ) ) {
             return rawFailed();
         }
         fileFull = false;
         fileStarted = clockNow();
-        fileLines.push_back( output.pos() );
-        // The lines of the files deleted go with them.
-        while ( fileLines.size() > raw->parts().size() ) {
-            const auto dropped = fileLines[ 1 ] - fileLines[ 0 ];
-            if ( !cutText( output, fileLines[ 0 ], fileLines[ 1 ] ) ) {
-                return writeFailed();
-            }
-            fileLines.pop_front();
-            for ( auto& start : fileLines ) {
-                start -= dropped;
-            }
+        output.setFileName( textPath() );
+        if ( !openText() || !writeLine( formatter.header() ) ) {
+            return writeFailed();
         }
+        firstOfText = true;
+        // Not the checkpoints of the files deleted: a capture that runs for
+        // days keeps those of its files only.
+        index->setCaptureParts( raw->parts(), CaptureIndex::Growth::Growing );
         // The Packet Panel's index follows the files at once.
         sendSnapshot();
         if ( flushFailed ) {
@@ -634,8 +607,9 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         if ( live ) {
             snapshotDue = true;
             const auto now = Clock::now();
-            if ( firstPacket ) {
+            if ( firstOfText ) {
                 // The header and this line are in the file before it is opened.
+                firstOfText = false;
                 flush();
                 if ( !flushFailed && live->firstPacket ) {
                     live->firstPacket( QFileInfo( output.fileName() ).absoluteFilePath(),

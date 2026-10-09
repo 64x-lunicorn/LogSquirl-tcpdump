@@ -85,6 +85,40 @@ SCENARIO( "A command names its program", "[process_source]" )
     REQUIRE( shell.displayName() == "ssh" );
 }
 
+SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[process_source]" )
+{
+    GIVEN( "a batch file, as Windows runs it through cmd.exe" )
+    {
+        for ( const auto* program : { "C:/extcap/dump.bat", "C:/extcap/DUMP.CMD" } ) {
+            CAPTURE( program );
+
+            THEN( "a plain argument passes" )
+            {
+                REQUIRE( batchArgumentProblem(
+                             { program, { "--capture", "host 10.0.0.1 and port 443" } } )
+                             .isEmpty() );
+            }
+
+            THEN( "every character cmd.exe reads in an argument, quoted or not, is refused" )
+            {
+                for ( const auto* hostile : { "x & calc", "x | calc", "x > out", "x < in", "%PATH%",
+                                              "!x!", "a^b", "(x)", "\"x\" & calc", "x\r\ncalc" } ) {
+                    CAPTURE( hostile );
+                    const auto problem
+                        = batchArgumentProblem( { program, { "--capture-filter", hostile } } );
+                    REQUIRE( problem.contains( "is a batch file" ) );
+                }
+            }
+        }
+    }
+
+    THEN( "a program that is no batch file, or a command for the shell, is not checked" )
+    {
+        REQUIRE( batchArgumentProblem( { "C:/extcap/dump.exe", { "x & calc" } } ).isEmpty() );
+        REQUIRE( batchArgumentProblem( ProcessCommand::shell( "dump.bat x & calc" ) ).isEmpty() );
+    }
+}
+
 #ifdef Q_OS_UNIX
 
 #include "pcap_converter.h"
@@ -95,6 +129,7 @@ SCENARIO( "A command names its program", "[process_source]" )
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <QTemporaryDir>
 
 #include <atomic>
@@ -548,6 +583,44 @@ SCENARIO( "Shutting the plugin down ends every capture program", "[process_sourc
                 worker.join();
             }
             logsquirl_plugin_shutdown();
+        }
+    }
+}
+
+SCENARIO( "Ending a group never signals LogSquirl's own", "[process_source]" )
+{
+    // A signal to group 0 (kill(-0)) would end this test run with it.
+    GIVEN( "a program that could not be started" )
+    {
+        QProcess process;
+        const auto group = newProcessGroup();
+        const auto start = startProcess( process, { "/nonexistent/capture-program", {} }, *group,
+                                         milliseconds( 5000 ) );
+        REQUIRE_FALSE( start.started );
+        REQUIRE( start.error.contains( "Cannot start capture-program" ) );
+
+        THEN( "ending its group, at once or after a grace, signals nothing" )
+        {
+            endProcessGroup( *group, &process, milliseconds( 0 ) );
+            endProcessGroup( *group, &process, milliseconds( 50 ) );
+            REQUIRE( ::kill( ::getpid(), 0 ) == 0 );
+        }
+    }
+
+    GIVEN( "a listing whose program has ended as its time is up" )
+    {
+        QTemporaryDir dir;
+        const auto program = fakeProgram( dir, "quick", "exit 0" );
+        QProcess process;
+        const auto group = newProcessGroup();
+        REQUIRE( startProcess( process, { program, {} }, *group, milliseconds( 5000 ) ).started );
+        REQUIRE( process.waitForFinished( 5000 ) );
+        REQUIRE( process.processId() == 0 ); // reaped: what a kill would have used
+
+        THEN( "ending its group signals nothing of LogSquirl's" )
+        {
+            endProcessGroup( *group, &process, milliseconds( 0 ) );
+            REQUIRE( ::kill( ::getpid(), 0 ) == 0 );
         }
     }
 }

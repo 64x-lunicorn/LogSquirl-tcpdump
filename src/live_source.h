@@ -85,6 +85,27 @@ using LiveOptions = QMap<QString, QString>;
 /// to the kind for this session, but never written to settings.ini.
 inline constexpr QChar kSecretOptionMark = QLatin1Char( '*' );
 
+/// Whether @p path is a program that can be run: a file, executable.
+bool isRunnableProgram( const QString& path );
+
+/// The program @p fileName (with ".exe" on Windows if the caller wants it) in
+/// the first of @p directories that has it, runnable; empty if none does.
+QString findProgram( const QString& fileName, const QStringList& directories );
+
+/// A yes-or-no option's value, as settings.ini keeps it: "true" or "false".
+inline QString liveOptionValue( bool on )
+{
+    return on ? QStringLiteral( "true" ) : QStringLiteral( "false" );
+}
+
+/// Whether the yes-or-no option @p name of @p options is on: "true" is,
+/// "false" is not (in any case), anything else, or none, is @p byDefault.
+bool liveOptionOn( const LiveOptions& options, const QString& name, bool byDefault );
+
+/// Whether @p text holds a control character (a line break, …); a tab
+/// counts too unless @p tabAllowed.
+bool hasControlCharacter( const QString& text, bool tabAllowed = false );
+
 /// Whether the option @p name is a secret (kSecretOptionMark).
 inline bool isSecretLiveOption( const QString& name )
 {
@@ -202,6 +223,15 @@ public:
     /// most @p timeout; on a worker thread.
     virtual LiveListing listInterfaces( const QString& device,
                                         std::chrono::milliseconds timeout ) const = 0;
+    /// The interfaces of @p device as the kind's @p options list them (ssh
+    /// lists with sudo -n if its option says so); by default as
+    /// listInterfaces( device, timeout ).  On a worker thread.
+    virtual LiveListing listInterfacesWith( const QString& device, const LiveOptions& options,
+                                            std::chrono::milliseconds timeout ) const
+    {
+        (void)options;
+        return listInterfaces( device, timeout );
+    }
 
     /// Why @p choice cannot be captured, kind-specific (the capture filter's
     /// syntax and the snaplen's range are checked before: captureFilterProblem());

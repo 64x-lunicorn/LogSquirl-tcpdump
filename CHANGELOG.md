@@ -70,10 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is to each, and a notification which one stopped it. A **Ring
   buffer** splits the raw capture into `<name>_00001_<time>.pcap`, … of a
   size or duration and keeps the newest N, each a capture of its own (a
-  pcapng's section header and interfaces repeated). The tab keeps the
-  lines of the packets kept: the oldest file's lines are cut from the
-  `.log` when it is deleted, and the Packet Panel says *Rotated away* for
-  a packet that was in it. **Save capture…** writes the files kept as one
+  pcapng's section header and interfaces repeated). Each file has a
+  `.log` of its own, opened in a new followed tab at its first packet, so
+  no tab grows without bound; a text is never rewritten, the tabs of
+  deleted files stay until they are closed, and their Packet Panel says
+  *Rotated away*. The index drops the checkpoints of deleted files.
+  **Save capture…** writes the files kept as one
   capture; Export packets… reads each packet from its file. The settings
   are fields of the Live capture form, kept in `settings.ini` (#77)
 - **Custom command as a live source.** The **Custom command** source runs
@@ -489,6 +491,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- Ring buffer: the text of a live capture is no longer rewritten in place
+  as the oldest raw file is deleted (LogSquirl follows that file); each raw
+  file has its own `.log` in a tab of its own, and the index of a capture
+  that runs for days no longer keeps the checkpoints of deleted files
+  (#125).
+- Stopping, restarting or closing a live capture no longer freezes
+  LogSquirl while its capture program takes its time to end (up to the
+  2 s grace, or a slow adb or ssh): the UI thread never waits for the
+  capture's worker, which ends on its own; a restart starts once the last
+  one is done; the plugin's shutdown cancels listings first and then joins
+  what is left (#123).
+- The Custom command examples for adb and ssh put `{filter}` into the line
+  those programs hand the device's or server's shell, so a filter with `;`
+  or `$(…)` ran there. New placeholders `{interface:sh}` and `{filter:sh}`
+  are single-quoted for that remote shell, and the examples use them; the
+  README and DEVELOPER_GUIDE state where a remote shell reads the filter
+  and how it is quoted (#121).
+- Android live capture: a Stop in the moment between starting tcpdump on
+  the device and writing its pid file orphaned tcpdump there. Stop now
+  leaves a stop mark that the capture's script looks for after writing
+  the pid, and the capture's files are removed on every path; README says
+  what a LogSquirl crash leaves on the device (#118).
+- SSH live capture lists the server's interfaces with `sudo -n tcpdump -D`
+  while *Run tcpdump with sudo -n* is on (anew as it is toggled), and with
+  `ip -o link` when tcpdump lists none, as #74 asked; the remote commands
+  run with `/bin/sh` whatever the login shell (#113).
+- SSH live capture: **Stop** left tcpdump running on the server, as root
+  behind sudo, until its next packet (ssh without a terminal gets no
+  hangup). The remote command is now a `/bin/sh` script with a watchdog
+  that ends tcpdump once ssh's stdin, held open by the plugin, closes
+  (#110).
+- **Security:** on Windows an extcap that is a batch file (`.bat`,
+  `.cmd`) ran through `cmd.exe` with the capture filter, the interface and
+  its arguments' values unescaped, so a `&` or `%…%` in them could run a
+  command. Such values are now refused for a batch file, before Start and
+  wherever a program is started (#106).
+- Live capture programs: a listing that timed out just as its program
+  ended could send SIGKILL to LogSquirl's own process group (`kill(-0)`);
+  a group is now never signalled without a pid. On Windows a capture
+  program is started suspended and put in its job object before it runs,
+  so nothing it starts escapes Stop; a job that cannot be made is reported,
+  and Stop then ends the program's process tree. Capture programs and
+  listings share one start and end (#103).
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the
   wire: a PPPoE session frame inside is unwrapped to its IP packet, a
   discovery message named, where before they showed as `PPPoES` /

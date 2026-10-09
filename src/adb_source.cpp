@@ -50,12 +50,6 @@ const QString kSuMark = QStringLiteral( "@su=" );
 const QString kTcpdumpMark = QStringLiteral( "@tcpdump=" );
 const QString kLinksMark = QStringLiteral( "@links" );
 
-bool runnable( const QString& path )
-{
-    const QFileInfo file( path );
-    return file.isFile() && file.isExecutable();
-}
-
 /// @p script run as root on the device: through su, if that is how root is had.
 QString asRoot( const QString& script, bool viaSu )
 {
@@ -88,19 +82,12 @@ QString probeScript( const QString& tempDir, bool withInterfaces )
     return script;
 }
 
-/// The device's file of a capture tagged @p tag, ending in @p suffix.
-QString deviceFile( const QString& tempDir, const QString& tag, const char* suffix )
-{
-    return tempDir + QStringLiteral( "/logsquirl-" ) + tag + QLatin1String( suffix );
-}
-
 /// What a capture needs to clean up after itself on the device.
 struct DeviceCapture {
     QString adb;
     QString serial;
     bool viaSu = false;
-    QString pidFile;
-    QString errFile;
+    AdbCaptureFiles files;
 };
 
 /// `adb -s <serial> shell <script>`.
@@ -151,10 +138,13 @@ public:
         if ( !started() ) {
             return;
         }
-        // Before the local adb is ended (ProcessSource's destructor).
-        const auto script
-            = QStringLiteral( "p=$(cat %1 2>/dev/null) && kill $p 2>/dev/null; rm -f %1 %2" )
-                  .arg( shellQuote( device_.pidFile ), shellQuote( device_.errFile ) );
+        // Before the local adb is ended (ProcessSource's destructor).  While
+        // it runs, the capture's script on the device may not have left its
+        // pid yet: the stop mark tells it to end its tcpdump.  Once adb has
+        // ended, so has the script, and only its files are left to remove.
+        const auto script = waitForEnd( std::chrono::milliseconds( 0 ) )
+                                ? adbCleanupScript( device_.files )
+                                : adbStopScript( device_.files );
         runListing( adbShell( device_.adb, device_.serial, asRoot( script, device_.viaSu ) ),
                     kCleanupTimeout );
     }
@@ -181,7 +171,7 @@ private:
     /// What tcpdump wrote to stderr on the device.
     QString deviceStderr() const
     {
-        const auto script = QStringLiteral( "cat %1" ).arg( shellQuote( device_.errFile ) );
+        const auto script = QStringLiteral( "cat %1" ).arg( shellQuote( device_.files.err ) );
         const auto output
             = runListing( adbShell( device_.adb, device_.serial, asRoot( script, device_.viaSu ) ),
                           kCleanupTimeout );
@@ -194,6 +184,39 @@ private:
 };
 
 } // namespace
+
+AdbCaptureFiles AdbCaptureFiles::of( const QString& tempDir, const QString& tag )
+{
+    const auto base = tempDir + QStringLiteral( "/logsquirl-" ) + tag;
+    return { base + QStringLiteral( ".pid" ), base + QStringLiteral( ".err" ),
+             base + QStringLiteral( ".stop" ) };
+}
+
+QString adbCaptureScript( const QString& tcpdump, const AdbCaptureFiles& files )
+{
+    // The pid is left after tcpdump has started, and the stop mark looked
+    // for after that: a Stop that came before the pid was there (it leaves
+    // the mark first, then reads the pid) is seen either way.  Stopped so,
+    // its stderr file goes too, which the Stop could not remove yet.
+    return QStringLiteral( "%1 2>%2 & p=$!; echo $p >%3; [ -e %4 ] && kill $p; wait $p; "
+                           "[ -e %4 ] && rm -f %2; rm -f %3 %4" )
+        .arg( tcpdump, shellQuote( files.err ), shellQuote( files.pid ), shellQuote( files.stop ) );
+}
+
+QString adbStopScript( const AdbCaptureFiles& files )
+{
+    // The mark is left for a script that has not left its pid yet, which
+    // removes it as it ends; once the pid was read, tcpdump is ended here.
+    return QStringLiteral( ": >%1; if p=$(cat %2 2>/dev/null) && [ -n \"$p\" ]; then "
+                           "kill $p 2>/dev/null; rm -f %1 %2; fi; rm -f %3" )
+        .arg( shellQuote( files.stop ), shellQuote( files.pid ), shellQuote( files.err ) );
+}
+
+QString adbCleanupScript( const AdbCaptureFiles& files )
+{
+    return QStringLiteral( "p=$(cat %1 2>/dev/null) && kill $p 2>/dev/null; rm -f %1 %2 %3" )
+        .arg( shellQuote( files.pid ), shellQuote( files.err ), shellQuote( files.stop ) );
+}
 
 std::vector<LiveTarget> parseAdbDevices( const QString& out )
 {
@@ -366,16 +389,7 @@ QString AdbSourceKind::adb() const
 {
     const auto name
         = where_.os == CaptureOs::Windows ? QStringLiteral( "adb.exe" ) : QStringLiteral( "adb" );
-    for ( const auto& dir : where_.searchPath + where_.installed ) {
-        if ( dir.isEmpty() ) {
-            continue;
-        }
-        const auto path = QDir( dir ).filePath( name );
-        if ( runnable( path ) ) {
-            return path;
-        }
-    }
-    return {};
+    return findProgram( name, where_.searchPath + where_.installed );
 }
 
 AdbDeviceAccess AdbSourceKind::probe( const QString& serial, bool withInterfaces,
@@ -421,8 +435,7 @@ ProcessCommand AdbSourceKind::captureCommand( const LiveChoice& choice,
                                               const AdbDeviceAccess& access,
                                               const QString& tag ) const
 {
-    const auto pidFile = deviceFile( where_.deviceTempDir, tag, ".pid" );
-    const auto errFile = deviceFile( where_.deviceTempDir, tag, ".err" );
+    const auto files = AdbCaptureFiles::of( where_.deviceTempDir, tag );
     auto tcpdump = QStringLiteral( "%1 -i %2 -s %3 -U -w -" )
                        .arg( shellQuote( access.tcpdump.isEmpty() ? QStringLiteral( "tcpdump" )
                                                                   : access.tcpdump ),
@@ -431,12 +444,9 @@ ProcessCommand AdbSourceKind::captureCommand( const LiveChoice& choice,
     if ( !choice.filter.isEmpty() ) {
         tcpdump += QLatin1Char( ' ' ) + shellQuote( choice.filter );
     }
-    // In the background, so that its pid can be left for Stop.
-    const auto script = QStringLiteral( "%1 2>%2 & echo $! >%3; wait $!; rm -f %3" )
-                            .arg( tcpdump, shellQuote( errFile ), shellQuote( pidFile ) );
     // exec-out merges stderr into the capture: the shell's and su's go nowhere.
-    const auto line
-        = QStringLiteral( "exec 2>/dev/null; " ) + asRoot( script, access.su && !access.root );
+    const auto line = QStringLiteral( "exec 2>/dev/null; " )
+                      + asRoot( adbCaptureScript( tcpdump, files ), access.su && !access.root );
     const auto program = adb();
     return { program.isEmpty() ? QStringLiteral( "adb" ) : program,
              { QStringLiteral( "-s" ), choice.device, QStringLiteral( "exec-out" ), line },
@@ -573,8 +583,7 @@ LiveCapture::SourceFactory AdbSourceKind::makeSource( const LiveChoice& choice )
         // Its own files: captures on one device do not meet.
         const auto tag = QString::number( QRandomGenerator::global()->generate64(), 16 );
         DeviceCapture device{ kind.adb(), choice.device, access.su && !access.root,
-                              deviceFile( kind.where_.deviceTempDir, tag, ".pid" ),
-                              deviceFile( kind.where_.deviceTempDir, tag, ".err" ) };
+                              AdbCaptureFiles::of( kind.where_.deviceTempDir, tag ) };
         return std::make_unique<DeviceCaptureSource>( kind.captureCommand( choice, access, tag ),
                                                       std::move( device ), stop,
                                                       std::move( onStderrLine ) );

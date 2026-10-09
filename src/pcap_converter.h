@@ -201,9 +201,10 @@ struct LiveSnapshot {
  * capture as Stop does: Converted, with what was captured.
  *
  * A ring buffer starts a new file after the packet that filled the current
- * one, by size or duration, and keeps the newest ringFiles files.  The text
- * keeps the lines of the packets in them: when the oldest file is deleted,
- * the text file drops the lines of its packets.
+ * one, by size or duration, and keeps the newest ringFiles files.  Each file
+ * has a text file of its own, named after it, which LiveObserver::firstPacket
+ * hands out to be opened; a text is never rewritten, also once its raw file
+ * is deleted.
  */
 struct LiveLimits {
     std::chrono::seconds duration{ 0 };     ///< Stop after this long.
@@ -243,9 +244,10 @@ using LiveClock = std::function<std::chrono::steady_clock::time_point()>;
 struct LiveObserver {
     /// The text file holds its header and the first packet line, so that a
     /// viewer that recognises its format at the first load sees a packet
-    /// line: it can be opened now, following it.  Called once, with the
-    /// paths of the text file and the raw capture; never for a capture
-    /// without packets.
+    /// line: it can be opened now, following it.  Called once per text file
+    /// (a ring buffer's, one per raw file, as each starts), with the paths
+    /// of the text file and its raw file; never for a capture without
+    /// packets.
     std::function<void( const QString& logPath, const QString& rawPath )> firstPacket;
     /// A snapshot: with the first packet, then at most once every
     /// kLiveSnapshotInterval while packets come.  The final summary is the
@@ -337,8 +339,9 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
  * Stopped, not Failed: nothing went wrong, nothing was captured.
  *
  * With @p limits, the conversion stops by itself, and the raw capture may
- * be a ring buffer of files (LiveLimits); ConversionResult::rawPath is then
- * the newest file, and the index's parts are the files kept.
+ * be a ring buffer of files (LiveLimits), each with a text file of its own;
+ * ConversionResult::outputPath and rawPath are then the newest ones, and
+ * the index's parts are the files kept.
  *
  * @param cancel  If set, checked between packets; stops the conversion and
  *                removes what was written.  The source must be given it

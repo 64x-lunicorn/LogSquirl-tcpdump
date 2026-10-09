@@ -27,19 +27,30 @@
  *
  *     ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p <port>] -- <user@host> <remote command>
  *
- * with stdin the null device: BatchMode makes ssh fail instead of asking for
- * a password, a passphrase or whether to trust a host key, so only keys and
- * the SSH agent are used and the plugin never asks for or stores a secret.
- * The interfaces are what `tcpdump -D` lists on the server; the capture is
+ * BatchMode makes ssh fail instead of asking for a password, a passphrase
+ * or whether to trust a host key, so only keys and the SSH agent are used
+ * and the plugin never asks for or stores a secret.  A listing's stdin is
+ * the null device.  The interfaces are what `tcpdump -D` lists on the
+ * server (behind `sudo -n` with the sudo option on), or, if that lists
+ * nothing, `ip -o link`; the capture runs the script
  *
- *     exec [sudo -n] tcpdump -i '<if>' -s <snaplen> -U -w - '<filter>'
+ *     [sudo -n] tcpdump -i '<if>' -s <snaplen> -U -w - '<filter>' &
+ *     <watchdog: read stdin until it closes, then kill tcpdump> &
+ *     wait for tcpdump; exit with its status
  *
- * a command line for the server's (POSIX) shell, the interface and the
- * filter quoted in single quotes (shellQuote()), so that nothing in them is
- * read by that shell.  `sudo -n` never prompts: a sudo that wants a password
- * fails, and the source says how to allow tcpdump without one.  By default
- * the filter excludes the capture's own SSH connection, `not (host <client>
- * and tcp port <server port>)`, both read from $SSH_CLIENT on the server.
+ * as `exec /bin/sh -c '<script>'`, so that the POSIX shell runs it whatever
+ * the user's login shell is (which only reads one single-quoted word); the
+ * interface and the filter are quoted in single quotes (shellQuote()), so
+ * that nothing in them is read by a shell.  ssh's stdin is a pipe the
+ * plugin holds open while the capture runs: Stop closes it and ends ssh,
+ * the remote stdin closes, and the watchdog ends tcpdump, also as root
+ * behind sudo, which a closed connection alone would not (without a
+ * terminal sshd sends no SIGHUP, and tcpdump notices a closed stdout only
+ * at its next packet).  `sudo -n` never prompts: a sudo that wants a
+ * password fails, and the source says how to allow tcpdump without one.
+ * By default the filter excludes the capture's own SSH connection, `not
+ * (host <client> and tcp port <server port>)`, both read from $SSH_CLIENT
+ * on the server (`set -- $SSH_CLIENT`).
  *
  * What ssh, sudo and tcpdump write on failure (an unknown host key, a
  * refused key, a sudo that wants a password, tcpdump missing or lacking
@@ -83,10 +94,15 @@ struct SshDestination {
 /// e.g. "admin@10.0.0.5:2222"; in their order, each once.
 std::vector<LiveTarget> sshConfigHosts( const QString& configText );
 
-/// The command line the server's shell runs to capture @p choice: tcpdump
+/// The POSIX shell script capturing @p choice on the server: tcpdump
 /// (behind `sudo -n` unless the option is off) writing pcap to stdout, the
 /// interface and filter quoted, and, unless the option is off, the filter
-/// excluding the SSH connection as $SSH_CLIENT names it.
+/// excluding the SSH connection as $SSH_CLIENT names it; a watchdog ends
+/// tcpdump once the script's stdin closes.
+QString sshRemoteCaptureScript( const LiveChoice& choice );
+
+/// The command line the server's login shell runs to capture @p choice:
+/// `exec /bin/sh -c '<sshRemoteCaptureScript()>'`.
 QString sshRemoteCaptureCommand( const LiveChoice& choice );
 
 /// What the user can do about @p error, what ssh, sudo or tcpdump wrote: an
@@ -124,8 +140,13 @@ public:
     Devices devices() const override;
     QString deviceLabel() const override;
     LiveListing listDevices( std::chrono::milliseconds timeout ) const override;
+    /// With the default options: sudo -n.
     LiveListing listInterfaces( const QString& device,
                                 std::chrono::milliseconds timeout ) const override;
+    /// `[sudo -n] tcpdump -D` on the server, sudo as the option says; `ip -o
+    /// link` if tcpdump lists nothing.
+    LiveListing listInterfacesWith( const QString& device, const LiveOptions& options,
+                                    std::chrono::milliseconds timeout ) const override;
     QString validate( const LiveChoice& choice ) const override;
     LiveOptionsWidget* makeOptionsWidget() const override;
     ProcessCommand command( const LiveChoice& choice ) const override;

@@ -417,9 +417,12 @@ void LiveCaptureForm::listInterfaces()
     }
     const auto device
         = kind->devices() == LiveSourceKind::Devices::None ? QString() : currentId( device_ );
+    const auto options = choice().options;
     showStatus( QStringLiteral( "Listing interfaces\xe2\x80\xa6" ) );
     runListing(
-        [ kind, device ] { return kind->listInterfaces( device, LiveSourceKind::kListTimeout ); },
+        [ kind, device, options ] {
+            return kind->listInterfacesWith( device, options, LiveSourceKind::kListTimeout );
+        },
         [ this, kind ]( const LiveListing& listing ) {
             const auto typed = interface_->currentText();
             const auto wanted = wanted_.source == kind->id() ? wanted_.networkInterface : QString();
@@ -557,6 +560,14 @@ void LiveCaptureForm::showOptionsWidget()
     layout->addRow( options_ );
     options_->setEnabled( kind->availability().available );
     connect( options_, &LiveOptionsWidget::changed, this, &LiveCaptureForm::changed );
+    connect( options_, &LiveOptionsWidget::listingChanged, this, [ this ] {
+        const auto kind = currentKind();
+        if ( kind
+             && ( kind->devices() == LiveSourceKind::Devices::None
+                  || !currentId( device_ ).isEmpty() ) ) {
+            listInterfaces();
+        }
+    } );
     tellTarget();
 }
 

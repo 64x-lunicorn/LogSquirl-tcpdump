@@ -357,14 +357,16 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
 SidebarWidget::~SidebarWidget()
 {
-    // A live capture is stopped, not cancelled: its tab may stay open after
-    // a runtime disable.  Its worker is waited for, as the conversion's.
-    live_.reset();
-
     // The listings of the form and the dialog are waited for by
     // listingPool_, as the host unloads the library next: their programs
     // are killed first, so that this takes moments, not a listing's timeout.
+    // First, as a live capture's worker may be listing too.
     cancelListings();
+
+    // A live capture is stopped, not cancelled: its tab may stay open after
+    // a runtime disable.  Its worker is not waited for here: the plugin's
+    // shutdown joins it (joinLiveCaptures()), with its program ended.
+    retireLiveCapture( std::move( live_ ) );
 
     // The host unloads the library right after the plugin is shut down:
     // the worker must be done with it before.  It checks the cancel flag
@@ -798,7 +800,7 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
     }
     const auto& capture = found->second;
     QString html;
-    if ( capturing_ && frontKey_ == liveKey_ ) {
+    if ( capturing_ && isLiveKey( frontKey_ ) ) {
         html += "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br>";
     }
     if ( !capture.error.isEmpty() ) {
@@ -823,8 +825,9 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Capturing live: " + name );
 
-    // The last capture's worker may still be ending its program.
-    live_.reset();
+    // The last capture's worker may still be ending its program: it ends
+    // on its own, never waited for here.
+    retireLiveCapture( std::move( live_ ) );
     live_ = std::make_unique<LiveCapture>(
         name, tempRoot_, loadConversionOptions( hostConfigDir() ), std::move( makeSource ) );
     live_->setLimits( limits );
@@ -832,6 +835,7 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     connect( live_.get(), &LiveCapture::readyToOpen, this, &SidebarWidget::openLiveCapture );
     connect( live_.get(), &LiveCapture::snapshotTaken, this, &SidebarWidget::takeLiveSnapshot );
     connect( live_.get(), &LiveCapture::finished, this, &SidebarWidget::finishLiveCapture );
+    connect( live_.get(), &LiveCapture::done, this, &SidebarWidget::startPendingLiveCapture );
     connect( live_.get(), &LiveCapture::stderrLine, this, [ this, name ]( const QString& line ) {
         hostLog( LOGSQUIRL_LOG_INFO, name + ": " + line );
         liveStderr_->appendPlainText( line );
@@ -844,6 +848,7 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     liveError_->clear();
     liveError_->setHidden( true );
     liveKey_.clear();
+    liveKeys_.clear();
     liveSnapshot_ = {};
     liveClock_.start();
     setCapturing( true );
@@ -930,9 +935,14 @@ void SidebarWidget::chooseAndStartLiveCapture()
         return;
     }
     if ( capturing_ ) {
-        // Started once the running one has ended (finishLiveCapture()).
+        // Started once the running one is done (startPendingLiveCapture()).
         pendingStart_ = choice;
         stopLiveCapture();
+        return;
+    }
+    if ( live_ && !live_->isDone() ) {
+        // Finished, but its program is still ending.
+        pendingStart_ = choice;
         return;
     }
     startLiveCapture( choice );
@@ -1023,11 +1033,14 @@ void SidebarWidget::openLiveCapture( const QString& logPath, const QString& rawP
     capture.fileName = QFileInfo( rawPath ).fileName();
     capture.fileSize = QFileInfo( rawPath ).size();
     capture.rawPath = rawPath;
+    capture.captureName = live_ ? live_->name() : QString();
     capture.withFormatHint = !formatHintShown_;
     formatHintShown_ = true;
 
     // Kept before the tab is opened: the host may report it in front at once.
+    // A ring buffer's next file opens a tab of its own; the tabs before stay.
     liveKey_ = fileKey( logPath );
+    liveKeys_.push_back( liveKey_ );
     converted_.insert_or_assign( liveKey_, std::move( capture ) );
     summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6" )
                                 .arg( live_ ? live_->name().toHtmlEscaped() : QString() ) );
@@ -1043,16 +1056,26 @@ void SidebarWidget::takeLiveSnapshot( const LiveSnapshot& snapshot )
 {
     liveSnapshot_ = snapshot;
     showLiveProgress();
-    const auto found = converted_.find( liveKey_ );
-    if ( liveKey_.isEmpty() || found == converted_.end() ) {
-        return;
+    // Every tab of the capture shows its summary so far, and reads packets
+    // through its latest index: one of a ring buffer's files deleted since
+    // says its packets were rotated away.
+    for ( const auto& key : liveKeys_ ) {
+        const auto found = converted_.find( key );
+        if ( found == converted_.end() ) {
+            continue;
+        }
+        found->second.fileSize = static_cast<qint64>( snapshot.rawBytes );
+        if ( snapshot.index ) {
+            found->second.index = snapshot.index;
+        }
+        updateSummary( key, snapshot.summary );
     }
-    found->second.fileSize = static_cast<qint64>( snapshot.rawBytes );
-    if ( snapshot.index ) {
-        // The packets so far, for the Packet Panel; shown with the summary.
-        found->second.index = snapshot.index;
-    }
-    updateSummary( liveKey_, snapshot.summary );
+}
+
+bool SidebarWidget::isLiveKey( const QString& key ) const
+{
+    return !key.isEmpty()
+           && std::find( liveKeys_.begin(), liveKeys_.end(), key ) != liveKeys_.end();
 }
 
 void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
@@ -1072,18 +1095,19 @@ void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summa
 void SidebarWidget::finishLiveCapture( const ConversionResult& result )
 {
     reportLiveOutcome( result );
-    // Start live capture… asked for another one: after this signal, as
-    // starting it destroys the LiveCapture that sends it.
-    if ( pendingStart_ ) {
-        QTimer::singleShot( 0, this, [ this ] {
-            if ( !pendingStart_ ) {
-                return;
-            }
-            const auto choice = *pendingStart_;
-            pendingStart_.reset();
-            startLiveCapture( choice );
-        } );
+}
+
+void SidebarWidget::startPendingLiveCapture()
+{
+    // Start live capture… asked for another one: once the last one is done,
+    // its program ended too, so that two never capture at once.  Starting
+    // it retires the LiveCapture that sends this, which goes on living.
+    if ( !pendingStart_ ) {
+        return;
     }
+    const auto choice = *pendingStart_;
+    pendingStart_.reset();
+    startLiveCapture( choice );
 }
 
 void SidebarWidget::reportLiveOutcome( const ConversionResult& result )
@@ -1095,8 +1119,8 @@ void SidebarWidget::reportLiveOutcome( const ConversionResult& result )
 
     switch ( result.status ) {
     case ConversionResult::Status::Cancelled:
-        if ( opened ) {
-            converted_.erase( found );
+        for ( const auto& key : liveKeys_ ) {
+            converted_.erase( key );
         }
         summaryLabel_->setText( "Cancelled." );
         hostLog( LOGSQUIRL_LOG_INFO, "Cancelled capturing " + name );
@@ -1120,7 +1144,11 @@ void SidebarWidget::reportLiveOutcome( const ConversionResult& result )
             summaryLabel_->setText( "Error: " + result.error.toHtmlEscaped() );
             return;
         }
-        found->second.error = result.error;
+        for ( const auto& key : liveKeys_ ) {
+            if ( const auto each = converted_.find( key ); each != converted_.end() ) {
+                each->second.error = result.error;
+            }
+        }
         break;
 
     case ConversionResult::Status::Converted:
@@ -1147,14 +1175,20 @@ void SidebarWidget::reportLiveOutcome( const ConversionResult& result )
         break;
     }
 
-    // The final summary and index, which the tab of the capture shows from
+    // The final summary and index, which the tabs of the capture show from
     // now on.
-    found->second.fileSize = QFileInfo( found->second.rawPath ).size();
-    if ( result.index ) {
-        found->second.index = result.index;
+    for ( const auto& key : liveKeys_ ) {
+        const auto each = converted_.find( key );
+        if ( each == converted_.end() ) {
+            continue;
+        }
+        each->second.fileSize = QFileInfo( each->second.rawPath ).size();
+        if ( result.index ) {
+            each->second.index = result.index;
+        }
+        updateSummary( key, result.summary );
     }
-    updateSummary( liveKey_, result.summary );
-    if ( frontKey_ != liveKey_ ) {
+    if ( !isLiveKey( frontKey_ ) ) {
         summaryLabel_->setText( QString( "The capture %1 has ended: its tab shows its summary." )
                                     .arg( name.toHtmlEscaped() ) );
     }
@@ -1181,9 +1215,11 @@ void SidebarWidget::saveCapture()
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
 
-    // Named after the text, <name>.pcap: a ring buffer's files are numbered.
-    const auto suggested = QFileInfo( frontKey_ ).completeBaseName() + "."
-                           + QFileInfo( found->second.rawPath ).suffix();
+    // Named after the capture, <name>.pcap: a ring buffer's files are numbered.
+    const auto name = found->second.captureName.isEmpty()
+                          ? QFileInfo( frontKey_ ).completeBaseName()
+                          : found->second.captureName;
+    const auto suggested = name + "." + QFileInfo( found->second.rawPath ).suffix();
     // The dialog runs its own event loop, as in chooseAndOpen().
     const QPointer<SidebarWidget> self( this );
     const auto target = chooseSaveFile_( this, QDir( lastDir_ ).filePath( suggested ) );

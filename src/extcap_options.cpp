@@ -309,9 +309,8 @@ QString ExtcapOptionsWidget::initialValue( const ExtcapArg& arg ) const
     switch ( arg.type ) {
     case ExtcapArgType::Boolean:
     case ExtcapArgType::BoolFlag:
-        return arg.defaultValue.compare( QLatin1String( "true" ), Qt::CaseInsensitive ) == 0
-                   ? QStringLiteral( "true" )
-                   : QStringLiteral( "false" );
+        return liveOptionValue(
+            arg.defaultValue.compare( QLatin1String( "true" ), Qt::CaseInsensitive ) == 0 );
     case ExtcapArgType::Selector:
     case ExtcapArgType::Radio:
     case ExtcapArgType::EditSelector: {
@@ -352,9 +351,8 @@ QWidget* ExtcapOptionsWidget::makeField( const ExtcapArg& arg, const QString& va
     case ExtcapArgType::BoolFlag: {
         auto* box = new QCheckBox;
         box->setChecked( value == QLatin1String( "true" ) );
-        connect( box, &QCheckBox::toggled, this, [ this, arg ]( bool on ) {
-            store( arg, on ? QStringLiteral( "true" ) : QStringLiteral( "false" ) );
-        } );
+        connect( box, &QCheckBox::toggled, this,
+                 [ this, arg ]( bool on ) { store( arg, liveOptionValue( on ) ); } );
         field = box;
         break;
     }
