@@ -505,9 +505,15 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     }
     html += "<br>";
 
-    // TCP analysis markers
-    if ( !summary.tcpMarkers.empty() ) {
+    // TCP analysis markers, and the handshakes' round-trip time
+    if ( !summary.tcpMarkers.empty() || summary.medianInitialRttNs ) {
         html += "<b>Analysis</b><br>";
+        if ( summary.medianInitialRttNs ) {
+            html += QString( "Median iRTT: %1 ms (%2 %3)<br>" )
+                        .arg( static_cast<double>( *summary.medianInitialRttNs ) / 1e6, 0, 'f', 3 )
+                        .arg( QLocale().toString( static_cast<qulonglong>( summary.handshakes ) ) )
+                        .arg( summary.handshakes == 1 ? "handshake" : "handshakes" );
+        }
         for ( const auto& [ marker, count ] : summary.tcpMarkers ) {
             html += QString( "%1: %2<br>" )
                         .arg( QString::fromStdString( marker ).toHtmlEscaped() )

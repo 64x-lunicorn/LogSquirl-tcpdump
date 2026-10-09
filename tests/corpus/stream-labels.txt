@@ -1,7 +1,7 @@
 No.    Stream  UTC Time                     Time           Source                                  Destination                             Protocol  Length Info
 1      0       2025-10-09 08:53:20.000000Z  0.000000       10.0.0.1                                10.0.0.2                                HTTP-Alt  54     40000 → 8080 [SYN] Seq=0 Win=64240
 2      0       2025-10-09 08:53:20.001000Z  0.001000       10.0.0.2                                10.0.0.1                                HTTP-Alt  54     8080 → 40000 [SYN, ACK] Seq=0 Ack=1 Win=64240
-3      0       2025-10-09 08:53:20.002000Z  0.002000       10.0.0.1                                10.0.0.2                                HTTP-Alt  54     40000 → 8080 [ACK] Seq=1 Ack=1 Win=64240
+3      0       2025-10-09 08:53:20.002000Z  0.002000       10.0.0.1                                10.0.0.2                                HTTP-Alt  54     40000 → 8080 [ACK] Seq=1 Ack=1 Win=64240 [iRTT=0.002000]
 4      0       2025-10-09 08:53:20.003000Z  0.003000       10.0.0.1                                10.0.0.2                                HTTP      94     40000 → 8080 [ACK, PSH] Seq=1 Ack=1 Win=64240 Len=40 | GET 10.0.0.2/status HTTP/1.1
 5      0       2025-10-09 08:53:20.004000Z  0.004000       10.0.0.2                                10.0.0.1                                HTTP      54     8080 → 40000 [ACK] Seq=1 Ack=41 Win=64240
 6      0       2025-10-09 08:53:20.010000Z  0.010000       10.0.0.2                                10.0.0.1                                HTTP      125    8080 → 40000 [ACK, PSH] Seq=1 Ack=41 Win=64240 Len=71 | HTTP/1.1 200 OK, Content-Type: application/json, Content-Length: 49
@@ -13,7 +13,7 @@ No.    Stream  UTC Time                     Time           Source               
 12     0       2025-10-09 08:53:20.022000Z  0.022000       10.0.0.1                                10.0.0.2                                HTTP      54     40000 → 8080 [ACK] Seq=42 Ack=134 Win=64240
 13     0       2025-10-09 08:53:21.000000Z  1.000000       10.0.0.1                                10.0.0.2                                HTTP-Alt  54     40000 → 8080 [SYN] Seq=0 Win=64240
 14     0       2025-10-09 08:53:21.001000Z  1.001000       10.0.0.2                                10.0.0.1                                HTTP-Alt  54     8080 → 40000 [SYN, ACK] Seq=0 Ack=1 Win=64240
-15     0       2025-10-09 08:53:21.002000Z  1.002000       10.0.0.1                                10.0.0.2                                HTTP-Alt  77     40000 → 8080 [ACK, PSH] Seq=1 Ack=1 Win=64240 Len=23 | plain text, no protocol
+15     0       2025-10-09 08:53:21.002000Z  1.002000       10.0.0.1                                10.0.0.2                                HTTP-Alt  77     40000 → 8080 [ACK, PSH] Seq=1 Ack=1 Win=64240 Len=23 [iRTT=0.002000] | plain text, no protocol
 16     1       2025-10-09 08:53:22.000000Z  2.000000       10.0.0.1                                10.0.0.2                                TLS       86     40001 → 443 [ACK, PSH] Seq=1 Ack=1 Win=64240 Len=32 | [TCP segment of a reassembled PDU]
 17     1       2025-10-09 08:53:22.001000Z  2.001000       10.0.0.1                                10.0.0.2                                TLS       86     40001 → 443 [ACK, PSH] Seq=33 Ack=1 Win=64240 Len=32 | [TCP segment of a reassembled PDU]
 18     1       2025-10-09 08:53:22.010000Z  2.010000       10.0.0.2                                10.0.0.1                                TLS       54     443 → 40001 [ACK] Seq=1 Ack=65 Win=64240

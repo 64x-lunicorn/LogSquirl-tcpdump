@@ -41,6 +41,7 @@ constexpr const char* kPreviewCharsKey = "conversion/previewChars";
 constexpr const char* kMaxStreamsKey = "conversion/maxStreams";
 constexpr const char* kMaxEndpointsKey = "conversion/maxEndpoints";
 constexpr const char* kReassemblyMegabytesKey = "conversion/reassemblyMegabytes";
+constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
 
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
@@ -104,6 +105,7 @@ ConversionOptions loadConversionOptions( const QString& configDir )
     }
     options.layout.macColumns = readFlag( file, kMacColumnsKey, options.layout.macColumns );
     options.preview = readFlag( file, kPreviewKey, options.preview );
+    options.tcpTimestamps = readFlag( file, kTcpTimestampsKey, options.tcpTimestamps );
     options.previewChars
         = readCount( file, kPreviewCharsKey, options.previewChars, 1, kMaxPreviewChars );
     options.maxStreams
@@ -129,6 +131,7 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     }
     file.setValue( kMacColumnsKey, options.layout.macColumns );
     file.setValue( kPreviewKey, options.preview );
+    file.setValue( kTcpTimestampsKey, options.tcpTimestamps );
     file.setValue( kPreviewCharsKey, static_cast<qulonglong>( options.previewChars ) );
     file.setValue( kMaxStreamsKey, static_cast<qulonglong>( options.maxStreams ) );
     file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );

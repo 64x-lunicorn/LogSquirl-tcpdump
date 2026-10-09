@@ -187,6 +187,21 @@ inline Bytes tcp( uint16_t srcPort, uint16_t dstPort, const Bytes& payload = {},
     return b + payload;
 }
 
+/**
+ * TCP header with the options @p options, padded with end-of-options to a
+ * whole number of words, around @p payload.
+ */
+inline Bytes tcpWithOptions( uint16_t srcPort, uint16_t dstPort, const Bytes& options,
+                             uint8_t flags, uint32_t seq = 1, uint32_t ack = 0,
+                             uint16_t window = 0xFFFF, const Bytes& payload = {} )
+{
+    const auto words = static_cast<uint8_t>( 5 + ( options.size() + 3 ) / 4 );
+    auto header = tcp( srcPort, dstPort, {}, 5, flags, seq, ack, window ) + options;
+    header.resize( static_cast<size_t>( words ) * 4, 0 );
+    header[ 12 ] = static_cast<uint8_t>( words << 4 );
+    return header + payload;
+}
+
 /** UDP header around @p payload; @p length -1 means its real size. */
 inline Bytes udp( uint16_t srcPort, uint16_t dstPort, const Bytes& payload = {}, int length = -1 )
 {

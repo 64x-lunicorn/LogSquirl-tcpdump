@@ -86,7 +86,14 @@ struct TcpDirection {
     static constexpr uint8_t kZeroWindowProbe = 0x10; ///< The last segment was a probe.
     /// The last segment that raised nextSeq carried data.
     static constexpr uint8_t kAdvancedWithData = 0x20;
-    /// The bits each segment sets afresh; kBaseSeqSet stays.
+    /// A SYN of this direction was seen: windowScale tells its option, or
+    /// that it had none.
+    static constexpr uint8_t kSynSeen = 0x40;
+    /// The direction's last segment was a SYN without ACK that awaits the
+    /// ACK which completes its handshake: lastTime is the SYN's.
+    static constexpr uint8_t kSynPending = 0x80;
+    /// The bits each segment sets afresh; kBaseSeqSet, kSynSeen and
+    /// kSynPending stay until the analysis changes them.
     static constexpr uint8_t kSegmentFlags
         = kWindowKnown | kWindowScaled | kKeepAlive | kZeroWindowProbe | kAdvancedWithData;
 };
