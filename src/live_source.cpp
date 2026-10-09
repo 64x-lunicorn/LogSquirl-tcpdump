@@ -25,6 +25,8 @@
 
 #include "live_source.h"
 
+#include "local_source.h"
+
 #include <QElapsedTimer>
 #include <QProcess>
 #include <QRegularExpression>
@@ -78,6 +80,7 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources()
     // Each source ticket adds its kind here, in the order the picker lists
     // them: Local (#72), Android (#73), SSH (#74), Wireshark extcap (#75),
     // Custom command (#76).
+    registry->add( std::make_shared<LocalSourceKind>() );
     return registry;
 }
 

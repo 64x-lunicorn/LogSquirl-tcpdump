@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Local live capture.** The **Local** source captures on this
+  computer's interfaces with Wireshark's `dumpcap` (preferred) or
+  `tcpdump`, found on `PATH` or where their installers put them; without
+  either it says what to install. It lists interfaces with `-D` and passes
+  the capture filter as one argument. It never runs sudo or asks for a
+  password: when the program may not capture (a permission error, no
+  interfaces listed, an unreadable `/dev/bpf0` on macOS), the section says
+  what to do on this OS: ChmodBPF or the `access_bpf` group on macOS, the
+  `wireshark` group or `setcap` on Linux, Npcap without the
+  administrators-only restriction on Windows; the README lists them (#72)
 - **Live capture UI.** The sidebar's new **Live capture** section, and
   **Plugins → tcpdump → Start live capture…** (also in the Command
   Palette) with the same fields in a dialog, start a live capture: a

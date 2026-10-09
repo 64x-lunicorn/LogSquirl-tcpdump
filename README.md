@@ -229,10 +229,47 @@ the Command Palette), which shows the same fields in a dialog:
   running one first
 
 The choices started last are remembered in the plugin's `settings.ini` and
-shown again after a restart. The plugin never asks for or stores a
+shown again after a restart, and so are each source's own options, for a
+source that has any. The plugin never asks for or stores a
 password. While the capture runs, the section shows what the capture
 program writes to stderr (also in LogSquirl's log); if it fails, the
 section shows why, with what the source says to do about it.
+
+#### Local: this computer, with dumpcap or tcpdump
+
+The **Local** source captures on this computer's interfaces with
+Wireshark's `dumpcap` if it is installed (preferred: it is on every OS and
+writes pcapng), else with `tcpdump`. Both are looked for on `PATH` and where
+their installers put them: `/Applications/Wireshark.app/Contents/MacOS/dumpcap`
+and `/usr/sbin/tcpdump` on macOS, `/usr/bin/dumpcap` and `/usr/sbin/tcpdump`
+on Linux, `Program Files\Wireshark\dumpcap.exe` on Windows. Without either,
+the source says what to install. Its interfaces are those `dumpcap -D` or
+`tcpdump -D` lists; it captures with `dumpcap -i <interface> -s <snaplen>
+-q -f <filter> -w -` or `tcpdump -i <interface> -s <snaplen> -U -w -
+<filter>`, the filter passed as one argument.
+
+The plugin **never runs sudo and never asks for a password**: the capture
+program must be allowed to capture as you. When it is not (it says
+"permission denied" or "You don't have permission", lists no interfaces,
+or, on macOS, `/dev/bpf0` cannot be read), the section says what to do on
+your OS; run the command yourself, once:
+
+- **macOS**: capturing needs read access to `/dev/bpf*`. Install
+  **ChmodBPF** from the [Wireshark](https://www.wireshark.org/download.html)
+  disk image ("Install ChmodBPF.pkg"): it lets the group `access_bpf` read
+  `/dev/bpf*` and adds you to it. If it is installed but you are not in the
+  group: `sudo dseditgroup -o edit -a "$USER" -t user access_bpf`, then log
+  out and in again
+- **Linux**: capturing needs `CAP_NET_RAW` and `CAP_NET_ADMIN`. With
+  dumpcap, join the `wireshark` group (on Debian and Ubuntu first `sudo
+  dpkg-reconfigure wireshark-common`, answering Yes): `sudo usermod -aG
+  wireshark "$USER"`, then log out and in again; or give the program the
+  capabilities: `sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/dumpcap`
+  (or `/usr/sbin/tcpdump`)
+- **Windows**: install [Npcap](https://npcap.com/#download) (Wireshark's
+  installer offers it), leaving "Restrict Npcap driver's access to
+  Administrators only" unchecked, so that LogSquirl need not run as
+  administrator
 
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:

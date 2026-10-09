@@ -1228,7 +1228,23 @@ leading `-`, unbalanced parentheses, a display filter field such as
 names the capture's files after its device and interface.
 
 `builtInLiveSources()` is the one place a kind is registered: a source
-ticket adds a line there and nothing in the UI. Tests use
+ticket adds a line there and nothing in the UI.
+
+The **Local** kind (`local_source.h/cpp`, id `local`) is `LocalSourceKind(
+LocalPrograms )`: `LocalPrograms::forThisComputer()` holds `PATH`'s
+directories, the install locations of dumpcap and tcpdump on this OS, the
+OS (`CaptureOs`) and, on macOS, `/dev/bpf0`; tests pass a directory of fake
+`dumpcap`/`tcpdump` scripts as the search path and a `CaptureOs` of their
+choice. `program()` finds dumpcap, else tcpdump (not on Windows), anew on
+each call; `availability()` is `captureInstallHint( os )` without either.
+`listInterfaces()` runs `<program> -D` and parses its lines (`1. en0
+(Wi-Fi)`, `1.en0 [Up, Running]`; the description, else tcpdump's flags);
+a permission error on stderr (`isCapturePermissionError()`), an empty
+list, or an unreadable BPF device on macOS add
+`capturePermissionGuidance( os, program )` to its error, which the form
+shows as its status, as `explainFailure()` adds it to a failed capture's.
+The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
+downloads; no code path runs them, sudo, or anything that prompts. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
 capture or a program, a failure with a hint, devices on request) through
 `SidebarWidget::setLiveSources()`.
