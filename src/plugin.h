@@ -30,16 +30,45 @@
 
 #include <QString>
 
+#include <cstddef>
+
 namespace tcpdump {
 class SidebarWidget;
 } // namespace tcpdump
 
 namespace tcpdump {
 
+/**
+ * Which host functions added after the base table the running host offers
+ * (all LogSquirl 26.11).  Told by the size of the host's table, following
+ * the SDK's growing-API rules: a member of LogSquirlHostApi that is not
+ * reported here must never be called or even read, as an older host's table
+ * ends before it.
+ */
+struct HostCapabilities {
+    bool regexLab = false;         ///< open_regex_lab
+    bool goToLogLine = false;      ///< go_to_log_line
+    bool selectedLogLines = false; ///< get_selected_log_lines
+
+    /// What a host table of @p apiSize bytes offers.
+    static HostCapabilities of( std::size_t apiSize );
+
+    bool operator==( const HostCapabilities& other ) const
+    {
+        return regexLab == other.regexLab && goToLogLine == other.goToLogLine
+               && selectedLogLines == other.selectedLogLines;
+    }
+    bool operator!=( const HostCapabilities& other ) const
+    {
+        return !( *this == other );
+    }
+};
+
 /// Global plugin state.  Only accessed from the main (GUI) thread.
 struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
+    HostCapabilities hostCapabilities;      ///< The later functions api offers.
     SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for pcap control.
     bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
     bool initialised = false;               ///< True between init() and shutdown().

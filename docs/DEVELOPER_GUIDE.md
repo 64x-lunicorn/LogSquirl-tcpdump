@@ -268,6 +268,29 @@ and when the plugin is disabled or updated at runtime, with the tabs kept
 open; the plugin notes `QCoreApplication::aboutToQuit` and removes the
 temporary files only in the first case.
 
+#### Host capabilities
+The host API grows by appending functions to `LogSquirlHostApi` (the SDK
+guide's *A Growing API*). LogSquirl 26.11 and later call
+`logsquirl_plugin_init_ex()` with the size of their table; an older host
+calls `logsquirl_plugin_init()`, which forwards with
+`LOGSQUIRL_HOST_API_BASE_SIZE`. `init_ex()` records what the size covers in
+`g_state.hostCapabilities` (`HostCapabilities::of()`, through
+`LOGSQUIRL_HOST_API_HAS`): `regexLab`, `goToLogLine` and `selectedLogLines`.
+Code that uses one of those functions checks the record first, and offers
+nothing that needs it otherwise; it never calls or reads a member the record
+does not report, not even to compare it with null, as an older host's table
+ends before it. Keep the pointer the host passed: never copy `*api`.
+
+#### The plugin API header
+`include/logsquirl_plugin_api.h` is the host's
+`src/plugins/include/logsquirl_plugin_api.h`, byte for byte, from the
+LogSquirl release named by `host_ref` in `.github/plugin-ci.json`; CI fails
+if they differ, and its Format job leaves the file alone. To move to a newer
+host, set `host_ref` to that release and refresh the header with
+LogSquirl-Plugin-CI's `scripts/sync-plugin.sh <this checkout>` (or copy the
+file from the LogSquirl release tag); never edit it by hand. A function the
+new header adds goes into `HostCapabilities` before anything calls it.
+
 ## Adding Protocol Support
 
 An application protocol is one detector function plus one table entry in

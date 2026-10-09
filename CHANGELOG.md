@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **Plugin API of LogSquirl 26.11.** The plugin builds against LogSquirl
+  26.11's plugin API header and exports `logsquirl_plugin_init_ex` next to
+  `logsquirl_plugin_init`, learning from the host's table size whether it
+  offers the Regex Lab, *Go to line* and the selected log lines. Nothing
+  visible changes yet; it still loads into LogSquirl 26.03 and later.
 - **IPv6 addresses in RFC 5952 form.** IPv6 addresses are shown as Wireshark
   shows them: lowercase hexadecimal, the longest run of zero groups (the
   leftmost on a tie, never a single group) collapsed to `::`, so `fe80::1`

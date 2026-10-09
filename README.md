@@ -153,7 +153,9 @@ No.    Stream  UTC Time                     Time           Source               
 
 ## Prerequisites
 
-- **LogSquirl** ≥ 26.03 with the plugin system enabled
+- **LogSquirl** ≥ 26.03 with the plugin system enabled; features that use the
+  Regex Lab, *Go to line* or the selected log lines need LogSquirl ≥ 26.11 and
+  are not offered on an older one
 - **Qt6** (Core, Concurrent, Widgets) — same version LogSquirl was built with
 - **CMake** ≥ 3.16
 - A C++17-capable compiler (GCC ≥ 9, Clang ≥ 14, MSVC ≥ 19.29)
