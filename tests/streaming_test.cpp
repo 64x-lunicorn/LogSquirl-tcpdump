@@ -257,6 +257,49 @@ SCENARIO( "The summary counts the packets cut at the snaplen", "[converter]" )
     }
 }
 
+SCENARIO( "The summary names the earliest and latest packet time in UTC", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a nanosecond capture whose packets are not in time order" )
+    {
+        FileOptions nano;
+        nano.nanoseconds = true;
+        std::vector<Record> records{ { udpPacket( 1111 ), 1791535272, 5 },
+                                     { udpPacket( 1111 ), 1791535270, 123456789 },
+                                     { udpPacket( 1111 ), 1791535300, 0 },
+                                     { udpPacket( 1111 ), 1791535290, 0 } };
+        const auto input = writeFile( dir, "merged.pcap", pcapFile( records, nano ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "they are written as the UTC Time column writes them, to the nanosecond" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.firstTimeUtc == "2026-10-09 08:41:10.123456789Z" );
+                REQUIRE( result.summary.lastTimeUtc == "2026-10-09 08:41:40.000000000Z" );
+            }
+        }
+    }
+
+    GIVEN( "a capture without packets" )
+    {
+        const auto input = writeFile( dir, "empty.pcap", pcapOf( {} ) );
+
+        THEN( "there is no time to name" )
+        {
+            const auto result = convertPcap( input, out.path() );
+            REQUIRE( result.summary.firstTimeUtc.empty() );
+            REQUIRE( result.summary.lastTimeUtc.empty() );
+        }
+    }
+}
+
 SCENARIO( "A capture is converted to a text file packet by packet", "[converter]" )
 {
     QTemporaryDir dir;

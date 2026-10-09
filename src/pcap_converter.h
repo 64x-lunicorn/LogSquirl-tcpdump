@@ -51,6 +51,10 @@ struct CaptureSummary {
     uint64_t packets = 0;
     uint64_t bytes = 0;           ///< Captured bytes of all packets.
     double durationSeconds = 0.0; ///< Between the earliest and the latest packet.
+    /// The earliest and the latest packet time, as the UTC Time column
+    /// writes them at the capture's precision; empty without packets.
+    std::string firstTimeUtc;
+    std::string lastTimeUtc;
     /// The capture's link-layer types by name, or number, in the order they
     /// were first seen: one for a pcap, one per kind of interface otherwise.
     std::vector<std::string> linkTypeNames;

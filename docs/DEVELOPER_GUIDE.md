@@ -71,11 +71,30 @@ forgot to escape.
 
 ### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
-Wireshark-style text lines with fixed-width columns: No., Stream, Time,
-Source, Destination, Protocol, Length, Info. Times are relative to the first
-packet, with 6 decimals, or 9 when the capture announces nanosecond
-precision for any of its packets (`PacketFormatter` takes the reader's
-`precision()`; `formatAllPackets()` the finest of its packets).
+Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
+Time, Source, Destination, Protocol, Length, Info. Both times have 6
+decimals, or 9 when the capture announces nanosecond precision for any of
+its packets (`PacketFormatter` takes the reader's `precision()`;
+`formatAllPackets()` the finest of its packets); further digits are cut,
+not rounded.
+
+UTC Time is the packet's wall-clock time, written by `formatUtcTime()` as
+an ISO 8601 date and time in UTC ending in `Z`:
+`2026-10-09 08:41:12.123456Z`, or `2026-10-09 08:41:12.123456789Z`. It is
+computed from the calendar alone (no `gmtime`, no time zone), so the text is
+the same on every platform and in every zone; a time before 1970 counts
+back from the epoch, and a year outside 0000–9999 gets ISO 8601's sign
+(`+10000`, `-0001`). The Capture Summary's first and last packet times are
+written by the same function. A Log Format reads the column with
+`%Y-%m-%d %H:%M:%S.%f%z`: LogSquirl's `%f` takes any number of digits, `%z`
+the `Z` as UTC. Time is relative to the first packet in the file, as
+Wireshark's default Time column; a packet recorded before it (a merged
+capture) has a negative Time but its own UTC Time.
+
+UTC Time comes before Time because it is the line's timestamp: the first
+time in the line, the field a Log Format names, and LogSquirl's table view
+puts its Δt column right after it, so the relative and the elapsed time sit
+side by side instead of Δt splitting the two.
 
 IPv6 addresses are written in the RFC 5952 form (`fe80::1`, `::`) by
 `formatIpv6()` in `wire_bytes.h`, the one place that formats them: the
@@ -146,7 +165,8 @@ Qt UI that provides:
   a notification. Tests replace the dialog with `setFileChooser()`
 - A progress bar and Cancel button while a capture is converted
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
-  top endpoints, packets per second, file size, the link-layer type names
+  top endpoints, the first and last packet time in UTC, packets per
+  second, file size, the link-layer type names
   (comma-separated when there are several), and the number of packets cut
   at the snaplen when there are any
 

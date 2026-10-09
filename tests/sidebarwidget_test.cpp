@@ -396,6 +396,34 @@ SCENARIO( "the summary lists the capture's link-layer types", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary shows the earliest and latest packet time", "[sidebar]" )
+{
+    GIVEN( "a capture with packets" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 2;
+        summary.firstTimeUtc = "2026-10-09 08:41:10.123456Z";
+        summary.lastTimeUtc = "2026-10-09 08:41:40.000000Z";
+
+        THEN( "both are shown in UTC, as the log's UTC Time column has them" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
+            REQUIRE( html.contains( "First packet: 2026-10-09 08:41:10.123456Z<br>" ) );
+            REQUIRE( html.contains( "Last packet: 2026-10-09 08:41:40.000000Z<br>" ) );
+        }
+    }
+
+    GIVEN( "a capture without packets" )
+    {
+        THEN( "neither is shown" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary() );
+            REQUIRE_FALSE( html.contains( "First packet" ) );
+            REQUIRE_FALSE( html.contains( "Last packet" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
 {
     GIVEN( "a capture with ten endpoints" )

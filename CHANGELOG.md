@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Absolute UTC time column.** Every packet line shows the packet's
+  wall-clock time in UTC, `2026-10-09 08:41:12.123456Z` (nine decimals for a
+  nanosecond capture), in a `UTC Time` column before the relative `Time`, so
+  that a capture can be lined up with a log of the same incident. The text
+  does not depend on the computer's time zone. A packet recorded before the
+  first one shows its own time there, while its relative time is negative.
+  The sidebar summary shows the first and last packet time in UTC.
 - **Open pcap… in the Plugins menu.** `Plugins → tcpdump → Open pcap…`, and
   so the Command Palette, opens the same dialog as the sidebar button. Chosen
   while a capture is being read, it shows a notification instead.

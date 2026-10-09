@@ -313,6 +313,12 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
                     .arg( QLocale().toString( static_cast<qulonglong>( summary.cutPackets ) ) );
     }
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
+    if ( !summary.firstTimeUtc.empty() ) {
+        html += QString( "First packet: %1<br>" )
+                    .arg( QString::fromStdString( summary.firstTimeUtc ) );
+        html += QString( "Last packet: %1<br>" )
+                    .arg( QString::fromStdString( summary.lastTimeUtc ) );
+    }
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
     QStringList linkTypes;

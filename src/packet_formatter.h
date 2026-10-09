@@ -24,8 +24,14 @@
  * Each packet is rendered as a single-line summary suitable for display
  * in LogSquirl's log viewer.  The format mimics Wireshark's packet list:
  *
- *   No.  Time         Source          Destination     Protocol  Length  Info
- *   1    0.000000     192.168.1.1     10.0.0.1        TCP       60      443 → 54321 [SYN] Seq=0
+ *   No. Stream UTC Time                    Time     Source      Destination Protocol Length Info
+ *   1   0      2026-10-09 08:41:12.123456Z 0.000000 192.168.1.1 10.0.0.1    TCP      60     443 → …
+ *
+ * The UTC Time is the packet's wall-clock time, so that a capture can be
+ * lined up with a log of the same incident; Time is relative to the first
+ * packet, as Wireshark's.  The absolute time comes first: it is the line's
+ * timestamp, which a Log Format reads, and LogSquirl's table view puts its
+ * Δt column right after it.
  *
  * Length is the length on the wire (PacketRecord::originalLen).  A packet
  * captured shorter than that, cut at the snaplen, ends its Info with
@@ -37,10 +43,24 @@
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace tcpdump {
+
+/**
+ * A time as an ISO 8601 date and time in UTC, e.g.
+ * "2026-10-09 08:41:12.123456Z": 6 decimals, or 9 at nanosecond precision
+ * (cut, not rounded), and a Z for UTC.  Computed from the calendar alone, so
+ * that neither the time zone nor the platform's time functions play a part.
+ * A time before 1970 counts back from the epoch; a year outside 0000–9999 is
+ * written with its sign, as ISO 8601's expanded years ("+10000", "-0001").
+ *
+ * @param seconds      Seconds since 1970-01-01 00:00:00 UTC.
+ * @param nanoseconds  Fraction of the second, below 1,000,000,000.
+ */
+std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision precision );
 
 /**
  * Format a single packet as a one-line summary string.
@@ -68,7 +88,7 @@ class PacketFormatter {
 public:
     /// @param precision   The finest precision the capture announces: every
     ///                    time is shown with its decimals, so that the time
-    ///                    column lines up and no packet's time is cut.
+    ///                    columns line up and no packet's time is cut.
     explicit PacketFormatter( TimePrecision precision = TimePrecision::Microseconds )
         : precision_( precision )
     {

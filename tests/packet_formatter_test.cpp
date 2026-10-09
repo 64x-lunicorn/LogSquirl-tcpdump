@@ -336,9 +336,9 @@ SCENARIO( "The Length column shows the length on the wire", "[packet_formatter]"
     pkt.protocol = "TCP";
     pkt.info = "40000 \xe2\x86\x92 443 [ACK] Seq=1 Ack=1 Win=512 Len=1460";
 
-    // The Length column starts after No., Stream, Time, Source, Destination
-    // and Protocol, and is 7 characters wide.
-    const size_t lengthColumn = 7 + 8 + 15 + 40 + 40 + 10;
+    // The Length column starts after No., Stream, UTC Time, Time, Source,
+    // Destination and Protocol, and is 7 characters wide.
+    const size_t lengthColumn = 7 + 8 + 29 + 15 + 40 + 40 + 10;
     auto lengthOf = [ & ]( const std::string& line ) {
         auto sub = line.substr( lengthColumn, 7 );
         return sub.substr( 0, sub.find( ' ' ) );
@@ -386,6 +386,112 @@ SCENARIO( "The Length column shows the length on the wire", "[packet_formatter]"
         THEN( "Info holds the cut marker alone" )
         {
             REQUIRE( line.substr( lengthColumn + 7 ) == "[cut to 0 bytes]" );
+        }
+    }
+}
+
+SCENARIO( "formatUtcTime writes a time as an ISO 8601 date and time in UTC", "[packet_formatter]" )
+{
+    THEN( "the epoch is midnight of 1970-01-01, marked Z" )
+    {
+        REQUIRE( formatUtcTime( 0, 0, TimePrecision::Microseconds )
+                 == "1970-01-01 00:00:00.000000Z" );
+    }
+
+    THEN( "a microsecond time has six decimals, the nanoseconds below them cut off" )
+    {
+        REQUIRE( formatUtcTime( 1791535272, 123456789, TimePrecision::Microseconds )
+                 == "2026-10-09 08:41:12.123456Z" );
+    }
+
+    THEN( "a nanosecond time has nine decimals" )
+    {
+        REQUIRE( formatUtcTime( 1791535272, 5, TimePrecision::Nanoseconds )
+                 == "2026-10-09 08:41:12.000000005Z" );
+    }
+
+    THEN( "leap days and the last second a pcap can hold are dated right" )
+    {
+        REQUIRE( formatUtcTime( 1709251199, 0, TimePrecision::Microseconds )
+                 == "2024-02-29 23:59:59.000000Z" );
+        REQUIRE( formatUtcTime( 4294967295, 999999999, TimePrecision::Nanoseconds )
+                 == "2106-02-07 06:28:15.999999999Z" );
+    }
+
+    THEN( "a time before 1970 counts back from the epoch" )
+    {
+        REQUIRE( formatUtcTime( -1, 500000000, TimePrecision::Microseconds )
+                 == "1969-12-31 23:59:59.500000Z" );
+    }
+
+    THEN( "a year outside 0000 to 9999 is written with its sign, as ISO 8601 expands it" )
+    {
+        REQUIRE( formatUtcTime( 253402300800, 0, TimePrecision::Microseconds )
+                 == "+10000-01-01 00:00:00.000000Z" );
+        REQUIRE( formatUtcTime( -62167219200, 0, TimePrecision::Microseconds )
+                 == "0000-01-01 00:00:00.000000Z" );
+        REQUIRE( formatUtcTime( -62167219201, 0, TimePrecision::Microseconds )
+                 == "-0001-12-31 23:59:59.000000Z" );
+    }
+}
+
+SCENARIO( "The UTC Time column shows each packet's wall-clock time", "[packet_formatter]" )
+{
+    // The column follows No. and Stream: 27 characters and two spaces, or 30
+    // and two for nanoseconds.
+    const size_t utcColumn = 7 + 8;
+
+    PacketRecord first;
+    first.number = 1;
+    first.timestampSec = 1791535272;
+    first.timestampNsec = 123456789;
+    first.srcIp = "192.168.1.1";
+    first.dstIp = "10.0.0.1";
+    first.protocol = "ICMP";
+
+    GIVEN( "a capture recorded to the microsecond" )
+    {
+        PacketFormatter formatter;
+
+        THEN( "the header names the column, and the relative Time follows it" )
+        {
+            REQUIRE( formatter.header().substr( utcColumn, 29 )
+                     == "UTC Time                     " );
+            REQUIRE( formatter.header().substr( utcColumn + 29, 4 ) == "Time" );
+        }
+
+        THEN( "a packet line carries its date and time with six decimals" )
+        {
+            REQUIRE( formatter.format( first, kNoStream ).substr( utcColumn, 29 )
+                     == "2026-10-09 08:41:12.123456Z  " );
+        }
+
+        AND_GIVEN( "a later packet recorded before the first one" )
+        {
+            PacketRecord earlier = first;
+            earlier.number = 2;
+            earlier.timestampSec -= 2;
+            formatter.format( first, kNoStream );
+            const auto line = formatter.format( earlier, kNoStream );
+
+            THEN( "it shows its own absolute time, its relative time negative" )
+            {
+                REQUIRE( line.substr( utcColumn, 29 ) == "2026-10-09 08:41:10.123456Z  " );
+                REQUIRE( line.substr( utcColumn + 29, 15 ) == "-2.000000      " );
+            }
+        }
+    }
+
+    GIVEN( "a capture recorded to the nanosecond" )
+    {
+        PacketFormatter formatter( TimePrecision::Nanoseconds );
+
+        THEN( "the column is three characters wider and has nine decimals" )
+        {
+            REQUIRE( formatter.header().substr( utcColumn, 32 )
+                     == "UTC Time                        " );
+            REQUIRE( formatter.format( first, kNoStream ).substr( utcColumn, 32 )
+                     == "2026-10-09 08:41:12.123456789Z  " );
         }
     }
 }
