@@ -31,6 +31,7 @@
 #include <cstring>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace tcpdump::tls {
 
@@ -153,9 +154,10 @@ const SessionSecrets* KeyLog::find( const uint8_t* clientRandom ) const
 
 // ── KeyLogFile ───────────────────────────────────────────────────────────
 
-KeyLogFile::KeyLogFile( const QString& path )
+KeyLogFile::KeyLogFile( const QString& path, Clock clock )
     : path_( path )
-    , lastRead_( std::chrono::steady_clock::now() )
+    , clock_( std::move( clock ) )
+    , lastRead_( now() )
 {
     read();
 }
@@ -186,9 +188,9 @@ void KeyLogFile::read()
 
 int64_t KeyLogFile::bytesRead()
 {
-    const auto now = std::chrono::steady_clock::now();
-    if ( now - lastRead_ >= kRereadInterval ) {
-        lastRead_ = now;
+    const auto time = now();
+    if ( time - lastRead_ >= kRereadInterval ) {
+        lastRead_ = time;
         // Read again only what was added: a file that did not grow has
         // nothing new.
         if ( QFileInfo( path_ ).size() != fileSize_ ) {

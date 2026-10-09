@@ -29,8 +29,8 @@
 
 #include <QFile>
 #include <QTemporaryDir>
-#include <QThread>
 
+#include <chrono>
 #include <string>
 
 using namespace tcpdump::tls;
@@ -53,6 +53,21 @@ size_t add( KeyLog& log, const std::string& text )
 {
     return log.addLines( text.data(), text.size() );
 }
+
+/// A clock that stands still until the test moves it on, for the
+/// interval between two reads of a key log.
+struct StillClock {
+    std::chrono::steady_clock::time_point at;
+    KeyLogFile::Clock clock()
+    {
+        return [ this ] { return at; };
+    }
+    /// Moves it on by the interval, so that the next look reads again.
+    void passInterval()
+    {
+        at += KeyLogFile::kRereadInterval;
+    }
+};
 
 } // namespace
 
@@ -147,7 +162,8 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
         REQUIRE( file.open( QIODevice::WriteOnly ) );
         file.write( "# empty so far\n" );
         file.flush();
-        KeyLogFile keyLog( path );
+        StillClock time;
+        KeyLogFile keyLog( path, time.clock() );
         REQUIRE( keyLog.readable() );
         REQUIRE_FALSE( keyLog.find( randomOf( 0xAA ).data() ) );
 
@@ -157,16 +173,16 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
             file.write( line.substr( 0, 40 ).c_str() );
             file.flush();
 
-            THEN( "the session is found once the line is whole" )
+            THEN( "the session is found once the line is whole, and the interval passed" )
             {
-                // The interval since the last read passes before it reads again.
-                QThread::msleep(
-                    static_cast<unsigned long>( KeyLogFile::kRereadInterval.count() + 50 ) );
+                time.passInterval();
                 REQUIRE_FALSE( keyLog.find( randomOf( 0xAA ).data() ) );
                 file.write( line.substr( 40 ).c_str() );
                 file.flush();
-                QThread::msleep(
-                    static_cast<unsigned long>( KeyLogFile::kRereadInterval.count() + 50 ) );
+                // Not before the interval since the last read has passed.
+                time.at += KeyLogFile::kRereadInterval / 2;
+                REQUIRE_FALSE( keyLog.find( randomOf( 0xAA ).data() ) );
+                time.passInterval();
                 const auto* secrets = keyLog.find( randomOf( 0xAA ).data() );
                 REQUIRE( secrets );
                 REQUIRE( secrets->masterSecret.size() == 48 );
@@ -184,7 +200,8 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
                       + "CLIENT_TRAFFIC_SECRET_0 " + kRandom + " " + master.substr( 0, 64 ) )
                         .c_str() );
         file.flush();
-        KeyLogFile keyLog( path );
+        StillClock time;
+        KeyLogFile keyLog( path, time.clock() );
 
         THEN( "the half line is not taken, though it would make a SHA-256 secret" )
         {
@@ -201,8 +218,7 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
                           + master + "\n" )
                             .c_str() );
             file.flush();
-            QThread::msleep(
-                static_cast<unsigned long>( KeyLogFile::kRereadInterval.count() + 50 ) );
+            time.passInterval();
 
             THEN( "they are read for the session that has some of its secrets already" )
             {
@@ -220,13 +236,13 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
         REQUIRE( file.open( QIODevice::WriteOnly ) );
         file.write( "# nothing\n" );
         file.flush();
-        KeyLogFile keyLog( path );
+        StillClock time;
+        KeyLogFile keyLog( path, time.clock() );
         const auto read = keyLog.bytesRead();
 
         THEN( "it is not read again, however often a session is looked for" )
         {
-            QThread::msleep(
-                static_cast<unsigned long>( KeyLogFile::kRereadInterval.count() + 50 ) );
+            time.passInterval();
             REQUIRE_FALSE( keyLog.find( randomOf( 0xAA ).data() ) );
             REQUIRE( keyLog.reads() == 1 );
             REQUIRE( keyLog.bytesRead() == read );

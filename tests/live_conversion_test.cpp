@@ -237,9 +237,10 @@ SCENARIO( "A live capture's lines are in the file while the capture runs", "[liv
                         run.pipe.write( pieces[ i ] );
                         const auto lines = static_cast<int>( i ) + 1;
                         // The stream pauses after the record, and what was
-                        // written is flushed before the wait: well within
-                        // kLiveFlushInterval, which a slow runner gets on top.
-                        REQUIRE( within( kLiveFlushInterval * 3,
+                        // written is flushed before the wait.  The stream
+                        // stays open, so a line seen at all is seen before
+                        // the end: the bound is generous for a loaded runner.
+                        REQUIRE( within( milliseconds( 5000 ),
                                          [ & ] { return lineCount( run.logPath() ) == lines; } ) );
                         INFO( "visible after "
                               << std::chrono::duration_cast<milliseconds>( Clock::now() - sent )

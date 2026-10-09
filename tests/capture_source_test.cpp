@@ -46,6 +46,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include <unistd.h>
 
@@ -254,7 +255,62 @@ SCENARIO( "A stream's format is decided by its header, without waiting for more"
     }
 }
 
-SCENARIO( "Stopping a stream that sends nothing ends the wait within 100 ms", "[capture_source]" )
+/// A stream that never sends anything: each wait times out, and the stop
+/// flag is set during the wait numbered stopDuring.
+class SilentSource : public StreamSource {
+public:
+    SilentSource( std::atomic_bool* stop, int stopDuring )
+        : StreamSource( stop )
+        , stop_( stop )
+        , stopDuring_( stopDuring )
+    {
+    }
+
+    std::vector<milliseconds> waits; ///< How long each wait was allowed.
+
+protected:
+    std::ptrdiff_t readFor( uint8_t*, size_t, milliseconds timeout ) override
+    {
+        waits.push_back( timeout );
+        if ( static_cast<int>( waits.size() ) == stopDuring_ ) {
+            *stop_ = true;
+        }
+        return -1;
+    }
+    bool available() override
+    {
+        return false;
+    }
+
+private:
+    std::atomic_bool* stop_;
+    int stopDuring_;
+};
+
+SCENARIO( "A read waits in slices and checks the stop flag after each", "[capture_source]" )
+{
+    GIVEN( "a stream that sends nothing, and a stop requested during the third wait" )
+    {
+        std::atomic_bool stop{ false };
+        SilentSource source( &stop, 3 );
+        uint8_t byte = 0;
+
+        THEN( "the read ends after that wait, none of them longer than a slice" )
+        {
+            REQUIRE( source.read( &byte, 1 ) == 0 );
+            REQUIRE( source.stopped() );
+            REQUIRE( source.waits.size() == 3 );
+            for ( const auto wait : source.waits ) {
+                REQUIRE( wait <= StreamSource::kWaitSlice );
+            }
+            REQUIRE( StreamSource::kWaitSlice <= milliseconds( 100 ) );
+        }
+    }
+}
+
+// The slices are proven above without a clock; on a pipe a generous bound
+// shows the waits are cut short at all, which a loaded machine still meets.
+SCENARIO( "Stopping a stream that sends nothing ends the wait", "[capture_source]" )
 {
     GIVEN( "a pipe that has sent a pcap header and then nothing" )
     {
@@ -277,9 +333,9 @@ SCENARIO( "Stopping a stream that sends nothing ends the wait within 100 ms", "[
             const auto returnedAt = Clock::now();
             canceller.join();
 
-            THEN( "it returns within 100 ms of the request, Cancelled, leaving nothing" )
+            THEN( "it returns soon after the request, Cancelled, leaving nothing" )
             {
-                REQUIRE( returnedAt - cancelledAt < milliseconds( 100 ) );
+                REQUIRE( returnedAt - cancelledAt < milliseconds( 2000 ) );
                 REQUIRE( source.stopped() );
                 REQUIRE( result.status == ConversionResult::Status::Cancelled );
                 REQUIRE( QDir( out.path() ).isEmpty() );
@@ -306,10 +362,10 @@ SCENARIO( "Stopping a stream that sends nothing ends the wait within 100 ms", "[
         const auto returnedAt = Clock::now();
         stopper.join();
 
-        THEN( "a read returns nothing within 100 ms of the stop, and stays ended" )
+        THEN( "a read returns nothing soon after the stop, and stays ended" )
         {
             REQUIRE( got == 0 );
-            REQUIRE( returnedAt - stoppedAt < milliseconds( 100 ) );
+            REQUIRE( returnedAt - stoppedAt < milliseconds( 2000 ) );
             REQUIRE( source.stopped() );
             REQUIRE( source.error().empty() );
             pipe.write( text( "late" ) );

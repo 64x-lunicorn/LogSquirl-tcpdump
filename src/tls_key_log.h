@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 
 namespace tcpdump::tls {
@@ -99,8 +100,11 @@ public:
     /// How often at most the file is read again for a session's secrets.
     static constexpr std::chrono::milliseconds kRereadInterval{ 500 };
 
-    /// The key log at @p path, read now.
-    explicit KeyLogFile( const QString& path );
+    /// The clock kRereadInterval is measured by; empty: the steady clock.
+    using Clock = std::function<std::chrono::steady_clock::time_point()>;
+
+    /// The key log at @p path, read now; @p clock is a test's.
+    explicit KeyLogFile( const QString& path, Clock clock = {} );
 
     /// Whether the file could be read; error() says why not.
     bool readable() const
@@ -139,7 +143,13 @@ private:
     /// All the secrets a session of its kind needs are there.
     static bool complete( const SessionSecrets& secrets );
 
+    std::chrono::steady_clock::time_point now() const
+    {
+        return clock_ ? clock_() : std::chrono::steady_clock::now();
+    }
+
     QString path_;
+    Clock clock_;
     QString error_;
     KeyLog keys_;
     int64_t offset_ = 0;   ///< Bytes of the file read for good: whole lines.
