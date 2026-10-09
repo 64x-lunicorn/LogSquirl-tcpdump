@@ -825,6 +825,361 @@ std::string detectDnsOverTcp( const uint8_t* payload, size_t len )
     return description;
 }
 
+// ── DHCP ─────────────────────────────────────────────────────────────────
+
+/// Where the BOOTP header (RFC 2131, 2) has the fields described: the
+/// client's own address, the one the server assigns ("your" address), the
+/// client hardware address, the server name and file fields, which an
+/// overload option fills with options, and the options behind the magic
+/// cookie.
+constexpr size_t kDhcpCiaddrAt = 12;
+constexpr size_t kDhcpYiaddrAt = 16;
+constexpr size_t kDhcpChaddrAt = 28;
+constexpr size_t kDhcpSnameAt = 44;
+constexpr size_t kDhcpSnameBytes = 64;
+constexpr size_t kDhcpFileAt = 108;
+constexpr size_t kDhcpFileBytes = 128;
+constexpr size_t kDhcpCookieAt = 236;
+constexpr size_t kDhcpOptionsAt = 240;
+constexpr uint32_t kDhcpMagicCookie = 0x63825363;
+
+/// What the options of a DHCP message say that its description shows.
+struct DhcpOptions {
+    int messageType = -1;                      ///< Option 53; -1: none.
+    const uint8_t* requestedAddress = nullptr; ///< Option 50.
+    std::string hostName;                      ///< Option 12, as text.
+    uint8_t overload = 0; ///< Option 52: 1 the file field, 2 sname, 3 both hold options.
+};
+
+/// Walk the options in @p field (RFC 2132, 2): pads skipped, up to the end
+/// option or the end of the field.  An option whose length runs past the
+/// field ends the walk; one of the wrong length is ignored.  Only the
+/// options field itself may overload others (@p mayOverload).
+void readDhcpOptions( FieldReader field, DhcpOptions& options, bool mayOverload )
+{
+    uint8_t code = 0;
+    FieldReader value( nullptr, 0 );
+    while ( field.u8( code ) && code != 255 ) {
+        if ( code == 0 ) {
+            continue;
+        }
+        if ( !field.takeVector8( value ) || !value.complete() ) {
+            return;
+        }
+        const auto length = value.remaining();
+        switch ( code ) {
+        case 53:
+            if ( length == 1 ) {
+                options.messageType = value.here()[ 0 ];
+            }
+            break;
+        case 50:
+            if ( length == 4 ) {
+                options.requestedAddress = value.here();
+            }
+            break;
+        case 12:
+            if ( length > 0 ) {
+                options.hostName = fieldText( value.here(), length );
+            }
+            break;
+        case 52:
+            if ( mayOverload && length == 1 ) {
+                options.overload = value.here()[ 0 ];
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/// A DHCP message type (option 53) as Wireshark names it, "DHCP Discover".
+std::string dhcpMessageName( int type )
+{
+    static const char* const kNames[] = {
+        nullptr,
+        "Discover",
+        "Offer",
+        "Request",
+        "Decline",
+        "ACK",
+        "NAK",
+        "Release",
+        "Inform",
+        "Force Renew",
+        "Lease query",
+        "Lease Unassigned",
+        "Lease Unknown",
+        "Lease Active",
+        "Bulk Lease Query",
+        "Lease Query Done",
+        "Active LeaseQuery",
+        "Lease Query Status",
+        "TLS",
+    };
+    if ( type > 0 && static_cast<size_t>( type ) < sizeof( kNames ) / sizeof( kNames[ 0 ] ) ) {
+        return std::string( "DHCP " ) + kNames[ type ];
+    }
+    char buf[ 48 ];
+    std::snprintf( buf, sizeof( buf ), "DHCP Unknown Message Type (0x%02x)", type );
+    return buf;
+}
+
+/// A non-zero IPv4 address at @p at of the message, if it holds one there.
+const uint8_t* dhcpAddress( const uint8_t* payload, size_t len, size_t at )
+{
+    if ( len < at + 4 || readBE32( payload + at ) == 0 ) {
+        return nullptr;
+    }
+    return payload + at;
+}
+
+/// Describe a DHCP message like Wireshark, with the client and its address:
+/// "DHCP Offer - Transaction ID 0x3903f326, 192.168.1.50 for
+/// 00:11:22:33:44:55", "DHCP Discover - Transaction ID 0x3903f326 from
+/// 00:11:22:33:44:55, Host Name: laptop".  The address is the one the
+/// server assigns, else the one the client requests (option 50), else the
+/// one it holds.  A message without a message type option (BOOTP) is a
+/// "Boot Request" or "Boot Reply".  Options are read in the options field,
+/// then in the file and sname fields if an overload option says they hold
+/// options.  Empty if the payload is no BOOTP message, or shorter than its
+/// transaction id.
+std::string detectDhcp( const uint8_t* payload, size_t len )
+{
+    FieldReader header( payload, len );
+    uint8_t op = 0;
+    uint8_t htype = 0;
+    uint8_t hlen = 0;
+    uint32_t xid = 0;
+    if ( !header.u8( op ) || ( op != 1 && op != 2 ) || !header.u8( htype ) || !header.u8( hlen )
+         || !header.skip( 1 ) || !header.u32( xid ) ) {
+        return {};
+    }
+
+    DhcpOptions options;
+    if ( len >= kDhcpOptionsAt && readBE32( payload + kDhcpCookieAt ) == kDhcpMagicCookie ) {
+        readDhcpOptions( { payload + kDhcpOptionsAt, len - kDhcpOptionsAt }, options, true );
+        if ( options.overload & 1 ) {
+            readDhcpOptions( { payload + kDhcpFileAt, kDhcpFileBytes }, options, false );
+        }
+        if ( options.overload & 2 ) {
+            readDhcpOptions( { payload + kDhcpSnameAt, kDhcpSnameBytes }, options, false );
+        }
+    }
+
+    char xidText[ 16 ];
+    std::snprintf( xidText, sizeof( xidText ), "0x%08x", xid );
+    std::string description = options.messageType >= 0
+                                  ? dhcpMessageName( options.messageType )
+                                  : ( op == 1 ? "Boot Request" : "Boot Reply" );
+    description += std::string( " - Transaction ID " ) + xidText;
+
+    const uint8_t* address = dhcpAddress( payload, len, kDhcpYiaddrAt );
+    if ( !address ) {
+        address = options.requestedAddress;
+    }
+    if ( !address ) {
+        address = dhcpAddress( payload, len, kDhcpCiaddrAt );
+    }
+    const bool ethernet = htype == 1 && hlen == 6 && len >= kDhcpChaddrAt + 6;
+    if ( address ) {
+        description += ", " + formatIpv4( address );
+    }
+    if ( ethernet ) {
+        description
+            += ( address || op == 2 ? " for " : " from " ) + formatMac( payload + kDhcpChaddrAt );
+    }
+    if ( !options.hostName.empty() ) {
+        description += ", Host Name: " + options.hostName;
+    }
+    return description;
+}
+
+// ── DHCPv6 ───────────────────────────────────────────────────────────────
+
+/// Most relays one message is looked into: RFC 8415, 7.6, lets a message
+/// pass at most 8 of them.
+constexpr int kMaxDhcpv6Relays = 8;
+
+/// Most bytes of a DUID shown, as hexadecimal.
+constexpr size_t kMaxDuidBytes = 32;
+
+constexpr uint8_t kDhcpv6RelayForward = 12;
+constexpr uint8_t kDhcpv6RelayReply = 13;
+
+/// A DHCPv6 message type as Wireshark names it, "Solicit", or "Unknown (99)".
+std::string dhcpv6MessageName( uint8_t type )
+{
+    static const char* const kNames[] = {
+        nullptr,
+        "Solicit",
+        "Advertise",
+        "Request",
+        "Confirm",
+        "Renew",
+        "Rebind",
+        "Reply",
+        "Release",
+        "Decline",
+        "Reconfigure",
+        "Information-request",
+        "Relay-forw",
+        "Relay-reply",
+        "Leasequery",
+        "Leasequery-reply",
+        "Leasequery-done",
+        "Leasequery-data",
+        "Reconfigure-request",
+        "Reconfigure-reply",
+        "DHCPv4-query",
+        "DHCPv4-response",
+    };
+    if ( type > 0 && type < sizeof( kNames ) / sizeof( kNames[ 0 ] ) ) {
+        return kNames[ type ];
+    }
+    return "Unknown (" + std::to_string( type ) + ")";
+}
+
+/// @p len bytes as lowercase hexadecimal, at most kMaxDuidBytes of them,
+/// then an ellipsis.
+std::string hexBytes( const uint8_t* p, size_t len )
+{
+    std::string out;
+    char buf[ 3 ];
+    for ( size_t i = 0; i < len && i < kMaxDuidBytes; ++i ) {
+        std::snprintf( buf, sizeof( buf ), "%02x", p[ i ] );
+        out += buf;
+    }
+    return len > kMaxDuidBytes ? out + "\xe2\x80\xa6" : out;
+}
+
+/// Describe a DHCPv6 message like Wireshark: "Solicit XID: 0x1a2b3c CID:
+/// 000100011c39cf88001122334455", the client's DUID (option 1) if it has
+/// one; a relay message names its link address and the message it relays
+/// (option 9), "Relay-forw L: 2001:db8::1, Solicit XID: …", up to
+/// kMaxDhcpv6Relays deep.  Options are walked within the message; one whose
+/// length runs past it ends the walk.  Empty if the message is shorter than
+/// its header.
+std::string describeDhcpv6( FieldReader message, int relays = 0 )
+{
+    uint8_t type = 0;
+    if ( !message.u8( type ) ) {
+        return {};
+    }
+    const bool relay = type == kDhcpv6RelayForward || type == kDhcpv6RelayReply;
+    std::string description = dhcpv6MessageName( type );
+    if ( relay ) {
+        if ( message.remaining() < 1 + 16 + 16 ) {
+            return {};
+        }
+        description += " L: " + formatIpv6( message.here() + 1 );
+        message.skip( 1 + 16 + 16 );
+    }
+    else {
+        uint32_t xid = 0;
+        if ( !message.u24( xid ) ) {
+            return {};
+        }
+        char xidText[ 16 ];
+        std::snprintf( xidText, sizeof( xidText ), " XID: 0x%06x", xid );
+        description += xidText;
+    }
+
+    uint16_t code = 0;
+    FieldReader value( nullptr, 0 );
+    while ( message.u16( code ) && message.takeVector16( value ) && value.complete() ) {
+        if ( !relay && code == 1 && value.remaining() > 0 ) {
+            description += " CID: " + hexBytes( value.here(), value.remaining() );
+            break;
+        }
+        if ( relay && code == 9 ) {
+            const auto relayed
+                = relays < kMaxDhcpv6Relays ? describeDhcpv6( value, relays + 1 ) : std::string();
+            if ( !relayed.empty() ) {
+                description += ", " + relayed;
+            }
+            break;
+        }
+    }
+    return description;
+}
+
+std::string detectDhcpv6( const uint8_t* payload, size_t len )
+{
+    return describeDhcpv6( { payload, len } );
+}
+
+// ── NTP ──────────────────────────────────────────────────────────────────
+
+/// The NTP header of modes 0 to 5 (RFC 5905, 7.3), without extensions.
+constexpr size_t kNtpHeaderBytes = 48;
+constexpr uint8_t kNtpModeClient = 3;
+constexpr uint8_t kNtpModeControl = 6;
+
+/// An NTP mode as Wireshark's Info names it.
+const char* ntpModeName( uint8_t mode )
+{
+    static const char* const kNames[] = {
+        "reserved", "symmetric active", "symmetric passive", "client",
+        "server",   "broadcast",        "control",           "private",
+    };
+    return kNames[ mode & 7 ];
+}
+
+/// The reference identifier of a stratum 0 or 1 packet as text: a
+/// kiss-o'-death code ("RATE") or the primary source ("GPS"), padded with
+/// NULs; empty unless it is printable ASCII.
+std::string ntpReferenceText( const uint8_t* id )
+{
+    size_t length = 4;
+    while ( length > 0 && id[ length - 1 ] == 0 ) {
+        --length;
+    }
+    for ( size_t i = 0; i < length; ++i ) {
+        if ( id[ i ] < 0x20 || id[ i ] >= 0x7F ) {
+            return {};
+        }
+    }
+    return std::string( reinterpret_cast<const char*>( id ), length );
+}
+
+/// Describe an NTP packet like Wireshark, "NTP Version 4, server", then its
+/// stratum, "stratum 2", with the reference identifier of a primary server
+/// or a kiss-o'-death, "stratum 1 (GPS)".  The stratum of a client request,
+/// 0 as a rule, is left out unless it is set.  Control (mode 6) and private
+/// (mode 7) messages have another header: only their version and mode are
+/// shown.  Empty if the version is not 1 to 4, or the packet of mode 0 to 5
+/// shorter than its header.
+std::string detectNtp( const uint8_t* payload, size_t len )
+{
+    if ( len < 1 ) {
+        return {};
+    }
+    const uint8_t version = ( payload[ 0 ] >> 3 ) & 7;
+    const uint8_t mode = payload[ 0 ] & 7;
+    if ( version < 1 || version > 4 || ( mode < kNtpModeControl && len < kNtpHeaderBytes ) ) {
+        return {};
+    }
+    std::string description
+        = "NTP Version " + std::to_string( version ) + ", " + ntpModeName( mode );
+    if ( mode >= kNtpModeControl ) {
+        return description;
+    }
+    const uint8_t stratum = payload[ 1 ];
+    if ( mode == kNtpModeClient && stratum == 0 ) {
+        return description;
+    }
+    description += ", stratum " + std::to_string( stratum );
+    if ( stratum <= 1 ) {
+        const auto reference = ntpReferenceText( payload + 12 );
+        if ( !reference.empty() ) {
+            description += " (" + reference + ")";
+        }
+    }
+    return description;
+}
+
 // ── TLS ──────────────────────────────────────────────────────────────────
 
 /// Most bytes of a hello field (a server name, the protocol list) shown.
@@ -1829,25 +2184,39 @@ std::optional<PayloadDescription> ssdpMessage( const Payload& p )
     return described( "SSDP", detectHttp( p.data, p.len ) );
 }
 
+/// NTP on port 123: named by the port, described if it is an NTP packet.
 std::optional<PayloadDescription> ntpPacket( const Payload& p )
 {
     if ( !onPort( p, 123 ) ) {
         return std::nullopt;
     }
-    return described( "NTP", {} );
+    return described( "NTP", detectNtp( p.data, p.len ) );
 }
 
+/// DHCP on ports 67 and 68: named by the port, described if it is a BOOTP
+/// message.
 std::optional<PayloadDescription> dhcpPacket( const Payload& p )
 {
     if ( !onPort( p, 67 ) && !onPort( p, 68 ) ) {
         return std::nullopt;
     }
-    return described( "DHCP", {} );
+    return described( "DHCP", detectDhcp( p.data, p.len ) );
+}
+
+/// DHCPv6 on ports 546 and 547: named by the port, described if the
+/// message has its header.
+std::optional<PayloadDescription> dhcpv6Packet( const Payload& p )
+{
+    if ( !onPort( p, 546 ) && !onPort( p, 547 ) ) {
+        return std::nullopt;
+    }
+    return described( "DHCPv6", detectDhcpv6( p.data, p.len ) );
 }
 
 /// The UDP detectors, in the order they are tried: ports first, then content.
-constexpr Detector kUdpDetectors[] = { dnsMessage, ssdpMessage,  ntpPacket,         dhcpPacket,
-                                       quicPacket, nmeaSentence, portHintAndPreview };
+constexpr Detector kUdpDetectors[]
+    = { dnsMessage,   ssdpMessage, ntpPacket,    dhcpPacket,
+        dhcpv6Packet, quicPacket,  nmeaSentence, portHintAndPreview };
 
 /// The detectors of a transport, as a range.
 template <size_t N>

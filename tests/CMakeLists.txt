@@ -24,6 +24,7 @@ add_executable(logsquirl_tcpdump_tests
     tls_test.cpp
     dns_test.cpp
     icmp_test.cpp
+    dhcp_ntp_test.cpp
     http_test.cpp
     quic_test.cpp
     streaming_test.cpp

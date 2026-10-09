@@ -163,7 +163,34 @@ tried: each transport has a table of detectors, all of the same shape
   the snaplen or the segment is described as far as it goes. A version is
   named only if known: a cut hello whose extensions end before a
   `supported_versions` would have shown gets none
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, QUIC, then NMEA and the port hint
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, QUIC, then NMEA and
+  the port hint
+- DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
+  and the transaction id, then the address and the client's MAC (an
+  Ethernet `chaddr`) and the host name (option 12, cut like every field),
+  `DHCP Offer - Transaction ID 0x3903f326, 192.168.1.50 for
+  00:11:22:33:44:55`, `DHCP Discover - Transaction ID 0x3903f326 from
+  00:11:22:33:44:55, Host Name: laptop`. The address is the one the server
+  assigns (`yiaddr`), else the one requested (option 50), else the one the
+  client holds (`ciaddr`). Options are walked within the message: pads
+  skipped, up to the end option; an option whose length runs past the
+  message ends the walk, one of the wrong length is ignored. An overload
+  option (52) in the options field makes the file and sname fields be
+  walked too, in that order, but not overload again. Without the magic
+  cookie (or option 53) a message is BOOTP, `Boot Request` or `Boot Reply`
+- DHCPv6 (UDP 546, 547): the message type, the transaction id and the
+  client's DUID (option 1) in hexadecimal, `Solicit XID: 0x1a2b3c CID:
+  000100011c39cf88001122334455`, as Wireshark writes it; a relay message
+  names its link address and the message it relays (option 9), up to 8
+  relays deep, `Relay-forw L: 2001:db8::1, Solicit XID: …`
+- NTP (UDP 123): version and mode as Wireshark writes them, then the
+  stratum, with the reference identifier of a primary server or a
+  kiss-o'-death code, `NTP Version 4, server, stratum 1 (GPS)`; a client
+  request's stratum, 0 as a rule, is left out unless set. Control and
+  private messages (modes 6 and 7) show their version and mode alone. A
+  packet of another version, or shorter than the 48-byte header, is `NTP`
+  by its port alone. DNS, mDNS, SSDP, NTP, DHCP and DHCPv6 are named by
+  their ports, not guessed: the label sticks to the stream
 - DNS: described like Wireshark, `Standard query response 0x1a2b A
   www.example.com CNAME example.com A 93.184.216.34`: the operation, the
   transaction id, the first question's type and name, a response code
@@ -234,7 +261,7 @@ word, without spaces, as the Protocol column and the Log Format need it.
 A service is listed with the transports it runs over (`kTcp`, `kUdp`,
 `kBoth`), so that TFTP is named on UDP 69 but not on TCP 69. The tables
 name what nothing dissects; a detector that recognises a protocol by its
-port or content (DNS, NTP, DHCP) runs before the port hint and decides
+port or content (DNS, NTP, DHCP, DHCPv6) runs before the port hint and decides
 alone, and may take its name from the table to keep the two in step.
 
 ### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
@@ -578,7 +605,9 @@ for a lossy link (tc netem) and differ from run to run. `stream-labels.pcap`,
 streams whose protocol sticks and a new connection that forgets it, is
 written by `tests/make_stream_labels_corpus.py`. `icmp.pcap`, ICMP and
 ICMPv6 echoes, error messages with their quoted packets and neighbor
-discovery, is written by `tests/make_icmp_corpus.py`. The pcapng unit tests build their
+discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
+lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
+by `tests/make_dhcp_ntp_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in

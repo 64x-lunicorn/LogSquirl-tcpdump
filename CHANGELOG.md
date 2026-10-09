@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beyond 14 counts as 14. No more memory per stream.
 
 ### Added
+- **DHCP, DHCPv6 and NTP described.** DHCP Info names the message type as
+  Wireshark does, with the transaction id, the address assigned, requested
+  or held and the client's MAC, and the host name the client sends: `DHCP
+  Offer - Transaction ID 0x3903f326, 192.168.1.50 for 00:11:22:33:44:55`,
+  `DHCP Discover - Transaction ID 0x3903f326 from 00:11:22:33:44:55, Host
+  Name: laptop`; messages without a DHCP message type are `Boot Request`
+  or `Boot Reply`. Options are walked within the message, pads, the end
+  option and overloaded file and sname fields included; a length that runs
+  past the message ends the walk. DHCPv6 (546/547) names its message type,
+  transaction id and client DUID, `Solicit XID: 0x1a2b3c CID: 0001…`, and
+  relay messages the link and the message they carry; it is now `DHCPv6`
+  by its port, as DHCP is, rather than a port guess with a preview of the
+  bytes. NTP shows version, mode and stratum, `NTP Version 4, server,
+  stratum 2`, with the reference of a primary server or a kiss-o'-death
+  code, `stratum 1 (GPS)`. Before, DHCP and NTP lines had no description.
 - **ICMP and ICMPv6 in full.** Info names messages in Wireshark's words. An
   echo shows its identifier and sequence number, so request and reply pair
   up: `Echo (ping) request id=0x1234, seq=7` (before: `Echo request`); so do
