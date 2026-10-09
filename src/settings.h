@@ -27,8 +27,10 @@
  * keeps the options it was converted with.
  *
  * The same file remembers the last choice of the live capture UI (group
- * [live]): source, device, interface, capture filter, snaplen.  Never a
- * password: no source asks for one.
+ * [live]): source, device, interface, capture filter, snaplen, and the
+ * options of each source (live/options/<source>/<name>).  Never a
+ * password: a secret option (isSecretLiveOption(), an extcap's password
+ * argument) is left out.
  */
 
 #pragma once
@@ -70,7 +72,13 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
 /// kMaxSnaplen.  Without a directory, or a file, an empty choice.
 LiveChoice loadLiveChoice( const QString& configDir );
 
-/// Save @p choice in @p configDir; false if it could not be written.
+/// Save @p choice in @p configDir, its options as those of its source
+/// (replacing what that source had; other sources keep theirs) but its
+/// secret ones; false if it could not be written.
 bool saveLiveChoice( const QString& configDir, const LiveChoice& choice );
+
+/// The options last saved for @p source in @p configDir; none without a
+/// directory, a file, or options saved for it.
+LiveOptions loadLiveOptions( const QString& configDir, const QString& source );
 
 } // namespace tcpdump

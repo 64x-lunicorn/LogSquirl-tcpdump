@@ -251,6 +251,12 @@ public:
     /// plugin's own are builtInLiveSources()).
     void setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
 
+    /// The kinds every SidebarWidget constructed afterwards offers until
+    /// setLiveSources(): builtInLiveSources(), unless @p sources is set.
+    /// The test runner sets an empty registry, so that no test runs a real
+    /// capture program (tcpdump -D, adb) by constructing a sidebar.
+    static void setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
+
     /// The Live capture section's form.
     LiveCaptureForm* liveForm() const
     {
@@ -382,7 +388,7 @@ private:
     QElapsedTimer liveClock_;   ///< Since the live capture started.
     QTimer liveTicker_;         ///< Moves the elapsed time on.
     /// Where the live capture form and dialog list devices and interfaces;
-    /// waited for when the widget goes.
+    /// cancelled and waited for when the widget goes.
     QThreadPool listingPool_;
     /// The kinds of live sources offered.
     std::shared_ptr<const LiveSourceRegistry> liveSources_;

@@ -275,6 +275,28 @@ would not wait. Two exist:
 A new live source either hands one of these its descriptor or device, or
 implements the two functions for its own handle.
 
+**A pipe of the plugin's (`capture_pipe.h/cpp`).** A Wireshark extcap does
+not write to stdout but into a path it is given (`--fifo`). `CapturePipe`
+makes that path: on Unix a FIFO (`mkfifo`, 0600) in a directory of its own
+(`mkdtemp`, 0700) named as the other temporary directories
+(`tempDirTemplate()`), so that one a crash left behind is removed with
+them; the plugin opens the read end non-blocking and also holds a write end
+of its own, so that the FIFO does not read as ended before the writer has
+opened it. On Windows it is a named pipe `\\.\pipe\logsquirl-tcpdump-<pid>-<random>`
+(`CreateNamedPipeW`: inbound, one instance, `FILE_FLAG_FIRST_PIPE_INSTANCE`,
+`PIPE_REJECT_REMOTE_CLIENTS`), connected and read with overlapped I/O into
+a buffer of its own, so that a read waits in slices (and a pending read is
+cancelled with `CancelIoEx` before the buffer goes); the writer closing it
+(`ERROR_BROKEN_PIPE`) ends it. `PipeSource( command, stop, onLine )` makes
+the pipe, runs the `ProcessCommand` that `command( pipePath )` returns as a
+Process Source with `discardStdout`, and is the `StreamSource` over the
+pipe: each read waits on the pipe and then takes in the program's stderr
+(`ProcessSource::waitForEnd( 0 )`), the stream ends once the program has
+ended and the pipe is drained, a failed program's error is the Process
+Source's, and the destructor ends the program before it removes the pipe.
+`tests/extcap_source_test.cpp` writes into the pipe from a thread, on
+every OS (on Windows through `CreateFileW`, as an extcap does).
+
 **Waits.** A source is given a stop flag (`std::atomic_bool`); `read()`
 checks it before every wait, and no wait is longer than
 `StreamSource::kWaitSlice` (50 ms), so a read returns within that of a
@@ -383,6 +405,11 @@ read through a `DeviceSource`:
   argument, untouched (spaces, quotes, `$( )`, `;`). A custom command opts
   into the shell explicitly with `ProcessCommand::shell( commandLine )`
   (`/bin/sh -c`, or `cmd.exe /d /s /c` on Windows), named by its first word.
+- **Elsewhere.** A program whose capture comes another way (an extcap's
+  FIFO) is run with `ProcessCommand::discardStdout`: its stdout goes to the
+  null device and whoever reads the capture asks `waitForEnd( timeout )`
+  (it takes in stderr meanwhile), `failure()` and `endedOnPurpose()`
+  instead of reading the source (`PipeSource`).
 - **Thread.** The source starts the program when it is constructed and
   owns it on that thread, which needs no event loop: build it on the
   worker thread that converts the stream.
@@ -1573,9 +1600,10 @@ knows none of them. A kind answers:
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
-| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice`; by default an interface is needed |
+| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
+| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
-| `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. An extcap's FIFO overrides it |
+| `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
 
 A kind holds no state that changes, so its listings may run on a worker
@@ -1583,17 +1611,122 @@ while the UI asks it the rest. `runListing( command, timeout )` runs a
 listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
 device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
-returns its stdout, stderr and exit code. `captureFilterProblem()` catches
+returns its stdout, stderr and exit code. A listing can be cancelled, which
+kills its group within moments: `cancelListings()` cancels every running
+one (the sidebar's destructor, so that the plugin's shutdown does not wait
+for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
+worker thread cancels those run under it once the flag is set (the form
+cancels its own listings as it goes); the kinds need not know of either. `captureFilterProblem()` catches
 what would be misread before libpcap sees a filter (a line break, a
 leading `-`, unbalanced parentheses, a display filter field such as
 `ip.addr`); the capture program compiles it. `liveCaptureName( choice )`
 names the capture's files after its device and interface.
 
 `builtInLiveSources()` is the one place a kind is registered: a source
-ticket adds a line there and nothing in the UI. Tests use
+ticket adds a line there and nothing in the UI.
+
+The **Local** kind (`local_source.h/cpp`, id `local`) is `LocalSourceKind(
+LocalPrograms )`: `LocalPrograms::forThisComputer()` holds `PATH`'s
+directories, the install locations of dumpcap and tcpdump on this OS, the
+OS (`CaptureOs`) and, on macOS, `/dev/bpf0`; tests pass a directory of fake
+`dumpcap`/`tcpdump` scripts as the search path and a `CaptureOs` of their
+choice. `program()` finds dumpcap, else tcpdump (not on Windows), anew on
+each call; `availability()` is `captureInstallHint( os )` without either.
+`listInterfaces()` runs `<program> -D` and parses its lines (`1. en0
+(Wi-Fi)`, `1.en0 [Up, Running]`; the description, else tcpdump's flags);
+a permission error on stderr (`isCapturePermissionError()`), an empty
+list, or an unreadable BPF device on macOS add
+`capturePermissionGuidance( os, program )` to its error, which the form
+shows as its status, as `explainFailure()` adds it to a failed capture's.
+The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
+downloads; no code path runs them, sudo, or anything that prompts. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
 capture or a program, a failure with a hint, devices on request) through
-`SidebarWidget::setLiveSources()`.
+`SidebarWidget::setLiveSources()`. The test runner sets
+`SidebarWidget::setDefaultLiveSources()` to an empty registry, so that no
+sidebar a test constructs offers the built-in kinds and runs a real
+`tcpdump -D` or `adb`.
+
+The **Android** kind (`adb_source.h/cpp`, id `adb`) is `AdbSourceKind(
+AdbPrograms )`: `PATH`'s directories, the SDK's `platform-tools` below
+`ANDROID_HOME`/`ANDROID_SDK_ROOT` and the usual install directories
+(`installed`), and the device's directory for its files (`deviceTempDir`,
+`/data/local/tmp`). Its devices are `Listed` (`parseAdbDevices()` of `adb
+devices -l`; a state other than `device` is a target's `problem`).
+`probe( serial, withInterfaces, timeout )` runs one `adb -s <serial> shell`
+script that prints `@uid=`, `@su=` (`su -c 'id -u'` with stdin `/dev/null`
+and, where the device has it, `timeout 5`), `@tcpdump=` and, after
+`@links`, `ip -o link` (`parseDeviceInterfaces()`), as an
+`AdbDeviceAccess{ root, su, tcpdump, interfaces }`; it never runs `adb
+root`. `listInterfaces()` lists `any` and the device's interfaces, with the
+root or tcpdump guidance as its error. `makeSource()` probes again on the
+capture's worker thread (throwing, as a failed capture, without root or
+tcpdump) and runs `captureCommand()`: `adb -s <serial> exec-out 'exec
+2>/dev/null; [su -c] <script>'`, the script running tcpdump in the
+background with its stderr and pid in `logsquirl-<tag>.err`/`.pid` and
+waiting for it. Every word in a device command line goes through
+`shellQuote()` (POSIX single quotes). The stream is a Process Source that,
+as it goes, kills tcpdump by its pid file on the device (through su when it
+runs as root) and removes its files, and that reads the `.err` file for
+the error of a capture that ended before any byte came.
+`explainFailure()` maps adb's and tcpdump's errors to
+`adbAuthorizeGuidance()`, `adbConnectGuidance()`, `adbRootGuidance()`,
+`adbTcpdumpGuidance()`. `tests/adb_source_test.cpp` uses a fake `adb`
+script whose "device" is this computer's `/bin/sh` with a `PATH` of fake
+`id`, `su`, `ip` and `tcpdump` (exec-out in a process group of its own, as
+a device's tcpdump is not ended with the local adb), so that quoting,
+root through `adb root` and su, binary-clean streams and the kill on Stop
+are tested end to end.
+
+The **Wireshark extcap** kind (`extcap_source.h/cpp`, id `extcap`) is
+`ExtcapSourceKind( ExtcapPlaces )`: the directories looked in, in order
+(`forThisComputer()`: `WIRESHARK_EXTCAP_DIR`, the personal directory, the
+global one of this OS, each followed by its `wireshark` subdirectory), and
+the OS (on Windows only `.exe`, `.bat` and `.cmd` count). `extcaps()` lists
+the executables (a name found twice is the first's), anew on each call;
+`availability()` is `extcapInstallHint()` without any. Its devices are
+`Listed`, the extcaps by file name: `listDevices()` asks each for
+`--extcap-interfaces` within the timeout in all (one that fails, or was not
+asked in time, is a target with a `problem`); `listInterfaces()` asks the
+chosen one; `config( device, interface, timeout )` asks for
+`--extcap-config` and `--extcap-dlts`. Every question is a `runListing()`.
+The protocol's sentences (`keyword {key=value}…`, `\}` escaped) are read
+by `parseExtcapSentences()`, bounded (`kMaxExtcapSentences`, lines of at
+most `kMaxExtcapLine`), into `parseExtcapInterfaces()`, `parseExtcapDlts()`
+and `parseExtcapConfig()`: `ExtcapArg{ number, call, display, type,
+default, range, required, validation, … values }` in the order of their
+numbers; a call that is no long option, or the protocol's own (`--fifo`,
+`--capture`, `--extcap-…`), is dropped. An argument's value is the option
+`extcapOptionName( interface, arg )`: the interface percent-encoded, `:`
+and the call, or `?` and the call for a boolflag (`"true"`/`"false"`),
+after `kSecretOptionMark` (`*`) for a password or a `{save=false}`
+argument. `extcapArguments( options, interface )` turns the interface's
+options into `--call=value` (one word, so that a value starting with `-` is
+not read as an option) and `--call` for a checked boolflag. `command()` is
+`<extcap> --capture --extcap-interface <if> [--extcap-capture-filter
+<filter>] <arguments>`; `makeSource()` adds `--fifo <pipe>` after the
+interface in a `PipeSource`. No `--extcap-control-in/out` is passed.
+
+The form of an interface's arguments is `ExtcapOptionsWidget`
+(`extcap_options.h/cpp`): on `setTarget()` (settled for
+`kSettleMs`) it runs `config()` on a thread pool of its own under a
+`ListingCancelScope` (cancelled when another interface is chosen or it
+goes; its destructor waits), and makes a field per argument: `QLineEdit`
+(string, password with `QLineEdit::Password`, numbers), `QCheckBox`
+(boolean, boolflag), `QComboBox` (selector; editable for editselector),
+radio buttons, a checkable `QListWidget` (multicheck, children indented
+under their parent), a path with Browse… (fileselect). Fields start with the
+option kept, else the default, and write through to the options, so that
+the capture passes every value shown; the interface's options it no longer
+takes are dropped, other interfaces' kept. `problem()` says the extcap is
+being asked, or names a required field left empty, a number that is none or
+out of `{range=}`, a value its `{validation=}` does not match, or a
+`{mustexist=true}` file that is not there. `tests/extcap_source_test.cpp`
+runs fake extcap scripts (`fakedump` answering from files and writing a
+synthetic pcap into the FIFO it is given, `brokendump` failing), so that
+discovery, every argument type, hostile values (passed as one word, no
+shell), a password kept out of `settings.ini`, Stop and a failing extcap
+are tested end to end.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview
@@ -1643,8 +1776,14 @@ The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
 only. `loadLiveChoice()` and `saveLiveChoice()` keep the last
 `LiveChoice` started (source, device, interface, filter, snaplen 1 to
-`kMaxSnaplen`) in the group `live` of the same file; no source asks for or
-keeps a password.
+`kMaxSnaplen`) in the group `live` of the same file, its `options` (a
+string map, `LiveOptions`) under `live/options/<source>/<name>`, replacing
+those of its source only; `loadLiveOptions( configDir, source )` reads a
+source's, which the sidebar hands the form (`setSourceOptions()`) for every
+kind, so that each source keeps its own options. A secret option (its name
+starts with `kSecretOptionMark`, `*`: an extcap's password) is never
+written (`isSecretLiveOption()`): it lives in the form's options for the
+session only.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:
@@ -1703,7 +1842,9 @@ snaplen. Choosing a source shows its `availability()` reason, or lists its
 devices and then the interfaces of the device chosen on the sidebar's
 listing pool, each listing bounded by the kind's timeout; a result for a
 source or device chosen since is dropped (a generation counter). The form
-remembers the choice it was given and selects it once listed. `problem()`
+remembers the choice it was given and selects it once listed. A kind's
+options widget is made anew whenever the kind is chosen, and its options
+are kept per source when another is chosen. `problem()`
 (no source, unavailable, the filter, the kind's `validate()`) keeps
 **Start** disabled, with the reason as its tooltip, as does a conversion or
 a capture running; the form is locked while a capture runs.

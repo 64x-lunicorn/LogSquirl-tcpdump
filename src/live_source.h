@@ -31,6 +31,7 @@
  *   - says whether the kind can be used here, and why not ("adb not found"),
  *   - lists its devices (phones, hosts) and their interfaces, on a worker
  *     thread, each listing bounded by a timeout,
+ *   - may have options of its own, edited in a widget it makes,
  *   - checks a choice before it starts,
  *   - makes the capture's stream for a choice: by default a Process Source
  *     running the command the kind builds from {device, interface, capture
@@ -39,7 +40,9 @@
  *
  * The capture filter is BPF, handed to the capture program as one argument
  * (or quoted for a remote shell by a kind that needs one): never through a
- * local shell.  The plugin never asks for or stores a password.
+ * local shell.  The plugin never stores a password: a kind's option that
+ * holds one (an extcap's password argument) is a secret option, kept in
+ * memory for the session only (isSecretLiveOption()).
  *
  * builtInLiveSources() is the one place a kind is registered.
  */
@@ -49,9 +52,11 @@
 #include "live_capture.h"
 #include "process_source.h"
 
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <vector>
@@ -64,6 +69,22 @@ constexpr int kDefaultSnaplen = 262144;
 /// The most the snaplen may be set to.
 constexpr int kMaxSnaplen = 262144;
 
+/// A kind's own options, by name: e.g. ssh's "exclude own SSH port", an
+/// extcap's arguments, a saved command.  Names hold no '/'.
+using LiveOptions = QMap<QString, QString>;
+
+/// What the name of a secret option (a password) starts with: it is handed
+/// to the kind for this session, but never written to settings.ini.
+inline constexpr QChar kSecretOptionMark = QLatin1Char( '*' );
+
+/// Whether the option @p name is a secret (kSecretOptionMark).
+inline bool isSecretLiveOption( const QString& name )
+{
+    return name.startsWith( kSecretOptionMark );
+}
+
+class LiveOptionsWidget;
+
 /// What the user chose to capture: one choice of the live capture UI, as
 /// settings.ini remembers it.
 struct LiveChoice {
@@ -72,12 +93,14 @@ struct LiveChoice {
     QString networkInterface; ///< The interface's id; empty: the kind's default, if it has one.
     QString filter;           ///< The capture filter, BPF; empty: everything.
     int snaplen = kDefaultSnaplen; ///< Bytes kept of each packet.
+    /// The source's own options (makeOptionsWidget()); kept per source.
+    LiveOptions options;
 
     bool operator==( const LiveChoice& other ) const
     {
         return source == other.source && device == other.device
                && networkInterface == other.networkInterface && filter == other.filter
-               && snaplen == other.snaplen;
+               && snaplen == other.snaplen && options == other.options;
     }
     bool operator!=( const LiveChoice& other ) const
     {
@@ -174,6 +197,14 @@ public:
     /// empty if it can.  By default an interface must be chosen.
     virtual QString validate( const LiveChoice& choice ) const;
 
+    /// A new widget for the kind's own options (LiveChoice::options), which
+    /// the form shows below its fields while the kind is chosen, and owns;
+    /// null (the default) for a kind without options.  On the UI thread.
+    virtual LiveOptionsWidget* makeOptionsWidget() const
+    {
+        return nullptr;
+    }
+
     /// The capture program for @p choice: e.g. `tcpdump -i <if> -s <snaplen>
     /// -U -w - <filter>`, the filter one argument.  For makeSource().
     virtual ProcessCommand command( const LiveChoice& choice ) const = 0;
@@ -242,8 +273,33 @@ struct ListingOutput {
  * event loop is needed.  stdin is the null device, so a program that would
  * ask (a password, a host key) fails instead of waiting.  A program still
  * running at the timeout is killed with what it started.
+ *
+ * A listing can be cancelled, so that closing the live capture UI or
+ * shutting the plugin down does not wait for its timeout: by
+ * cancelListings(), or by the flag of a ListingCancelScope on its thread.
+ * Its program is then killed with what it started, and error says
+ * "cancelled".
  */
 ListingOutput runListing( const ProcessCommand& command, std::chrono::milliseconds timeout );
+
+/// Cancel every listing running now, on whichever thread (the plugin's
+/// shutdown); listings started afterwards run as usual.
+void cancelListings();
+
+/**
+ * While it lives, the listings run on its thread (runListing(), called by a
+ * kind's listDevices() or listInterfaces()) are cancelled once @p cancel is
+ * set: how the live capture form cancels its own listings, which the kinds
+ * need not know of.  Scopes do not nest.
+ */
+class ListingCancelScope {
+public:
+    explicit ListingCancelScope( std::shared_ptr<const std::atomic_bool> cancel );
+    ~ListingCancelScope();
+
+    ListingCancelScope( const ListingCancelScope& ) = delete;
+    ListingCancelScope& operator=( const ListingCancelScope& ) = delete;
+};
 
 /// A file name for a capture of @p choice: its interface, after its device
 /// if it has one, with anything but letters, digits, '.', '-' and '_'

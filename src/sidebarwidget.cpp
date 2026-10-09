@@ -136,7 +136,19 @@ QString fileKey( const QString& filePath )
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
+/// What setDefaultLiveSources() set; null: builtInLiveSources().
+std::shared_ptr<const LiveSourceRegistry>& defaultLiveSources()
+{
+    static std::shared_ptr<const LiveSourceRegistry> sources;
+    return sources;
+}
+
 } // namespace
+
+void SidebarWidget::setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
+{
+    defaultLiveSources() = std::move( sources );
+}
 
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
@@ -312,6 +324,15 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         // Neither this widget nor its members are used after the dialog:
         // it may be gone when it returns (its pool waits for the listings).
         LiveCaptureDialog dialog( liveSources_, choice, parent, &listingPool_ );
+        // Another source chosen there starts with the options saved for it.
+        if ( liveSources_ ) {
+            for ( const auto& kind : liveSources_->kinds() ) {
+                if ( kind->id() != choice.source ) {
+                    dialog.form()->setSourceOptions(
+                        kind->id(), loadLiveOptions( hostConfigDir(), kind->id() ) );
+                }
+            }
+        }
         if ( dialog.exec() != QDialog::Accepted ) {
             return false;
         }
@@ -329,7 +350,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
     setConverting( false );
     setCapturing( false );
-    setLiveSources( builtInLiveSources() );
+    setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
 }
 
 SidebarWidget::~SidebarWidget()
@@ -337,6 +358,11 @@ SidebarWidget::~SidebarWidget()
     // A live capture is stopped, not cancelled: its tab may stay open after
     // a runtime disable.  Its worker is waited for, as the conversion's.
     live_.reset();
+
+    // The listings of the form and the dialog are waited for by
+    // listingPool_, as the host unloads the library next: their programs
+    // are killed first, so that this takes moments, not a listing's timeout.
+    cancelListings();
 
     // The host unloads the library right after the plugin is shut down:
     // the worker must be done with it before.  It checks the cancel flag
@@ -905,6 +931,12 @@ void SidebarWidget::setLiveSources( std::shared_ptr<const LiveSourceRegistry> so
 {
     liveSources_ = std::move( sources );
     liveForm_->setSources( liveSources_ );
+    if ( liveSources_ ) {
+        for ( const auto& kind : liveSources_->kinds() ) {
+            liveForm_->setSourceOptions( kind->id(),
+                                         loadLiveOptions( hostConfigDir(), kind->id() ) );
+        }
+    }
     liveForm_->setChoice( loadLiveChoice( hostConfigDir() ) );
     updateStartButton();
 }

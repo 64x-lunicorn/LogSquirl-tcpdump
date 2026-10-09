@@ -264,6 +264,9 @@ ProcessSource::ProcessSource( const ProcessCommand& command, const std::atomic_b
     process_->setProcessChannelMode( QProcess::SeparateChannels );
     process_->setReadChannel( QProcess::StandardOutput );
     process_->setStandardInputFile( QProcess::nullDevice() );
+    if ( command.discardStdout ) {
+        process_->setStandardOutputFile( QProcess::nullDevice() );
+    }
 #ifdef Q_OS_WIN
     // A console program gets no console window.
     process_->setCreateProcessArgumentsModifier(
@@ -343,6 +346,23 @@ void ProcessSource::terminate()
         endGroup( *group_, process_.get() );
         drainStderr();
     }
+}
+
+bool ProcessSource::waitForEnd( std::chrono::milliseconds timeout )
+{
+    if ( !started_ ) {
+        return true;
+    }
+    if ( process_->state() != QProcess::NotRunning ) {
+        // Takes in stderr while it waits; 0 looks once.
+        process_->waitForFinished( static_cast<int>( timeout.count() ) );
+    }
+    drainStderr();
+    if ( process_->state() != QProcess::NotRunning ) {
+        return false;
+    }
+    stderr_.finish();
+    return true;
 }
 
 std::ptrdiff_t ProcessSource::readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout )

@@ -128,7 +128,11 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
         ++generation_;
         listInterfaces();
     } );
-    connect( interface_, &QComboBox::currentTextChanged, this, &LiveCaptureForm::changed );
+    connect( interface_, &QComboBox::currentTextChanged, this, [ this ] {
+        tellTarget();
+        emit changed();
+    } );
+    connect( device_, &QComboBox::currentTextChanged, this, &LiveCaptureForm::tellTarget );
     connect( refresh_, &QPushButton::clicked, this, &LiveCaptureForm::refresh );
     connect( filter_, &QLineEdit::textChanged, this, [ this ] {
         checkFilter();
@@ -141,7 +145,8 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
 
 LiveCaptureForm::~LiveCaptureForm()
 {
-    // A listing's program ends by its timeout at the latest.
+    // Its listings' programs are killed, rather than waited for.
+    cancel_->store( true );
     if ( ownPool_ ) {
         ownPool_->waitForDone();
     }
@@ -160,8 +165,18 @@ void LiveCaptureForm::setSources( std::shared_ptr<const LiveSourceRegistry> sour
     setChoice( current );
 }
 
+void LiveCaptureForm::setSourceOptions( const QString& source, const LiveOptions& options )
+{
+    if ( options_ && optionsSource_ == source ) {
+        options_->setOptions( options );
+    }
+    optionsBySource_[ source ] = options;
+}
+
 void LiveCaptureForm::setChoice( const LiveChoice& choice )
 {
+    dropOptionsWidget();
+    optionsBySource_[ choice.source ] = choice.options;
     wanted_ = choice;
     const auto index = source_->findData( choice.source );
     source_->setCurrentIndex( index >= 0 ? index : ( source_->count() > 0 ? 0 : -1 ) );
@@ -182,6 +197,13 @@ LiveChoice LiveCaptureForm::choice() const
     choice.networkInterface = currentId( interface_ );
     choice.filter = filter_->text().trimmed();
     choice.snaplen = snaplen_->value();
+    if ( options_ ) {
+        choice.options = options_->options();
+    }
+    else if ( const auto kept = optionsBySource_.find( choice.source );
+              kept != optionsBySource_.end() ) {
+        choice.options = kept->second;
+    }
     return choice;
 }
 
@@ -204,7 +226,10 @@ QString LiveCaptureForm::problem() const
     if ( const auto filter = captureFilterProblem( current.filter ); !filter.isEmpty() ) {
         return filter;
     }
-    return kind->validate( current );
+    if ( auto invalid = kind->validate( current ); !invalid.isEmpty() ) {
+        return invalid;
+    }
+    return options_ ? options_->problem() : QString();
 }
 
 void LiveCaptureForm::refresh()
@@ -228,6 +253,8 @@ void LiveCaptureForm::refresh()
 void LiveCaptureForm::sourceChanged()
 {
     ++generation_;
+    dropOptionsWidget();
+    showOptionsWidget();
     device_->clear();
     interface_->clear();
     const auto kind = currentKind();
@@ -358,7 +385,8 @@ void LiveCaptureForm::runListing( std::function<LiveListing()> listing,
                  done( result );
              } );
     // The listing holds its kind, never the form: it may outlive it.
-    watcher->setFuture( QtConcurrent::run( pool_, [ listing ] {
+    watcher->setFuture( QtConcurrent::run( pool_, [ listing, cancel = cancel_ ] {
+        const ListingCancelScope scope( cancel );
         try {
             return listing();
         } catch ( const std::exception& e ) {
@@ -417,6 +445,49 @@ void LiveCaptureForm::showStatus( const QString& text )
 {
     status_->setText( text );
     status_->setHidden( text.isEmpty() );
+}
+
+void LiveCaptureForm::dropOptionsWidget()
+{
+    if ( !options_ ) {
+        return;
+    }
+    optionsBySource_[ optionsSource_ ] = options_->options();
+    // Deleted now, not later: its object name must not be found any more.
+    delete options_;
+    options_ = nullptr;
+    optionsSource_.clear();
+}
+
+void LiveCaptureForm::showOptionsWidget()
+{
+    const auto kind = currentKind();
+    options_ = kind ? kind->makeOptionsWidget() : nullptr;
+    if ( !options_ ) {
+        return;
+    }
+    optionsSource_ = kind->id();
+    if ( const auto kept = optionsBySource_.find( optionsSource_ );
+         kept != optionsBySource_.end() ) {
+        options_->setOptions( kept->second );
+    }
+    auto* layout = static_cast<QFormLayout*>( this->layout() );
+    layout->addRow( options_ );
+    options_->setEnabled( kind->availability().available );
+    connect( options_, &LiveOptionsWidget::changed, this, &LiveCaptureForm::changed );
+    tellTarget();
+}
+
+void LiveCaptureForm::tellTarget()
+{
+    if ( !options_ ) {
+        return;
+    }
+    const auto kind = currentKind();
+    const auto device = kind && kind->devices() != LiveSourceKind::Devices::None
+                            ? currentId( device_ )
+                            : QString();
+    options_->setTarget( device, currentId( interface_ ) );
 }
 
 void LiveCaptureForm::checkFilter()

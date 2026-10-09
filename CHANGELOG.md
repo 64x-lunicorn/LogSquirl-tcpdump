@@ -35,6 +35,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packets are written uncompressed. zlib 1.3.1 is fetched by the build,
   pinned by its SHA-256, and linked in statically with hidden, prefixed
   symbols (NOTICE). zstd and xz are not read (#51)
+- **Wireshark extcap live capture.** The **Wireshark extcap** source makes
+  every extcap a live source (`sshdump`, `androiddump`, `ciscodump`,
+  `udpdump`, `randpktdump`, a vendor's), found in `WIRESHARK_EXTCAP_DIR`,
+  the personal extcap directory and Wireshark's own on each OS (each with
+  its `wireshark` subdirectory). The extcaps are listed with their
+  interfaces (`--extcap-interfaces`; one that fails is listed with its
+  error), and the chosen interface's arguments (`--extcap-config`) become a
+  form: text, numbers with their range, check boxes, drop-down and radio
+  choices, multi-check lists and file paths, with their defaults, a
+  required one keeping Start disabled. Values are remembered per interface
+  in `settings.ini`, except passwords (and arguments the extcap says not to
+  save), kept for the session only. It captures with `--capture --fifo`
+  into a FIFO the plugin makes in its private temporary directory (a named
+  pipe on Windows), every value one argument, never through a shell;
+  **Stop** ends the extcap (#75)
+- **Android live capture.** The **Android** source captures on a phone or
+  an emulator with the device's tcpdump through `adb` (found on `PATH`,
+  below `ANDROID_HOME`/`ANDROID_SDK_ROOT` or where the SDK is usually
+  installed). It lists the devices of `adb devices -l` (unauthorized,
+  offline or unpermitted ones with what to do) and the device's interfaces
+  (`ip -o link`, after `any`), and finds root: adbd running as root (an
+  emulator or a userdebug build after `adb root`, which the plugin never
+  runs) or a `su -c` that grants it without a prompt; without root or
+  tcpdump on the device it says what to do (`adb root`, Magisk, pushing a
+  static tcpdump to `/data/local/tmp`). It captures through `adb exec-out`,
+  binary-clean, the interface and filter single-quoted for the device's
+  shell so that no filter can inject a command; tcpdump's stderr is read
+  from the device when a capture fails, and **Stop** kills tcpdump on the
+  device too (#73)
+- **Local live capture.** The **Local** source captures on this
+  computer's interfaces with Wireshark's `dumpcap` (preferred) or
+  `tcpdump`, found on `PATH` or where their installers put them; without
+  either it says what to install. It lists interfaces with `-D` and passes
+  the capture filter as one argument. It never runs sudo or asks for a
+  password: when the program may not capture (a permission error, no
+  interfaces listed, an unreadable `/dev/bpf0` on macOS), the section says
+  what to do on this OS: ChmodBPF or the `access_bpf` group on macOS, the
+  `wireshark` group or `setcap` on Linux, Npcap without the
+  administrators-only restriction on Windows; the README lists them (#72)
 - **Live capture UI.** The sidebar's new **Live capture** section, and
   **Plugins → tcpdump → Start live capture…** (also in the Command
   Palette) with the same fields in a dialog, start a live capture: a
@@ -51,7 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password is ever asked for or stored. One live capture runs at a time:
   the menu entry offers to stop the running one, and starts the new one
   once it has ended. Sources plug in through one small interface, the
-  Live Source Kind (#71)
+  Live Source Kind (#71). Closing the section or the dialog, or shutting
+  the plugin down, cancels a device or interface listing that still runs
+  (its program is killed) instead of waiting up to its 10 s timeout. A
+  source may have options of its own, shown in the form while it is
+  chosen and remembered per source in `settings.ini`
 - **TLS decryption with an `SSLKEYLOGFILE`.** The new option *TLS
   decryption: key log file* takes the key log browsers, curl and OpenSSL
   applications write (NSS format: `CLIENT_RANDOM` for TLS 1.2, the

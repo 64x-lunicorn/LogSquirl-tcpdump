@@ -35,7 +35,14 @@
  * A listing touches nothing of the form, so a form with a given pool goes
  * at once, its listings' results dropped; the pool's owner waits for them
  * (the plugin must not be unloaded while one runs).  A form with its own
- * pool waits for them as it goes, at most a listing's timeout.
+ * pool waits for them as it goes.  Either way the form cancels its listings
+ * as it goes (ListingCancelScope): their programs are killed, so that
+ * waiting for them takes moments, not a listing's timeout.
+ *
+ * A source with options of its own (an ssh's own port excluded, an extcap's
+ * arguments) shows their widget below the snaplen while it is chosen; the
+ * options of each source are kept apart, so that choosing another source
+ * and back keeps them.
  *
  * problem() says why the choice cannot be captured, for the Start button
  * of whoever holds the form; changed() tells it to ask again.
@@ -49,6 +56,8 @@
 #include <QThreadPool>
 #include <QWidget>
 
+#include <atomic>
+#include <map>
 #include <memory>
 
 class QComboBox;
@@ -59,14 +68,53 @@ class QSpinBox;
 
 namespace tcpdump {
 
+/**
+ * The fields of a Live Source Kind's own options, below the form's while
+ * the kind is chosen (LiveSourceKind::makeOptionsWidget()): the form hands
+ * it the options kept for its kind and reads them back for choice().  It
+ * emits changed() when they change, so that problem() is asked again.
+ *
+ * Options that depend on the device and interface (an extcap's arguments
+ * are its interface's) follow setTarget(), which the form calls whenever
+ * they change.
+ */
+class LiveOptionsWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    using QWidget::QWidget;
+
+    /// Show @p options; names it does not know are ignored.
+    virtual void setOptions( const LiveOptions& options ) = 0;
+    /// The options the fields hold.
+    virtual LiveOptions options() const = 0;
+
+    /// The device (empty for a kind without devices) and the interface the
+    /// form's fields hold now; by default ignored.
+    virtual void setTarget( const QString& device, const QString& networkInterface )
+    {
+        (void)device;
+        (void)networkInterface;
+    }
+
+    /// Why options() cannot be captured with (a required field is empty),
+    /// for LiveCaptureForm::problem(); empty (the default) if they can.
+    virtual QString problem() const
+    {
+        return {};
+    }
+
+signals:
+    void changed();
+};
+
 class LiveCaptureForm : public QWidget {
     Q_OBJECT
 
 public:
     /// Lists on @p pool, or on a pool of its own if it is null.
     explicit LiveCaptureForm( QThreadPool* pool = nullptr, QWidget* parent = nullptr );
-    /// With a pool of its own, waits for a listing that still runs, which
-    /// its timeout bounds.
+    /// Cancels its listings; with a pool of its own, waits for them to end.
     ~LiveCaptureForm() override;
 
     LiveCaptureForm( const LiveCaptureForm& ) = delete;
@@ -85,11 +133,16 @@ public:
     /// What the fields hold.
     LiveChoice choice() const;
 
+    /// The options @p source starts with when it is chosen, until the user
+    /// changes them or setChoice() gives others (the ones saved for it).
+    void setSourceOptions( const QString& source, const LiveOptions& options );
+
     /// The source chosen, or null if there is none.
     std::shared_ptr<const LiveSourceKind> currentKind() const;
 
     /// Why choice() cannot be captured: no source, an unavailable one, a bad
-    /// capture filter, or what the source's validate() says; empty if it can.
+    /// capture filter, what the source's validate() says, or what its
+    /// options widget does; empty if it can.
     QString problem() const;
 
     /// Whether a listing runs.
@@ -125,6 +178,12 @@ private:
     void showStatus( const QString& text );
     /// Show the capture filter's problem below it.
     void checkFilter();
+    /// Keep the options widget's options for its source, and remove it.
+    void dropOptionsWidget();
+    /// Show the options widget of the current source, if it has one.
+    void showOptionsWidget();
+    /// Tell the options widget the device and interface chosen now.
+    void tellTarget();
 
     std::shared_ptr<const LiveSourceRegistry> sources_;
     LiveChoice wanted_; ///< The choice setChoice() was given.
@@ -137,10 +196,17 @@ private:
     QLineEdit* filter_ = nullptr;
     QLabel* filterHint_ = nullptr;
     QSpinBox* snaplen_ = nullptr;
+    /// The current source's options, if it has any; owned by the form.
+    LiveOptionsWidget* options_ = nullptr;
+    QString optionsSource_; ///< The source options_ is of.
+    /// The options of each source, as last shown or given.
+    std::map<QString, LiveOptions> optionsBySource_;
     /// Counts the source and device changes: a listing's result is shown
     /// only if none came after it started.
     quint64 generation_ = 0;
-    int listing_ = 0;                      ///< Listings running.
+    int listing_ = 0; ///< Listings running.
+    /// Set as the form goes: cancels the listings it started.
+    std::shared_ptr<std::atomic_bool> cancel_ = std::make_shared<std::atomic_bool>( false );
     std::unique_ptr<QThreadPool> ownPool_; ///< Without a pool given.
     QThreadPool* pool_ = nullptr;          ///< Where listings run.
 };

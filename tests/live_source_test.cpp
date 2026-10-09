@@ -36,6 +36,10 @@
 #include <QSettings>
 #include <QTemporaryDir>
 
+#include <atomic>
+#include <memory>
+#include <thread>
+
 using namespace tcpdump;
 using namespace tcpdump_test;
 
@@ -156,6 +160,36 @@ SCENARIO( "The last live capture choice is kept in settings.ini", "[live_source]
         }
     }
 
+    WHEN( "choices with options are saved for two sources" )
+    {
+        LiveChoice first{ "a", "", "en0", "", 100, { { "note", "one" }, { "port", "22" } } };
+        REQUIRE( saveLiveChoice( configDir.path(), first ) );
+        LiveChoice second{ "b", "", "en1", "", 100, { { "note", "two" } } };
+        REQUIRE( saveLiveChoice( configDir.path(), second ) );
+
+        THEN( "the last one is read back with its options, and each source keeps its own" )
+        {
+            REQUIRE( loadLiveChoice( configDir.path() ) == second );
+            REQUIRE( loadLiveOptions( configDir.path(), "a" ) == first.options );
+            REQUIRE( loadLiveOptions( configDir.path(), "b" ) == second.options );
+            REQUIRE( loadLiveOptions( configDir.path(), "c" ).isEmpty() );
+            REQUIRE( loadLiveOptions( {}, "a" ).isEmpty() );
+        }
+
+        AND_WHEN( "the first source is saved again with fewer options" )
+        {
+            first.options.remove( "port" );
+            REQUIRE( saveLiveChoice( configDir.path(), first ) );
+
+            THEN( "the one left out is gone" )
+            {
+                REQUIRE( loadLiveOptions( configDir.path(), "a" )
+                         == LiveOptions{ { "note", "one" } } );
+                REQUIRE( loadLiveOptions( configDir.path(), "b" ) == second.options );
+            }
+        }
+    }
+
     WHEN( "the snaplen in the file is out of range or not a number" )
     {
         QSettings file( settingsFilePath( configDir.path() ), QSettings::IniFormat );
@@ -247,6 +281,59 @@ SCENARIO( "A listing program is run with a timeout and nothing to answer a promp
             quiet.start();
             waitFor( [ & ] { return quiet.elapsed() > 1500; } );
             REQUIRE_FALSE( QFile::exists( marker ) );
+        }
+    }
+
+    GIVEN( "a program that does not finish, and its listing cancelled" )
+    {
+        const auto program = listingProgram( dir, "hang", "sleep 30" );
+        ListingOutput output;
+        QElapsedTimer took;
+        took.start();
+        std::thread lister(
+            [ & ] { output = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) ); } );
+        QElapsedTimer started;
+        started.start();
+        waitFor( [ & ] { return started.elapsed() > 300; } );
+        cancelListings();
+        lister.join();
+
+        THEN( "it ends at once, cancelled, without waiting for its timeout" )
+        {
+            REQUIRE( took.elapsed() < 1500 );
+            REQUIRE( output.error.contains( "cancelled" ) );
+            REQUIRE( output.exitCode == -1 );
+        }
+
+        THEN( "a listing started afterwards is not cancelled" )
+        {
+            const auto quick = listingProgram( dir, "quick", "echo en0" );
+            REQUIRE( runListing( { quick, {} }, std::chrono::milliseconds( 10000 ) ).out
+                     == "en0\n" );
+        }
+    }
+
+    GIVEN( "a program that does not finish, run under a cancel flag" )
+    {
+        const auto program = listingProgram( dir, "hang", "sleep 30" );
+        auto cancel = std::make_shared<std::atomic_bool>( false );
+        ListingOutput output;
+        QElapsedTimer took;
+        took.start();
+        std::thread lister( [ & ] {
+            const ListingCancelScope scope( cancel );
+            output = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) );
+        } );
+        QElapsedTimer started;
+        started.start();
+        waitFor( [ & ] { return started.elapsed() > 300; } );
+        cancel->store( true );
+        lister.join();
+
+        THEN( "setting the flag ends it" )
+        {
+            REQUIRE( took.elapsed() < 1500 );
+            REQUIRE( output.error.contains( "cancelled" ) );
         }
     }
 

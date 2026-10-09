@@ -65,6 +65,10 @@ struct ProcessCommand {
     QString name;
     /// program is a command line for the system's shell, not an executable.
     bool viaShell = false;
+    /// The capture comes another way than stdout (an extcap writes it to a
+    /// FIFO the plugin made): stdout goes to the null device, and the
+    /// stream is not read from it (see ProcessSource::waitForEnd()).
+    bool discardStdout = false;
 
     /// A custom command line run by the system's shell (/bin/sh -c, or
     /// cmd.exe /c on Windows), for a user who wants pipes or quoting: the
@@ -154,17 +158,26 @@ public:
     /// been ended.
     void terminate();
 
-protected:
-    std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override;
-    bool available() override;
+    /// For a program whose capture comes another way than stdout
+    /// (ProcessCommand::discardStdout), read by whoever reads that: wait at
+    /// most @p timeout (0: not at all) for the program to end, handing on
+    /// what it writes to stderr meanwhile; whether it has ended (or was
+    /// never started).
+    bool waitForEnd( std::chrono::milliseconds timeout );
+
+    /// Why the program ended, if it failed: empty if it runs, exited with 0
+    /// or was ended on purpose.
+    QString failure() const;
+
     /// Whether the program was ended by terminate() or
     /// terminateCaptureProcesses().
     bool endedOnPurpose() const override;
 
+protected:
+    std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override;
+    bool available() override;
+
 private:
-    /// Why the program ended, if it failed: empty if it exited with 0 or
-    /// was ended on purpose.
-    QString failure() const;
     void drainStderr();
 
     QString name_;

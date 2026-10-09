@@ -36,6 +36,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
@@ -375,6 +376,102 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     }
 }
 
+SCENARIO( "A source's own options show in the form, are part of the choice, and are kept",
+          "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir root;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->withOptions = true;
+    fake->capture = pcapOf( { datagram( 0 ) } );
+    auto plain = std::make_shared<FakeSourceKind>( "plain", "Plain" );
+    auto registry = registryOf( fake );
+    registry->add( plain );
+
+    auto sidebar = std::make_unique<SidebarWidget>();
+    sidebar->setTempRoot( root.path() );
+    sidebar->setLiveSources( registry );
+    auto* form = sidebar->liveForm();
+    const Fields fields( sidebar.get() );
+    REQUIRE( listed( form, fields ) );
+    auto* note = sidebar->findChild<QLineEdit*>( "fakeNote" );
+    REQUIRE( note );
+
+    WHEN( "an option is set" )
+    {
+        int changes = 0;
+        QObject::connect( form, &LiveCaptureForm::changed, [ & ] { ++changes; } );
+        note->setText( "hello" );
+
+        THEN( "it is part of the choice, and the form says it changed" )
+        {
+            REQUIRE( changes > 0 );
+            REQUIRE( form->choice().options == LiveOptions{ { "note", "hello" } } );
+            REQUIRE( fields.start->isEnabled() );
+        }
+
+        AND_WHEN( "another source is chosen, and then this one again" )
+        {
+            fields.source->setCurrentIndex( 1 );
+            emit fields.source->activated( 1 );
+
+            THEN( "the other source has no options widget, and this one's options stay" )
+            {
+                REQUIRE_FALSE( sidebar->findChild<QLineEdit*>( "fakeNote" ) );
+                REQUIRE( form->choice().options.isEmpty() );
+                fields.source->setCurrentIndex( 0 );
+                emit fields.source->activated( 0 );
+                auto* again = sidebar->findChild<QLineEdit*>( "fakeNote" );
+                REQUIRE( again );
+                REQUIRE( again->text() == "hello" );
+                REQUIRE( form->choice().options == LiveOptions{ { "note", "hello" } } );
+            }
+        }
+
+        AND_WHEN( "the capture is started and the plugin restarts" )
+        {
+            fields.start->click();
+            REQUIRE( fake->started().size() == 1 );
+            REQUIRE( fake->started().front().options == LiveOptions{ { "note", "hello" } } );
+            sidebar->stopLiveCapture();
+            REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+            sidebar.reset();
+            SidebarWidget restarted;
+            restarted.setLiveSources( registry );
+
+            THEN( "the option is shown again" )
+            {
+                auto* again = restarted.findChild<QLineEdit*>( "fakeNote" );
+                REQUIRE( again );
+                REQUIRE( again->text() == "hello" );
+                REQUIRE( restarted.liveForm()->choice().options
+                         == LiveOptions{ { "note", "hello" } } );
+            }
+        }
+    }
+
+    WHEN( "an option the source does not accept is set" )
+    {
+        note->setText( "bad" );
+
+        THEN( "Start is disabled with the source's reason" )
+        {
+            REQUIRE_FALSE( fields.start->isEnabled() );
+            REQUIRE( fields.start->toolTip() == "The note is bad." );
+        }
+    }
+
+    WHEN( "a choice with options is set" )
+    {
+        form->setChoice( LiveChoice{ "fake", "", "fake0", "", 100, { { "note", "given" } } } );
+
+        THEN( "the widget shows them" )
+        {
+            REQUIRE( sidebar->findChild<QLineEdit*>( "fakeNote" )->text() == "given" );
+        }
+    }
+}
+
 SCENARIO( "The Start live capture dialog has the section's fields", "[live_ui]" )
 {
     FakeHost host;
@@ -545,6 +642,62 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
 }
 
 #ifdef Q_OS_UNIX
+
+SCENARIO( "A listing that hangs does not hold up closing the sidebar or a dialog", "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir dir;
+    const auto program = dir.filePath( "hanging-lister" );
+    {
+        QFile file( program );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        file.write( "#!/bin/sh\nsleep 30\n" );
+        file.close();
+        REQUIRE( file.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner ) );
+    }
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->listingProgram = program;
+    /// Long enough for the listing program to be running.
+    const auto whileListing = [ & ]( const LiveCaptureForm* form ) {
+        REQUIRE( form->isListing() );
+        QElapsedTimer running;
+        running.start();
+        waitFor( [ & ] { return running.elapsed() > 300; } );
+        REQUIRE( form->isListing() );
+    };
+
+    WHEN( "the sidebar goes while its form lists" )
+    {
+        auto sidebar = std::make_unique<SidebarWidget>();
+        sidebar->setTempRoot( dir.path() );
+        sidebar->setLiveSources( registryOf( fake ) );
+        whileListing( sidebar->liveForm() );
+        QElapsedTimer took;
+        took.start();
+        sidebar.reset();
+
+        THEN( "the listing is cancelled, not waited for" )
+        {
+            REQUIRE( took.elapsed() < 1000 );
+        }
+    }
+
+    WHEN( "a form with a pool of its own goes while it lists" )
+    {
+        auto form = std::make_unique<LiveCaptureForm>();
+        form->setSources( registryOf( fake ) );
+        whileListing( form.get() );
+        QElapsedTimer took;
+        took.start();
+        form.reset();
+
+        THEN( "the listing is cancelled, not waited for" )
+        {
+            REQUIRE( took.elapsed() < 1000 );
+        }
+    }
+}
 
 SCENARIO( "A source's capture program gets the capture filter as one argument, no shell",
           "[live_ui]" )

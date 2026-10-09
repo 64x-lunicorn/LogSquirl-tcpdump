@@ -236,10 +236,131 @@ the Command Palette), which shows the same fields in a dialog:
   running one first
 
 The choices started last are remembered in the plugin's `settings.ini` and
-shown again after a restart. The plugin never asks for or stores a
-password. While the capture runs, the section shows what the capture
+shown again after a restart, and so are each source's own options, for a
+source that has any. The plugin never stores a password: one a source's
+options ask for (an extcap's password argument) is kept in memory for the
+session only. While the capture runs, the section shows what the capture
 program writes to stderr (also in LogSquirl's log); if it fails, the
 section shows why, with what the source says to do about it.
+
+#### Local: this computer, with dumpcap or tcpdump
+
+The **Local** source captures on this computer's interfaces with
+Wireshark's `dumpcap` if it is installed (preferred: it is on every OS and
+writes pcapng), else with `tcpdump`. Both are looked for on `PATH` and where
+their installers put them: `/Applications/Wireshark.app/Contents/MacOS/dumpcap`
+and `/usr/sbin/tcpdump` on macOS, `/usr/bin/dumpcap` and `/usr/sbin/tcpdump`
+on Linux, `Program Files\Wireshark\dumpcap.exe` on Windows. Without either,
+the source says what to install. Its interfaces are those `dumpcap -D` or
+`tcpdump -D` lists; it captures with `dumpcap -i <interface> -s <snaplen>
+-q -f <filter> -w -` or `tcpdump -i <interface> -s <snaplen> -U -w -
+<filter>`, the filter passed as one argument.
+
+The plugin **never runs sudo and never asks for a password**: the capture
+program must be allowed to capture as you. When it is not (it says
+"permission denied" or "You don't have permission", lists no interfaces,
+or, on macOS, `/dev/bpf0` cannot be read), the section says what to do on
+your OS; run the command yourself, once:
+
+- **macOS**: capturing needs read access to `/dev/bpf*`. Install
+  **ChmodBPF** from the [Wireshark](https://www.wireshark.org/download.html)
+  disk image ("Install ChmodBPF.pkg"): it lets the group `access_bpf` read
+  `/dev/bpf*` and adds you to it. If it is installed but you are not in the
+  group: `sudo dseditgroup -o edit -a "$USER" -t user access_bpf`, then log
+  out and in again
+- **Linux**: capturing needs `CAP_NET_RAW` and `CAP_NET_ADMIN`. With
+  dumpcap, join the `wireshark` group (on Debian and Ubuntu first `sudo
+  dpkg-reconfigure wireshark-common`, answering Yes): `sudo usermod -aG
+  wireshark "$USER"`, then log out and in again; or give the program the
+  capabilities: `sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/dumpcap`
+  (or `/usr/sbin/tcpdump`)
+- **Windows**: install [Npcap](https://npcap.com/#download) (Wireshark's
+  installer offers it), leaving "Restrict Npcap driver's access to
+  Administrators only" unchecked, so that LogSquirl need not run as
+  administrator
+
+#### Android: a phone or an emulator, through adb
+
+The **Android** source captures on an Android device with the device's own
+`tcpdump`, through `adb`. It finds `adb` on `PATH`, in the SDK's
+`platform-tools` below `ANDROID_HOME` or `ANDROID_SDK_ROOT`, and where
+Android Studio and package managers put it (`~/Library/Android/sdk`,
+`~/Android/Sdk`, `%LOCALAPPDATA%\Android\Sdk`, `/opt/homebrew/bin`,
+`/usr/lib/android-sdk`); without it, the source says where to get the
+[Platform-Tools](https://developer.android.com/tools/releases/platform-tools).
+
+- **Devices** are those of `adb devices -l`, with their model. One that is
+  `unauthorized` (allow USB debugging in the prompt on the device),
+  `offline` (reconnect it, or `adb kill-server`) or without permissions
+  (Linux: a udev rule) is listed with what to do, and cannot be chosen
+- **Interfaces** are `any` and those of `ip -o link` on the device. Listing
+  them also asks the device whether it can capture, and says what to do if
+  it cannot
+- **Root**: capturing needs it. The source uses it when `adb` already runs
+  as root (an emulator image without Google Play, or a userdebug or eng
+  build, after you ran `adb root` yourself: LogSquirl never runs it), or
+  when `su -c` gives root without a prompt (a rooted device whose su
+  manager, e.g. Magisk, granted the Shell app). Otherwise it says that a
+  stock, unrooted device cannot capture this way
+- **tcpdump** is looked for on the device's `PATH`, in `/system/bin` and
+  `/system/xbin` (emulators and userdebug builds have it), and in
+  `/data/local/tmp`: on another device, push a static `tcpdump` built for
+  its CPU there (`adb push tcpdump /data/local/tmp/`, `adb shell chmod 755
+  /data/local/tmp/tcpdump`)
+
+It captures with `adb -s <serial> exec-out` (binary-clean: no terminal, no
+CR/LF translation) running `tcpdump -i <interface> -s <snaplen> -U -w -
+<filter>` on the device, through `su -c` where that is how root is had.
+The interface and the filter are single-quoted for the device's shell, so
+a filter is always one argument of tcpdump and never shell syntax.
+tcpdump's stderr is kept in a file on the device and shown if the capture
+fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
+and removes its files.
+
+#### Wireshark extcap: sshdump, androiddump, ciscodump, udpdump, …
+
+The **Wireshark extcap** source makes every
+[extcap](https://www.wireshark.org/docs/wsdg_html_chunked/ChCaptureExtcap.html)
+you have a live source: the ones Wireshark ships (`sshdump`, `ciscodump`,
+`androiddump`, `udpdump`, `randpktdump`, `wifidump`, …) and any other,
+e.g. a vendor's. It looks for them, in this order, in
+
+- the directories in `WIRESHARK_EXTCAP_DIR` (separated as `PATH` is),
+- your personal extcap directory: `~/.local/lib/wireshark/extcap` or
+  `~/.config/wireshark/extcap`; `%APPDATA%\Wireshark\extcap` on Windows,
+- Wireshark's own: `/Applications/Wireshark.app/Contents/MacOS/extcap` on
+  macOS (also `~/Applications/…`, and Homebrew's `lib/wireshark/extcap`),
+  `/usr/lib/<arch>-linux-gnu/wireshark/extcap`, `/usr/lib/wireshark/extcap`,
+  `/usr/lib64/…` or `/usr/libexec/…` on Linux,
+  `Program Files\Wireshark\extcap` on Windows,
+
+each with its `wireshark` subdirectory, where Wireshark 4.2 and later keep
+theirs. Without any extcap, the source says where they come from.
+
+- **Extcap** is the device: each extcap found, asked for its interfaces
+  (`--extcap-interfaces`). One that fails is listed with its error and
+  cannot be chosen
+- **Interface**: the interfaces the chosen extcap reports
+- Its **arguments** (`--extcap-interface <interface> --extcap-config`)
+  are shown as a form below the snaplen: text, numbers (checked against
+  their range), check boxes, drop-down lists, radio buttons, lists of check
+  boxes and file paths, each with its default; a required one left empty
+  keeps Start disabled. The link type it captures (`--extcap-dlts`) is
+  shown above them. The values are remembered per interface in
+  `settings.ini`, except a **password** (or an argument the extcap says not
+  to save), which is kept for this session only and never written there
+
+It captures with `<extcap> --capture --extcap-interface <interface> --fifo
+<pipe> [--extcap-capture-filter <filter>] --<argument>=<value> …`, every
+value one argument, never through a shell. The extcap writes into a FIFO
+the plugin makes in its private temporary directory (readable by you
+alone), or a named pipe `\\.\pipe\logsquirl-tcpdump-…` on Windows; its
+stderr is shown as a capture program's, and **Stop** ends it with what it
+started. An extcap's toolbar controls (`--extcap-control-in`/`-out`) are
+not used: extcaps capture without them. Note that, as with Wireshark, a
+password argument is on the extcap's command line, which other users of
+the computer may see in its process list while it runs. The snaplen is not
+passed: an extcap has its own option for that, if any.
 
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:

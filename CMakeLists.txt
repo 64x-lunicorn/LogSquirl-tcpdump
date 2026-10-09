@@ -171,6 +171,11 @@ add_library(logsquirl_tcpdump SHARED
     src/packet_panel.cpp
     src/live_capture.cpp
     src/live_source.cpp
+    src/local_source.cpp
+    src/adb_source.cpp
+    src/extcap_source.cpp
+    src/extcap_options.cpp
+    src/capture_pipe.cpp
     src/live_capture_form.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
