@@ -891,6 +891,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
 
         THEN( "the capture is converted, its bytes as they were written" )
         {
+            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
             REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
             REQUIRE( host.openedFiles.size() == 1 );
             const QFileInfo log( host.openedFiles.first() );
@@ -945,6 +946,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
         {
             REQUIRE( waitFor( [ & ] { return extcaps.calls().contains( "killed" ); } ) );
             REQUIRE( waitFor( [ & ] { return !QFileInfo::exists( QFileInfo( fifo ).path() ); } ) );
+            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
             REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
         }
     }
@@ -959,6 +961,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
 
         THEN( "the capture stops by itself, as for any source, and ends the extcap" )
         {
+            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
             REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
             REQUIRE( host.notifications.size() == 1 );
             REQUIRE( host.notifications.first().contains( "stopped after 1 packets" ) );
@@ -978,6 +981,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
 
         THEN( "the raw capture is split, only the newest file kept, each file's text in a tab" )
         {
+            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
             REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
             REQUIRE( host.openedFiles.size() == 2 );
             const QFileInfo log( host.openedFiles.last() );

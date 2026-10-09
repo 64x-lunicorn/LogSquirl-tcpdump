@@ -571,6 +571,7 @@ SCENARIO( "The Android source captures live through a fake adb", "[adb_source]" 
 
             THEN( "the capture comes binary-clean through exec-out, CR and LF as they were" )
             {
+                INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
                 REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
                 REQUIRE( host.openedFiles.size() == 1 );
                 const QFileInfo log( host.openedFiles.first() );
@@ -650,7 +651,10 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
         host.openedFiles.clear();
         auto sidebar = sidebarFor( adb, tempRoot );
         REQUIRE( sidebar->startLiveCapture( { "adb", adb.serial, "any", "", 96 } ) );
-        REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1; } ) );
+        const auto* error = sidebar->findChild<QLabel*>( "liveError" );
+        REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1 || !error->isHidden(); } ) );
+        INFO( error->text().toStdString() );
+        REQUIRE( host.openedFiles.size() == 1 );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().size() == 2; } ) ); // pid, stderr
 
         sidebar->stopLiveCapture();
@@ -659,6 +663,7 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
         REQUIRE( adb.adbLog().contains( "kill $p" ) );
         REQUIRE( adb.adbLog().contains( "su -c ': >" ) == viaSu );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
+        INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
         REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
         QFile::remove( adb.path( "adb-root" ) );
         sidebar.reset();
