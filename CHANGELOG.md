@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Names from DNS answers.** The new option *Show names from the
+  capture's DNS answers with the addresses* (off by default; the default
+  output is unchanged) shows an address that a DNS or mDNS answer earlier
+  in the capture resolved with its name behind it in Source and
+  Destination, `93.184.216.34(www.example.com)`: one word, still starting
+  with the address, so the Log Format, the presets, Follow stream, the
+  summary's filters and the display filters match as before. A and AAAA
+  answers name their address with the name asked for, through CNAMEs; PTR
+  answers name the address they spell; over UDP and TCP. Passive and
+  streaming: a name labels only the packets after its answer, a later
+  answer renames, names are shown unchecked (a spoofed answer is shown as
+  any other). At most 8,192 addresses keep a name (about 2.5 MB), the
+  oldest let go first. The sidebar summary lists endpoints with their
+  names (#54)
 - **gzip-compressed captures.** `.pcap.gz`, `.pcapng.gz` and `.cap.gz`
   files open as Wireshark opens them (the Open dialog lists them; the gzip
   magic decides, also behind a text preamble, not the name). They are

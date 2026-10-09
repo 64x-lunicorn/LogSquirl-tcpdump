@@ -270,6 +270,7 @@ opens its options:
 |--------|---------|---------|
 | Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
 | Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet or Wi-Fi |
+| Show names from the capture's DNS answers with the addresses | off | on: Source and Destination show an address a DNS answer earlier in the capture named as `93.184.216.34(www.example.com)`, see [Names from DNS answers](#names-from-dns-answers) |
 | Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
 | Show TCP timestamps (TSval, TSecr) on every segment | off: on SYNs only, among their options | on: every segment with the option, as Wireshark shows it |
 | SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
@@ -289,7 +290,7 @@ which the Log Format and every highlighter and filter written for it expect.
 The plugin's own patterns, those of [Follow stream](#usage), the summary's
 filters, the [display filters](#display-filters) and the [highlighter set
 and filter group](#highlighters-and-filters),
-read every layout. Two options change the column layout:
+read every layout. Three options change the column layout:
 
 - **Time**: a line has one time column fewer. The [Log Format](#log-format)
   still reads it, leaving the missing column empty: with the UTC time only,
@@ -302,9 +303,51 @@ read every layout. Two options change the column layout:
   Info, so the Log Format reads them as the start of `body`; the other
   columns stay where they are. A highlighter or filter anchored at the
   start of Info no longer matches.
+- **Show names from the capture's DNS answers**: Source and Destination
+  get the name behind the address, without a space, so each stays one
+  word and still begins with the address; the Log Format reads them as
+  ever. A highlighter or filter that expects an address to end its column
+  no longer matches the named lines.
 
 The payload preview, the TCP timestamps and the caps change only what Info says or which
 streams are numbered, not the columns.
+
+### Names from DNS answers
+
+With **Show names from the capture's DNS answers with the addresses** on,
+an address that a DNS answer in the capture resolved shows its name, as
+Wireshark's name resolution does when it is fed from the capture:
+
+```
+1      0  …  192.0.2.10                    93.184.216.34                    HTTPS  54  50000 → 443 [SYN] Seq=0 Win=64240
+4      0  …  192.0.2.53                    192.0.2.10                       DNS    105 53 → 53001 Len=63 | Standard query response 0x1a2b A www.example.com CNAME example.com A 93.184.216.34
+5      0  …  192.0.2.10                    93.184.216.34(www.example.com)   HTTPS  54  50000 → 443 [ACK] Seq=1 Ack=1 Win=64240 [iRTT=0.006000]
+```
+
+- **Passive**: nothing is looked up. Names come from the responses of DNS
+  (UDP and TCP, port 53) and mDNS (port 5353) in the capture: A and AAAA
+  answers name their address with the name that was asked for, followed
+  back through the CNAMEs of the answer (`www.example.com`, not
+  `example.com`); PTR answers for `in-addr.arpa` and `ip6.arpa` names name
+  the address they spell. Only the answer section is read, and only
+  responses without an error. DNS over TLS and over HTTPS are not read
+- **From then on**: a name labels the packets after the answer that gave
+  it; packets before it, and the answer itself, keep the address alone, so
+  a live capture and a file read alike. A later answer that names the
+  address again replaces its name
+- **Unchecked**: a name is shown as the answer gave it. A spoofed or
+  forged answer names an address as well as a true one: the address is
+  always there, in front of the name. A name with characters other than
+  letters, digits, `-`, `_` and `.`, or longer than 120 characters, is not
+  shown
+- **Memory**: at most 8,192 addresses keep a name (about 2.5 MB); past
+  that, the one named longest ago loses its name
+- **Everything else works on the address**: stream numbers, the summary's
+  endpoint counts and the Conversations table are the same as without
+  names. Follow stream, the summary's endpoint filters and the [display
+  filters](#display-filters) (`ip.addr == 93.184.216.34`) match a line
+  with or without the name. The sidebar summary lists an endpoint with the
+  name it had last: `93.184.216.34 (www.example.com): 7 pkts`
 
 ### TLS decryption
 
@@ -567,6 +610,8 @@ graph TD
     H -->|VXLAN| T
     T --> G
     H --> I[PacketFormatter: one line]
+    H -->|DNS answers, with host names shown| N[HostNames: address → name]
+    N --> I
     I --> J[Append to private .log file]
     J --> E
     J --> K[host API: open_file]

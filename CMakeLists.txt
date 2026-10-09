@@ -152,6 +152,7 @@ add_library(logsquirl_tcpdump SHARED
     src/tls_crypto.cpp
     src/tls_key_log.cpp
     src/tls_decryption.cpp
+    src/host_names.cpp
     src/capture_stats.cpp
     src/conversations.cpp
     src/capture_file.cpp

@@ -1092,6 +1092,69 @@ runs the Converter's steps over `tests/corpus/tls-decrypt.pcap` with its key
 log `tls-decrypt.keys`, without one, with secrets that come late and with
 mutated records, and over HTTP/2 frames cut and mutated.
 
+#### Host Names (`host_names.h/cpp`)
+Passive name resolution, as Wireshark's from the capture (#54). With
+`LineLayout::hostNames` (the option *Show names from the capture's DNS
+answers with the addresses*, off by default) the Converter keeps a
+`HostNames` (pure C++) and hands it to the Packet Formatter, which writes a
+named address as `93.184.216.34(www.example.com)` in Source and
+Destination. Without the option no `HostNames` exists and the text is byte
+for byte the same as before.
+
+- **Learning**: after a packet's line is written, `HostNames::learn()`
+  reads the DNS responses it carries: a UDP datagram from port 53 or 5353
+  (mDNS), its payload one message (`CaptureReader::payloadOf()`), and a TCP
+  segment from port 53, the whole messages the TCP Reassembly completed in
+  it, each behind its length. `dnsResolvedNames()` in `describe_dns.cpp`
+  reads a standard query's response without an error code, its answer
+  section only, at most `kMaxResolvedNames` (32) records: an A or AAAA
+  answer names its address with its owner followed back through the
+  message's CNAME answers (at most 8 steps, names compared without case),
+  so that the name is the one the client asked for; a PTR answer whose
+  owner spells an IPv4 (`in-addr.arpa`) or IPv6 (`ip6.arpa`, 32 nibbles)
+  address names that address with its target. Authority and additional
+  records (glue, mDNS's additional A records) and TTLs are not read; DNS
+  over TLS or HTTPS is not read, nor LLMNR. A response cut short gives
+  the answers before the cut.
+- **Decisions**:
+  - *Presentation*: the name goes behind the address in its column, in
+    parentheses and without a space, rather than in its place or in Info.
+    Each column stays one `\S+` word, so the Log Format, the presets and
+    every pattern that counts columns read the line as ever; the column
+    still begins with the address, so a search for the address finds
+    named lines too, its `collate: ipaddress` still sorts by it, and the
+    address is visible next to a name that may be forged. Info, which the
+    presets and the Stream Labels read from its start, is untouched.
+  - *Streaming*: a name labels the packets after the answer that gave it,
+    never earlier ones (no look-ahead, so a live capture and a file
+    convert alike, and nothing is converted twice); the answer's own line
+    is written before it is learned, so an mDNS announcement shows its
+    sender's address alone. A later answer replaces the name of an
+    address; the summary lists each endpoint with the name it had at the
+    end.
+  - *No validation*: names are shown as the responses give them; a
+    spoofed or forged answer names an address as a true one does. Only a
+    name that could break a column is dropped: `isHostName()` allows 1 to
+    `kMaxHostName` (120) letters, digits, `-`, `_` and `.`, not starting
+    with `.` (`readDnsName()` cuts longer names, and escapes other bytes).
+  - *Bounded memory*: at most `ConversionOptions::maxHostNames`
+    (`HostNames::kMaxNames`, 8,192) addresses keep a name, each at most
+    about 300 bytes (address, name, hash and list nodes), about 2.5 MB in
+    all; past the cap the address named longest ago (learned or renamed)
+    loses its name. The cap is not in the options dialog.
+- **What reads the columns**: the Stream Tracker, the Conversations, the
+  summary's endpoint counts and the TCP Analysis work on the
+  `PacketRecord`'s addresses, before the line is formatted, so names change
+  none of them. The patterns built from a line or an address,
+  `addressPattern()` in `regex_lab.h` (the address and
+  `nameSuffixPattern()`), take an address with or without its name:
+  Follow stream reads the clicked line's columns with `columnAddress()`,
+  so that it finds a stream's lines from before and after the name was
+  learned, the summary's endpoint filters and the display filters'
+  `ip.*`/`ipv6.*` tests (`valuesPattern()`) allow the name behind the
+  address. The sidebar summary writes an endpoint's name after its filter
+  link, as plain text.
+
 #### TCP analysis markers
 `analyseTcp()` then classifies the segment as Wireshark's TCP analysis does
 (`tcp_analyze_sequence_number()` in `epan/dissectors/packet-tcp.c`, with its
@@ -1204,7 +1267,8 @@ Panel's *Numeric Fields* template offers bytes over time and nothing else;
 The `timestamp` and `time` groups are optional, each with the spaces after
 it, so that the format reads a line of every `LineLayout`: a time column
 the line does not have is empty, a line without `timestamp` has no time for
-LogSquirl, and the MAC columns start `body`. A line of the default layout
+LogSquirl, and the MAC columns start `body`. With host names, `source` and
+`destination` read `93.184.216.34(www.example.com)`: still one word. A line of the default layout
 matches exactly as with mandatory groups. Code that parses packet lines
 with a copy of the regex must take this one.
 
@@ -1411,7 +1475,8 @@ the preview 1 to `kMaxPreviewChars`, the caps `kMinCap` to ten times their
 default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB); the
 SOME/IP ports are a list (`someIpPorts`, read by `parseSomeIpPorts()`: 1 to
 65535, at most `kMaxSomeIpPorts`, anything else skipped), the name table a
-path (`someIpNamesFile`). The key log's path (`tlsKeyLogFile`) is kept as it
+path (`someIpNamesFile`). The host names are a flag (`hostNames`, off
+unless the file says `true`). The key log's path (`tlsKeyLogFile`) is kept as it
 is, its file is not touched until a conversion reads it. `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
@@ -1910,7 +1975,15 @@ access points. `tls-decrypt.pcap`, TLS 1.2 and
 (`uv run`, as it needs the `cryptography` package): randoms and secrets
 from a fixed seed, records encrypted with the keys they give, no one's
 traffic. A capture with a `<name>.keys` beside it is converted with that
-key log by the corpus tests. The link layers' tests,
+key log by the corpus tests. `names.pcap`, DNS, mDNS and DNS-over-TCP
+answers with packets to and from their addresses before and after them, a
+name a column cannot show and an answer that renames an address, is
+written by `tests/make_names_corpus.py`; its text is converted without host
+names, as every corpus text, and `tests/host_names_test.cpp` checks its
+lines with them. `allLineLayouts()` in `tests/corpus_layouts.h` has every
+layout with and without host names, so the Log Format, preset, Follow
+stream, summary filter and display filter tests over the corpus run with
+names too. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

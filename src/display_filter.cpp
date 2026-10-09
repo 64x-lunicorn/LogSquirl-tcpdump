@@ -766,12 +766,18 @@ QString valuesPattern( const FilterExpression& comparison )
 {
     const auto& info = infoOf( comparison.field );
     if ( info.kind == ValueKind::Ipv4 || info.kind == ValueKind::Ipv6 ) {
+        // The address, and the name a DNS answer gave it, if its column
+        // shows one (LineLayout::hostNames).
+        QString address;
         if ( comparison.op != FilterOperator::Equal ) {
-            return info.kind == ValueKind::Ipv4 ? kAnyIpv4 : kAnyIpv6;
+            address = info.kind == ValueKind::Ipv4 ? kAnyIpv4 : kAnyIpv6;
         }
-        return info.kind == ValueKind::Ipv4
-                   ? ipv4Pattern( comparison.address, comparison.prefixLength )
-                   : literalPattern( comparison.address );
+        else {
+            address = info.kind == ValueKind::Ipv4
+                          ? ipv4Pattern( comparison.address, comparison.prefixLength )
+                          : literalPattern( comparison.address );
+        }
+        return "(?:" + address + ")" + nameSuffixPattern();
     }
 
     const auto n = comparison.number;

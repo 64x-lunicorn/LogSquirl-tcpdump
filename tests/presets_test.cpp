@@ -417,6 +417,12 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "HTTP", { 2, 3 } },
               { "ICMP", { 7, 20 } },
           } },
+        { "names.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 10, 11, 17, 18, 28, 29 } },
+              { "TCP handshakes", { 1, 2, 10, 11, 17, 18, 28, 29 } },
+              { "DNS", { 3, 4, 8, 9, 12, 13, 15, 17, 18, 19, 20, 21, 23, 24, 26, 27 } },
+          } },
         { "mqtt.txt",
           {
               { "TCP SYN/FIN", { 1, 2, 21, 22, 31, 32 } },

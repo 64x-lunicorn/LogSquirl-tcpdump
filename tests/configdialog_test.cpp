@@ -83,7 +83,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
     GIVEN( "a dialog for options other than the defaults" )
     {
         ConversionOptions options;
-        options.layout = { TimeColumns::AbsoluteOnly, true };
+        options.layout = { TimeColumns::AbsoluteOnly, true, true };
         options.preview = false;
         options.previewChars = 50;
         options.maxStreams = 1234;
@@ -100,6 +100,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE( child<QComboBox>( dialog, "timeColumns" )->currentData().toInt()
                      == static_cast<int>( TimeColumns::AbsoluteOnly ) );
             REQUIRE( child<QCheckBox>( dialog, "macColumns" )->isChecked() );
+            REQUIRE( child<QCheckBox>( dialog, "hostNames" )->isChecked() );
             REQUIRE_FALSE( child<QCheckBox>( dialog, "preview" )->isChecked() );
             REQUIRE( child<QSpinBox>( dialog, "previewChars" )->value() == 50 );
             REQUIRE_FALSE( child<QSpinBox>( dialog, "previewChars" )->isEnabled() );
@@ -126,6 +127,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             timeColumns->setCurrentIndex(
                 timeColumns->findData( static_cast<int>( TimeColumns::RelativeOnly ) ) );
             child<QCheckBox>( dialog, "macColumns" )->setChecked( false );
+            child<QCheckBox>( dialog, "hostNames" )->setChecked( false );
             child<QCheckBox>( dialog, "preview" )->setChecked( true );
             child<QSpinBox>( dialog, "previewChars" )->setValue( 80 );
             child<QSpinBox>( dialog, "maxStreams" )->setValue( 2000 );
@@ -141,6 +143,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 const auto edited = dialog.options();
                 REQUIRE( edited.layout.timeColumns == TimeColumns::RelativeOnly );
                 REQUIRE_FALSE( edited.layout.macColumns );
+                REQUIRE_FALSE( edited.layout.hostNames );
                 REQUIRE( edited.preview );
                 REQUIRE( child<QSpinBox>( dialog, "previewChars" )->isEnabled() );
                 REQUIRE( edited.previewChars == 80 );
@@ -166,6 +169,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 const ConversionOptions defaults;
                 REQUIRE( restored.layout.timeColumns == defaults.layout.timeColumns );
                 REQUIRE( restored.layout.macColumns == defaults.layout.macColumns );
+                REQUIRE_FALSE( restored.layout.hostNames );
                 REQUIRE( restored.preview == defaults.preview );
                 REQUIRE( restored.previewChars == defaults.previewChars );
                 REQUIRE( restored.maxStreams == defaults.maxStreams );

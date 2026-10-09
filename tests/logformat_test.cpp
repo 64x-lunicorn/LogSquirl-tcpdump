@@ -568,16 +568,17 @@ SCENARIO( "The Log Format reads the corpus in every Line Layout", "[logformat][c
 
     for ( const auto timeColumns :
           { TimeColumns::Both, TimeColumns::AbsoluteOnly, TimeColumns::RelativeOnly } ) {
-        for ( const bool macColumns : { false, true } ) {
+        for ( const auto& [ macColumns, hostNames ] :
+              { std::pair{ false, false }, { true, false }, { false, true }, { true, true } } ) {
             ConversionOptions options;
-            options.layout = { timeColumns, macColumns };
+            options.layout = { timeColumns, macColumns, hostNames };
             for ( const auto& capture : captures ) {
                 if ( capture.fileName().startsWith( "malformed-" ) ) {
                     continue;
                 }
                 INFO( "capture " << capture.fileName().toStdString() << ", time columns "
                                  << static_cast<int>( timeColumns ) << ", MAC columns "
-                                 << macColumns );
+                                 << macColumns << ", host names " << hostNames );
                 const auto result
                     = convertPcap( capture.filePath(), out.path(), nullptr, {}, options );
                 REQUIRE( result.status == ConversionResult::Status::Converted );

@@ -28,6 +28,7 @@
 #include "capture_stats.h"
 #include "conversations.h"
 #include "gzip_source.h"
+#include "host_names.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_parser.h"
@@ -72,6 +73,10 @@ struct CaptureSummary {
     /// Packets per IP address in the Source or Destination column, for
     /// every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
+    /// The names of those addresses at the end of the capture (or of what
+    /// was converted so far), with host names shown (LineLayout::hostNames):
+    /// the last a DNS answer gave each (HostNames); empty otherwise.
+    std::map<std::string, std::string> endpointNames;
     /// Packets per address of a tunnel's endpoints, which no column shows
     /// (CaptureStats::tunnelEndpointPackets); empty without tunnels.
     std::map<std::string, uint64_t> tunnelEndpointPackets;
@@ -226,6 +231,9 @@ struct ConversionOptions {
     /// The TLS key log (SSLKEYLOGFILE) to decrypt TLS sessions with
     /// (tls_decryption.h); empty: none.  Read only, while converting.
     QString keyLogPath;
+    /// Addresses whose names are kept at most, with host names shown
+    /// (LineLayout::hostNames, HostNames).
+    size_t maxHostNames = HostNames::kMaxNames;
 };
 
 /**

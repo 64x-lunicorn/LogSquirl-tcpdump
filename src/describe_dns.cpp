@@ -24,6 +24,9 @@
 
 #include "describe_common.h"
 
+#include "payload_describer.h"
+
+#include <algorithm>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -440,3 +443,187 @@ std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len )
 }
 
 } // namespace tcpdump::describer
+
+// ── Names from DNS answers ───────────────────────────────────────────────
+
+namespace tcpdump {
+
+namespace {
+
+/// Most CNAME answers followed back from an address's owner: a chain
+/// longer than that, or a loop, names the address where it stops.
+constexpr size_t kMaxCnameSteps = 8;
+
+/// @p c in lower case, if an ASCII letter, independent of the C locale.
+char asciiLower( char c )
+{
+    return c >= 'A' && c <= 'Z' ? static_cast<char>( c - 'A' + 'a' ) : c;
+}
+
+/// The value of the hex digit @p c, or -1.
+int hexDigit( char c )
+{
+    c = asciiLower( c );
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+/// The same DNS name, ASCII letters compared without case (RFC 4343).
+bool sameName( const std::string& a, const std::string& b )
+{
+    return a.size() == b.size() && std::equal( a.begin(), a.end(), b.begin(), []( char x, char y ) {
+               return asciiLower( x ) == asciiLower( y );
+           } );
+}
+
+bool endsWith( const std::string& text, const std::string& end )
+{
+    return text.size() >= end.size() && sameName( text.substr( text.size() - end.size() ), end );
+}
+
+/// The address a reverse-lookup name spells: "34.216.184.93.in-addr.arpa"
+/// 93.184.216.34, an ip6.arpa name of 32 nibbles an IPv6 address; empty for
+/// any other name.
+std::string reverseAddress( const std::string& name )
+{
+    static const std::string v4 = ".in-addr.arpa";
+    static const std::string v6 = ".ip6.arpa";
+    if ( endsWith( name, v4 ) ) {
+        const auto labels = name.substr( 0, name.size() - v4.size() );
+        uint8_t bytes[ 4 ];
+        size_t count = 0;
+        size_t start = 0;
+        while ( start <= labels.size() ) {
+            const auto dot = std::min( labels.find( '.', start ), labels.size() );
+            const auto label = labels.substr( start, dot - start );
+            if ( count == 4 || label.empty() || label.size() > 3
+                 || label.find_first_not_of( "0123456789" ) != std::string::npos
+                 || ( label.size() > 1 && label[ 0 ] == '0' ) || std::stoi( label ) > 255 ) {
+                return {};
+            }
+            bytes[ 3 - count++ ] = static_cast<uint8_t>( std::stoi( label ) );
+            start = dot + 1;
+        }
+        return count == 4 ? formatIpv4( bytes ) : std::string{};
+    }
+    if ( endsWith( name, v6 ) ) {
+        const auto labels = name.substr( 0, name.size() - v6.size() );
+        if ( labels.size() != 63 ) { // 32 nibbles and the dots between them
+            return {};
+        }
+        uint8_t bytes[ 16 ] = {};
+        for ( size_t i = 0; i < 32; ++i ) {
+            const int nibble = hexDigit( labels[ 2 * i ] );
+            if ( nibble < 0 || ( i < 31 && labels[ 2 * i + 1 ] != '.' ) ) {
+                return {};
+            }
+            // The first label is the lowest nibble of the last byte.
+            const size_t at = 31 - i;
+            bytes[ at / 2 ] |= static_cast<uint8_t>( at % 2 == 0 ? nibble << 4 : nibble );
+        }
+        return formatIpv6( bytes );
+    }
+    return {};
+}
+
+} // namespace
+
+bool isHostName( const std::string& name )
+{
+    if ( name.empty() || name.size() > kMaxHostName || name.front() == '.' ) {
+        return false;
+    }
+    return std::all_of( name.begin(), name.end(), []( char c ) {
+        return describer::isAsciiAlpha( static_cast<uint8_t>( c ) ) || ( c >= '0' && c <= '9' )
+               || c == '-' || c == '_' || c == '.';
+    } );
+}
+
+std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len )
+{
+    using namespace describer;
+    const DnsMessage dns{ message, len };
+    FieldReader reader( message, len );
+    uint16_t id = 0;
+    uint16_t flags = 0;
+    uint16_t questions = 0;
+    uint16_t answers = 0;
+    if ( !reader.u16( id ) || !reader.u16( flags ) || !reader.u16( questions )
+         || !reader.u16( answers ) || !reader.skip( 4 ) ) {
+        return {};
+    }
+    // A response (QR) to a standard query, without an error.
+    if ( ( flags & 0x8000 ) == 0 || ( ( flags >> 11 ) & 0x0F ) != 0 || ( flags & 0x000F ) != 0 ) {
+        return {};
+    }
+    for ( unsigned i = 0; i < questions; ++i ) {
+        std::string question;
+        if ( !readDnsQuestion( dns, reader, question ) ) {
+            return {};
+        }
+    }
+
+    struct Alias {
+        std::string owner;
+        std::string target;
+    };
+    /// An address and its name: an A or AAAA answer's owner, to be followed
+    /// back through the aliases, or a PTR answer's target.
+    struct Answer {
+        ResolvedName resolved;
+        bool viaAliases = true;
+    };
+    std::vector<Alias> aliases;
+    std::vector<Answer> addresses;
+    for ( size_t i = 0; i < answers && i < kMaxResolvedNames; ++i ) {
+        std::string owner;
+        uint16_t type = 0;
+        uint16_t length = 0;
+        if ( !readDnsName( dns, reader, owner ) || !reader.u16( type ) || !reader.skip( 2 + 4 )
+             || !reader.u16( length ) ) {
+            break;
+        }
+        auto data = reader.take( length );
+        if ( !data.complete() ) {
+            break;
+        }
+        std::string target;
+        if ( type == 1 && length == 4 ) { // A
+            addresses.push_back( { { formatIpv4( data.here() ), owner } } );
+        }
+        else if ( type == 28 && length == 16 ) { // AAAA
+            addresses.push_back( { { formatIpv6( data.here() ), owner } } );
+        }
+        else if ( type == 5 && readDnsName( dns, data, target ) ) { // CNAME
+            aliases.push_back( { owner, target } );
+        }
+        else if ( type == 12 && readDnsName( dns, data, target ) ) { // PTR
+            auto address = reverseAddress( owner );
+            if ( !address.empty() ) {
+                addresses.push_back( { { std::move( address ), target }, false } );
+            }
+        }
+    }
+
+    std::vector<ResolvedName> names;
+    for ( auto& [ resolved, viaAliases ] : addresses ) {
+        auto& name = resolved.name;
+        if ( viaAliases ) {
+            for ( size_t step = 0; step < kMaxCnameSteps; ++step ) {
+                const auto alias
+                    = std::find_if( aliases.begin(), aliases.end(), [ &name ]( const Alias& a ) {
+                          return sameName( a.target, name );
+                      } );
+                if ( alias == aliases.end() ) {
+                    break;
+                }
+                name = alias->owner;
+            }
+        }
+        if ( isHostName( name ) ) {
+            names.push_back( std::move( resolved ) );
+        }
+    }
+    return names;
+}
+
+} // namespace tcpdump

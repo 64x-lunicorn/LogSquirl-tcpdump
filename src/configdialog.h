@@ -59,6 +59,7 @@ private:
 
     QComboBox* timeColumns_ = nullptr;
     QCheckBox* macColumns_ = nullptr;
+    QCheckBox* hostNames_ = nullptr;
     QCheckBox* preview_ = nullptr;
     QSpinBox* previewChars_ = nullptr;
     QCheckBox* tcpTimestamps_ = nullptr;

@@ -32,6 +32,7 @@ add_executable(logsquirl_tcpdump_tests
     sip_test.cpp
     tls_test.cpp
     dns_test.cpp
+    host_names_test.cpp
     icmp_test.cpp
     dhcp_ntp_test.cpp
     http_test.cpp
@@ -133,6 +134,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/tls_crypto.cpp"
         "${CMAKE_SOURCE_DIR}/src/tls_key_log.cpp"
         "${CMAKE_SOURCE_DIR}/src/tls_decryption.cpp"
+        "${CMAKE_SOURCE_DIR}/src/host_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"

@@ -142,7 +142,16 @@ QString afterWord( const QString& text )
     return text.mid( next );
 }
 
-/// The columns of @p line, converted with MAC columns if @p macColumns.
+/// The address of a Source or Destination column, without the name host
+/// names put behind it in parentheses.
+QString withoutName( const QString& column )
+{
+    const auto open = column.indexOf( '(' );
+    return open > 0 && column.endsWith( ')' ) ? column.left( open ) : column;
+}
+
+/// The columns of @p line, converted with MAC columns if @p macColumns,
+/// the addresses without their names.
 Columns columnsOf( const QString& line, bool macColumns )
 {
     Columns columns;
@@ -152,8 +161,8 @@ Columns columnsOf( const QString& line, bool macColumns )
     }
     columns.packet = true;
     columns.stream = match.captured( "stream" );
-    columns.source = match.captured( "source" );
-    columns.destination = match.captured( "destination" );
+    columns.source = withoutName( match.captured( "source" ) );
+    columns.destination = withoutName( match.captured( "destination" ) );
     columns.protocol = match.captured( "protocol" );
     columns.length = match.captured( "length" ).toULongLong();
 
@@ -580,7 +589,8 @@ SCENARIO( "A display filter selects the packet lines it means", "[displayfilter]
             REQUIRE( displayFilterPattern( "dns" ).pattern
                      == upToSourcePattern() + R"(\S+ +\S+ +(?i:dns) +\d+ )" );
             REQUIRE( displayFilterPattern( "ip.src == 10.0.0.1" ).pattern
-                     == upToSourcePattern() + R"(10\.0\.0\.1 +\S+ +(?!ARP )\S+ +\d+ )" );
+                     == upToSourcePattern() + R"((?:10\.0\.0\.1))" + nameSuffixPattern()
+                            + R"( +\S+ +(?!ARP )\S+ +\d+ )" );
         }
 
         THEN( "conditions combine as lookaheads at the start of the line" )

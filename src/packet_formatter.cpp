@@ -136,6 +136,18 @@ void writeColumn( std::ostream& out, const std::string& value, size_t width )
     out << shown << std::string( padding, ' ' );
 }
 
+/// The Source or Destination column of @p address, or of @p mac without
+/// one: the address and its name, if @p names has one for it.
+std::string addressColumn( const std::string& address, const std::string& mac,
+                           const HostNames* names )
+{
+    if ( address.empty() ) {
+        return mac;
+    }
+    const auto* name = names ? names->find( address ) : nullptr;
+    return name ? address + "(" + *name + ")" : address;
+}
+
 } // namespace
 
 std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision precision )
@@ -172,7 +184,8 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
 }
 
 std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, TimePrecision precision, const LineLayout& layout )
+                              int streamId, TimePrecision precision, const LineLayout& layout,
+                              const HostNames* names )
 {
     // Time relative to the first packet; negative for an earlier packet.
     // Packet times are never before 1970, so the seconds' difference fits.
@@ -198,8 +211,11 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
         writeColumn( oss, formatRelativeTime( deltaSec, deltaNsec, precision ),
                      timeWidth( precision ) );
     }
-    writeColumn( oss, pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp, 40 );
-    writeColumn( oss, pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp, 40 );
+    if ( !layout.hostNames ) {
+        names = nullptr;
+    }
+    writeColumn( oss, addressColumn( pkt.srcIp, pkt.srcMac, names ), 40 );
+    writeColumn( oss, addressColumn( pkt.dstIp, pkt.dstMac, names ), 40 );
     writeColumn( oss, pkt.protocol, 10 );
     // The length on the wire, as Wireshark's Length column; a packet cut at
     // the snaplen says in Info how much of it was captured, so that a reader
@@ -248,14 +264,15 @@ std::string PacketFormatter::header() const
     return hdr.str();
 }
 
-std::string PacketFormatter::format( const PacketRecord& pkt, int streamId )
+std::string PacketFormatter::format( const PacketRecord& pkt, int streamId, const HostNames* names )
 {
     if ( !haveBase_ ) {
         haveBase_ = true;
         baseTimeSec_ = pkt.timestampSec;
         baseTimeNsec_ = pkt.timestampNsec;
     }
-    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_, layout_ );
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_, layout_,
+                             names );
 }
 
 std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )

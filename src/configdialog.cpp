@@ -71,11 +71,19 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
                            static_cast<int>( TimeColumns::RelativeOnly ) );
     macColumns_ = new QCheckBox( QStringLiteral( "Show MAC addresses as columns" ) );
     macColumns_->setObjectName( "macColumns" );
+    hostNames_ = new QCheckBox(
+        QStringLiteral( "Show names from the capture's DNS answers with the addresses" ) );
+    hostNames_->setObjectName( "hostNames" );
+    hostNames_->setToolTip( QStringLiteral(
+        "Source and Destination show an address as 93.184.216.34(example.com) once a DNS or "
+        "mDNS answer in the capture gave it that name; packets before the answer keep the "
+        "address alone. Names are taken as the answers give them, unchecked." ) );
 
     auto* columns = new QGroupBox( QStringLiteral( "Columns" ) );
     auto* columnsLayout = new QFormLayout( columns );
     columnsLayout->addRow( QStringLiteral( "Time:" ), timeColumns_ );
     columnsLayout->addRow( macColumns_ );
+    columnsLayout->addRow( hostNames_ );
     auto* layoutNote = new QLabel( QStringLiteral(
         "<small>Other columns than the defaults change the line layout: highlighters and "
         "filters written for the default one may no longer match.</small>" ) );
@@ -206,6 +214,7 @@ void ConfigDialog::showOptions( const ConversionOptions& options )
     timeColumns_->setCurrentIndex(
         timeColumns_->findData( static_cast<int>( options.layout.timeColumns ) ) );
     macColumns_->setChecked( options.layout.macColumns );
+    hostNames_->setChecked( options.layout.hostNames );
     preview_->setChecked( options.preview );
     previewChars_->setEnabled( options.preview );
     previewChars_->setValue( static_cast<int>( options.previewChars ) );
@@ -223,6 +232,7 @@ ConversionOptions ConfigDialog::options() const
     ConversionOptions options;
     options.layout.timeColumns = static_cast<TimeColumns>( timeColumns_->currentData().toInt() );
     options.layout.macColumns = macColumns_->isChecked();
+    options.layout.hostNames = hostNames_->isChecked();
     options.preview = preview_->isChecked();
     options.previewChars = static_cast<size_t>( previewChars_->value() );
     options.tcpTimestamps = tcpTimestamps_->isChecked();

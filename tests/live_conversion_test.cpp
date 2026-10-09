@@ -468,6 +468,30 @@ SCENARIO( "Stop finalises a live capture at once", "[live]" )
     }
 }
 
+SCENARIO( "A live capture names addresses from its DNS answers as a file does", "[live]" )
+{
+    GIVEN( "the capture with DNS answers, sent live with host names shown" )
+    {
+        const auto capture = QDir( QStringLiteral( TCPDUMP_CORPUS_DIR ) ).filePath( "names.pcap" );
+        ConversionOptions options;
+        options.layout.hostNames = true;
+        QTemporaryDir out;
+        LiveRun run( out.path(), options );
+        run.pipe.write( fileBytes( capture ) );
+        run.pipe.closeWrite();
+        const auto result = run.finish();
+
+        THEN( "its lines and its endpoints' names are those of the file" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            const auto fromFile = convertPcap( capture, out.path(), nullptr, {}, options );
+            REQUIRE( readLines( result.outputPath ) == readLines( fromFile.outputPath ) );
+            REQUIRE( result.summary.endpointNames == fromFile.summary.endpointNames );
+            REQUIRE_FALSE( result.summary.endpointNames.empty() );
+        }
+    }
+}
+
 #endif
 
 SCENARIO( "A live capture whose source fails keeps what was captured", "[live]" )

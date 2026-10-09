@@ -28,6 +28,7 @@
 #include "capture_reader.h"
 #include "capture_source.h"
 #include "gzip_source.h"
+#include "host_names.h"
 #include "media_expectations.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
@@ -245,8 +246,8 @@ using Clock = std::chrono::steady_clock;
  * Parser's record (its preview limited), the stream it belongs to, its TCP
  * analysis, its payload described in the stream, reassembled and, with a key
  * log, decrypted, the media an SDP announced, its stream labels, the
- * conversations' and the summary's counts, its line, and its place in the
- * CaptureIndex.
+ * conversations' and the summary's counts, its line, the names its DNS
+ * answers give (with host names shown), and its place in the CaptureIndex.
  */
 ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QString& inputPath,
                                  const QString& name, const QString& outputRoot,
@@ -354,11 +355,23 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         decryption.emplace(
             [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog->find( clientRandom ); } );
     }
-    // The summary with what the decryption did.
+    // The names DNS answers gave addresses, only when they are shown.
+    std::optional<HostNames> names;
+    if ( options.layout.hostNames ) {
+        names.emplace( options.maxHostNames );
+    }
+    // The summary with what the decryption did and the endpoints' names.
     auto withDecryption = [ & ]( CaptureSummary summary ) {
         if ( decryption ) {
             summary.tlsSessionsDecrypted = decryption->sessionsDecrypted();
             summary.keyLogError = keyLog->error().toStdString();
+        }
+        if ( names ) {
+            for ( const auto& [ address, packets ] : summary.endpointPackets ) {
+                if ( const auto* name = names->find( address ) ) {
+                    summary.endpointNames.emplace( address, *name );
+                }
+            }
         }
         return summary;
     };
@@ -448,7 +461,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         const auto stream = tracker.track( pkt );
         stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
-        const auto messages = reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
+        const auto payload = reader.payloadOf( pkt );
+        const auto messages = reassembly.apply( pkt, stream, payload );
         if ( decryption ) {
             decryption->apply( pkt, stream, messages );
         }
@@ -456,8 +470,12 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         labels.apply( pkt, stream );
         conversations.add( pkt, stream );
         stats.add( pkt );
-        if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
+        if ( !writeLine( formatter.format( pkt, stream.id, names ? &*names : nullptr ) ) ) {
             return writeFailed();
+        }
+        // Behind its own line: a name labels the packets after its answer.
+        if ( names ) {
+            names->learn( pkt, payload, messages.bytes );
         }
         if ( pkt.transport ) {
             index->noteStream( *pkt.transport, stream.id, reader.packetsRead() );
@@ -593,7 +611,7 @@ bool CaptureSummary::operator==( const CaptureSummary& other ) const
                          s.linkTypeNames, s.protocolPackets, s.protocolBytes, s.endpointPackets,
                          s.tunnelEndpointPackets, s.tcpMarkers, s.cutPackets, s.endsInsideRecord,
                          s.compressionProblem, s.streamCap, s.otherEndpointPackets,
-                         s.tlsSessionsDecrypted, s.keyLogError );
+                         s.tlsSessionsDecrypted, s.keyLogError, s.endpointNames );
     };
     return fields( *this ) == fields( other );
 }

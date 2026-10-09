@@ -800,6 +800,26 @@ SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary names the endpoints DNS answers named", "[sidebar]" )
+{
+    GIVEN( "a capture converted with host names, one endpoint named" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 5;
+        summary.endpointPackets[ "93.184.216.34" ] = 3;
+        summary.endpointPackets[ "192.0.2.10" ] = 2;
+        summary.endpointNames[ "93.184.216.34" ] = "www.example.com";
+
+        THEN( "its name follows the address, the filter link is the address's" )
+        {
+            const auto html = tcpdump::summaryHtml( "names.pcap", 100, summary, true );
+            REQUIRE( html.contains( "93.184.216.34</a> (www.example.com): 3 pkts" ) );
+            REQUIRE( html.contains( "endpoint/93.184.216.34\"" ) );
+            REQUIRE( html.contains( "192.0.2.10</a>: 2 pkts" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary lists a tunnel's endpoints apart, without a filter", "[sidebar]" )
 {
     GIVEN( "a capture whose packets were carried through tunnels" )

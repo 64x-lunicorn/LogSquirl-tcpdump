@@ -39,15 +39,19 @@
 
 namespace tcpdump_test {
 
-/// Every Line Layout the configuration dialog offers, the default first.
+/// Every Line Layout the configuration dialog offers, the default first:
+/// each choice of time columns, with and without MAC columns, with and
+/// without host names.
 inline std::vector<tcpdump::LineLayout> allLineLayouts()
 {
     using tcpdump::TimeColumns;
     std::vector<tcpdump::LineLayout> layouts;
-    for ( const bool macColumns : { false, true } ) {
-        for ( const auto timeColumns :
-              { TimeColumns::Both, TimeColumns::AbsoluteOnly, TimeColumns::RelativeOnly } ) {
-            layouts.push_back( { timeColumns, macColumns } );
+    for ( const bool hostNames : { false, true } ) {
+        for ( const bool macColumns : { false, true } ) {
+            for ( const auto timeColumns :
+                  { TimeColumns::Both, TimeColumns::AbsoluteOnly, TimeColumns::RelativeOnly } ) {
+                layouts.push_back( { timeColumns, macColumns, hostNames } );
+            }
         }
     }
     return layouts;
@@ -59,7 +63,8 @@ inline std::string describeLayout( const tcpdump::LineLayout& layout )
     static const char* const times[]
         = { "both time columns", "UTC time only", "time since the first packet only" };
     return std::string( times[ static_cast<int>( layout.timeColumns ) ] )
-           + ( layout.macColumns ? ", MAC columns" : "" );
+           + ( layout.macColumns ? ", MAC columns" : "" )
+           + ( layout.hostNames ? ", host names" : "" );
 }
 
 /// The committed corpus captures that have a committed text.

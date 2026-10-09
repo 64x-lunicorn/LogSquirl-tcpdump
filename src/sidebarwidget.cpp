@@ -1289,6 +1289,12 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
         if ( shown >= 8 )
             break;
         html += filterName( ip, kEndpointFilter, filterLinks );
+        // The name a DNS answer gave it, with host names shown: plain
+        // text, the filter is the address's.
+        const auto name = summary.endpointNames.find( ip );
+        if ( name != summary.endpointNames.end() ) {
+            html += " (" + QString::fromStdString( name->second ).toHtmlEscaped() + ")";
+        }
         html += QString( ": %1 pkts<br>" )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
