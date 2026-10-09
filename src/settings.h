@@ -25,10 +25,15 @@
  * The configuration dialog (configdialog.h) writes them; the sidebar reads
  * them at the start of each conversion, so that a capture already open
  * keeps the options it was converted with.
+ *
+ * The same file remembers the last choice of the live capture UI (group
+ * [live]): source, device, interface, capture filter, snaplen.  Never a
+ * password: no source asks for one.
  */
 
 #pragma once
 
+#include "live_source.h"
 #include "pcap_converter.h"
 #include "someip.h"
 
@@ -60,5 +65,12 @@ ConversionOptions loadConversionOptions( const QString& configDir );
 
 /// Save @p options in @p configDir; false if they could not be written.
 bool saveConversionOptions( const QString& configDir, const ConversionOptions& options );
+
+/// The live capture choice saved in @p configDir; the snaplen within 1 to
+/// kMaxSnaplen.  Without a directory, or a file, an empty choice.
+LiveChoice loadLiveChoice( const QString& configDir );
+
+/// Save @p choice in @p configDir; false if it could not be written.
+bool saveLiveChoice( const QString& configDir, const LiveChoice& choice );
 
 } // namespace tcpdump

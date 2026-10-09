@@ -43,7 +43,10 @@
  *
  * A live capture (startLiveCapture()) runs in a LiveCapture: its tab is
  * opened, following the file, on the UI thread once the first packet line is
- * there, and its summary follows the snapshots until Stop finalises it.
+ * there, and its summary follows the snapshots until Stop finalises it.  The
+ * Live capture section, and the Start live capture… dialog, choose what to
+ * capture from the Live Source Kinds (live_source.h): the kind chosen makes
+ * the stream, and explains a failure.
  *
  * Export packets… reads the selected lines, lets the user confirm or change
  * their packets in the ExportDialog, asks where to write them, and writes
@@ -54,6 +57,7 @@
 #include "sidebarwidget.h"
 #include "conversation_table.h"
 #include "follow_stream.h"
+#include "live_capture_form.h"
 #include "packet_export.h"
 #include "packet_panel.h"
 #include "pcap_converter.h"
@@ -66,7 +70,9 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QGroupBox>
 #include <QLocale>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
@@ -216,17 +222,62 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     layout->addWidget( cancelButton_ );
     connect( cancelButton_, &QPushButton::clicked, this, &SidebarWidget::cancel );
 
-    // A live capture's progress: no percentage, a stream has no size
+    // Live capture: what to capture, Start and Stop, the progress (no
+    // percentage, a stream has no size) and what the capture program says.
+    auto* liveSection = new QGroupBox( "Live capture" );
+    liveSection->setObjectName( "liveSection" );
+    auto* liveLayout = new QVBoxLayout( liveSection );
+    liveLayout->setSpacing( 4 );
+
+    listingPool_.setMaxThreadCount( 4 );
+    liveForm_ = new LiveCaptureForm( &listingPool_ );
+    liveForm_->setObjectName( "liveForm" );
+    liveLayout->addWidget( liveForm_ );
+    connect( liveForm_, &LiveCaptureForm::changed, this, &SidebarWidget::updateStartButton );
+
+    startButton_ = new QPushButton( "Start" );
+    startButton_->setObjectName( "liveStartButton" );
+    liveLayout->addWidget( startButton_ );
+    connect( startButton_, &QPushButton::clicked, this, [ this ] {
+        try {
+            startLiveCapture( liveForm_->choice() );
+        } catch ( const std::exception& e ) {
+            // An exception must not escape into Qt or the host.
+            hostLog( LOGSQUIRL_LOG_ERROR,
+                     "Starting a live capture failed: " + QString::fromUtf8( e.what() ) );
+        }
+    } );
+
     liveLabel_ = new QLabel;
     liveLabel_->setObjectName( "liveProgress" );
     liveLabel_->setWordWrap( true );
-    layout->addWidget( liveLabel_ );
+    liveLayout->addWidget( liveLabel_ );
 
     stopButton_ = new QPushButton( "Stop" );
     stopButton_->setObjectName( "stopButton" );
     stopButton_->setToolTip( "End the capture and keep what was captured" );
-    layout->addWidget( stopButton_ );
+    liveLayout->addWidget( stopButton_ );
     connect( stopButton_, &QPushButton::clicked, this, &SidebarWidget::stopLiveCapture );
+
+    liveError_ = new QLabel;
+    liveError_->setObjectName( "liveError" );
+    liveError_->setWordWrap( true );
+    liveError_->setTextInteractionFlags( Qt::TextSelectableByMouse );
+    liveError_->setHidden( true );
+    liveLayout->addWidget( liveError_ );
+
+    // The capture program's stderr, the latest lines; also in the host's log.
+    liveStderr_ = new QPlainTextEdit;
+    liveStderr_->setObjectName( "liveStderr" );
+    liveStderr_->setReadOnly( true );
+    liveStderr_->setMaximumBlockCount( 200 );
+    liveStderr_->setLineWrapMode( QPlainTextEdit::NoWrap );
+    liveStderr_->setMaximumHeight( 5 * fontMetrics().lineSpacing() + 12 );
+    liveStderr_->setToolTip( "What the capture program wrote to stderr" );
+    liveStderr_->setHidden( true );
+    liveLayout->addWidget( liveStderr_ );
+
+    layout->addWidget( liveSection );
 
     liveTicker_.setInterval( 1000 );
     connect( &liveTicker_, &QTimer::timeout, this, &SidebarWidget::showLiveProgress );
@@ -255,8 +306,28 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     packetPanel_->setObjectName( "packetPanel" );
     layout->addWidget( packetPanel_, 1 );
 
+    askLiveChoice_ = [ this ]( QWidget* parent, LiveChoice& choice ) {
+        // Neither this widget nor its members are used after the dialog:
+        // it may be gone when it returns (its pool waits for the listings).
+        LiveCaptureDialog dialog( liveSources_, choice, parent, &listingPool_ );
+        if ( dialog.exec() != QDialog::Accepted ) {
+            return false;
+        }
+        choice = dialog.choice();
+        return true;
+    };
+    confirmStop_ = []( QWidget* parent, const QString& running ) {
+        return QMessageBox::question(
+                   parent, "Start Live Capture",
+                   QString( "The live capture %1 is running: only one runs at a time. Stop it?" )
+                       .arg( running ),
+                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No )
+               == QMessageBox::Yes;
+    };
+
     setConverting( false );
     setCapturing( false );
+    setLiveSources( builtInLiveSources() );
 }
 
 SidebarWidget::~SidebarWidget()
@@ -623,6 +694,7 @@ void SidebarWidget::setConverting( bool converting )
     cancelButton_->setHidden( !converting );
     progressBar_->setHidden( !converting );
     progressBar_->setValue( 0 );
+    updateStartButton();
 }
 
 void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
@@ -727,10 +799,17 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     connect( live_.get(), &LiveCapture::readyToOpen, this, &SidebarWidget::openLiveCapture );
     connect( live_.get(), &LiveCapture::snapshotTaken, this, &SidebarWidget::takeLiveSnapshot );
     connect( live_.get(), &LiveCapture::finished, this, &SidebarWidget::finishLiveCapture );
-    connect( live_.get(), &LiveCapture::stderrLine, this, [ name ]( const QString& line ) {
+    connect( live_.get(), &LiveCapture::stderrLine, this, [ this, name ]( const QString& line ) {
         hostLog( LOGSQUIRL_LOG_INFO, name + ": " + line );
+        liveStderr_->appendPlainText( line );
+        liveStderr_->setHidden( false );
     } );
 
+    liveKind_.reset(); // startLiveCapture( LiveChoice ) sets it
+    liveStderr_->clear();
+    liveStderr_->setHidden( true );
+    liveError_->clear();
+    liveError_->setHidden( true );
     liveKey_.clear();
     liveSnapshot_ = {};
     liveClock_.start();
@@ -739,6 +818,124 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
                                 .arg( name.toHtmlEscaped() ) );
     live_->start();
     return true;
+}
+
+bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
+{
+    if ( refuseWhileBusy() ) {
+        return false;
+    }
+    const auto kind = liveSources_ ? liveSources_->find( choice.source ) : nullptr;
+    QString problem;
+    if ( !kind ) {
+        problem = QString( "There is no live capture source \"%1\"." ).arg( choice.source );
+    }
+    else if ( const auto availability = kind->availability(); !availability.available ) {
+        problem = availability.reason;
+    }
+    else if ( choice.snaplen < 1 || choice.snaplen > kMaxSnaplen ) {
+        problem = QString( "The snaplen must be 1 to %1 bytes." ).arg( kMaxSnaplen );
+    }
+    else if ( problem = captureFilterProblem( choice.filter ); problem.isEmpty() ) {
+        problem = kind->validate( choice );
+    }
+    if ( !problem.isEmpty() ) {
+        hostNotify( "Cannot start the live capture: " + problem );
+        return false;
+    }
+
+    // The last choice started is the one shown after a restart.
+    if ( !saveLiveChoice( hostConfigDir(), choice ) ) {
+        hostLog( LOGSQUIRL_LOG_WARNING, "The live capture choice could not be saved in "
+                                            + settingsFilePath( hostConfigDir() ) );
+    }
+    if ( liveForm_->choice() != choice ) {
+        liveForm_->setChoice( choice );
+    }
+    const auto source = kind->makeSource( choice );
+    if ( !startLiveCapture( liveCaptureName( choice ), source ) ) {
+        return false;
+    }
+    liveKind_ = kind;
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Live capture from %1, interface %2, filter \"%3\", "
+                      "snaplen %4" )
+                 .arg( kind->displayName(),
+                       choice.interface.isEmpty() ? "(default)" : choice.interface, choice.filter )
+                 .arg( choice.snaplen ) );
+    return true;
+}
+
+void SidebarWidget::chooseAndStartLiveCapture()
+{
+    if ( converting_ ) {
+        refuseWhileBusy();
+        return;
+    }
+    if ( pendingStart_ ) {
+        hostNotify( "A live capture is still stopping: the next one starts when it has ended." );
+        return;
+    }
+    // The dialogs run their own event loops, in which this widget may be
+    // deleted, or the capture end by itself.
+    const QPointer<SidebarWidget> self( this );
+    if ( capturing_ && live_ ) {
+        const auto running = live_->name();
+        if ( !confirmStop_( this, running ) || !self ) {
+            return;
+        }
+    }
+    auto choice = liveForm_->choice();
+    if ( !askLiveChoice_( this, choice ) || !self ) {
+        return;
+    }
+    if ( capturing_ ) {
+        // Started once the running one has ended (finishLiveCapture()).
+        pendingStart_ = choice;
+        stopLiveCapture();
+        return;
+    }
+    startLiveCapture( choice );
+}
+
+void SidebarWidget::setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
+{
+    liveSources_ = std::move( sources );
+    liveForm_->setSources( liveSources_ );
+    liveForm_->setChoice( loadLiveChoice( hostConfigDir() ) );
+    updateStartButton();
+}
+
+void SidebarWidget::updateStartButton()
+{
+    if ( !startButton_ || !liveForm_ ) {
+        return;
+    }
+    QString why;
+    if ( converting_ ) {
+        why = "A capture is being read.";
+    }
+    else if ( capturing_ ) {
+        why = "A live capture is running.";
+    }
+    else {
+        why = liveForm_->problem();
+    }
+    startButton_->setEnabled( why.isEmpty() );
+    startButton_->setToolTip( why.isEmpty() ? "Start capturing live" : why );
+    liveForm_->setEnabled( !capturing_ );
+}
+
+void SidebarWidget::showLiveError( const QString& error )
+{
+    auto text = "Error: " + error.toHtmlEscaped();
+    if ( liveKind_ ) {
+        if ( const auto hint = liveKind_->explainFailure( error ); !hint.isEmpty() ) {
+            text += "<br>" + hint.toHtmlEscaped();
+        }
+    }
+    liveError_->setText( text.replace( '\n', "<br>" ) );
+    liveError_->setHidden( false );
 }
 
 void SidebarWidget::stopLiveCapture()
@@ -758,6 +955,8 @@ void SidebarWidget::setCapturing( bool capturing )
     stopButton_->setEnabled( capturing );
     stopButton_->setHidden( !capturing );
     liveLabel_->setHidden( !capturing );
+    startButton_->setHidden( capturing );
+    updateStartButton();
     if ( capturing ) {
         showLiveProgress();
         liveTicker_.start();
@@ -826,6 +1025,23 @@ void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summa
 
 void SidebarWidget::finishLiveCapture( const ConversionResult& result )
 {
+    reportLiveOutcome( result );
+    // Start live capture… asked for another one: after this signal, as
+    // starting it destroys the LiveCapture that sends it.
+    if ( pendingStart_ ) {
+        QTimer::singleShot( 0, this, [ this ] {
+            if ( !pendingStart_ ) {
+                return;
+            }
+            const auto choice = *pendingStart_;
+            pendingStart_.reset();
+            startLiveCapture( choice );
+        } );
+    }
+}
+
+void SidebarWidget::reportLiveOutcome( const ConversionResult& result )
+{
     const auto name = live_ ? live_->name() : QString();
     setCapturing( false );
     const auto found = liveKey_.isEmpty() ? converted_.end() : converted_.find( liveKey_ );
@@ -851,6 +1067,7 @@ void SidebarWidget::finishLiveCapture( const ConversionResult& result )
     }
 
     case ConversionResult::Status::Failed:
+        showLiveError( result.error );
         hostLog( LOGSQUIRL_LOG_ERROR, "Capture " + name + " failed: " + result.error );
         hostNotify( "Capture " + name + " failed: " + result.error );
         if ( !opened || result.outputPath.isEmpty() ) {

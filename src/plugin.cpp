@@ -37,7 +37,8 @@
  *      if it is older than LogSquirl 26.11 — we store the pointers and
  *      the host capabilities the size tells, create a SidebarWidget,
  *      register it as a sidebar tab, add Plugins > tcpdump >
- *      Open pcap… to the menu (and Follow stream, on a host with the
+ *      Open pcap…, Start live capture… and Stop live capture to the menu
+ *      (and Follow stream, on a host with the
  *      Regex Lab and the selected lines; Packet details, Export packets…
  *      and Follow stream content on a host with the selected lines; Display
  *      filter… on a host with the Regex Lab), and register for the host's
@@ -161,6 +162,31 @@ static void openFromMenu( void* /* user_data */ )
     } );
 }
 
+/// Plugins > tcpdump > Start live capture…: the Live capture section's form
+/// in a dialog.
+static void startLiveCaptureFromMenu( void* /* user_data */ )
+{
+    guarded( "starting a live capture from the menu", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->chooseAndStartLiveCapture();
+        }
+    } );
+}
+
+/// Plugins > tcpdump > Stop live capture: the same as the sidebar's Stop.
+static void stopLiveCaptureFromMenu( void* /* user_data */ )
+{
+    guarded( "stopping a live capture from the menu", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            if ( !sidebar->isCapturing() ) {
+                tcpdump::hostNotify( "No live capture is running." );
+                return;
+            }
+            sidebar->stopLiveCapture();
+        }
+    } );
+}
+
 /// Plugins > tcpdump > Follow stream: the same as the sidebar's button.
 static void followStreamFromMenu( void* /* user_data */ )
 {
@@ -260,6 +286,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // Also in the Plugins menu, and so in the Command Palette.  There is
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
+                                   nullptr );
+        api->register_menu_action( handle, "tcpdump", "Start live capture\xe2\x80\xa6",
+                                   &startLiveCaptureFromMenu, nullptr );
+        api->register_menu_action( handle, "tcpdump", "Stop live capture", &stopLiveCaptureFromMenu,
                                    nullptr );
         // The Packet Panel and Export packets read the selected lines, and
         // a display filter opens in the Regex Lab: only a host that tells the

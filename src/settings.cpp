@@ -46,6 +46,13 @@ constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
 constexpr const char* kSomeIpPortsKey = "conversion/someIpPorts";
 constexpr const char* kSomeIpNamesFileKey = "conversion/someIpNamesFile";
 
+/// The keys of the live capture choice, in the [live] group.
+constexpr const char* kLiveSourceKey = "live/source";
+constexpr const char* kLiveDeviceKey = "live/device";
+constexpr const char* kLiveInterfaceKey = "live/interface";
+constexpr const char* kLiveFilterKey = "live/filter";
+constexpr const char* kLiveSnaplenKey = "live/snaplen";
+
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
     TimeColumns value;
@@ -150,6 +157,37 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     }
     file.setValue( kSomeIpPortsKey, ports.isEmpty() ? QVariant( QString() ) : QVariant( ports ) );
     file.setValue( kSomeIpNamesFileKey, options.someIpNamesFile );
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+LiveChoice loadLiveChoice( const QString& configDir )
+{
+    LiveChoice choice;
+    if ( configDir.isEmpty() ) {
+        return choice;
+    }
+    const QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    choice.source = file.value( kLiveSourceKey ).toString();
+    choice.device = file.value( kLiveDeviceKey ).toString();
+    choice.interface = file.value( kLiveInterfaceKey ).toString();
+    choice.filter = file.value( kLiveFilterKey ).toString();
+    choice.snaplen = static_cast<int>( readCount( file, kLiveSnaplenKey, kDefaultSnaplen, 1,
+                                                  static_cast<size_t>( kMaxSnaplen ) ) );
+    return choice;
+}
+
+bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
+{
+    if ( configDir.isEmpty() || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.setValue( kLiveSourceKey, choice.source );
+    file.setValue( kLiveDeviceKey, choice.device );
+    file.setValue( kLiveInterfaceKey, choice.interface );
+    file.setValue( kLiveFilterKey, choice.filter );
+    file.setValue( kLiveSnaplenKey, choice.snaplen );
     file.sync();
     return file.status() == QSettings::NoError;
 }
