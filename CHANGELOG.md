@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **The sidebar summary follows the tab in front.** With several captures
+  open, the sidebar shows the Capture Summary of the one in the tab in front
+  and switches with the tab; a tab that is not a capture converted by the
+  plugin, or holds no log at all, shows "No capture in this tab." instead of
+  the last capture's summary. Converting another capture keeps the summaries
+  of the others for the rest of the session.
 - **Plugin API of LogSquirl 26.11.** The plugin builds against LogSquirl
   26.11's plugin API header and exports `logsquirl_plugin_init_ex` next to
   `logsquirl_plugin_init`, learning from the host's table size whether it

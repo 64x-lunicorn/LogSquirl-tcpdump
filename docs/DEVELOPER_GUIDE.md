@@ -243,6 +243,15 @@ Qt UI that provides:
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
+- The summary of the capture in the tab in front. Every converted capture's
+  summary is kept for the session, under the path of the text file written
+  for it (canonical, so that the host's spelling of the path finds it); the
+  plugin's active-file callback calls `showSummaryFor()` on every tab
+  switch, which shows the kept summary or "No capture in this tab." for a
+  file the plugin did not write or a tab without a Log File. While a capture
+  is being read the label keeps saying so. The summaries are lost when the
+  plugin is unloaded, so after a runtime disable or update the tabs left
+  open show no capture
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
@@ -260,8 +269,8 @@ cannot block on a FIFO or device; destroying the widget cancels a running
 conversion and waits for the worker.
 
 ### Plugin Entry (`plugin.h/cpp`)
-C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab
-with the host application. No exception may leave them: their work runs
+C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
+the menu entry and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept

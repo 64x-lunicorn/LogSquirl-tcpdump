@@ -40,6 +40,9 @@
 
 #include <memory>
 
+extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
+                                         size_t api_size );
+
 using tcpdump::SidebarWidget;
 using tcpdump_test::FakeHost;
 using tcpdump_test::waitFor;
@@ -395,6 +398,127 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
                 REQUIRE( summary->text().contains( readmeSection ) );
             }
         }
+    }
+}
+
+SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir tempRoot;
+    REQUIRE( dir.isValid() );
+    REQUIRE( tempRoot.isValid() );
+
+    GIVEN( "an initialised plugin that converted two captures, each opened in a tab" )
+    {
+        FakeHost host;
+        tcpdump::g_state.tempRoot = tempRoot.path();
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+        REQUIRE( host.hasActiveFileCallback() );
+        auto* widget = tcpdump::g_state.sidebarWidget;
+        auto* summary = child<QLabel>( *widget, "summary" );
+
+        widget->openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+        REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+        widget->openPcapFile( writeCapture( dir, "second.pcap", captureOf( 2 ) ) );
+        REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+        REQUIRE( host.openedFiles.size() == 2 );
+        const auto first = host.openedFiles.at( 0 );
+        const auto second = host.openedFiles.at( 1 );
+
+        WHEN( "the first capture's tab comes to the front" )
+        {
+            host.activateFile( first );
+
+            THEN( "the sidebar shows the first capture's summary, as it was" )
+            {
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+                REQUIRE_FALSE( summary->text().contains( "second.pcap" ) );
+                REQUIRE( summary->text().contains( "#log-format" ) );
+            }
+
+            AND_WHEN( "the second capture's tab comes to the front again" )
+            {
+                host.activateFile( second );
+
+                THEN( "the sidebar shows the second capture's summary" )
+                {
+                    REQUIRE( summary->text().contains( "second.pcap" ) );
+                    REQUIRE_FALSE( summary->text().contains( "first.pcap" ) );
+                }
+            }
+        }
+
+        WHEN( "a tab with a file the plugin did not write comes to the front" )
+        {
+            host.activateFile( dir.filePath( "server.log" ) );
+
+            THEN( "the sidebar says the tab holds no capture, and names none" )
+            {
+                REQUIRE( summary->text() == "No capture in this tab." );
+            }
+
+            AND_WHEN( "a capture's tab comes back" )
+            {
+                host.activateFile( first );
+
+                THEN( "its summary is shown again" )
+                {
+                    REQUIRE( summary->text().contains( "first.pcap" ) );
+                }
+            }
+        }
+
+        WHEN( "a tab that holds no Log File comes to the front, such as the dashboard" )
+        {
+            host.activateFile( QString() );
+
+            THEN( "the sidebar says the tab holds no capture" )
+            {
+                REQUIRE( summary->text() == "No capture in this tab." );
+            }
+        }
+
+        WHEN( "the host names a capture's file by another spelling of its path" )
+        {
+            const QFileInfo info( first );
+            host.activateFile( info.absolutePath() + "/./" + info.fileName() );
+
+            THEN( "the capture is still recognised" )
+            {
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+            }
+        }
+
+        WHEN( "a third capture is converted" )
+        {
+            widget->openPcapFile( writeCapture( dir, "third.pcap", captureOf( 3 ) ) );
+            REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+            REQUIRE( host.openedFiles.size() == 3 );
+
+            THEN( "the summaries of the others are kept" )
+            {
+                REQUIRE( summary->text().contains( "third.pcap" ) );
+                host.activateFile( first );
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+                host.activateFile( second );
+                REQUIRE( summary->text().contains( "second.pcap" ) );
+            }
+        }
+
+        WHEN( "the tab in front changes while a capture is being read" )
+        {
+            widget->openPcapFile( writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
+            host.activateFile( first );
+
+            THEN( "the sidebar keeps showing the reading, until it is done" )
+            {
+                REQUIRE( summary->text().contains( "Reading big.pcap" ) );
+                widget->cancel();
+                REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
     }
 }
 

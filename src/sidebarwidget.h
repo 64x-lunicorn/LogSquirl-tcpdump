@@ -22,10 +22,12 @@
  * @brief Sidebar tab for opening pcap files and viewing capture summary.
  *
  * Provides a "Open pcap…" button and shows the summary (packet count,
- * link-layer type, duration) of the last opened capture.
+ * link-layer type, duration) of the capture in the tab in front.
  */
 
 #pragma once
+
+#include "pcap_converter.h"
 
 #include <QFutureWatcher>
 #include <QLabel>
@@ -37,12 +39,10 @@
 
 #include <atomic>
 #include <functional>
+#include <map>
 #include <memory>
 
 namespace tcpdump {
-
-struct CaptureSummary;
-struct ConversionResult;
 
 /// The capture summary shown in the sidebar, as rich text.
 QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary );
@@ -53,9 +53,14 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does)
  *   - progress bar and Cancel button, while a capture is converted
- *   - Summary label showing the last capture's stats; the first one after
+ *   - Summary label showing the stats of the capture in the tab in front,
+ *     or that the tab holds none; the summary of the first capture after
  *     the plugin is loaded also links to the README section on installing
  *     the Log Format, which the plugin cannot tell is installed
+ *
+ * The summaries of all captures converted while the plugin is loaded are
+ * kept, keyed by the text file written for each, so that a capture's tab
+ * that comes to the front again shows its own.
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -88,6 +93,12 @@ public:
         chooseFile_ = std::move( chooser );
     }
 
+    /// Show the summary of the capture whose text is @p filePath, the file
+    /// in the tab now in front (empty: a tab without a Log File), or that the
+    /// tab holds no capture of this plugin.  While a capture is being read,
+    /// the label keeps saying so.
+    void showSummaryFor( const QString& filePath );
+
     /// Stop a running conversion; nothing is opened then.
     void cancel();
 
@@ -111,6 +122,14 @@ public:
     }
 
 private:
+    /// A capture converted while the plugin is loaded, as its summary shows it.
+    struct ConvertedCapture {
+        QString fileName;            ///< The capture's name, without directory.
+        qint64 fileSize = 0;         ///< The capture's size in bytes.
+        CaptureSummary summary;      ///< What was converted.
+        bool withFormatHint = false; ///< Links to the Log Format section.
+    };
+
     /// Show the outcome of a conversion and return to idle.
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
@@ -123,6 +142,8 @@ private:
     QString lastDir_;              ///< Remembers the last browsed directory.
     bool formatHintShown_ = false; ///< The Log Format hint was shown once.
     FileChooser chooseFile_;       ///< Shows the file dialog.
+    /// The captures converted so far, by the text file written for each.
+    std::map<QString, ConvertedCapture> converted_;
 
     bool converting_ = false;
     /// Cancels the running conversion.

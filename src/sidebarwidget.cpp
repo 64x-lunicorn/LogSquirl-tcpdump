@@ -27,6 +27,9 @@
  *      packet, formats it into a human-readable line, and writes the line
  *      to a temporary .log file
  *   3. Opens the .log file in LogSquirl's main viewer
+ *
+ * It keeps each converted capture's summary under the path of its .log file
+ * and shows the one of the tab in front, as the host reports tab switches.
  */
 
 #include "sidebarwidget.h"
@@ -55,6 +58,22 @@ namespace {
 /// The README section on installing the Log Format and what it unlocks.
 const char* const kLogFormatHelpUrl
     = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+
+/// What the summary says for a tab that shows no capture of the plugin.
+const char* const kNoCaptureText = "No capture in this tab.";
+
+/// One spelling of @p filePath, so that the path the host reports for a tab
+/// finds the file the plugin wrote: e.g. on macOS the temporary directory
+/// /var/folders/... is a link to /private/var/folders/....
+QString fileKey( const QString& filePath )
+{
+    if ( filePath.isEmpty() ) {
+        return {};
+    }
+    const QFileInfo info( filePath );
+    const auto canonical = info.canonicalFilePath();
+    return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
 
 } // namespace
 
@@ -259,25 +278,50 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         break;
     }
 
+    // Whether LogSquirl has the Log Format installed is not known to the
+    // plugin, so the hint is shown regardless, but only with the first
+    // capture of a load.
+    ConvertedCapture capture;
+    capture.fileName = QFileInfo( filePath ).fileName();
+    capture.fileSize = QFileInfo( filePath ).size();
+    capture.summary = std::move( result.summary );
+    capture.withFormatHint = !formatHintShown_;
+    formatHintShown_ = true;
+    const auto packets = capture.summary.packets;
+
+    // Kept before the tab is opened: the host may report it in front at once.
+    const auto key = fileKey( result.outputPath );
+    converted_.insert_or_assign( key, std::move( capture ) );
+    showSummaryFor( key );
+
     // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
     }
 
-    auto html = summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(),
-                             result.summary );
-    // Whether LogSquirl has the Log Format installed is not known to the
-    // plugin, so the hint is shown regardless, but only once per load.
-    if ( !formatHintShown_ ) {
-        formatHintShown_ = true;
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Opened %1 packets from %2" ).arg( packets ).arg( filePath ) );
+}
+
+void SidebarWidget::showSummaryFor( const QString& filePath )
+{
+    // The capture being read is shown in a tab of its own when it is done.
+    if ( converting_ ) {
+        return;
+    }
+    const auto found = converted_.find( fileKey( filePath ) );
+    if ( found == converted_.end() ) {
+        summaryLabel_->setText( kNoCaptureText );
+        return;
+    }
+    const auto& capture = found->second;
+    auto html = summaryHtml( capture.fileName, capture.fileSize, capture.summary );
+    if ( capture.withFormatHint ) {
         html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
                          "Log Format: <a href=\"%1\">install it once</a>.</i>" )
                     .arg( kLogFormatHelpUrl );
     }
     summaryLabel_->setText( html );
-
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 packets from %2" ).arg( result.summary.packets ).arg( filePath ) );
 }
 
 namespace {

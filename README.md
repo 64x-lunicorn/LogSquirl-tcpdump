@@ -94,9 +94,12 @@ After installing, restart LogSquirl or re-scan via *Plugins â†’ Manage Pluginsâ€
    progress bar shows how far a large capture is read; **Cancel** stops it
 5. The text is written to a new file in a private temporary directory,
    readable by you only, and removed when LogSquirl quits
-6. Use LogSquirl's built-in search, filters, and highlighters on the
+6. The sidebar shows the summary of the capture in the tab in front:
+   switching tabs switches it, and a tab that is not a converted capture
+   shows none
+7. Use LogSquirl's built-in search, filters, and highlighters on the
    packet data
-7. With the [Log Format](#log-format) installed, switch to the table view
+8. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Log Format

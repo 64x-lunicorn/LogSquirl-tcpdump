@@ -24,7 +24,9 @@
  * A FakeHost installs itself into g_state for its lifetime: the plugin
  * gets a private, empty config directory (so tests never read or write
  * real settings), and every log message, notification, open_file()
- * request and menu entry is recorded for the test to inspect.
+ * request and menu entry is recorded for the test to inspect.  A test
+ * brings a file's tab to the front with activateFile(), which calls the
+ * plugin's active-file callback as LogSquirl does on a tab switch.
  *
  * It presents itself as a host of LogSquirl 26.11 or later, whose table holds
  * the Regex Lab, Go to line and the selected Log Lines, or, constructed with
@@ -130,6 +132,14 @@ public:
         };
         api_.unregister_sidebar_tab
             = []( void* handle, void* widget ) { self( handle )->sidebarTabs.removeAll( widget ); };
+        api_.get_active_file_path
+            = []( void* handle ) { return self( handle )->activeFileUtf8_.constData(); };
+        api_.register_active_file_callback
+            = []( void* handle, void ( *callback )( void*, const char* ), void* userData ) {
+                  // One per plugin: a later registration replaces it, as in LogSquirl.
+                  self( handle )->activeFileCallback_ = callback;
+                  self( handle )->activeFileUserData_ = userData;
+              };
 
         // Added later: only a table long enough holds them.
         if ( LOGSQUIRL_HOST_API_HAS( apiSize_, open_regex_lab ) ) {
@@ -211,6 +221,25 @@ public:
         menuActions.clear();
     }
 
+    /**
+     * Bring the tab of @p filePath to the front, or, with an empty path, a
+     * tab that holds no Log File: the plugin's active-file callback, if it
+     * registered one, is called with the path.
+     */
+    void activateFile( const QString& filePath )
+    {
+        activeFileUtf8_ = filePath.toUtf8();
+        if ( activeFileCallback_ ) {
+            activeFileCallback_( activeFileUserData_, activeFileUtf8_.constData() );
+        }
+    }
+
+    /** Whether the plugin registered an active-file callback. */
+    bool hasActiveFileCallback() const
+    {
+        return activeFileCallback_ != nullptr;
+    }
+
     /** The plugin's config directory (empty until a test writes to it). */
     QString configDir() const
     {
@@ -255,7 +284,10 @@ private:
 
     QTemporaryDir configDir_;
     QByteArray configDirUtf8_;
-    QByteArray selectedUtf8_; ///< The text get_selected_log_lines() last returned.
+    QByteArray selectedUtf8_;   ///< The text get_selected_log_lines() last returned.
+    QByteArray activeFileUtf8_; ///< The file in the tab in front; empty: none.
+    void ( *activeFileCallback_ )( void* userData, const char* filePath ) = nullptr;
+    void* activeFileUserData_ = nullptr;
     std::size_t apiSize_;
     LogSquirlHostApi api_{};
 };

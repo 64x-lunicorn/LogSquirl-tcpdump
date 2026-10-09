@@ -121,6 +121,37 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
     }
 }
 
+SCENARIO( "the plugin follows the tab in front for its lifetime", "[plugin]" )
+{
+    GIVEN( "a host" )
+    {
+        FakeHost host;
+
+        WHEN( "the plugin is initialised" )
+        {
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+
+            THEN( "it registers for the host's active-file notifications" )
+            {
+                REQUIRE( host.hasActiveFileCallback() );
+            }
+
+            AND_WHEN( "it is shut down and the host still reports a tab switch" )
+            {
+                logsquirl_plugin_shutdown();
+
+                THEN( "nothing happens" )
+                {
+                    REQUIRE_NOTHROW( host.activateFile( "/tmp/some.log" ) );
+                    REQUIRE( host.logs.filter( "failed" ).isEmpty() );
+                }
+            }
+
+            logsquirl_plugin_shutdown();
+        }
+    }
+}
+
 SCENARIO( "the plugin learns the later host functions from the table size", "[plugin]" )
 {
     GIVEN( "a host of LogSquirl 26.11 or later, with the full table" )

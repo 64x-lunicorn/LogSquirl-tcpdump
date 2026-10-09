@@ -36,8 +36,9 @@
  *   2. Host calls init_ex(api, handle, api_size) — or init(api, handle)
  *      if it is older than LogSquirl 26.11 — we store the pointers and
  *      the host capabilities the size tells, create a SidebarWidget,
- *      register it as a sidebar tab, and add Plugins > tcpdump >
- *      Open pcap… to the menu.
+ *      register it as a sidebar tab, add Plugins > tcpdump >
+ *      Open pcap… to the menu, and register for the host's active-file
+ *      notifications, so the sidebar shows the summary of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
@@ -137,6 +138,17 @@ static void openFromMenu( void* /* user_data */ )
     } );
 }
 
+/// The host brought another tab to the front: show its capture's summary.
+static void onActiveFileChanged( void* /* user_data */, const char* filePath )
+{
+    guarded( "showing the summary of the tab in front", [ filePath ] {
+        // A failed init leaves no widget, and the host keeps the callback.
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->showSummaryFor( QString::fromUtf8( filePath ? filePath : "" ) );
+        }
+    } );
+}
+
 // ── Exported C entry points ──────────────────────────────────────────────
 
 extern "C" {
@@ -181,6 +193,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
                                    nullptr );
+
+        // The summary follows the tab in front.  There is no call to remove
+        // the callback either: the host drops it with the plugin.
+        api->register_active_file_callback( handle, &onActiveFileChanged, nullptr );
 
         // The host shuts the plugin down both when LogSquirl quits (after
         // aboutToQuit) and when the plugin is disabled or updated at runtime,
