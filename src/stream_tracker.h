@@ -57,6 +57,8 @@ struct QuicConnection {
  */
 struct StreamState {
     QuicConnection quic; ///< UDP only.
+    /// TCP only: the stream began with the HTTP/2 connection preface.
+    bool http2 = false;
 };
 
 /// The stream a packet belongs to.

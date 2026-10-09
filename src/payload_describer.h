@@ -26,7 +26,7 @@
  * It takes the captured payload bytes and the two ports, and returns a
  * protocol label and a one-line description, or no match.  A payload that
  * can only be told from what came before it in its stream (a QUIC short
- * header) is looked at again once the Stream Tracker has found its stream.
+ * header, an HTTP/2 frame) is looked at again once the Stream Tracker has found its stream.
  *
  * Pure C++ — no Qt dependency.
  */
@@ -67,9 +67,12 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
  * A UDP stream that carried a QUIC long header is a QUIC connection: its
  * short header packets, which carry no version, are labelled QUIC and
  * described as "Protected Payload, DCID=…", the connection ID as long as
- * the other side's last long header said.  Packets of other streams, and
- * of streams past the stream cap, which have no state, are left as they
- * are.
+ * the other side's last long header said.  A TCP stream that began with
+ * the HTTP/2 connection preface is an HTTP/2 connection: its segments that
+ * begin with frame headers are labelled HTTP2 and described as
+ * "HEADERS[1], DATA[1]", each frame's type and stream.  Packets of other
+ * streams, and of streams past the stream cap, which have no state, are
+ * left as they are.
  */
 void describeInStream( PacketRecord& pkt, const Stream& stream );
 

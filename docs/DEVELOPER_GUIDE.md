@@ -99,8 +99,28 @@ description, or no match. It is the only module that knows which
 application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
-- TCP: DNS on port 53, TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the
-  exact shape, in the right direction, on proxy ports), then the port hint
+- TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, NMEA 0183, SOCKS4/5
+  (only messages of the exact shape, in the right direction, on proxy
+  ports), then the port hint
+- HTTP: a request is its request line with the Host header's value put
+  before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
+  path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
+  its status line, then `, Content-Type: …` and `, Content-Length: …` when
+  it has them, `HTTP/1.1 200 OK, Content-Type: text/html, Content-Length:
+  1234`. The request or status line always comes first. A header counts
+  only in the header section (before the empty line), on a whole line the
+  segment holds up to its line feed, its name in any case; its value is
+  shown without the blanks around it, escaped and cut like every field.
+  SSDP (UDP 1900) is described the same way
+- HTTP/2: the connection preface, `PRI * HTTP/2.0`, is labelled `HTTP2`
+  and described as `Magic`, then the frames behind it in the segment. A
+  frame is named with its type and stream, `HEADERS[1]`, Wireshark's way,
+  up to four in a segment, then `…`. A frame header must keep the rules of
+  its type (a known type, a stream for DATA, HEADERS and the like, stream 0
+  for SETTINGS, PING and GOAWAY, the fixed length of PING, RST_STREAM,
+  PRIORITY and WINDOW_UPDATE, no more than the default maximum frame size
+  of 16384 bytes, the reserved bit unset), or the bytes are taken for no
+  frames. HPACK header blocks are not decoded; HTTP/2 over TLS is TLS
 - TLS: every record of a segment and every handshake message of a record
   is named, in order, up to four, then `…`; a ClientHello adds its server
   name, the highest version it offers (`supported_versions`, GREASE aside,
@@ -147,7 +167,12 @@ tried: each transport has a table of detectors, all of the same shape
   ID its sender chose is, and labels the stream's short header packets
   (fixed bit, no long header bit, long enough for header protection) QUIC,
   `Protected Payload, DCID=…`, replacing the description after the
-  ` | ` separator (`kDescriptionSeparator`). For this the parser keeps the
+  ` | ` separator (`kDescriptionSeparator`). Likewise it records in
+  `StreamState::http2` that a TCP stream began with the HTTP/2 preface,
+  and labels the stream's later segments `HTTP2` when they begin with
+  frame headers, naming the frames whose header lies in the kept bytes.
+  A segment that begins inside a frame (its first bytes no plausible
+  header) is left as it is: segments are not reassembled. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
 - The port hint, the last entry of both tables, names the service of a
@@ -240,7 +265,8 @@ packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
 pointer. Every field added costs memory once per numbered stream: today
 the Payload Describer's `QuicConnection` (whether a QUIC long header was
-seen, and the connection ID length of each direction), 3 bytes.
+seen, and the connection ID length of each direction), 3 bytes, and
+whether a TCP stream began with the HTTP/2 preface, 1 byte.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet
 (among them the packets cut at the snaplen),

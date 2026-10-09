@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **HTTP names the host, the content type and length.** A request line
+  shows the Host header's value before its path, `GET
+  example.com/index.html HTTP/1.1`, when the header is in the segment; a
+  response adds its Content-Type and Content-Length when it has them,
+  `HTTP/1.1 200 OK, Content-Type: text/html, Content-Length: 1234`. The
+  request or status line still comes first, and header values are escaped
+  and cut like every field. SSDP responses gain the same headers.
+- **HTTP/2 in clear text.** The connection preface is labelled `HTTP2`,
+  `Magic, SETTINGS[0], WINDOW_UPDATE[0]`, and the segments that follow on
+  its stream, in both directions, are `HTTP2` when they begin with frame
+  headers, each frame named with its type and stream, `HEADERS[1],
+  DATA[1]`. Header blocks are not decoded, and a segment that begins inside
+  a frame is left as it was.
 - **DNS reads like Wireshark's.** A query shows its transaction id, query
   type and name, `Standard query 0x1a2b A www.example.com`; a response adds
   its answers with their data, `Standard query response 0x1a2b A

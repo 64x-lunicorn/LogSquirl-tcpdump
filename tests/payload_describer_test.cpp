@@ -121,11 +121,11 @@ SCENARIO( "The describer names a TCP payload from its bytes and ports alone", "[
     {
         const auto request = text( "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n" );
 
-        THEN( "the label is HTTP and the description is the request line" )
+        THEN( "the label is HTTP and the description is the request line with the host" )
         {
             const auto described = describe( Transport::Tcp, request, 53248, 80 );
             REQUIRE( described.label == "HTTP" );
-            REQUIRE( described.description == "GET /index.html HTTP/1.1" );
+            REQUIRE( described.description == "GET example.com/index.html HTTP/1.1" );
         }
     }
 
@@ -133,11 +133,11 @@ SCENARIO( "The describer names a TCP payload from its bytes and ports alone", "[
     {
         const auto response = text( "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n" );
 
-        THEN( "the description is the status line" )
+        THEN( "the description is the status line with the content length" )
         {
             const auto described = describe( Transport::Tcp, response, 80, 53248 );
             REQUIRE( described.label == "HTTP" );
-            REQUIRE( described.description == "HTTP/1.1 404 Not Found" );
+            REQUIRE( described.description == "HTTP/1.1 404 Not Found, Content-Length: 0" );
         }
     }
 
