@@ -205,9 +205,10 @@ A change of the packet line's columns is a change of the format too:
 line's columns, split at runs of spaces, and reads every timestamp with a
 port of LogSquirl's `TimestampReader` rules
 (`src/logformat/src/timestampreader.cpp` in the host). The plugin cannot
-register the format with LogSquirl (#50), nor tell whether it is installed,
-and the shared CI cannot yet pack it into the release archive (#58);
-`cmake --install` puts it next to the library.
+register the format with LogSquirl (#50), nor tell whether it is installed.
+The release archive carries it next to the library (`package_files` in
+`.github/plugin-ci.json`, LogSquirl-Plugin-CI v1.1.0), and `cmake --install`
+puts it there too.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that

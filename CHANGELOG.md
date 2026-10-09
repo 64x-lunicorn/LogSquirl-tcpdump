@@ -26,9 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field, the Δt column, *Go to timestamp*, time-range search limits and the
   Chart Panel's templates (packets per second, bytes over time); README's
   *Log Format* section says how. The first sidebar summary after the plugin
-  is loaded links to that section. The release archives do not carry the
-  file yet, as the shared CI cannot pack extra files (#58); `cmake --install`
-  installs it next to the library.
+  is loaded links to that section. The release archives carry the file next
+  to the library, as does `cmake --install`.
 - **Absolute UTC time column.** Every packet line shows the packet's
   wall-clock time in UTC, `2026-10-09 08:41:12.123456Z` (nine decimals for a
   nanosecond capture), in a `UTC Time` column before the relative `Time`, so

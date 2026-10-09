@@ -67,6 +67,10 @@ and unpack it into LogSquirl's plugin directory:
 | Linux    | `~/.local/share/logsquirl/plugins/io.github.logsquirl.tcpdump/` |
 | Windows  | `%APPDATA%/logsquirl/plugins/io.github.logsquirl.tcpdump/` |
 
+The archive also holds `tcpdump_log.json`, the [Log Format](#log-format) for
+the converted packet list, next to the library; LogSquirl does not load it
+from there, copy it into its formats directory as described below.
+
 ### From source
 
 See [Build](#build), then:
@@ -105,8 +109,8 @@ LogSquirl recognises the packet list as a log with fields once it has the
 plugin's Log Format definition, [`formats/tcpdump_log.json`](formats/tcpdump_log.json)
 (lnav-compatible, like LogSquirl's built-in formats). It is a one-time copy:
 
-1. Get `tcpdump_log.json` from the [`formats`](formats/) folder of this
-   repository, or of the release's source code archive
+1. Take `tcpdump_log.json` from the release archive (it lies next to the
+   library), or from the [`formats`](formats/) folder of this repository
 2. In LogSquirl, open **Options → Log Formats**, click **Open Formats
    Folder…** and copy the file there. The folder is
 
