@@ -52,6 +52,10 @@ namespace tcpdump {
 
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
+    , chooseFile_( []( QWidget* parent, const QString& dir ) {
+        return QFileDialog::getOpenFileName( parent, "Open pcap Capture File", dir,
+                                             "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+    } )
     , tempRoot_( tcpdump::tempRoot() )
 {
     pool_.setMaxThreadCount( 1 );
@@ -70,7 +74,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
     layout->addWidget( openButton_ );
 
-    connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::onOpenClicked );
+    connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
 
     // Progress of a running conversion, and a way to stop it
     progressBar_ = new QProgressBar;
@@ -117,8 +121,13 @@ SidebarWidget::~SidebarWidget()
     }
 }
 
-void SidebarWidget::onOpenClicked()
+void SidebarWidget::chooseAndOpen()
 {
+    // The Open button is disabled meanwhile, but the menu entry is not.
+    if ( converting_ ) {
+        hostNotify( "A capture is still being read: wait for it, or cancel it first." );
+        return;
+    }
     if ( lastDir_.isEmpty() ) {
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
@@ -129,9 +138,7 @@ void SidebarWidget::onOpenClicked()
     // is unloaded while the dialog is open: the code this call returns into
     // is gone then, and only the host can prevent that.
     const QPointer<SidebarWidget> self( this );
-    const auto filePath
-        = QFileDialog::getOpenFileName( this, "Open pcap Capture File", lastDir_,
-                                        "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+    const auto filePath = chooseFile_( this, lastDir_ );
     if ( !self ) {
         return;
     }
@@ -144,7 +151,7 @@ void SidebarWidget::onOpenClicked()
     try {
         openPcapFile( filePath );
     } catch ( const std::exception& e ) {
-        // An exception must not escape a Qt slot.
+        // An exception must not escape into Qt or the host.
         hostLog(
             LOGSQUIRL_LOG_ERROR,
             QString( "Opening %1 failed: %2" ).arg( filePath, QString::fromUtf8( e.what() ) ) );

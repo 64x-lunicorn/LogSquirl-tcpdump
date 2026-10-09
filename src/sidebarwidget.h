@@ -36,6 +36,7 @@
 #include <QWidget>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 namespace tcpdump {
@@ -50,7 +51,7 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  * Sidebar widget displayed in the LogSquirl sidebar panel.
  *
  * Contains:
- *   - "Open pcap…" button (opens a file dialog)
+ *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does)
  *   - progress bar and Cancel button, while a capture is converted
  *   - Summary label showing the last capture's stats
  *
@@ -68,8 +69,22 @@ public:
     explicit SidebarWidget( QWidget* parent = nullptr );
     ~SidebarWidget() override;
 
+    /// Ask for a capture in a file dialog, as the Open button does, and open
+    /// it.  While a conversion runs, only a notification says so.
+    void chooseAndOpen();
+
     /// Convert a pcap file in the background, then open the text in LogSquirl.
     void openPcapFile( const QString& filePath );
+
+    /// Asks for a capture file: given the dialog's parent and the directory
+    /// to start in, returns the chosen path, or an empty one if none was.
+    using FileChooser = std::function<QString( QWidget* parent, const QString& dir )>;
+
+    /// Ask with @p chooser instead of a file dialog (for tests).
+    void setFileChooser( FileChooser chooser )
+    {
+        chooseFile_ = std::move( chooser );
+    }
 
     /// Stop a running conversion; nothing is opened then.
     void cancel();
@@ -93,10 +108,6 @@ public:
         return converting_;
     }
 
-private Q_SLOTS:
-    /// Show a file dialog and open the selected pcap file.
-    void onOpenClicked();
-
 private:
     /// Show the outcome of a conversion and return to idle.
     void finishConversion( const QString& filePath, ConversionResult result );
@@ -107,7 +118,8 @@ private:
     QPushButton* cancelButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
-    QString lastDir_; ///< Remembers the last browsed directory.
+    QString lastDir_;        ///< Remembers the last browsed directory.
+    FileChooser chooseFile_; ///< Shows the file dialog.
 
     bool converting_ = false;
     /// Cancels the running conversion.

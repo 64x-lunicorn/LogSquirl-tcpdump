@@ -32,10 +32,13 @@
  * ────────────────
  *   1. Host calls get_info() to read metadata.
  *   2. Host calls init(api, handle) — we store the pointers, create
- *      a SidebarWidget, and register it as a sidebar tab.
- *   3. User clicks "Open pcap…", selects a .pcap file, plugin parses
- *      it and opens the formatted text in LogSquirl.
- *   4. Host calls shutdown() — we unregister + delete the widget.
+ *      a SidebarWidget, register it as a sidebar tab, and add
+ *      Plugins > tcpdump > Open pcap… to the menu.
+ *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
+ *      .pcap file, plugin parses it and opens the formatted text in
+ *      LogSquirl.
+ *   4. Host calls shutdown() — we unregister + delete the widget; the
+ *      host removes the menu entry when it unloads the plugin.
  */
 
 #include "plugin.h"
@@ -109,6 +112,18 @@ static bool guarded( const char* what, Work&& work ) noexcept
     return false;
 }
 
+/// Plugins > tcpdump > Open pcap…: the same as the sidebar's Open button.
+static void openFromMenu( void* /* user_data */ )
+{
+    guarded( "opening a capture from the menu", [] {
+        // The host removes the entry only after shutdown(), and a failed
+        // init leaves no widget.
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->chooseAndOpen();
+        }
+    } );
+}
+
 // ── Exported C entry points ──────────────────────────────────────────────
 
 extern "C" {
@@ -145,6 +160,11 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
         api->register_sidebar_tab( handle, "tcpdump",
                                    static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
         tcpdump::g_state.sidebarTabRegistered = true;
+
+        // Also in the Plugins menu, and so in the Command Palette.  There is
+        // no call to remove it: the host does when it unloads the plugin.
+        api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
+                                   nullptr );
 
         // The host shuts the plugin down both when LogSquirl quits (after
         // aboutToQuit) and when the plugin is disabled or updated at runtime,

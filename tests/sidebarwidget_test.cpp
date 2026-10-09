@@ -177,6 +177,36 @@ SCENARIO( "the sidebar shows why the output could not be written", "[sidebar]" )
     }
 }
 
+SCENARIO( "the Open button asks for a capture and opens it", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar whose file dialog selects a capture" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
+        QWidget* dialogParent = nullptr;
+        widget.setFileChooser( [ &dialogParent, &capture ]( QWidget* parent, const QString& ) {
+            dialogParent = parent;
+            return capture;
+        } );
+
+        WHEN( "the Open button is clicked" )
+        {
+            child<QPushButton>( widget, "openButton" )->click();
+
+            THEN( "the dialog is shown over the sidebar and the capture opened in a tab" )
+            {
+                REQUIRE( dialogParent == &widget );
+                REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
 {
     QTemporaryDir dir;
