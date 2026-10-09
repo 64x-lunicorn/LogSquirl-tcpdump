@@ -530,14 +530,16 @@ header, or a pcapng's section header and interfaces, are repeated at its
 start, so Wireshark opens any of them. When the N+1st file starts, the
 oldest is deleted.
 
-The capture's tab is bounded too: it keeps the lines of the packets in
-the files kept. When the oldest file is deleted, its packets' lines are
-cut from the start of the `.log`, and LogSquirl reloads the tab, as it does
-a log that was truncated (marks on those lines go). The packet numbers in
-the No. column go on across the files. A line still selected from before
-(or in another view) of a packet whose file was deleted shows *Rotated
-away* in the Packet Panel; Follow stream content starts at the first
-packet kept. **Save capture…** writes the files kept as one capture
+Each file has a text of its own, `<name>_00001_<time>.log`, …: when a new
+file starts, its text opens in a **new tab**, following it, once its first
+packet line is there, so no tab grows without bound. A text is never
+rewritten: the tabs of files the ring buffer has deleted stay open, as
+they are, until you close them, and their Packet Panel says *Rotated away*
+for their packets (their lines stay readable; only the packets' bytes are
+gone). The packet numbers in the No. column go on across the files.
+Follow stream content starts at the first packet kept. The `.log` files
+stay in the private temporary directory until LogSquirl quits; close the
+tabs of old files to let LogSquirl forget them. **Save capture…** writes the files kept as one capture
 (packets of the deleted files are gone); **Export packets…** copies the
 selected packets from the files they are in.
 

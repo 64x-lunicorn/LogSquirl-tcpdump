@@ -117,8 +117,10 @@ QString liveStopText( const QString& name, StopCondition condition, const LiveLi
  * Packet Panel its packets.
  *
  * A live capture's tab is opened, following its file, once the header and
- * the first packet line are in it; its summary in the sidebar follows the
- * snapshots while it runs, and is final when it ends.
+ * the first packet line are in it; with a ring buffer, each file's text in
+ * a tab of its own as it starts, the tabs before left as they are.  Its
+ * summary in the sidebar follows the snapshots while it runs, in every tab
+ * of the capture, and is final when it ends.
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -324,7 +326,10 @@ private:
         std::shared_ptr<const CaptureIndex> index;
         bool withFormatHint = false; ///< Links to the Log Format section.
         QString rawPath;             ///< A live capture's raw file; empty for a file.
-        QString error;               ///< Why a live capture failed, keeping what it had.
+        /// What Save capture… names the capture: a live capture's name (a
+        /// ring buffer's text files are numbered); empty for a file.
+        QString captureName;
+        QString error; ///< Why a live capture failed, keeping what it had.
     };
 
     /// Open a link of the summary: a filter in the Regex Lab, or a web page.
@@ -346,6 +351,8 @@ private:
     void startPendingLiveCapture();
     /// Show the outcome of a live capture and return to idle.
     void reportLiveOutcome( const ConversionResult& result );
+    /// Whether @p key is a text file of the live capture, running or the last.
+    bool isLiveKey( const QString& key ) const;
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();
     /// Whether a capture is being read or captured, said in a notification.
@@ -394,7 +401,10 @@ private:
     /// The live capture, running or the last one; kept until the next starts,
     /// as its worker may still be ending the capture program.
     std::unique_ptr<LiveCapture> live_;
-    QString liveKey_;           ///< The live capture's text file, once it is there.
+    QString liveKey_; ///< The live capture's text file, once it is there.
+    /// Every text file of the live capture, oldest first, the last liveKey_:
+    /// a ring buffer's, one per raw file, each in a tab of its own.
+    std::vector<QString> liveKeys_;
     LiveSnapshot liveSnapshot_; ///< The latest snapshot of the live capture.
     LiveLimits liveLimits_;     ///< The live capture's stop conditions and ring buffer.
     QElapsedTimer liveClock_;   ///< Since the live capture started.

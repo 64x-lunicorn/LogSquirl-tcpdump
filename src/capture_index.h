@@ -149,7 +149,7 @@ public:
 
     /// Remember the files of a capture split into @p parts, in order, as
     /// they are now; only the last one may be Growing.  The packets before
-    /// the first one's are rotated away.
+    /// the first one's are rotated away, and their checkpoints dropped.
     void setCaptureParts( const std::vector<CapturePart>& parts, Growth growth = Growth::Fixed );
 
     /// The capture's files, with their canonical paths: one for a capture

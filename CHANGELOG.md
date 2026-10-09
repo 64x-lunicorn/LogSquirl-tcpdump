@@ -70,10 +70,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it is to each, and a notification which one stopped it. A **Ring
   buffer** splits the raw capture into `<name>_00001_<time>.pcap`, … of a
   size or duration and keeps the newest N, each a capture of its own (a
-  pcapng's section header and interfaces repeated). The tab keeps the
-  lines of the packets kept: the oldest file's lines are cut from the
-  `.log` when it is deleted, and the Packet Panel says *Rotated away* for
-  a packet that was in it. **Save capture…** writes the files kept as one
+  pcapng's section header and interfaces repeated). Each file has a
+  `.log` of its own, opened in a new followed tab at its first packet, so
+  no tab grows without bound; a text is never rewritten, the tabs of
+  deleted files stay until they are closed, and their Packet Panel says
+  *Rotated away*. The index drops the checkpoints of deleted files.
+  **Save capture…** writes the files kept as one
   capture; Export packets… reads each packet from its file. The settings
   are fields of the Live capture form, kept in `settings.ini` (#77)
 - **Custom command as a live source.** The **Custom command** source runs
@@ -489,6 +491,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- Ring buffer: the text of a live capture is no longer rewritten in place
+  as the oldest raw file is deleted (LogSquirl follows that file); each raw
+  file has its own `.log` in a tab of its own, and the index of a capture
+  that runs for days no longer keeps the checkpoints of deleted files
+  (#125).
 - Stopping, restarting or closing a live capture no longer freezes
   LogSquirl while its capture program takes its time to end (up to the
   2 s grace, or a slow adb or ssh): the UI thread never waits for the

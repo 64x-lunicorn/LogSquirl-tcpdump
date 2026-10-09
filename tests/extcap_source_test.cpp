@@ -974,17 +974,20 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
         REQUIRE( sidebar->startLiveCapture( choice ) );
         REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
 
-        THEN( "the raw capture is split, only the newest file kept, and so are its lines" )
+        THEN( "the raw capture is split, only the newest file kept, each file's text in a tab" )
         {
             REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
-            REQUIRE( host.openedFiles.size() == 1 );
-            const QFileInfo log( host.openedFiles.first() );
+            REQUIRE( host.openedFiles.size() == 2 );
+            const QFileInfo log( host.openedFiles.last() );
             const auto files = log.dir().entryList( { "fakedump-fake0_*.pcap" }, QDir::Files );
             REQUIRE( files.size() == 1 );
             REQUIRE( files.first().startsWith( "fakedump-fake0_00002_" ) );
+            REQUIRE( log.fileName().startsWith( "fakedump-fake0_00002_" ) );
             const auto text = readText( log.filePath() );
             REQUIRE( text.count( "UDP" ) == 1 );
             REQUIRE( text.contains( "two" ) );
+            // The first file's text stays as it was.
+            REQUIRE( readText( host.openedFiles.first() ).count( "UDP" ) == 1 );
         }
     }
 

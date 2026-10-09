@@ -1621,14 +1621,21 @@ interfaces declared so far), and deletes the oldest files beyond
 a file covers, not the most. Each file is a `CapturePart`
 (`capture_index.h`): its path, the packets before it, where its records
 start in the stream, the header bytes ahead of them, and where each copied
-header record lay in the stream. The text keeps the lines of the packets
-in the files kept: the Converter notes where each file's lines start in
-the `.log` and, when a file is deleted, cuts its lines out of the file in
-place (`cutText()`, through a second, binary handle) and writes on at the
-new end. LogSquirl, which follows the tab, re-reads a file that changed in
-the range it indexed as it does a truncated log; marks on dropped lines
-go. A snapshot goes out right after each rotation, so the Packet Panel's
-index follows the files at once.
+header record lay in the stream. Each raw file has a text of its own,
+named after it (`<name>_00001_<time>.log`; without a ring buffer
+`<name>.log`): at a rotation the Converter closes the text, starts the
+next with the header, and calls `LiveObserver::firstPacket` again once its
+first packet line is flushed, so the sidebar opens it in a new followed
+tab (on the UI thread). A text is never rewritten (the maintainer's
+choice, over cutting the deleted file's lines out of one `.log` in place):
+the tabs of deleted files stay as they are until the user closes them,
+and every tab of the capture reads packets through the latest index, so
+their Packet Panel says *Rotated away*. The sidebar keeps the text files
+of the live capture (`liveKeys_`) and hands each the snapshots' summary
+and index. A snapshot goes out right after each rotation, so the Packet
+Panel's index follows the files at once; the Converter's own index drops
+the checkpoints of the deleted files then (`setCaptureParts()`), so a
+capture that runs for days keeps those of its files only.
 
 The `CaptureIndex` keeps the parts (`setCaptureParts()`, `parts()`,
 `partOf( number )`, `rotatedAway()`): its checkpoints stay in stream

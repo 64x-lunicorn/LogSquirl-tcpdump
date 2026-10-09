@@ -372,8 +372,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
     }
 }
 
-SCENARIO( "A live capture with a ring buffer keeps the newest packets in its tab",
-          "[live_capture]" )
+SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_capture]" )
 {
     GIVEN( "the sidebar capturing from a pipe into a ring buffer of two files of two packets" )
     {
@@ -411,30 +410,42 @@ SCENARIO( "A live capture with a ring buffer keeps the newest packets in its tab
             {
                 pipe->write( Bytes( whole.begin() + firstEnd, whole.end() ) );
                 REQUIRE( waitFor( [ & ] { return live->text().contains( "file 3" ); } ) );
-                REQUIRE( waitFor( [ & ] { return readLines( logPath ).size() == 5; } ) );
+                REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 3; } ) );
+                const auto lastLog = host.openedFiles.last();
+                REQUIRE( waitFor( [ & ] { return readLines( lastLog ).size() == 3; } ) );
                 sidebar.findChild<QPushButton*>( "stopButton" )->click();
                 REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
 
-                THEN( "the tab keeps the lines of packets 3 to 6" )
+                THEN( "each file's text is in a tab of its own, followed, opened in order" )
                 {
-                    const auto lines = readLines( logPath );
-                    REQUIRE( lines.size() == 5 );
-                    REQUIRE( lines.at( 1 ).startsWith( "3 " ) );
-                    REQUIRE( lines.at( 4 ).startsWith( "6 " ) );
+                    REQUIRE( host.openedFollowing == QList<bool>{ true, true, true } );
+                    REQUIRE_FALSE( host.openedOffUiThread );
+                    for ( int i = 0; i < 3; ++i ) {
+                        const auto lines = readLines( host.openedFiles.at( i ) );
+                        REQUIRE( lines.size() == 3 );
+                        REQUIRE( lines.at( 1 ).startsWith( QString::number( 2 * i + 1 ) + " " ) );
+                        REQUIRE( lines.at( 2 ).startsWith( QString::number( 2 * i + 2 ) + " " ) );
+                    }
                 }
 
-                THEN( "the Packet Panel says the first packet was rotated away" )
+                THEN( "the first tab stays as it was; its Packet Panel says rotated away" )
                 {
+                    REQUIRE( readLines( logPath ).at( 1 ) == firstLine );
                     auto* panel = sidebar.packetPanel();
                     host.selectedLines = { firstLine };
                     panel->refresh();
                     REQUIRE( waitFor(
                         [ & ] { return panel->statusText().contains( "Rotated away" ); } ) );
                     REQUIRE( panel->shownPacket() == 0 );
+                }
 
-                    host.selectedLines = { readLines( logPath ).at( 2 ) };
+                THEN( "the last tab's Packet Panel shows its packets" )
+                {
+                    sidebar.showSummaryFor( lastLog );
+                    auto* panel = sidebar.packetPanel();
+                    host.selectedLines = { readLines( lastLog ).at( 1 ) };
                     panel->refresh();
-                    REQUIRE( waitFor( [ & ] { return panel->shownPacket() == 4; } ) );
+                    REQUIRE( waitFor( [ & ] { return panel->shownPacket() == 5; } ) );
                 }
 
                 THEN( "Save capture… writes the files kept as one capture of packets 3 to 6" )

@@ -118,6 +118,17 @@ void CaptureIndex::setCaptureParts( const std::vector<CapturePart>& parts, Growt
         file.modified = info.lastModified();
         files_.push_back( std::move( file ) );
     }
+    // The checkpoints in the files rotated away are never read again (a
+    // packet is read from a checkpoint in its own file): dropped, so that
+    // a ring buffer that runs for days keeps those of its files only.
+    if ( !files_.empty() && files_.front().part.packetsBefore > 0 ) {
+        const auto rotatedAway = files_.front().part.packetsBefore;
+        checkpoints_.erase( checkpoints_.begin(),
+                            std::find_if( checkpoints_.begin(), checkpoints_.end(),
+                                          [ rotatedAway ]( const ReaderCheckpoint& c ) {
+                                              return c.packetsBefore > rotatedAway;
+                                          } ) );
+    }
 }
 
 std::vector<CapturePart> CaptureIndex::parts() const
