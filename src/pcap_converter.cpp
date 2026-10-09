@@ -25,6 +25,7 @@
 #include "pcap_converter.h"
 
 #include "capture_reader.h"
+#include "media_expectations.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "stream_labels.h"
@@ -247,6 +248,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
+    MediaExpectations media;
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
@@ -265,6 +267,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
+        media.apply( pkt );
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {

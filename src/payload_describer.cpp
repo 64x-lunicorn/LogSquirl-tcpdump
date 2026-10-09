@@ -172,6 +172,20 @@ std::optional<PayloadDescription> mqttPackets( const Payload& p )
                                           : result;
 }
 
+/// SIP on any port, by its start line; the media its SDP bodies announce
+/// goes with the description.  Before HTTP, whose OPTIONS a SIP request
+/// shares.
+std::optional<PayloadDescription> sipMessages( const Payload& p )
+{
+    std::vector<SipCall> calls;
+    auto result
+        = describedIfAny( "SIP", detectSip( p.data, p.len, p.transport == Transport::Tcp, calls ) );
+    if ( result ) {
+        result->sipCalls = std::move( calls );
+    }
+    return result;
+}
+
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
     return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
@@ -202,7 +216,7 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 
 /// The TCP detectors, in the order they are tried.
 constexpr Detector kTcpDetectors[]
-    = { dnsOverTcpMessage, tlsRecord,    httpMessage,  http2Preface,
+    = { dnsOverTcpMessage, tlsRecord,    sipMessages,  httpMessage,       http2Preface,
         mqttPackets,       nmeaSentence, socksMessage, portHintAndPreview };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
@@ -256,8 +270,8 @@ std::optional<PayloadDescription> dhcpv6Packet( const Payload& p )
 
 /// The UDP detectors, in the order they are tried: ports first, then content.
 constexpr Detector kUdpDetectors[]
-    = { dnsMessage,   ssdpMessage, ntpPacket,    dhcpPacket,
-        dhcpv6Packet, quicPacket,  nmeaSentence, portHintAndPreview };
+    = { dnsMessage,  ssdpMessage, ntpPacket,    dhcpPacket,        dhcpv6Packet,
+        sipMessages, quicPacket,  nmeaSentence, portHintAndPreview };
 
 /// The detectors of a transport, as a range.
 template <size_t N>

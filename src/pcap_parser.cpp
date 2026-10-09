@@ -71,12 +71,13 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
 {
     pkt.payloadHeadLen = std::min( len, kPayloadHeadBytes );
     std::copy_n( payload, pkt.payloadHeadLen, pkt.payloadHead.begin() );
-    const auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
+    auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
     if ( !described.label.empty() ) {
         pkt.protocol = described.label;
     }
     pkt.protocolRecognised = !described.label.empty() && !described.guessed;
     pkt.streamCue = described.streamCue;
+    pkt.sipCalls = std::move( described.sipCalls );
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
         pkt.previewBytes = described.preview ? described.description.size() : 0;

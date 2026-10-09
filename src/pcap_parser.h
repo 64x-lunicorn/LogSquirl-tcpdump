@@ -151,6 +151,30 @@ enum class StreamCue : uint8_t {
     MqttConnect,    ///< An MQTT CONNECT packet.
 };
 
+/// A media stream an SDP body offers or answers (RFC 4566, RFC 3264): the
+/// address its RTP is to be sent to, and the ports of its RTP and RTCP.
+struct MediaEndpoint {
+    std::string ip; ///< As the Source and Destination columns write it
+    uint16_t rtpPort = 0;
+    uint16_t rtcpPort = 0; ///< The RTP port + 1 unless `a=rtcp:` says otherwise
+};
+
+/// What a SIP message says about its call's media, for the Converter's
+/// MediaExpectations (media_expectations.h).
+struct SipCall {
+    std::string callId; ///< The Call-ID header's value, at most kMaxSipCallIdBytes
+    /// The RTP media streams its SDP body announces, at most kMaxSdpMedia.
+    std::vector<MediaEndpoint> media;
+    bool ends = false; ///< A BYE: the call's media is no longer expected.
+};
+
+/// Most bytes of a Call-ID a SipCall keeps, and media streams of one SDP
+/// body, so that a message cannot grow a PacketRecord without bound.
+constexpr size_t kMaxSipCallIdBytes = 128;
+constexpr size_t kMaxSdpMedia = 8;
+/// Most SIP messages described in one TCP segment.
+constexpr size_t kMaxSipMessages = 4;
+
 /// Payload bytes a PacketRecord keeps: enough for a QUIC long header's
 /// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
 constexpr size_t kPayloadHeadBytes = 48;
@@ -215,6 +239,9 @@ struct PacketRecord {
     bool protocolRecognised = false;
     /// What the payload begins for its stream (describeInStream).
     StreamCue streamCue = StreamCue::None;
+    /// The SIP messages of the payload that announce media or end a call,
+    /// at most kMaxSipMessages; empty for any other payload.
+    std::vector<SipCall> sipCalls;
     /// Info ends in a preview of the payload's text this many bytes long,
     /// after kDescriptionSeparator; 0 without one (limitPreview()).
     size_t previewBytes = 0;

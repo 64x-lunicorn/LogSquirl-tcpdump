@@ -62,6 +62,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is checked against the packet and the captured bytes. MQTT over TLS
   (8883) stays TLS. Before, MQTT was named by its port alone, with a
   preview of its bytes.
+- **SIP, SDP, RTP and RTCP described.** SIP on any port, over UDP and
+  TCP, is described as Wireshark names its messages: `Request: INVITE
+  sip:bob@example.com`, `Status: 200 OK (INVITE)`, with the CSeq number
+  and the Call-ID cut short, and an SDP body by its media, `SDP (audio
+  49170 RTP/AVP 0 8)`. Over TCP every message of a segment is described,
+  told apart by its Content-Length; a message cut by the segment ends in
+  `…`, a malformed one is `[Malformed Packet]`. The addresses and ports SDP
+  announces (`c=` and `m=` lines of the offer and the answer; RTCP on the
+  next port, `a=rtcp:` or `a=rtcp-mux`) are expected for RTP and RTCP, and
+  the UDP packets to or from them are described as `RTP` (`PT=PCMU,
+  SSRC=0x1234ABCD, Seq=1000, Time=8000, Mark`, payload types named as RFC
+  3551 names them) and `RTCP` (`Sender Report, Source description`).
+  UDP on other ports stays UDP. At most 1024 endpoints are expected; one
+  is forgotten after 5 minutes without a packet, with its call's BYE, or
+  for a newer one past the cap. Before, SIP was named by its port alone,
+  with a preview of its text, and RTP was plain UDP.
 
 ### Fixed
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the

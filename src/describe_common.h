@@ -261,6 +261,22 @@ std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, u
 std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort );
 /// The payload begins with an MQTT CONNECT (describe_mqtt.cpp).
 bool isMqttConnect( const uint8_t* payload, size_t len );
+/// The SIP messages a payload begins with, every one of a TCP segment
+/// (describe_sip.cpp): what their SDP bodies announce, and the calls a BYE
+/// ends, are added to @p calls.
+std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
+                       std::vector<SipCall>& calls );
+
+// ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
+
+/// The payload begins with an RTCP header: version 2, an RTCP packet type.
+bool isRtcpHeader( const uint8_t* payload, size_t len );
+/// An RTP packet, "PT=PCMU, SSRC=0x…, Seq=…, Time=…", of @p wireLen bytes
+/// of which @p len were kept; empty if it is no RTP version 2 (or RTCP).
+std::string describeRtp( const uint8_t* payload, size_t len, size_t wireLen );
+/// The packets of a compound RTCP packet, "Sender Report, Source
+/// description"; empty if it does not begin with an RTCP header.
+std::string describeRtcp( const uint8_t* payload, size_t len, size_t wireLen );
 
 // ── In the stream ────────────────────────────────────────────────────────
 

@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -60,6 +61,9 @@ struct PayloadDescription {
     /// What the payload begins for its stream, which describeInStream()
     /// builds on (PacketRecord::streamCue).
     StreamCue streamCue = StreamCue::None;
+    /// The SIP messages of the payload that announce media or end a call
+    /// (PacketRecord::sipCalls).
+    std::vector<SipCall> sipCalls;
 };
 
 /**

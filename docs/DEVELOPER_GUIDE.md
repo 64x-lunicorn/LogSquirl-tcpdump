@@ -242,14 +242,17 @@ and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
 (with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
 over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
 `describe_socks.cpp`, `describe_mqtt.cpp` (with a connection on another
-port in the stream) and `describe_nmea.cpp`. They share the internal
+port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
+`describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`) and
+`describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, MQTT (on port 1883,
-  or behind a CONNECT), NMEA 0183, SOCKS4/5 (only messages of the exact
-  shape, in the right direction, on proxy ports), then the port hint
+- TCP: DNS on port 53, TLS, SIP (before HTTP, whose `OPTIONS` it shares),
+  HTTP, the HTTP/2 preface, MQTT (on port 1883, or behind a CONNECT), NMEA
+  0183, SOCKS4/5 (only messages of the exact shape, in the right
+  direction, on proxy ports), then the port hint
 - HTTP: a request is its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
   path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
@@ -307,8 +310,60 @@ of the detectors and in-stream passes the tables use.
   is MQTT and gives its stream `StreamCue::MqttConnect`: the stream's later
   segments that no detector recognised are described from their first
   kPayloadHeadBytes in `describeMqttInStream()`. MQTT over TLS (8883) is TLS
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, QUIC, then NMEA and
-  the port hint
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, SIP, QUIC, then
+  NMEA and the port hint
+- SIP (RFC 3261), on any port, by its start line: a request line whose
+  version is `SIP/2.0` and whose URI has a scheme, or a status line with a
+  code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
+  a response `Status: 200 OK (INVITE)`, the method its CSeq names; then
+  the CSeq number and the Call-ID, cut after 12 bytes, `, CSeq 1, Call-ID
+  a84b4c76e667…`, and an SDP body summarised by its media lines, `, SDP
+  (audio 49170 RTP/AVP 0 8)`. The compact header names (`i`, `l`, `c`)
+  count. Over TCP the messages of a segment follow each other by their
+  Content-Length (none: no body), line ends between them skipped, up to
+  four, joined by `; `, then `…`; over UDP a datagram is one message, its
+  body the rest of it without a Content-Length. A message whose header
+  section or body goes on beyond the payload ends in ` …`, its rest in the
+  next segment is SIP by its port (5060) or the stream's label; one
+  without Call-ID or a CSeq of number and method, with a header line
+  without colon, more than 128 header lines or a Content-Length that is no
+  number up to 100,000,000 is `[Malformed Packet]`, as is an SDP body that
+  does not begin with `v=`. Every header and SDP line is looked for within
+  the message's bytes; an SDP body is read for 256 lines at most
+- SDP (RFC 4566) and the media it announces: each `m=` line with an RTP
+  transport (`RTP/AVP`, `RTP/SAVPF`, …) and a port other than 0, at the
+  address of the `c=` line of its own or of the session (an IPv4 or IPv6
+  address, written as the address columns write it, a multicast TTL
+  dropped; a host name announces nothing), is an RTP endpoint, and its RTCP
+  one on the next port, or on the port of `a=rtcp:`, or on the same with
+  `a=rtcp-mux`. At most `kMaxSdpMedia` (8) per body. The detector hands
+  them on in `PayloadDescription::sipCalls`, the parser keeps them in
+  `PacketRecord::sipCalls` with the Call-ID (at most `kMaxSipCallIdBytes`)
+  and whether the message is a BYE, for the `MediaExpectations`
+- RTP and RTCP (RFC 3550) are described where an SDP body announced them,
+  and nowhere else: RTP has no port of its own and no header that tells
+  it from any other UDP payload. The `MediaExpectations`
+  (`media_expectations.h/cpp`) are that capture-wide state, a side table
+  the Converter owns next to the Stream Tracker and runs on every packet
+  after `describeInStream()`, before the Stream Labels: not in
+  `StreamState`, since the signalling and the media are different
+  conversations and an endpoint is expected before its stream exists. It
+  maps "address port" to the call's Call-ID, whether RTP or RTCP is
+  expected and the capture time of the last packet or announcement. A UDP
+  packet from or to an expected endpoint (the destination looked up first)
+  is redescribed from its first kPayloadHeadBytes: RTP version 2 as
+  `PT=PCMU, SSRC=0x1234ABCD, Seq=1000, Time=8000, Mark`, the payload type
+  named as RFC 3551 names it, `DynamicRTP-Type-96` from 96 on, a number
+  otherwise; RTCP (packet types 200 to 207, which RTP on the same port is
+  told from by its second byte, RFC 5761) as the packets of its compound
+  packet, `Sender Report, Source description`, at most four. A CSRC list
+  or an RTCP length beyond the packet is `[Malformed Packet]`; a payload
+  without the header is left as it was. The table is bounded: at most
+  `MediaExpectations::kMaxExpectations` (1024) endpoints, a new one past
+  that replacing the one longest without a packet; an endpoint without a
+  packet for `kIdleSeconds` (300) of capture time is forgotten when next
+  looked up; a BYE forgets its call's endpoints, and a new SDP body of a
+  call (a re-INVITE) those at the addresses it announces anew
 - DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
   and the transaction id, then the address and the client's MAC (an
   Ethernet `chaddr`) and the host name (option 12, cut like every field),
@@ -731,7 +786,8 @@ share a base name), and `cmake --install` puts them there too.
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
 its stream and the TCP Analysis show its numbers relative and mark it,
-lets the Payload Describer look at it again in its stream and the Stream
+lets the Payload Describer look at it again in its stream and the
+`MediaExpectations` as RTP or RTCP where SDP announced them, the Stream
 Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
@@ -954,7 +1010,10 @@ discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
 lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
 by `tests/make_dhcp_ntp_corpus.py`; `mqtt.pcap`, MQTT 3.1.1 and 5.0
 sessions on port 1883, a PUBLISH cut over two segments, and a session on
-another port found by its CONNECT, by `tests/make_mqtt_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
+another port found by its CONNECT, by `tests/make_mqtt_corpus.py`; `sip.pcap`, a SIP call over UDP with its
+SDP offer and answer, RTP and RTCP and UDP on ports SDP did not announce,
+SIP over TCP with two messages in a segment and an SDP body cut over two,
+and an OPTIONS on another port, by `tests/make_sip_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
 and IP-in-IP tunnels, nested and nested too deep, by
 `tests/make_tunnels_corpus.py`; `wifi.pcap`, a station joining an access
 point behind Radiotap headers, and `ppp.pcapng`, a PPPoE session from
