@@ -448,6 +448,73 @@ SCENARIO( "A packet in an IP-in-IP tunnel is shown by its inner packet", "[tunne
     }
 }
 
+SCENARIO( "A tunnelled Ethernet frame is dissected as one on the wire", "[tunnels]" )
+{
+    GIVEN( "a PPPoE session frame carried in VXLAN" )
+    {
+        const auto pkt = only( overVxlan(
+            100, innerEth( EthertypePppoeSession, pppoeSession( 0x0021, innerTcp() ) ) ) );
+
+        THEN( "its inner IP packet is dissected" )
+        {
+            REQUIRE( pkt.protocol == "TCP" );
+            REQUIRE( pkt.srcIp == "192.168.1.1" );
+            REQUIRE( pkt.dstPort == 40001 );
+            REQUIRE( pkt.srcMac == "02:00:00:00:00:01" );
+            REQUIRE( pkt.tunnels.size() == 1 );
+            REQUIRE( pkt.tunnels[ 0 ].srcIp == "10.0.0.1" );
+        }
+    }
+
+    GIVEN( "a VLAN-tagged PPPoE session frame carried in GRE" )
+    {
+        const auto pkt = only(
+            eth( EthertypeIpv4,
+                 outerIpv4( IpProtoGre,
+                            gre( EthertypeTransparentBridging,
+                                 innerEth( EthertypeVlan,
+                                           vlanTag( 7, EthertypePppoeSession,
+                                                    pppoeSession( 0x0021, innerTcp() ) ) ) ) ) ) );
+
+        THEN( "its inner IP packet is dissected" )
+        {
+            REQUIRE( pkt.protocol == "TCP" );
+            REQUIRE( pkt.srcIp == "192.168.1.1" );
+            REQUIRE( pkt.tunnels[ 0 ].name == "GRE" );
+        }
+    }
+
+    GIVEN( "a PPPoE discovery frame carried in VXLAN" )
+    {
+        const auto pkt = only( overVxlan(
+            1, innerEth( EthertypePppoeDiscovery, pppoe( 0x09, Bytes{ 1, 1, 0, 0 } ) ) ) );
+
+        THEN( "its message is named" )
+        {
+            REQUIRE( pkt.protocol == "PPPoED" );
+            REQUIRE( pkt.info == "Active Discovery Initiation (PADI)" );
+        }
+    }
+
+    GIVEN( "an IEEE 802.3 frame carried in VXLAN and in GRE" )
+    {
+        const Bytes llc{ 0xAA, 0xAA, 0x03, 0, 0, 0 };
+        const auto overVx = only( overVxlan( 1, innerEth( 6, llc ) ) );
+        const auto overGre
+            = only( eth( EthertypeIpv4, outerIpv4( IpProtoGre, gre( EthertypeTransparentBridging,
+                                                                    innerEth( 6, llc ) ) ) ) );
+
+        THEN( "it is shown as LLC" )
+        {
+            for ( const auto& pkt : { overVx, overGre } ) {
+                REQUIRE( pkt.protocol == "LLC" );
+                REQUIRE( pkt.info == "802.3 frame, length 6" );
+                REQUIRE( pkt.srcMac == "02:00:00:00:00:01" );
+            }
+        }
+    }
+}
+
 SCENARIO( "Tunnels nest up to a bound", "[tunnels]" )
 {
     GIVEN( "a GRE tunnel inside a VXLAN one" )

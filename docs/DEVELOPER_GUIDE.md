@@ -160,10 +160,13 @@ first, each followed by ` | `:
 
 `VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240`; nested:
 `VXLAN VNI 100 | GRE | Echo (ping) request id=0x4e03, seq=1`. An Ethernet
-frame inside (VXLAN, GRE's transparent bridging) has its VLAN tags
-stripped and its MAC addresses replace the outer frame's, so a non-IP frame
-inside (ARP, LLDP) is shown by its own addresses; `parseCarried()` dissects
-its EtherType as `dissectPacket()` does for the outer frame.
+frame inside (VXLAN, GRE's transparent bridging) goes through the same
+`parseEthernet()` as the outer frame: its MAC addresses replace the outer
+frame's, so a non-IP frame inside (ARP, LLDP) is shown by its own
+addresses, and `parseNetwork()` strips its VLAN tags, unwraps PPPoE and
+dissects its network layer. `dissectPacket()` hands every link layer's
+network layer to `parseNetwork()` too, so a step added there reaches
+tunnelled frames as well.
 
 Entering a tunnel (`enterTunnel()`) moves the outer packet's addresses into
 a `Tunnel` record in `PacketRecord::tunnels`, its name with them, and clears

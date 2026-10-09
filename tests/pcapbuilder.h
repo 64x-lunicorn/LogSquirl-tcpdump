@@ -90,6 +90,23 @@ inline Bytes vlanTag( uint16_t vlanId, uint16_t innerEtherType, const Bytes& pay
     return b + payload;
 }
 
+/** A PPPoE header with @p code for session 0x1234 around @p payload. */
+inline Bytes pppoe( uint8_t code, const Bytes& payload, int length = -1 )
+{
+    Bytes b{ 0x11, code };
+    putBE16( b, code == 0 ? 0x1234 : 0 );
+    putBE16( b, static_cast<uint16_t>( length >= 0 ? length : payload.size() ) );
+    return b + payload;
+}
+
+/** A PPPoE session frame carrying PPP @p protocol, without address and control. */
+inline Bytes pppoeSession( uint16_t protocol, const Bytes& payload )
+{
+    Bytes b;
+    putBE16( b, protocol );
+    return pppoe( 0x00, b + payload );
+}
+
 struct Ipv4Options {
     int totalLength = -1;  ///< -1: header + payload; otherwise this value.
     uint16_t fragment = 0; ///< Flags and fragment offset (in 8-byte units).

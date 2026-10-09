@@ -400,14 +400,43 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.dstIp = targetIp;
 }
 
-// ── Tunnels ──────────────────────────────────────────────────────────────
+// ── Network layer ────────────────────────────────────────────────────────
 
-/// Dissect the payload of EtherType @p etherType, @p remaining captured
-/// bytes at @p data, as the network layer of a frame a tunnel carries.  The
-/// type field of an @p ethernet frame may be an IEEE 802.3 length instead.
-void parseCarried( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, size_t remaining,
+/**
+ * Dissect what EtherType @p etherType names, @p remaining captured bytes at
+ * @p data, into @p pkt: VLAN tags (802.1Q, and 802.1ad QinQ service tags
+ * stacked around it) are stripped, a PPPoE frame is unwrapped, then the
+ * network and transport layers are parsed.  Behind an @p ethernet header
+ * the type field may be an IEEE 802.3 length instead.
+ */
+void parseNetwork( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, size_t remaining,
                    bool ethernet )
 {
+    // Each VLAN tag is 2 bytes of tag control, then the EtherType of what
+    // follows.
+    for ( int tags = 0; tags < 8 && remaining >= 4
+                        && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
+                             || etherType == EthertypeQinQLegacy );
+          ++tags ) {
+        etherType = readBE16( data + 2 );
+        pkt.etherType = etherType;
+        data += 4;
+        remaining -= 4;
+    }
+
+    // PPPoE: a session's PPP frame carries the network layer, a discovery
+    // message none.
+    if ( etherType == EthertypePppoeDiscovery || etherType == EthertypePppoeSession ) {
+        const auto network = dissectPppoe( pkt, data, remaining );
+        if ( !network ) {
+            return;
+        }
+        etherType = network->etherType;
+        pkt.etherType = etherType;
+        data = network->data;
+        remaining = network->len;
+    }
+
     if ( etherType == EthertypeIpv4 ) {
         parseIpv4( pkt, data, remaining );
     }
@@ -418,10 +447,12 @@ void parseCarried( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, s
         parseArp( pkt, data, remaining );
     }
     else if ( etherType <= kMax8023Length && ethernet ) {
+        // An IEEE 802.3 frame: the field is the length of its LLC data
         pkt.protocol = "LLC";
         pkt.info = "802.3 frame, length " + std::to_string( etherType );
     }
     else {
+        // An EtherType not dissected further: its name, if it has one.
         char hex[ 8 ];
         std::snprintf( hex, sizeof( hex ), "%04X", etherType );
         const auto* name = etherTypeName( etherType );
@@ -430,10 +461,9 @@ void parseCarried( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, s
     }
 }
 
-/// Dissect the Ethernet frame a VXLAN or GRE tunnel carries, @p remaining
-/// captured bytes at @p data: its MAC addresses replace the outer frame's,
-/// its VLAN tags are stripped as on the wire.
-void parseCarriedEthernet( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+/// Dissect an Ethernet frame, @p remaining captured bytes at @p data, into
+/// @p pkt: its MAC addresses, and what it carries, by parseNetwork().
+void parseEthernet( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 {
     if ( remaining < 14 ) {
         pkt.protocol = "Ethernet";
@@ -442,20 +472,11 @@ void parseCarriedEthernet( PacketRecord& pkt, const uint8_t* data, size_t remain
     }
     pkt.dstMac = formatMac( data );
     pkt.srcMac = formatMac( data + 6 );
-    auto etherType = readBE16( data + 12 );
-    data += 14;
-    remaining -= 14;
-    for ( int tags = 0; tags < 8 && remaining >= 4
-                        && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
-                             || etherType == EthertypeQinQLegacy );
-          ++tags ) {
-        etherType = readBE16( data + 2 );
-        data += 4;
-        remaining -= 4;
-    }
-    pkt.etherType = etherType;
-    parseCarried( pkt, etherType, data, remaining, true );
+    pkt.etherType = readBE16( data + 12 );
+    parseNetwork( pkt, pkt.etherType, data + 14, remaining - 14, true );
 }
+
+// ── Tunnels ──────────────────────────────────────────────────────────────
 
 /**
  * Enter the tunnel @p name: what was dissected so far becomes the tunnel's
@@ -553,10 +574,10 @@ void parseGre( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         return;
     }
     if ( protocolType == EthertypeTransparentBridging ) {
-        parseCarriedEthernet( pkt, data + offset, remaining - offset );
+        parseEthernet( pkt, data + offset, remaining - offset );
     }
     else {
-        parseCarried( pkt, protocolType, data + offset, remaining - offset, false );
+        parseNetwork( pkt, protocolType, data + offset, remaining - offset, false );
     }
 }
 
@@ -573,7 +594,7 @@ void parseVxlan( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     if ( !enterTunnel( pkt, std::move( name ), "VXLAN" ) ) {
         return;
     }
-    parseCarriedEthernet( pkt, data + 8, remaining - 8 );
+    parseEthernet( pkt, data + 8, remaining - 8 );
 }
 
 } // anonymous namespace
@@ -599,12 +620,7 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
     size_t networkRemaining = 0;
 
     if ( linkType == DltEthernet && pktRemaining >= 14 ) {
-        pkt.dstMac = formatMac( pktData );
-        pkt.srcMac = formatMac( pktData + 6 );
-        etherType = readBE16( pktData + 12 );
-        pkt.etherType = etherType;
-        networkData = pktData + 14;
-        networkRemaining = pktRemaining - 14;
+        parseEthernet( pkt, pktData, pktRemaining );
     }
     else if ( linkType == DltRaw && pktRemaining >= 1 ) {
         // Raw IP — determine version from first nibble
@@ -672,54 +688,8 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         pkt.info = "Unsupported link-layer type " + std::to_string( linkType );
     }
 
-    // Strip VLAN tags: 802.1Q, and 802.1ad (QinQ) service tags stacked
-    // around it.  Each tag is 2 bytes of tag control, then the EtherType of
-    // what follows.
-    for ( int tags = 0; networkData && tags < 8 && networkRemaining >= 4
-                        && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
-                             || etherType == EthertypeQinQLegacy );
-          ++tags ) {
-        etherType = readBE16( networkData + 2 );
-        pkt.etherType = etherType;
-        networkData += 4;
-        networkRemaining -= 4;
-    }
-
-    // PPPoE: a session's PPP frame carries the network layer, a discovery
-    // message none.
-    if ( networkData
-         && ( etherType == EthertypePppoeDiscovery || etherType == EthertypePppoeSession ) ) {
-        const auto network = dissectPppoe( pkt, networkData, networkRemaining );
-        etherType = network ? network->etherType : 0;
-        pkt.etherType = network ? etherType : pkt.etherType;
-        networkData = network ? network->data : nullptr;
-        networkRemaining = network ? network->len : 0;
-    }
-
-    // Parse network and transport layers
     if ( networkData ) {
-        if ( etherType == EthertypeIpv4 ) {
-            parseIpv4( pkt, networkData, networkRemaining );
-        }
-        else if ( etherType == EthertypeIpv6 ) {
-            parseIpv6( pkt, networkData, networkRemaining );
-        }
-        else if ( etherType == EthertypeArp ) {
-            parseArp( pkt, networkData, networkRemaining );
-        }
-        else if ( etherType <= kMax8023Length && linkType == DltEthernet ) {
-            // An IEEE 802.3 frame: the field is the length of its LLC data
-            pkt.protocol = "LLC";
-            pkt.info = "802.3 frame, length " + std::to_string( etherType );
-        }
-        else {
-            // An EtherType not dissected further: its name, if it has one.
-            char hex[ 8 ];
-            std::snprintf( hex, sizeof( hex ), "%04X", etherType );
-            const auto* name = etherTypeName( etherType );
-            pkt.protocol = name ? name : std::string( "ETH(0x" ) + hex + ")";
-            pkt.info = std::string( "EtherType 0x" ) + hex;
-        }
+        parseNetwork( pkt, etherType, networkData, networkRemaining, false );
     }
 }
 

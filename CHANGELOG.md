@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
   type` on every line, and PPPoE frames only their EtherType.
 
+### Fixed
+- An Ethernet frame carried in VXLAN or GRE is dissected as one on the
+  wire: a PPPoE session frame inside is unwrapped to its IP packet, a
+  discovery message named, where before they showed as `PPPoES` /
+  `PPPoED` with `EtherType 0x8864` / `0x8863` (#67).
+
 ## [0.3.0] — 2026-10-09
 
 ### Added

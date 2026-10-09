@@ -147,23 +147,6 @@ Bytes control( uint8_t code, const Bytes& data = {} )
     return b + data;
 }
 
-/// A PPPoE header with @p code for session 0x1234 around @p payload.
-Bytes pppoe( uint8_t code, const Bytes& payload, int length = -1 )
-{
-    Bytes b{ 0x11, code };
-    putBE16( b, code == 0 ? 0x1234 : 0 );
-    putBE16( b, static_cast<uint16_t>( length >= 0 ? length : payload.size() ) );
-    return b + payload;
-}
-
-/// A PPPoE session frame carrying PPP @p protocol, without address and control.
-Bytes pppoeSession( uint16_t protocol, const Bytes& payload )
-{
-    Bytes b;
-    putBE16( b, protocol );
-    return pppoe( 0x00, b + payload );
-}
-
 /// A PPPoE discovery tag.
 Bytes tag( uint16_t type, const Bytes& value )
 {
