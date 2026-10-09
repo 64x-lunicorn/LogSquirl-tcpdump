@@ -234,8 +234,9 @@ public:
      * DATA[1]", up to four, then "…"; the connection preface first, at the
      * start of the client's direction, as "Magic".  A header block's
      * request (:method, :authority, :path) or response (:status,
-     * Content-Type, Content-Length) is told when the block is complete in
-     * the same bytes.  Empty if no frame header is among them.
+     * Content-Type, Content-Length) is told on the frame that began the
+     * block, or on the one that ends it when the block began in earlier
+     * bytes.  Empty if no frame header is among them.
      */
     std::string describe( const uint8_t* data, size_t len );
 
@@ -246,6 +247,14 @@ public:
     /// Let go of all that is held and decode no header block from now on,
     /// naming the frames only.
     void abandonHeaders();
+
+    /**
+     * Bytes of the direction went missing (a TLS record lost or one that
+     * would not decrypt): the next bytes begin a frame, and as the header
+     * blocks of the missing bytes changed the HPACK table unseen, no
+     * header block is decoded from now on (abandonHeaders()).
+     */
+    void resync();
 
 private:
     /// A frame whose header is complete, held as far as needed.

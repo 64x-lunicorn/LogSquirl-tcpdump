@@ -33,7 +33,9 @@
  *
  * It also keeps where each numbered stream begins and ends, the numbers of
  * its first and last packet, 8 bytes a stream, so that Follow stream
- * content reads only the packets between the two.
+ * content reads only the packets between the two; in chunks a copy of the
+ * index shares (SharedChunks), so that a live capture's snapshot of it
+ * costs a pointer per 4,096 streams, not 8 bytes per stream.
  *
  * The capture file is told by its path, size and modification time when it
  * was converted: a file changed since is reported, not misread.
@@ -54,6 +56,7 @@
 #pragma once
 
 #include "pcap_parser.h"
+#include "shared_chunks.h"
 
 #include <QDateTime>
 #include <QFile>
@@ -129,6 +132,14 @@ public:
     /// The first and last packet of stream @p id of @p transport; unset for
     /// a stream not noted.
     std::optional<StreamExtent> streamExtent( Transport transport, int id ) const;
+
+    /// Chunks of stream extents this index and @p other share, for the
+    /// tests: a copy shares them all, until either notes a stream of one.
+    size_t streamChunksSharedWith( const CaptureIndex& other ) const
+    {
+        return tcpStreams_.chunksSharedWith( other.tcpStreams_ )
+               + udpStreams_.chunksSharedWith( other.udpStreams_ );
+    }
 
     /// Remember the capture file at @p path as it is now, the file the
     /// checkpoints point into.  A Growing file is read as it was converted
@@ -207,8 +218,10 @@ private:
     uint32_t packets_ = 0;
     std::vector<ReaderCheckpoint> checkpoints_;
     /// By stream id, per transport: the StreamTracker numbers them from 0.
-    std::vector<StreamExtent> tcpStreams_;
-    std::vector<StreamExtent> udpStreams_;
+    /// A copy of the index (a live capture's snapshot) shares them.
+    static constexpr size_t kStreamChunk = 4096;
+    SharedChunks<StreamExtent, kStreamChunk> tcpStreams_;
+    SharedChunks<StreamExtent, kStreamChunk> udpStreams_;
     /// A capture file as it was when it was remembered.
     struct File {
         CapturePart part; ///< Its path canonical.
@@ -268,19 +281,42 @@ public:
         return error_;
     }
 
+    /// Keep the record of each packet read, as it lies in the file, so that
+    /// it can be copied without reading the file again (Export packets):
+    /// of a gzip-compressed capture, decompressing it again.
+    void keepRecords( bool keep )
+    {
+        keepRecords_ = keep;
+    }
+
+    /// The record of the packet read last, header and all; empty when it
+    /// was not kept: keepRecords() is off, it is longer than
+    /// kMaxKeptRecord, or the reader had read part of it before.
+    ByteView recordBytes() const;
+
+    /// The longest record kept.
+    static constexpr size_t kMaxKeptRecord = 16 * 1024 * 1024;
+
 private:
+    class RecordingSource;
     /// Open the file @p part again, at @p checkpoint (in it) if there is one.
     bool reopen( const CapturePart& part, const ReaderCheckpoint* checkpoint );
     void close();
 
     std::shared_ptr<const CaptureIndex> index_;
     std::unique_ptr<CaptureFile> file_;
+    /// Between the file and the reader: keeps what the reader reads.
+    std::unique_ptr<RecordingSource> recording_;
     std::unique_ptr<HeadSource> headSource_;
     std::unique_ptr<CaptureReader> reader_;
     /// The file reader_ reads, and the packets of the capture before it.
     QString readerPath_;
     uint32_t readerPacketsBefore_ = 0;
     QString error_;
+    bool keepRecords_ = false;
+    /// Where the record of the packet read last lies, if it was kept.
+    uint64_t recordOffset_ = 0;
+    uint64_t recordLength_ = 0;
 };
 
 } // namespace tcpdump

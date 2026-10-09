@@ -147,6 +147,62 @@ ExportResult failed( const QString& error )
 
 // ── Choosing the packets ─────────────────────────────────────────────────
 
+PacketNumbers::PacketNumbers( std::initializer_list<uint32_t> numbers )
+    : PacketNumbers( std::vector<uint32_t>( numbers ) )
+{
+}
+
+PacketNumbers::PacketNumbers( const std::vector<uint32_t>& numbers )
+{
+    std::vector<Range> ranges;
+    ranges.reserve( numbers.size() );
+    for ( const auto number : numbers ) {
+        ranges.push_back( { number, number } );
+    }
+    *this = ofRanges( std::move( ranges ) );
+}
+
+PacketNumbers PacketNumbers::ofRanges( std::vector<Range> ranges )
+{
+    std::sort( ranges.begin(), ranges.end(),
+               []( const Range& a, const Range& b ) { return a.first < b.first; } );
+    PacketNumbers numbers;
+    for ( const auto& range : ranges ) {
+        if ( range.first > range.last ) {
+            continue;
+        }
+        auto& merged = numbers.ranges_;
+        // Overlapping or next to the last one: one range.
+        if ( !merged.empty() && uint64_t{ range.first } <= uint64_t{ merged.back().last } + 1 ) {
+            merged.back().last = std::max( merged.back().last, range.last );
+        }
+        else {
+            merged.push_back( range );
+        }
+    }
+    return numbers;
+}
+
+uint64_t PacketNumbers::count() const
+{
+    uint64_t count = 0;
+    for ( const auto& range : ranges_ ) {
+        count += uint64_t{ range.last } - range.first + 1;
+    }
+    return count;
+}
+
+std::vector<uint32_t> PacketNumbers::list() const
+{
+    std::vector<uint32_t> numbers;
+    for ( const auto& range : ranges_ ) {
+        for ( uint64_t number = range.first; number <= range.last; ++number ) {
+            numbers.push_back( static_cast<uint32_t>( number ) );
+        }
+    }
+    return numbers;
+}
+
 namespace {
 
 /// The packets of the packet lines in @p text and, if @p numbersToo, of the
@@ -154,14 +210,13 @@ namespace {
 PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
 {
     PacketSet set;
+    std::vector<PacketNumbers::Range> ranges;
     const auto add = [ & ]( uint64_t first, uint64_t last ) {
         if ( first == 0 || first > last || last > packets ) {
             ++set.skipped;
             return;
         }
-        for ( auto number = first; number <= last; ++number ) {
-            set.numbers.push_back( static_cast<uint32_t>( number ) );
-        }
+        ranges.push_back( { static_cast<uint32_t>( first ), static_cast<uint32_t>( last ) } );
     };
     // "12 - 40" is one range; commas and spaces separate the others.
     static const QRegularExpression dash( QStringLiteral( "\\s*[-\\x{2013}]\\s*" ) );
@@ -199,8 +254,7 @@ PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
             firstOk&& lastOk ? add( first, last ) : void( ++set.skipped );
         }
     }
-    std::sort( set.numbers.begin(), set.numbers.end() );
-    set.numbers.erase( std::unique( set.numbers.begin(), set.numbers.end() ), set.numbers.end() );
+    set.numbers = PacketNumbers::ofRanges( std::move( ranges ) );
     return set;
 }
 
@@ -216,17 +270,13 @@ PacketSet packetLinesOf( const QString& text, uint32_t packets )
     return parse( text, packets, false );
 }
 
-QString formatPacketRanges( const std::vector<uint32_t>& numbers )
+QString formatPacketRanges( const PacketNumbers& numbers )
 {
     QStringList ranges;
-    for ( size_t i = 0; i < numbers.size(); ) {
-        size_t j = i;
-        while ( j + 1 < numbers.size() && numbers[ j + 1 ] == numbers[ j ] + 1 ) {
-            ++j;
-        }
-        ranges << ( j == i ? QString::number( numbers[ i ] )
-                           : QStringLiteral( "%1-%2" ).arg( numbers[ i ] ).arg( numbers[ j ] ) );
-        i = j + 1;
+    for ( const auto& range : numbers.ranges() ) {
+        ranges << ( range.first == range.last
+                        ? QString::number( range.first )
+                        : QStringLiteral( "%1-%2" ).arg( range.first ).arg( range.last ) );
     }
     return ranges.join( QStringLiteral( ", " ) );
 }
@@ -249,16 +299,13 @@ CaptureFormat captureFormatOf( const QString& path )
 
 // ── Writing them ─────────────────────────────────────────────────────────
 
-ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
-                            std::vector<uint32_t> numbers, const QString& outputPath,
-                            const std::atomic_bool* cancel,
+ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const PacketNumbers& numbers,
+                            const QString& outputPath, const std::atomic_bool* cancel,
                             const std::function<void( int permille )>& progress )
 {
     if ( !index ) {
         return failed( QStringLiteral( "No capture." ) );
     }
-    std::sort( numbers.begin(), numbers.end() );
-    numbers.erase( std::unique( numbers.begin(), numbers.end() ), numbers.end() );
     if ( numbers.empty() ) {
         return failed( QStringLiteral( "No packet to export." ) );
     }
@@ -287,69 +334,104 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
 
     ExportResult result;
     CaptureCursor cursor( index );
+    // The cursor keeps each record it reads, which is copied from there:
+    // the capture is read (and decompressed) once.  The file is opened
+    // again only for the headers, and a record the cursor could not keep.
+    cursor.keepRecords( true );
     RecordCopier copier( output );
     CapturedPacket packet;
     bool headerWritten = false;
     uint64_t section = 0;   ///< The pcapng section written last, by where it starts.
     size_t headersOfIt = 0; ///< Its header records written so far.
     int lastPermille = -1;
-    for ( size_t i = 0; i < numbers.size(); ++i ) {
-        if ( cancel && cancel->load() ) {
-            output.cancelWriting();
-            result.status = ExportResult::Status::Cancelled;
-            return result;
-        }
-        if ( !cursor.read( numbers[ i ], packet ) ) {
-            output.cancelWriting();
-            return failed(
-                QStringLiteral( "Packet %1: %2" ).arg( numbers[ i ] ).arg( cursor.error() ) );
-        }
-        if ( !capture || capturePath != packet.file ) {
-            capture = std::make_unique<CaptureFile>();
-            if ( !capture->open( packet.file, problem, index->gzipAccessPoints() ) ) {
+    const auto total = numbers.count();
+    uint64_t done = 0;
+    for ( const auto& range : numbers.ranges() ) {
+        for ( uint64_t at = range.first; at <= range.last; ++at ) {
+            const auto number = static_cast<uint32_t>( at );
+            if ( cancel && cancel->load() ) {
                 output.cancelWriting();
-                return failed( problem );
+                result.status = ExportResult::Status::Cancelled;
+                return result;
             }
-            capturePath = packet.file;
-            copier.setSource( capture->source() );
-        }
-        const auto& headers = packet.headers;
-        if ( headers.records.empty() ) {
-            output.cancelWriting();
-            return failed( QStringLiteral( "Packet %1 has no header to write before it." )
-                               .arg( numbers[ i ] ) );
-        }
-        result.format = headers.format;
-
-        // The headers it needs that were not written yet: a pcap's once, a
-        // pcapng section's header when the section changes, and the section's
-        // interfaces as they are declared.
-        if ( headers.format == CaptureFormat::Pcapng ) {
-            if ( !headerWritten || headers.records.front().offset != section ) {
-                section = headers.records.front().offset;
-                headersOfIt = 0;
-            }
-        }
-        for ( ; headersOfIt < headers.records.size(); ++headersOfIt ) {
-            const bool sectionHeader = headers.format == CaptureFormat::Pcapng && headersOfIt == 0;
-            if ( !copier.copy( headers.records[ headersOfIt ], sectionHeader ) ) {
+            if ( !cursor.read( number, packet ) ) {
                 output.cancelWriting();
-                return failed( copier.error() );
+                return failed(
+                    QStringLiteral( "Packet %1: %2" ).arg( number ).arg( cursor.error() ) );
             }
-        }
-        headerWritten = true;
+            // The capture file, opened when a record is to be copied from it.
+            const auto source = [ & ] {
+                if ( capture && capturePath == packet.file ) {
+                    return true;
+                }
+                capture = std::make_unique<CaptureFile>();
+                if ( !capture->open( packet.file, problem, index->gzipAccessPoints() ) ) {
+                    return false;
+                }
+                capturePath = packet.file;
+                copier.setSource( capture->source() );
+                return true;
+            };
+            const auto& headers = packet.headers;
+            if ( headers.records.empty() ) {
+                output.cancelWriting();
+                return failed(
+                    QStringLiteral( "Packet %1 has no header to write before it." ).arg( number ) );
+            }
+            result.format = headers.format;
 
-        if ( !copier.copy( { packet.recordOffset, packet.recordLength } ) ) {
-            output.cancelWriting();
-            return failed( copier.error() );
-        }
-        ++result.packets;
+            // The headers it needs that were not written yet: a pcap's once, a
+            // pcapng section's header when the section changes, and the section's
+            // interfaces as they are declared.
+            if ( headers.format == CaptureFormat::Pcapng ) {
+                if ( !headerWritten || headers.records.front().offset != section ) {
+                    section = headers.records.front().offset;
+                    headersOfIt = 0;
+                }
+            }
+            for ( ; headersOfIt < headers.records.size(); ++headersOfIt ) {
+                const bool sectionHeader
+                    = headers.format == CaptureFormat::Pcapng && headersOfIt == 0;
+                if ( !source() ) {
+                    output.cancelWriting();
+                    return failed( problem );
+                }
+                if ( !copier.copy( headers.records[ headersOfIt ], sectionHeader ) ) {
+                    output.cancelWriting();
+                    return failed( copier.error() );
+                }
+            }
+            headerWritten = true;
 
-        if ( progress ) {
-            const auto permille = static_cast<int>( ( i + 1 ) * 1000 / numbers.size() );
-            if ( permille != lastPermille ) {
-                lastPermille = permille;
-                progress( permille );
+            const auto record = cursor.recordBytes();
+            if ( record.data && record.size == packet.recordLength ) {
+                const auto length = static_cast<qint64>( record.size );
+                if ( output.write( reinterpret_cast<const char*>( record.data ), length )
+                     != length ) {
+                    output.cancelWriting();
+                    return failed( QStringLiteral( "The export cannot be written: %1" )
+                                       .arg( output.errorString() ) );
+                }
+            }
+            else {
+                ++result.recordsReadAgain;
+                if ( !source() ) {
+                    output.cancelWriting();
+                    return failed( problem );
+                }
+                if ( !copier.copy( { packet.recordOffset, packet.recordLength } ) ) {
+                    output.cancelWriting();
+                    return failed( copier.error() );
+                }
+            }
+            ++result.packets;
+
+            if ( progress ) {
+                const auto permille = static_cast<int>( ++done * 1000 / total );
+                if ( permille != lastPermille ) {
+                    lastPermille = permille;
+                    progress( permille );
+                }
             }
         }
     }

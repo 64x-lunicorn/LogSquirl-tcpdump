@@ -37,6 +37,7 @@
 #include <QFile>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTreeWidget>
@@ -257,6 +258,101 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
     }
 }
 
+SCENARIO( "The Packet Panel reads a packet off the UI thread", "[packet_panel]" )
+{
+    GIVEN( "a converted capture in the tab in front" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+
+        WHEN( "a packet line is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 3 ] };
+            panel->refresh();
+
+            THEN( "the panel says it reads the packet, then shows it" )
+            {
+                REQUIRE( panel->statusText()
+                         == QString::fromUtf8( "Reading packet 3\xe2\x80\xa6" ) );
+                REQUIRE( panel->shownPacket() == 0 );
+                REQUIRE( panel->findChild<QPushButton*>( "followContentButton" )->isEnabled() );
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+                REQUIRE( panel->statusText() == "Packet 3" );
+            }
+        }
+
+        WHEN( "the selection moves on before a packet is read" )
+        {
+            host.selectedLines = { loaded.lines[ 2 ] };
+            panel->refresh();
+            host.selectedLines = { loaded.lines[ 5 ] };
+            panel->refresh();
+
+            THEN( "the packet of the line selected last is shown, and stays" )
+            {
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 5; } ) );
+                runFor( 200 );
+                REQUIRE( panel->shownPacket() == 5 );
+            }
+        }
+    }
+}
+
+SCENARIO( "The Packet Panel's TCP layer shows the handshake's iRTT", "[packet_panel]" )
+{
+    GIVEN( "the synthetic reassembly capture, its handshakes timed" )
+    {
+        LoadedCapture loaded( kReassembly );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+
+        WHEN( "the ACK that completes a handshake is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 3 ] };
+            REQUIRE( loaded.lines[ 3 ].contains( "[iRTT=0.003000]" ) );
+            panel->refresh();
+
+            THEN( "its TCP layer has the iRTT" )
+            {
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+                const auto& layers = panel->layers();
+                const auto tcp = std::find_if( layers.begin(), layers.end(), []( const auto& l ) {
+                    return l.name == "Transmission Control Protocol";
+                } );
+                REQUIRE( tcp != layers.end() );
+                REQUIRE( tcp->fields.back().name == "iRTT" );
+                REQUIRE( tcp->fields.back().value == "0.003000 seconds" );
+                auto* tree = panel->findChild<QTreeWidget*>( "packetLayers" );
+                bool shown = false;
+                for ( int i = 0; i < tree->topLevelItemCount(); ++i ) {
+                    auto* item = tree->topLevelItem( i );
+                    for ( int j = 0; j < item->childCount(); ++j ) {
+                        shown = shown || item->child( j )->text( 0 ) == "iRTT: 0.003000 seconds";
+                    }
+                }
+                REQUIRE( shown );
+            }
+        }
+
+        WHEN( "a packet without one is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 1 ] };
+            panel->refresh();
+
+            THEN( "its TCP layer has none" )
+            {
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 1; } ) );
+                for ( const auto& layer : panel->layers() ) {
+                    for ( const auto& field : layer.fields ) {
+                        REQUIRE( field.name != "iRTT" );
+                    }
+                }
+            }
+        }
+    }
+}
+
 SCENARIO( "The Packet Panel polls the selection only while it is visible", "[packet_panel]" )
 {
     GIVEN( "a converted capture in the tab in front and a selected line" )
@@ -364,6 +460,7 @@ SCENARIO( "Packet details reads the selected line at once", "[packet_panel]" )
 
             THEN( "the panel shows the packet, and a notification names its layers" )
             {
+                REQUIRE( waitFor( [ & ] { return !host.notifications.isEmpty(); } ) );
                 REQUIRE( loaded.panel->shownPacket() == 1 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().startsWith( "Packet 1: Ethernet II / " ) );
@@ -602,6 +699,21 @@ SCENARIO( "A long stream is shown in part, read off the UI thread with Cancel",
             REQUIRE_FALSE( view->hasMore() );
             REQUIRE( view->contentText().size() == 1500 * 1000 );
             REQUIRE( view->noteText().isEmpty() );
+        }
+
+        THEN( "a format chosen while Show more reads is the format of all that is shown" )
+        {
+            view->findChild<QPushButton*>( "streamMore" )->click();
+            REQUIRE( view->isBusy() );
+            view->findChild<QComboBox*>( "streamFormat" )->setCurrentIndex( 1 );
+            REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+            const auto text = view->contentText();
+            REQUIRE( text.startsWith( "00000000  61 61 61" ) );
+            const QRegularExpression hexLine( "^\\s*[0-9a-f]{8}  |^$" );
+            for ( const auto& line : text.split( '\n' ) ) {
+                INFO( line.toStdString() );
+                REQUIRE( hexLine.match( line ).hasMatch() );
+            }
         }
 
         THEN( "a read cancelled at once can go on later" )

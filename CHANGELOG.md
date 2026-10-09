@@ -150,7 +150,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep their lines. A live capture reads the key log again as it grows.
   The secrets are read only, kept in memory for the conversion and wiped,
   never written or shown; a session keeps its keys and sequence numbers,
-  no data, 65,536 sessions at most. The sidebar summary counts the
+  no data, 16,384 sessions at a time, a new one in place of the one idle
+  the longest. The sidebar summary counts the
   sessions decrypted. The cryptography is Mbed TLS 3.6.7, fetched by the
   build at that release and hash and linked in (NOTICE).
 - **Follow stream content.** The Packet Panel's new **Stream** tab shows
@@ -177,7 +178,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without reading past the header. The new option *Show TCP timestamps
   (TSval, TSecr) on every segment* (off by default) shows the timestamps
   on the other segments too. The ACK that completes a handshake shows its
-  initial round-trip time, from the SYN, `[iRTT=0.012345]`, and the
+  initial round-trip time, from the SYN, `[iRTT=0.012345]`, also in the
+  Packet Panel's TCP layer, and the
   summary the median of all handshakes captured whole (exact up to 4,096
   handshakes, within 0.8 % beyond, in 32 KB of memory however long the
   capture). A segment that
@@ -186,8 +188,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filtered with the other TCP problems. `tests/corpus/tcp-analysis.pcap`
   has a second connection that shows them.
 - **Display filters.** **Plugins → tcpdump → Display filter…** (also in
-  the Command Palette) takes a Wireshark-style display filter, such as
-  `ip.addr == 10.0.0.0/8 && tcp.port == 443 || dns`, and opens the Regex
+  the Command Palette), and the *Display filter* field in the sidebar,
+  take a Wireshark-style display filter, such as
+  `ip.addr == 10.0.0.0/8 && tcp.port == 443 || dns`, and open the Regex
   Lab with the pattern of the packet lines it selects, in every column
   layout. Supported: `ip.addr`/`src`/`dst` (an address or an IPv4
   network), `ipv6.addr`/`src`/`dst`, `tcp.port`/`srcport`/`dstport`, the
@@ -248,10 +251,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by every column. A click on a row, or *Filter on this conversation*,
   opens the Regex Lab with the pattern of the stream's lines, as Follow
   stream builds it. The counts are taken while converting, for the
-  numbered streams only, so the stream cap bounds them (some 70 MB more at
-  the default cap of 1,000,000 streams); the packets of streams past it are
+  numbered streams only, so the stream cap bounds them (some 200 bytes a
+  stream for its counts and row; with the Stream Tracker some 390 MB at the
+  default cap of 1,000,000 streams); the packets of streams past it are
   one row, *Other streams*. The table is part of the Capture Summary and
-  shows a new summary snapshot as it comes, keeping its sort and selection.
+  shows a new summary snapshot as it comes, keeping its sort and selection;
+  a snapshot shares the rows of the streams that had no packet since the
+  last one.
 - **Export packets.** *Plugins → tcpdump → Export packets…* writes the
   packets of the selected lines to a new capture file, e.g. the lines of a
   Filtered View, to share a narrowed view or open it in Wireshark. Each

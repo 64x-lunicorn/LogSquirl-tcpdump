@@ -239,7 +239,7 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
             const auto selected = model->rowOf( Transport::Udp, 1 );
             loaded.table->view()->setCurrentIndex( model->index( selected, 0 ) );
 
-            auto rows = *model->conversations();
+            auto rows = model->conversations()->list();
             Conversation added;
             added.transport = Transport::Tcp;
             added.stream = 8;
@@ -249,7 +249,7 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
             added.packetsAToB = 40;
             rows.push_back( added );
             tcpdump::CaptureSummary summary;
-            summary.conversations = std::make_shared<const std::vector<Conversation>>( rows );
+            summary.conversations = std::make_shared<const tcpdump::ConversationRows>( rows );
             loaded.sidebar->updateSummary( loaded.text, summary );
 
             THEN( "the table shows it, in the same sort, the same conversation selected" )
@@ -268,7 +268,7 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
         {
             loaded.host.activateFile( "/some/other.log" );
             tcpdump::CaptureSummary summary;
-            summary.conversations = std::make_shared<const std::vector<Conversation>>();
+            summary.conversations = std::make_shared<const tcpdump::ConversationRows>();
             loaded.sidebar->updateSummary( loaded.text, summary );
 
             THEN( "it is kept for when its tab comes back" )

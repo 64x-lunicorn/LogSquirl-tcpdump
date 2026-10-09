@@ -627,11 +627,13 @@ public:
      * the same capture (a ring buffer's, capture_index.h): the header records
      * the checkpoint's state names lie at @p where of their offset in this
      * file, so that headers() says where they are here.  A reader whose
-     * headers all come from open() has nothing to do.
+     * headers all come from open() has nothing to do.  False if @p where
+     * does not know where one of them is: this file lacks it.
      */
-    virtual void relocateHeaders( const std::function<uint64_t( uint64_t )>& where )
+    virtual bool relocateHeaders( const std::function<std::optional<uint64_t>( uint64_t )>& where )
     {
         static_cast<void>( where );
+        return true;
     }
 
     /// Where the record of the last packet returned starts in the source:

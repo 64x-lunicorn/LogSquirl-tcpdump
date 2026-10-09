@@ -64,8 +64,9 @@ struct SessionSecrets {
 class KeyLog {
 public:
     /// Take the secrets of the lines in the @p len bytes at @p text; a
-    /// line may end in CR LF, the last one without a line feed.  Returns
-    /// the number of secrets taken.
+    /// line may end in CR LF, the last one without a line feed.  A TLS 1.3
+    /// secret is 32 or 48 bytes, as long as its hash; a TLS 1.2 master
+    /// secret 48.  Returns the number of secrets taken.
     size_t addLines( const char* text, size_t len );
 
     /// The secrets of the session whose ClientHello has @p clientRandom,
@@ -85,9 +86,11 @@ private:
 /**
  * A key log file, read when the conversion starts and again as it grows,
  * as the file of a live capture does while the browser writes it: a
- * session whose secrets are not there yet reads what was added, at most
- * every kRereadInterval.  Read only: the file is never written, copied or
- * kept open.
+ * session whose secrets are not there yet, or not all of a TLS 1.3
+ * session's, reads what was added, at most every kRereadInterval and only
+ * when the file grew.  A last line without its line feed is not read until
+ * it has one: it may be half written.  Read only: the file is never
+ * written, copied or kept open.
  */
 class KeyLogFile {
 public:
@@ -111,8 +114,19 @@ public:
     }
 
     /// The secrets of a session, reading what the file has gained when
-    /// there are none and kRereadInterval has passed.
+    /// there are none, or not all, and kRereadInterval has passed.
     const SessionSecrets* find( const uint8_t* clientRandom );
+
+    /// Bytes of the file read so far, whole lines, reading what it has
+    /// gained when kRereadInterval has passed.  A session not found is
+    /// looked for again once this grew.
+    int64_t bytesRead();
+
+    /// Times the file was read, for the tests.
+    int reads() const
+    {
+        return reads_;
+    }
 
     const KeyLog& keys() const
     {
@@ -122,11 +136,15 @@ public:
 private:
     /// Read what the file has gained since the last read.
     void read();
+    /// All the secrets a session of its kind needs are there.
+    static bool complete( const SessionSecrets& secrets );
 
     QString path_;
     QString error_;
     KeyLog keys_;
-    int64_t offset_ = 0; ///< Bytes of the file read for good: whole lines.
+    int64_t offset_ = 0;   ///< Bytes of the file read for good: whole lines.
+    int64_t fileSize_ = 0; ///< The file's size when it was last read.
+    int reads_ = 0;
     std::chrono::steady_clock::time_point lastRead_;
 };
 

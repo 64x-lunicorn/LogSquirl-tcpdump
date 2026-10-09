@@ -182,6 +182,7 @@ SCENARIO( "Exported packets are the capture's records, byte for byte", "[packet_
             REQUIRE( result.status == ExportResult::Status::Exported );
             REQUIRE( result.packets == expected.size() );
             REQUIRE( result.format == captureFormatOf( capture ) );
+            REQUIRE( result.recordsReadAgain == 0 );
 
             THEN( "the export holds exactly those records, in order, as they are in the capture" )
             {
@@ -424,6 +425,19 @@ SCENARIO( "The packets to export are read from packet lines, numbers and ranges"
         }
     }
 
+    GIVEN( "a range of three billion packets, named twice and overlapped" )
+    {
+        const auto set = parsePacketSet( "1-3000000000, 2-3000000000 7 3000000000", 3000000000u );
+
+        THEN( "they are kept as one range, counted without listing them" )
+        {
+            REQUIRE( set.numbers.count() == 3000000000u );
+            REQUIRE( set.numbers.ranges().size() == 1 );
+            REQUIRE( formatPacketRanges( set.numbers ) == "1-3000000000" );
+            REQUIRE( set.skipped == 0 );
+        }
+    }
+
     THEN( "numbers are written back as ranges" )
     {
         REQUIRE( formatPacketRanges( { 1, 2, 3, 5, 7, 8 } ) == "1-3, 5, 7-8" );
@@ -554,6 +568,22 @@ SCENARIO( "The Export dialog shows the packets its text names", "[packet_export]
         {
             REQUIRE( dialog.packetSet().numbers == std::vector<uint32_t>{ 5, 6, 7 } );
             REQUIRE( count->text().startsWith( "3 packets; 1 skipped" ) );
+        }
+    }
+
+    WHEN( "the user types digit by digit a range of three billion packets" )
+    {
+        ExportRequest huge;
+        huge.packets = 3000000000u;
+        ExportDialog large( huge );
+        for ( const auto* text : { "1", "1-", "1-3", "1-30", "1-3000000000" } ) {
+            large.setText( text );
+        }
+
+        THEN( "its count is told at once, the packets not listed" )
+        {
+            REQUIRE( large.packetSet().numbers.count() == 3000000000u );
+            REQUIRE( large.findChild<QLabel*>( "packetCount" )->text() == "3000000000 packets" );
         }
     }
 

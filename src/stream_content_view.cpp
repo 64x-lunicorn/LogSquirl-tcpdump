@@ -199,6 +199,7 @@ void StreamContentView::clear( const QString& reason )
     index_.reset();
     reader_.reset();
     chunks_.clear();
+    rerenderPending_ = false;
     shownBytes_ = 0;
     more_ = false;
     lastError_.clear();
@@ -327,7 +328,13 @@ void StreamContentView::finishRead( const std::shared_ptr<Batch>& batch )
         shownBytes_ += chunk.bytes.size();
         chunks_.push_back( std::move( chunk ) );
     }
-    appendChunks( chunks_, from );
+    if ( rerenderPending_ ) {
+        // The format or directions changed while it read: all of it anew.
+        rerender();
+    }
+    else {
+        appendChunks( chunks_, from );
+    }
     // A cancelled read can go on where it stopped.
     more_ = batch->status == Status::More || batch->status == Status::Cancelled;
     if ( batch->status == Status::Failed ) {
@@ -373,6 +380,7 @@ void StreamContentView::appendChunks( const std::vector<StreamChunk>& chunks, si
 
 void StreamContentView::rerender()
 {
+    rerenderPending_ = false;
     if ( !reader_ ) {
         return;
     }
@@ -391,7 +399,10 @@ void StreamContentView::setFormat( StreamFormat format )
     formatBox_->setCurrentIndex( formatBox_->findData( static_cast<int>( format ) ) );
     content_->setLineWrapMode( format == StreamFormat::Hex ? QPlainTextEdit::NoWrap
                                                            : QPlainTextEdit::WidgetWidth );
-    if ( !busy_ ) {
+    if ( busy_ ) {
+        rerenderPending_ = true; // when the read or export ends
+    }
+    else {
         rerender();
     }
 }
@@ -403,7 +414,10 @@ void StreamContentView::setDirections( unsigned directions )
     }
     directions_ = directions;
     directionBox_->setCurrentIndex( directionBox_->findData( static_cast<uint>( directions ) ) );
-    if ( !busy_ ) {
+    if ( busy_ ) {
+        rerenderPending_ = true; // when the read or export ends
+    }
+    else {
         rerender();
     }
 }
@@ -486,6 +500,9 @@ void StreamContentView::exportTo( const QString& path, bool raw )
                      return;
                  }
                  setBusy( false );
+                 if ( rerenderPending_ ) {
+                     rerender();
+                 }
                  StreamExport result;
                  if ( watcher->future().resultCount() > 0 ) {
                      result = watcher->result();

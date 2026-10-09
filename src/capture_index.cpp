@@ -68,10 +68,12 @@ void CaptureIndex::noteStream( Transport transport, int id, uint32_t number )
     const auto at = static_cast<size_t>( id );
     if ( at >= streams.size() ) {
         // Numbered in order: a new stream is the next one.
-        streams.resize( at + 1 );
-        streams[ at ].first = number;
+        streams.growTo( at + 1 );
+        streams.writable( at ).first = number;
     }
-    streams[ at ].last = number;
+    if ( streams[ at ].last != number ) {
+        streams.writable( at ).last = number;
+    }
 }
 
 std::optional<CaptureIndex::StreamExtent> CaptureIndex::streamExtent( Transport transport,
@@ -213,6 +215,92 @@ QString CaptureIndex::fileProblem( uint32_t number ) const
 
 // ── CaptureCursor ────────────────────────────────────────────────────────
 
+/// Passes a file's bytes on to the reader and, when it keeps them, a copy
+/// of those from the reader's place on (trimTo()), up to kMaxKeptRecord:
+/// the record the reader reads next, and what it read ahead of it.
+class CaptureCursor::RecordingSource : public ByteSource {
+public:
+    RecordingSource( ByteSource& inner, bool keep )
+        : inner_( inner )
+        , keeping_( keep )
+    {
+    }
+
+    size_t read( uint8_t* dst, size_t n ) override
+    {
+        const auto got = inner_.read( dst, n );
+        if ( keeping_ ) {
+            if ( kept_.size() + got > kMaxKeptRecord ) {
+                kept_.clear(); // too long to keep: copied from the file
+                start_ = position_ + got;
+            }
+            else {
+                kept_.insert( kept_.end(), dst, dst + got );
+            }
+        }
+        position_ += got;
+        return got;
+    }
+
+    bool skip( uint64_t n ) override
+    {
+        if ( keeping_ && n <= kMaxKeptRecord ) {
+            return ByteSource::skip( n ); // read, so that they are kept
+        }
+        if ( !inner_.skip( n ) ) {
+            return false;
+        }
+        kept_.clear();
+        position_ += n;
+        start_ = position_;
+        return true;
+    }
+
+    bool seek( uint64_t offset ) override
+    {
+        if ( !inner_.seek( offset ) ) {
+            return false;
+        }
+        kept_.clear();
+        position_ = offset;
+        start_ = offset;
+        return true;
+    }
+
+    bool ready() override
+    {
+        return inner_.ready();
+    }
+
+    /// Let go of what was kept before @p offset, where the reader is.
+    void trimTo( uint64_t offset )
+    {
+        if ( offset <= start_ ) {
+            return;
+        }
+        const auto drop = std::min<uint64_t>( offset - start_, kept_.size() );
+        kept_.erase( kept_.begin(), kept_.begin() + static_cast<std::ptrdiff_t>( drop ) );
+        start_ = offset;
+    }
+
+    /// The bytes kept from @p offset on, @p length of them; empty if not all
+    /// of them were kept.
+    ByteView bytes( uint64_t offset, uint64_t length ) const
+    {
+        if ( offset < start_ || offset - start_ + length > kept_.size() ) {
+            return {};
+        }
+        return { kept_.data() + ( offset - start_ ), static_cast<size_t>( length ) };
+    }
+
+private:
+    ByteSource& inner_;
+    bool keeping_;
+    uint64_t position_ = 0; ///< Bytes passed on so far: the reader's offsets.
+    uint64_t start_ = 0;    ///< Where the bytes kept start.
+    std::vector<uint8_t> kept_;
+};
+
 CaptureCursor::CaptureCursor( std::shared_ptr<const CaptureIndex> index )
     : index_( std::move( index ) )
 {
@@ -229,7 +317,9 @@ void CaptureCursor::close()
     reader_.reset();
     readerPath_.clear();
     headSource_.reset();
+    recording_.reset();
     file_.reset();
+    recordLength_ = 0;
 }
 
 bool CaptureCursor::reopen( const CapturePart& part, const ReaderCheckpoint* checkpoint )
@@ -242,7 +332,8 @@ bool CaptureCursor::reopen( const CapturePart& part, const ReaderCheckpoint* che
         error_ = problem;
         return false;
     }
-    headSource_ = std::make_unique<HeadSource>( file_->source() );
+    recording_ = std::make_unique<RecordingSource>( file_->source(), keepRecords_ );
+    headSource_ = std::make_unique<HeadSource>( *recording_ );
     reader_ = makeCaptureReader( *headSource_ );
     if ( !reader_->open() || ( checkpoint && !reader_->resume( *checkpoint ) ) ) {
         close();
@@ -252,8 +343,16 @@ bool CaptureCursor::reopen( const CapturePart& part, const ReaderCheckpoint* che
     if ( checkpoint ) {
         // The checkpoint was taken as the capture was read: the headers it
         // names lie elsewhere in a later file of it, copied ahead of its records.
-        reader_->relocateHeaders(
-            [ &part ]( uint64_t offset ) { return part.fileOffset( offset ).value_or( offset ); } );
+        if ( !reader_->relocateHeaders(
+                 [ &part ]( uint64_t offset ) { return part.fileOffset( offset ); } ) ) {
+            // Bytes at the offset the capture had them would be another
+            // record's: an export would copy them as the headers.
+            close();
+            error_ = QStringLiteral( "%1 lacks the headers its packets need: it has changed "
+                                     "since it was written." )
+                         .arg( QFileInfo( part.path ).fileName() );
+            return false;
+        }
     }
     readerPath_ = part.path;
     readerPacketsBefore_ = part.packetsBefore;
@@ -308,7 +407,11 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
     }
 
     PacketRecord record;
+    recordLength_ = 0;
     while ( reader_->packetsRead() < local ) {
+        // Only what comes after the record read last is kept: the reader may
+        // have read ahead of where it is.
+        recording_->trimTo( reader_->recordOffset() + reader_->recordLength() );
         if ( !reader_->next( record ) ) {
             close();
             error_ = QStringLiteral( "The capture ends before packet %1: it has changed since "
@@ -316,6 +419,10 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
                          .arg( number );
             return false;
         }
+    }
+    if ( keepRecords_ ) {
+        recordOffset_ = reader_->recordOffset();
+        recordLength_ = reader_->recordLength();
     }
     record.number = number;
     packet.record = std::move( record );
@@ -326,6 +433,14 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
     packet.headers = reader_->headers();
     packet.file = part->path;
     return true;
+}
+
+ByteView CaptureCursor::recordBytes() const
+{
+    if ( !recording_ || recordLength_ == 0 ) {
+        return {};
+    }
+    return recording_->bytes( recordOffset_, recordLength_ );
 }
 
 } // namespace tcpdump

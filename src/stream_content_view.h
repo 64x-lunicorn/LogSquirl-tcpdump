@@ -135,6 +135,9 @@ private:
 
     QThreadPool pool_;
     std::shared_ptr<std::atomic_bool> cancel_;
+    /// The format or directions changed while busy: what is shown is
+    /// rendered anew when the read or export ends.
+    bool rerenderPending_ = false;
     /// Counts the streams followed: a result of an earlier one is dropped.
     uint64_t generation_ = 0;
 

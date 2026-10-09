@@ -144,11 +144,12 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    tree (Frame, Ethernet, IP, TCP/UDP/ICMP, tunnels, the application
    protocol the payload was recognised as) with every field named, and its
    bytes as a hex and ASCII dump; selecting a layer or field highlights its
-   bytes. The panel follows the selection while the tcpdump tab is in view
+   bytes. The ACK that completes a TCP handshake has the handshake's
+   `iRTT` in its TCP layer. The panel follows the selection while the tcpdump tab is in view
    (it asks LogSquirl at most every 250 ms, and not at all while hidden),
    and **Plugins → tcpdump → Packet details** shows the selected line's
    packet at once. The packet is read again from the capture file, found
-   by the line's No.: the plugin keeps a file position every 10,000 packets
+   by the line's No., off LogSquirl's UI thread ("Reading packet N…"): the plugin keeps a file position every 10,000 packets
    while converting, so no packet is kept in memory. A capture file that
    was changed, moved or removed after it was opened is reported, not
    misread; open it again. Needs LogSquirl ≥ 26.11
@@ -199,8 +200,10 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    The capture is read once from front to back in the background; a
    progress dialog shows how far, and Cancel leaves no file. Needs
    LogSquirl ≥ 26.11
-14. To filter as with a Wireshark display filter, choose **Plugins →
-   tcpdump → Display filter…** (also in the Command Palette) and type one,
+14. To filter as with a Wireshark display filter, type one in the
+   sidebar's **Display filter** field and press Enter or **Open in Regex
+   Lab**, or choose **Plugins → tcpdump → Display filter…** (also in the
+   Command Palette) and type one,
    such as `ip.addr == 10.0.0.1 && tcp.port == 443`: the Regex Lab opens
    with the pattern of the packet lines it selects; apply it to filter the
    view. A filter outside the [supported subset](#display-filters) is
@@ -669,9 +672,11 @@ sessions decrypted, or says why the key log could not be read.
 - **Records**, put together across segments by the TCP reassembly; a record
   the capture lost is passed over, and the next ones are still decrypted
 - **During a live capture** the key log is read again as the browser adds
-  to it (at most twice a second)
+  to it (at most twice a second); a last line is read once its line feed
+  is written
 - **Memory**: a session keeps its keys and sequence numbers, no data; at
-  most 65,536 sessions are followed, and HTTP/2 header decoding takes at
+  most 16,384 sessions are followed at a time (about 55 MB), a new one
+  in place of the one idle the longest, and HTTP/2 header decoding takes at
   most 32 MB, all sessions together
 
 **Security.** The key log decrypts every session whose secrets it holds:
@@ -777,8 +782,9 @@ choice of [columns](#options).
 
 ### Display filters
 
-**Plugins → tcpdump → Display filter…** translates a Wireshark-style
-display filter into a Regex Lab pattern over the packet line's columns.
+**Plugins → tcpdump → Display filter…**, and the sidebar's *Display
+filter* field, translate a Wireshark-style display filter into a Regex Lab
+pattern over the packet line's columns.
 The supported subset:
 
 | Filter | Selects the packet lines |
@@ -796,7 +802,8 @@ Fields compare with `==`, `!=`, `<`, `>`, `<=` and `>=` (or `eq`, `ne`,
 `lt`, `gt`, `le`, `ge`), addresses with `==` and `!=` only; numbers are
 decimal or `0x` hexadecimal. A field alone, `tcp.port`, selects the packets
 that have it. Conditions combine with `!`/`not`, `&&`/`and`, `||`/`or` and
-parentheses, `!` binding tighter than `&&`, and `&&` than `||`. As in
+parentheses (nested at most 64 deep), `!` binding tighter than `&&`, and
+`&&` than `||`. As in
 Wireshark, `!=` selects the packets that have the field and no value of it
 equal: `ip.addr != 10.0.0.1` is the IPv4 packets with neither address
 10.0.0.1, while `!(ip.addr == 10.0.0.1)` also selects every packet without

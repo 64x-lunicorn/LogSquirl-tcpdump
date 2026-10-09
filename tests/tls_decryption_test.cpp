@@ -38,6 +38,10 @@
 
 #include <QFile>
 
+#include <mbedtls/gcm.h>
+
+#include <cstring>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -155,6 +159,163 @@ constexpr uint8_t kData = 0x0;
 constexpr uint8_t kContinuation = 0x9;
 constexpr uint8_t kEndStream = 0x1;
 constexpr uint8_t kEndHeaders = 0x4;
+
+/// A TLS 1.3 session with TLS_AES_128_GCM_SHA256 between a client (stream
+/// direction 0, port 50000) and a server (direction 1, port 443), its
+/// records protected here and fed straight to a TlsDecryption, one segment
+/// of whole records at a time.
+class Tls13Session {
+public:
+    /// The session on TCP stream @p streamId, its client random its own.
+    explicit Tls13Session( int streamId = 0 )
+        : streamId_( streamId )
+    {
+        for ( size_t i = 0; i < random_.size(); ++i ) {
+            random_[ i ] = static_cast<uint8_t>( 0xA0 + i + streamId );
+        }
+        secrets_.clientHandshakeTraffic = secret( 1 );
+        secrets_.serverHandshakeTraffic = secret( 2 );
+        secrets_.clientTraffic = secret( 3 );
+        secrets_.serverTraffic = secret( 4 );
+        keys_[ 0 ].secret = secrets_.clientHandshakeTraffic;
+        keys_[ 1 ].secret = secrets_.serverHandshakeTraffic;
+    }
+
+    TlsDecryption::Lookup lookup() const
+    {
+        return [ this ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+            return std::memcmp( random, random_.data(), random_.size() ) == 0 ? &secrets_ : nullptr;
+        };
+    }
+
+    /// The ClientHello and the ServerHello, plaintext records.
+    Bytes clientHello() const
+    {
+        Bytes body{ 0x03, 0x03 };
+        body.insert( body.end(), random_.begin(), random_.end() );
+        body = body + Bytes{ 0x00, 0x00, 0x02, 0x13, 0x01, 0x01, 0x00, 0x00, 0x00 };
+        return record( 0x16, handshakeMessage( 1, body ) );
+    }
+    Bytes serverHello() const
+    {
+        Bytes body{ 0x03, 0x03 };
+        for ( uint8_t i = 0; i < 32; ++i ) {
+            body.push_back( static_cast<uint8_t>( 0x50 + i ) );
+        }
+        body = body
+               + Bytes{ 0x00, 0x13, 0x01, 0x00, 0x00, 0x06, 0x00, 0x2B, 0x00, 0x02, 0x03, 0x04 };
+        return record( 0x16, handshakeMessage( 2, body ) );
+    }
+
+    /// A protected record of direction @p d, its content type @p inner.
+    Bytes seal( unsigned d, uint8_t inner, const Bytes& plain )
+    {
+        auto& keys = keys_[ d ];
+        const auto key = tls::hkdfExpandLabel( tls::Hash::Sha256, keys.secret, "key", {}, 16 );
+        const auto iv = tls::hkdfExpandLabel( tls::Hash::Sha256, keys.secret, "iv", {}, 12 );
+        uint8_t nonce[ 12 ];
+        std::memcpy( nonce, iv.data(), sizeof( nonce ) );
+        for ( int i = 0; i < 8; ++i ) {
+            nonce[ 11 - i ] ^= static_cast<uint8_t>( keys.seq >> ( 8 * i ) );
+        }
+        ++keys.seq;
+        auto inside = plain;
+        inside.push_back( inner );
+        const auto length = inside.size() + 16;
+        Bytes out{ 0x17, 0x03, 0x03, static_cast<uint8_t>( length >> 8 ),
+                   static_cast<uint8_t>( length ) };
+        Bytes cipher( inside.size() );
+        uint8_t tag[ 16 ];
+        mbedtls_gcm_context gcm;
+        mbedtls_gcm_init( &gcm );
+        REQUIRE( mbedtls_gcm_setkey( &gcm, MBEDTLS_CIPHER_ID_AES, key.data(), 128 ) == 0 );
+        REQUIRE( mbedtls_gcm_crypt_and_tag( &gcm, MBEDTLS_GCM_ENCRYPT, inside.size(), nonce,
+                                            sizeof( nonce ), out.data(), out.size(), inside.data(),
+                                            cipher.data(), sizeof( tag ), tag )
+                 == 0 );
+        mbedtls_gcm_free( &gcm );
+        return out + cipher + Bytes( tag, tag + sizeof( tag ) );
+    }
+
+    /// Direction @p d's handshake is over: its records are protected by
+    /// the application traffic keys from here on.
+    void finished( unsigned d )
+    {
+        keys_[ d ].secret = d == 0 ? secrets_.clientTraffic : secrets_.serverTraffic;
+        keys_[ d ].seq = 0;
+    }
+
+    /// The handshake up to the application data of both directions:
+    /// EncryptedExtensions (ALPN @p alpn), Finished each.
+    void handshake( TlsDecryption& decryption, const std::string& alpn )
+    {
+        feed( decryption, 0, clientHello() );
+        Bytes extensions;
+        if ( !alpn.empty() ) {
+            const auto n = static_cast<uint8_t>( alpn.size() );
+            extensions = Bytes{ 0x00, 0x10,
+                                0x00, static_cast<uint8_t>( n + 3 ),
+                                0x00, static_cast<uint8_t>( n + 1 ),
+                                n }
+                         + Bytes( alpn.begin(), alpn.end() );
+        }
+        const auto ee = handshakeMessage( 8, Bytes{ static_cast<uint8_t>( extensions.size() >> 8 ),
+                                                    static_cast<uint8_t>( extensions.size() ) }
+                                                 + extensions );
+        feed( decryption, 1,
+              serverHello() + seal( 1, 0x16, ee + handshakeMessage( 20, Bytes( 32, 0xF1 ) ) ) );
+        finished( 1 );
+        feed( decryption, 0, seal( 0, 0x16, handshakeMessage( 20, Bytes( 32, 0xF2 ) ) ) );
+        finished( 0 );
+    }
+
+    /// The Info of a segment of direction @p d with @p bytes, whole records.
+    std::string feed( TlsDecryption& decryption, unsigned d, const Bytes& bytes )
+    {
+        PacketRecord pkt;
+        pkt.transport = Transport::Tcp;
+        pkt.tcpFlags = 0x18;
+        pkt.srcPort = d == 0 ? 50000 : 443;
+        pkt.dstPort = d == 0 ? 443 : 50000;
+        pkt.info = "segment";
+        const Stream stream{ streamId_, &state_, d };
+        decryption.apply( pkt, stream, ReassembledMessages{ { bytes.data(), bytes.size() }, 1 } );
+        return pkt.info;
+    }
+
+    static Bytes handshakeMessage( uint8_t type, const Bytes& body )
+    {
+        return Bytes{ type, static_cast<uint8_t>( body.size() >> 16 ),
+                      static_cast<uint8_t>( body.size() >> 8 ),
+                      static_cast<uint8_t>( body.size() ) }
+               + body;
+    }
+
+    static Bytes record( uint8_t type, const Bytes& fragment )
+    {
+        return Bytes{ type, 0x03, 0x03, static_cast<uint8_t>( fragment.size() >> 8 ),
+                      static_cast<uint8_t>( fragment.size() ) }
+               + fragment;
+    }
+
+private:
+    struct Keys {
+        tls::SecretBytes secret;
+        uint64_t seq = 0;
+    };
+
+    static tls::SecretBytes secret( uint8_t fill )
+    {
+        const Bytes bytes( 32, fill );
+        return tls::SecretBytes( bytes.data(), bytes.size() );
+    }
+
+    int streamId_;
+    tls::ClientRandom random_{};
+    tls::SessionSecrets secrets_;
+    Keys keys_[ 2 ];
+    StreamState state_;
+};
 
 } // namespace
 
@@ -312,6 +473,20 @@ SCENARIO( "HTTP/2 from whole bytes is described with its header blocks", "[tls_d
         }
     }
 
+    GIVEN( "a header block whose CONTINUATION comes in later bytes" )
+    {
+        Http2Direction client;
+        const Bytes first( kFirstRequest.begin(), kFirstRequest.begin() + 5 );
+        const Bytes rest( kFirstRequest.begin() + 5, kFirstRequest.end() );
+
+        THEN( "the request is told on the frame that ends the block" )
+        {
+            REQUIRE( describe( client, h2Frame( kHeaders, 0, 1, first ) ) == "HEADERS[1]" );
+            REQUIRE( describe( client, h2Frame( kContinuation, kEndHeaders, 1, rest ) )
+                     == "CONTINUATION[1]: GET www.example.com/" );
+        }
+    }
+
     GIVEN( "a request frame split over two pieces of bytes, then one that builds on it" )
     {
         Http2Direction client;
@@ -384,6 +559,195 @@ SCENARIO( "HTTP/2 from whole bytes is described with its header blocks", "[tls_d
                     REQUIRE( direction.memory() <= 2 * ( Http2Direction::kMaxHeaderBlockBytes + 9 )
                                                        + HpackDecoder::kMaxTableSize );
                 }
+            }
+        }
+    }
+}
+
+SCENARIO( "HTTP/2 over TLS after a record that was lost or would not decrypt",
+          "[tls_decryption][http2]" )
+{
+    Tls13Session session;
+    TlsDecryption decryption( session.lookup() );
+    session.handshake( decryption, "h2" );
+    const std::string preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    REQUIRE( contains( session.feed( decryption, 0,
+                                     session.seal( 0, 0x17,
+                                                   Bytes( preface.begin(), preface.end() )
+                                                       + h2Frame( 0x4, 0, 0, {} ) ) ),
+                       "Magic, SETTINGS[0]" ) );
+
+    // A DATA frame over two records, the second of which goes missing, then
+    // a record that begins with a request.
+    const auto data = h2Frame( kData, kEndStream, 1, Bytes( 100, 'd' ) );
+    const Bytes head( data.begin(), data.begin() + 50 );
+    const Bytes tail( data.begin() + 50, data.end() );
+    const auto request = h2Frame( kHeaders, kEndStream | kEndHeaders, 3, kFirstRequest );
+    REQUIRE( contains( session.feed( decryption, 0, session.seal( 0, 0x17, head ) ), "DATA[1]" ) );
+
+    GIVEN( "the record with the rest of the frame lost" )
+    {
+        session.seal( 0, 0x17, tail ); // never sent
+        const auto info = session.feed( decryption, 0, session.seal( 0, 0x17, request ) );
+
+        THEN( "the next record is read from a frame's start, its headers no longer decoded" )
+        {
+            REQUIRE( contains( info, "TLS (decrypted) | HEADERS[3]" ) );
+            REQUIRE_FALSE( contains( info, "GET" ) );
+        }
+    }
+
+    GIVEN( "the record with the rest of the frame broken" )
+    {
+        auto broken = session.seal( 0, 0x17, tail );
+        broken.back() ^= 0x01;
+        session.feed( decryption, 0, broken );
+        const auto info = session.feed( decryption, 0, session.seal( 0, 0x17, request ) );
+
+        THEN( "the next record is read from a frame's start, its headers no longer decoded" )
+        {
+            REQUIRE( contains( info, "TLS (decrypted) | HEADERS[3]" ) );
+            REQUIRE_FALSE( contains( info, "GET" ) );
+        }
+    }
+
+    GIVEN( "the record lost in the same segment as the next" )
+    {
+        const auto lost = session.seal( 0, 0x17, tail );
+        const auto info = session.feed( decryption, 0,
+                                        session.seal( 0, 0x17, h2Frame( 0x6, 0, 0, Bytes( 8 ) ) )
+                                            + lost + session.seal( 0, 0x17, request ) );
+
+        THEN( "the record after it is read from a frame's start" )
+        {
+            REQUIRE( contains( info, "HEADERS[3]" ) );
+        }
+    }
+}
+
+SCENARIO( "TLS 1.3 handshake messages over more than one record", "[tls_decryption]" )
+{
+    Tls13Session session;
+    TlsDecryption decryption( session.lookup() );
+    session.feed( decryption, 0, session.clientHello() );
+
+    GIVEN( "a Certificate whose second record begins with what reads as a Finished" )
+    {
+        const auto ee = Tls13Session::handshakeMessage( 8, Bytes{ 0x00, 0x00 } );
+        auto certificate = Tls13Session::handshakeMessage( 11, Bytes( 200, 0x30 ) );
+        const size_t cut = ee.size() + 100;
+        const auto flight = ee + certificate;
+        // The second record: 14 00 00 00, a Finished of no bytes, if read
+        // as the start of a message.
+        auto second = Bytes( flight.begin() + static_cast<std::ptrdiff_t>( cut ), flight.end() );
+        second[ 0 ] = 0x14;
+        second[ 1 ] = second[ 2 ] = second[ 3 ] = 0x00;
+        session.feed(
+            decryption, 1,
+            session.serverHello()
+                + session.seal( 1, 0x16,
+                                Bytes( flight.begin(),
+                                       flight.begin() + static_cast<std::ptrdiff_t>( cut ) ) ) );
+        session.feed( decryption, 1, session.seal( 1, 0x16, second ) );
+        const auto finished = session.feed(
+            decryption, 1,
+            session.seal( 1, 0x16,
+                          Tls13Session::handshakeMessage( 15, Bytes( 20, 0x01 ) )
+                              + Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF1 ) ) ) );
+        session.finished( 1 );
+        const auto response = session.feed(
+            decryption, 1,
+            session.seal( 1, 0x17,
+                          Bytes( { 'H', 'T', 'T', 'P', '/', '1', '.', '1', ' ', '2', '0', '0', ' ',
+                                   'O', 'K', '\r', '\n', '\r', '\n' } ) ) );
+
+        THEN( "the keys change at the real Finished, and the records after it decrypt" )
+        {
+            REQUIRE( contains( finished, "TLS (decrypted) | Certificate Verify, Finished" ) );
+            REQUIRE( contains( response, "TLS (decrypted) | HTTP/1.1 200 OK" ) );
+        }
+    }
+}
+
+SCENARIO( "A session the key log has no secrets for is looked for once it grew",
+          "[tls_decryption]" )
+{
+    Tls13Session session;
+    int asked = 0;
+    int64_t keyLogBytes = 100;
+    TlsDecryption decryption(
+        [ &asked ]( const uint8_t* ) -> const tls::SessionSecrets* {
+            ++asked;
+            return nullptr;
+        },
+        [ &keyLogBytes ] { return keyLogBytes; } );
+    session.feed( decryption, 0, session.clientHello() );
+    session.feed( decryption, 1, session.serverHello() );
+
+    GIVEN( "records of the session while the key log stays as it is" )
+    {
+        for ( int i = 0; i < 5; ++i ) {
+            session.feed( decryption, 1, session.seal( 1, 0x16, Bytes( 30, 0x01 ) ) );
+        }
+
+        THEN( "it is looked for once" )
+        {
+            REQUIRE( asked == 1 );
+        }
+
+        WHEN( "the key log grows" )
+        {
+            keyLogBytes = 200;
+            session.feed( decryption, 1, session.seal( 1, 0x16, Bytes( 30, 0x01 ) ) );
+            session.feed( decryption, 1, session.seal( 1, 0x16, Bytes( 30, 0x01 ) ) );
+
+            THEN( "it is looked for again, once" )
+            {
+                REQUIRE( asked == 2 );
+            }
+        }
+    }
+}
+
+SCENARIO( "TLS sessions past the most followed take the place of the least recent",
+          "[tls_decryption]" )
+{
+    std::vector<std::unique_ptr<Tls13Session>> sessions;
+    for ( int i = 0; i < 3; ++i ) {
+        sessions.push_back( std::make_unique<Tls13Session>( i ) );
+    }
+    TlsDecryption decryption(
+        [ &sessions ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+            for ( const auto& session : sessions ) {
+                if ( const auto* secrets = session->lookup()( random ) ) {
+                    return secrets;
+                }
+            }
+            return nullptr;
+        },
+        {}, 2 );
+    const std::string ok = "HTTP/1.1 200 OK\r\n\r\n";
+    auto respond = [ & ]( int i ) {
+        return sessions[ i ]->feed( decryption, 1,
+                                    sessions[ i ]->seal( 1, 0x17, Bytes( ok.begin(), ok.end() ) ) );
+    };
+
+    GIVEN( "two sessions followed, the first one used since the second began" )
+    {
+        sessions[ 0 ]->handshake( decryption, "" );
+        sessions[ 1 ]->handshake( decryption, "" );
+        REQUIRE( contains( respond( 0 ), "HTTP/1.1 200 OK" ) );
+
+        WHEN( "a third one begins" )
+        {
+            sessions[ 2 ]->handshake( decryption, "" );
+
+            THEN( "it is decrypted, in place of the least recently used" )
+            {
+                REQUIRE( decryption.sessions() == 2 );
+                REQUIRE( contains( respond( 2 ), "TLS (decrypted) | HTTP/1.1 200 OK" ) );
+                REQUIRE( contains( respond( 0 ), "TLS (decrypted) | HTTP/1.1 200 OK" ) );
+                REQUIRE_FALSE( contains( respond( 1 ), kDecryptedMarker ) );
             }
         }
     }

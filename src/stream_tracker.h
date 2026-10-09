@@ -180,10 +180,10 @@ struct StreamEndpoints {
  */
 class StreamTracker {
 public:
-    /// Conversations numbered by default: some 150 MB of memory at most, and
-    /// some 70 MB more for their counts in the Conversations table
-    /// (conversations.h).  The options may raise it tenfold (kMaxStreamCap,
-    /// some 2.2 GB in all) or lower it.
+    /// Conversations numbered by default: some 390 MB of memory at most
+    /// with their counts and rows in the Conversations table
+    /// (conversations.h; measured, DEVELOPER_GUIDE).  The options may raise
+    /// it tenfold (kMaxStreamCap, some 3.9 GB) or lower it.
     static constexpr size_t kMaxStreams = 1000000;
 
     explicit StreamTracker( size_t maxStreams = kMaxStreams )

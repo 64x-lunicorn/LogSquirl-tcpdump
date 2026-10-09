@@ -42,6 +42,44 @@ namespace tcpdump::tls {
 /// keeps.
 void wipe( void* data, size_t len );
 
+/**
+ * An allocator that wipes what it gives back, all of it: a vector's bytes
+ * past its size, and the old buffer when it grows, may hold plaintext too.
+ */
+template <typename T, typename Base = std::allocator<T>>
+struct WipingAllocator : Base {
+    using value_type = T;
+    template <typename U>
+    struct rebind {
+        using other
+            = WipingAllocator<U, typename std::allocator_traits<Base>::template rebind_alloc<U>>;
+    };
+    WipingAllocator() = default;
+    template <typename U, typename B>
+    WipingAllocator( const WipingAllocator<U, B>& other ) noexcept
+        : Base( other )
+    {
+    }
+    void deallocate( T* p, size_t n )
+    {
+        wipe( p, n * sizeof( T ) );
+        Base::deallocate( p, n );
+    }
+    template <typename U, typename B>
+    bool operator==( const WipingAllocator<U, B>& ) const noexcept
+    {
+        return true;
+    }
+    template <typename U, typename B>
+    bool operator!=( const WipingAllocator<U, B>& ) const noexcept
+    {
+        return false;
+    }
+};
+
+/// Decrypted bytes: wiped when they go, or move to a larger buffer.
+using PlainBytes = std::vector<uint8_t, WipingAllocator<uint8_t>>;
+
 /// Bytes of a secret (a key, a traffic secret), wiped when they go.
 class SecretBytes {
 public:
@@ -177,15 +215,14 @@ public:
      * False if the tag does not match, or the cipher is no AEAD one.
      */
     bool open( const uint8_t* nonce, ByteView aad, ByteView ciphertext,
-               std::vector<uint8_t>& plaintext ) const;
+               PlainBytes& plaintext ) const;
 
     /**
      * Decrypt @p ciphertext, whole blocks, with the AES block at @p iv in
      * CBC mode into @p plaintext.  False if it is no whole number of
      * blocks, or the cipher is no CBC one.
      */
-    bool decryptCbc( const uint8_t* iv, ByteView ciphertext,
-                     std::vector<uint8_t>& plaintext ) const;
+    bool decryptCbc( const uint8_t* iv, ByteView ciphertext, PlainBytes& plaintext ) const;
 
 private:
     struct Context;

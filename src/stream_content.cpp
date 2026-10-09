@@ -33,6 +33,9 @@ namespace tcpdump {
 
 namespace {
 
+/// The largest window scale shift (RFC 7323, 2.3).
+constexpr uint8_t kMaxWindowShift = 14;
+
 constexpr uint8_t kTcpFin = 0x01;
 constexpr uint8_t kTcpSyn = 0x02;
 constexpr uint8_t kTcpAck = 0x10;
@@ -304,9 +307,17 @@ void StreamContentReader::takeTcp( unsigned direction, uint32_t packet, const Pa
         order.reset( seq );
         started_[ direction ] = true;
         finSeq_[ direction ].reset();
+        sentEnd_[ direction ] = seq;
+        synSeen_[ direction ] = true;
+        windowShift_[ direction ] = record.tcpWindowShift;
+    }
+    const auto end = seq + record.payloadLen;
+    if ( !sentEnd_[ direction ] || seqAfter( end, *sentEnd_[ direction ] ) > 0 ) {
+        sentEnd_[ direction ] = end;
     }
     const unsigned other = 1 - direction;
-    if ( ( flags & kTcpAck ) && started_[ other ] ) {
+    if ( ( flags & kTcpAck ) && started_[ other ]
+         && plausibleAck( other, record.tcpAck, record ) ) {
         // The other side's bytes up to the acknowledged ones were sent: those
         // the capture lacks are missing.
         skipTo( other, record.tcpAck, packet );
@@ -344,6 +355,29 @@ void StreamContentReader::takeTcp( unsigned direction, uint32_t packet, const Pa
     if ( flags & kTcpFin ) {
         finSeq_[ direction ] = seq + record.payloadLen;
     }
+}
+
+bool StreamContentReader::plausibleAck( unsigned other, uint32_t ack,
+                                        const PacketRecord& record ) const
+{
+    if ( !sentEnd_[ other ] ) {
+        return false;
+    }
+    // Bytes the capture lacks may lie past those seen, as far as the
+    // acknowledging side's window lets the other send: its window is
+    // scaled when both SYNs offered a scale, and may be by the most when
+    // the handshake was not seen.
+    const unsigned acker = 1 - other;
+    uint8_t shift = 0;
+    if ( !synSeen_[ 0 ] || !synSeen_[ 1 ] ) {
+        shift = kMaxWindowShift;
+    }
+    else if ( windowShift_[ 0 ] && windowShift_[ 1 ] ) {
+        shift = std::min<uint8_t>( *windowShift_[ acker ], kMaxWindowShift );
+    }
+    const uint64_t window = uint64_t{ record.tcpWindow } << shift;
+    const auto past = seqAfter( ack, *sentEnd_[ other ] );
+    return past <= 0 || static_cast<uint64_t>( past ) <= window;
 }
 
 void StreamContentReader::popNext( unsigned direction, uint32_t packet )

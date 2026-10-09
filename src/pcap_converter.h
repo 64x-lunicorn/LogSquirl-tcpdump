@@ -90,7 +90,7 @@ struct CaptureSummary {
     /// The Conversations table: a row per numbered stream.  Shared, as it
     /// may hold a million rows: a summary taken anew (a live capture's
     /// next snapshot) holds a table of its own, never a changed one.
-    std::shared_ptr<const std::vector<Conversation>> conversations;
+    std::shared_ptr<const ConversationRows> conversations;
     /// Packets of the streams past the stream cap (see streamCap), which
     /// the table counts together as "other streams", and their bytes on the
     /// wire.
@@ -250,9 +250,9 @@ struct LiveObserver {
     /// packets.
     std::function<void( const QString& logPath, const QString& rawPath )> firstPacket;
     /// A snapshot: with the first packet, then at most once every
-    /// kLiveSnapshotInterval while packets come.  The final summary is the
-    /// result's.
-    std::function<void( const LiveSnapshot& )> snapshot;
+    /// kLiveSnapshotInterval while packets come, handed over to be moved
+    /// on, not copied.  The final summary is the result's.
+    std::function<void( LiveSnapshot&& )> snapshot;
 };
 
 /// Bytes in a mebibyte, the unit of ConversionOptions::reassemblyMegabytes.

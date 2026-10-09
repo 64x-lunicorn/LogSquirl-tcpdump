@@ -172,6 +172,16 @@ private:
     /// The sequence number after a direction's FIN, which the other side
     /// acknowledges without a byte missing; unset before its FIN.
     std::optional<uint32_t> finSeq_[ 2 ];
+    /// The sequence number after the last byte a direction was seen to
+    /// send; unset before its first segment.
+    std::optional<uint32_t> sentEnd_[ 2 ];
+    /// The window scale shift a direction's SYN offered; unset without one.
+    std::optional<uint8_t> windowShift_[ 2 ];
+    bool synSeen_[ 2 ] = { false, false };
+    /// Whether an acknowledgement of @p ack of direction @p other's bytes,
+    /// in @p record, could be one: no more than the bytes seen sent and the
+    /// window the acknowledging side offered.
+    bool plausibleAck( unsigned other, uint32_t ack, const PacketRecord& record ) const;
     /// Which end is the client is told by the first packet of the stream read.
     bool endsKnown_ = false;
     uint64_t sent_[ 2 ] = { 0, 0 };

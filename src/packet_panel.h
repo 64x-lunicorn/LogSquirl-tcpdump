@@ -30,7 +30,10 @@
  * for the selection while it is visible, every kPollIntervalMs, and does
  * nothing when it did not change; Plugins > tcpdump > Packet details reads
  * it at once.  The packet is found by the No. column of the first selected
- * line and read back from the capture file by a CaptureCursor.
+ * line and read back from the capture file by a CaptureCursor, on a worker
+ * thread of the panel's own (up to a checkpoint interval of records): the
+ * panel says "Reading packet N…" meanwhile, and a read the selection has
+ * moved on from is dropped, not started if it has not begun.
  *
  * Its Stream tab shows the content of the shown packet's conversation
  * (Follow stream content, StreamContentView) once the user asks for it: by
@@ -47,12 +50,16 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QThreadPool>
 #include <QTimer>
 #include <QWidget>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -96,13 +103,21 @@ public:
     /// now in front; null for a tab that holds no capture of the plugin.
     void setCapture( std::shared_ptr<const CaptureIndex> index );
 
-    /// Read the selection now and show its packet, even if it did not change.
-    void refresh();
+    /// Read the selection now and show its packet, even if it did not
+    /// change; @p then runs once it is shown, or why not (on this thread).
+    void refresh( std::function<void()> then = {} );
 
     /// Whether the selection is being asked for: only while the panel is visible.
     bool isPolling() const
     {
         return timer_.isActive();
+    }
+
+    /// The number of the packet of the selected line, also while it is
+    /// read; 0 while none is selected.
+    uint32_t selectedPacket() const
+    {
+        return selectedPacket_;
     }
 
     /// The number of the packet shown; 0 while none is.
@@ -120,9 +135,10 @@ public:
     /// The panel's status line: the packet shown, or why there is none.
     QString statusText() const;
 
-    /// Follow stream content: show the content of the shown packet's stream
-    /// in the Stream tab.  False, and the reason in @p why, when no packet
-    /// of a TCP or UDP stream is shown.
+    /// Follow stream content: show the content of the selected packet's
+    /// stream in the Stream tab, also while the packet is being read.
+    /// False, and the reason in @p why, when no packet line of a TCP or
+    /// UDP stream is selected.
     bool followStreamContent( QString* why = nullptr );
 
     /// The Stream tab.
@@ -146,7 +162,13 @@ private:
     void poll( bool force = false );
     /// Show the packet of @p selection, the selected lines' text.
     void showSelection( const QString& selection );
+    /// Read packet @p number on the worker, then show it.
     void showPacket( uint32_t number );
+    /// What a read on the worker found.
+    struct PacketRead;
+    void showRead( const PacketRead& read );
+    /// The packet shown, or why none is: run what waited for it.
+    void settled();
     /// Show no packet, only @p reason.
     void showReason( const QString& reason );
     /// Highlight the bytes of @p item in the dump.
@@ -162,12 +184,24 @@ private:
     QTimer timer_;
 
     std::shared_ptr<const CaptureIndex> index_;
-    std::unique_ptr<CaptureCursor> cursor_;
+    /// Used by the worker only, one read at a time.
+    std::shared_ptr<CaptureCursor> cursor_;
+    QThreadPool pool_;
+    /// Counts the reads asked for: a result of an earlier one is dropped,
+    /// and one not begun yet is not started.
+    uint64_t generation_ = 0;
+    std::shared_ptr<std::atomic<uint64_t>> latest_;
+    bool reading_ = false;
+    std::vector<std::function<void()>> whenSettled_;
     /// What the selection was when last asked: the host's result and text.
     int lastResult_ = 0;
     QByteArray lastSelection_;
     bool haveLast_ = false;
 
+    uint32_t selectedPacket_ = 0; ///< The packet of the selected line, read or not.
+    /// The iRTT the selected line tells, "0.012345" (the TCP Analysis's
+    /// [iRTT=…]); empty without one.
+    std::string selectedIrtt_;
     uint32_t shownPacket_ = 0;
     /// The Stream column of the shown packet's line: its number, or
     /// kNoStream ("-") or kUnnumbered ("?").

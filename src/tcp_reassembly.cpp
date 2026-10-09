@@ -344,20 +344,38 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
     const auto framer = entry.framer;
     const auto* label = entry.label;
     const auto key = keyOf( stream, stream.direction );
+    bool limited = false;
     if ( walk.incomplete.framer == 0 ) {
         release( key );
     }
     else {
-        entry.held.reserve( std::max( rest, std::min( walk.incomplete.length, streamLimit_ ) ) );
-        entry.held.assign( completed_.begin() + static_cast<std::ptrdiff_t>( walk.end ),
-                           completed_.end() );
-        entry.segments = 1;
-        entry.framer = walk.incomplete.framer; // another after an upgrade
-        entry.label = walk.incomplete.label;
+        // The buffer went to completed_: the entry is counted without it,
+        // and the next message's is made room for, as much as it announces
+        // if there is room, else its bytes at hand.
         recharge( entry );
+        auto room = std::max( rest, std::min( walk.incomplete.length, streamLimit_ ) );
+        if ( !makeRoom( room, key ) ) {
+            room = rest;
+        }
+        if ( room == rest && !makeRoom( room, key ) ) {
+            release( key );
+            limited = true;
+        }
+        else {
+            entry.held.reserve( room );
+            entry.held.assign( completed_.begin() + static_cast<std::ptrdiff_t>( walk.end ),
+                               completed_.end() );
+            entry.segments = 1;
+            entry.framer = walk.incomplete.framer; // another after an upgrade
+            entry.label = walk.incomplete.label;
+            recharge( entry );
+        }
     }
     completed_.resize( walk.end );
     describeMessages( pkt, completed_.data(), completed_.size(), framer, label, segments );
+    if ( limited ) {
+        mark( pkt, kReassemblyLimit );
+    }
     return { { completed_.data(), completed_.size() }, segments };
 }
 

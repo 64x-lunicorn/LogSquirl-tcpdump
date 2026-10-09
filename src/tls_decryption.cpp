@@ -318,6 +318,76 @@ bool alpnIsH2( ByteView data )
            && std::memcmp( protocol.data, "h2", 2 ) == 0;
 }
 
+/**
+ * TLS 1.3: the handshake messages of a direction's decrypted records, put
+ * together across records.  A message is held until it is whole, up to
+ * kMaxMessageBytes; a longer one is passed over, by its type only.
+ */
+class HandshakeMessages {
+public:
+    /// Longest handshake message held: EncryptedExtensions, Finished and
+    /// KeyUpdate, which are read, are far shorter.
+    static constexpr uint32_t kMaxMessageBytes = 16 * 1024;
+
+    /// Call @p onMessage(type, body) for each message @p bytes complete;
+    /// the body of one passed over is empty.
+    template <typename OnMessage>
+    void add( ByteView bytes, OnMessage onMessage )
+    {
+        size_t at = 0;
+        while ( at < bytes.size ) {
+            if ( skip_ > 0 ) {
+                const auto n = std::min<size_t>( skip_, bytes.size - at );
+                skip_ -= static_cast<uint32_t>( n );
+                at += n;
+                continue;
+            }
+            if ( held_.size() < kHeaderBytes ) {
+                const auto n = std::min( kHeaderBytes - held_.size(), bytes.size - at );
+                held_.insert( held_.end(), bytes.data + at, bytes.data + at + n );
+                at += n;
+                if ( held_.size() < kHeaderBytes ) {
+                    break;
+                }
+            }
+            const uint32_t length = static_cast<uint32_t>( held_[ 1 ] ) << 16
+                                    | static_cast<uint32_t>( held_[ 2 ] ) << 8 | held_[ 3 ];
+            if ( length > kMaxMessageBytes ) {
+                onMessage( held_[ 0 ], ByteView{ held_.data(), 0 } );
+                skip_ = length;
+                reset();
+                continue;
+            }
+            const auto n
+                = std::min<size_t>( kHeaderBytes + length - held_.size(), bytes.size - at );
+            held_.insert( held_.end(), bytes.data + at, bytes.data + at + n );
+            at += n;
+            if ( held_.size() == kHeaderBytes + length ) {
+                onMessage( held_[ 0 ], ByteView{ held_.data() + kHeaderBytes, length } );
+                reset();
+            }
+        }
+    }
+
+    /// Records went missing: the next one begins a message.
+    void lost()
+    {
+        reset();
+        skip_ = 0;
+    }
+
+private:
+    static constexpr size_t kHeaderBytes = 4;
+
+    void reset()
+    {
+        tls::PlainBytes().swap( held_ );
+    }
+
+    tls::PlainBytes held_; ///< The message begun, its header first.
+    uint32_t skip_ = 0;    ///< Bytes of a long message still to pass over.
+};
+
 } // namespace
 
 // ── A session ────────────────────────────────────────────────────────────
@@ -337,6 +407,12 @@ struct TlsDecryption::Direction {
     bool encrypted = false;   ///< Its records are protected.
     bool application = false; ///< TLS 1.3: by the application traffic keys.
     uint8_t failures = 0;     ///< Records in a row that did not decrypt.
+    /// Records the last one decrypted came after, lost or not decrypted.
+    uint64_t skipped = 0;
+    /// Application data went missing since the last that was described:
+    /// HTTP/2 is read from a frame's start again (Http2Direction::resync()).
+    bool lost = false;
+    HandshakeMessages handshake; ///< TLS 1.3: the encrypted handshake.
     std::unique_ptr<Http2Direction> http2;
     size_t http2Charged = 0; ///< Counted in http2Memory_.
 };
@@ -352,7 +428,11 @@ struct TlsDecryption::Session {
     bool keyed = false;          ///< Keys were set up from the key log.
     bool http2 = false;          ///< The application data is HTTP/2.
     bool decrypted = false;      ///< A record was decrypted.
-    uint8_t fins = 0;            ///< Bit 1 << d: direction d sent its FIN.
+    /// The key log's bytes read when it had no secrets for the session;
+    /// -1 if it was not looked for in vain.
+    int64_t missedAt = -1;
+    std::list<int>::iterator recent; ///< Its place in recent_.
+    uint8_t fins = 0;                ///< Bit 1 << d: direction d sent its FIN.
     Direction dir[ 2 ];
 };
 
@@ -372,8 +452,10 @@ bool tls13Keys( const Suite& suite, const tls::SecretBytes& secret,
 
 } // namespace
 
-TlsDecryption::TlsDecryption( Lookup lookup )
+TlsDecryption::TlsDecryption( Lookup lookup, KeyLogBytes keyLogBytes, size_t maxSessions )
     : lookup_( std::move( lookup ) )
+    , keyLogBytes_( std::move( keyLogBytes ) )
+    , maxSessions_( std::max<size_t>( maxSessions, 1 ) )
 {
 }
 
@@ -388,6 +470,7 @@ void TlsDecryption::erase( int streamId )
     for ( const auto& direction : it->second->dir ) {
         http2Memory_ -= direction.http2Charged;
     }
+    recent_.erase( it->second->recent );
     sessions_.erase( it );
 }
 
@@ -405,12 +488,13 @@ void TlsDecryption::handshake( const Stream& stream, ByteView fragment )
             // A new session, or the second ClientHello after a
             // HelloRetryRequest, with the same random.
             erase( stream.id );
-            if ( sessions_.size() >= kMaxSessions ) {
-                return;
+            if ( sessions_.size() >= maxSessions_ ) {
+                erase( recent_.front() ); // its connection's end was not captured, or is far
             }
             auto session = std::make_unique<Session>();
             std::copy( random.data, random.data + random.size, session->clientRandom.begin() );
             session->client = stream.direction;
+            session->recent = recent_.insert( recent_.end(), stream.id );
             sessions_.emplace( stream.id, std::move( session ) );
             return;
         }
@@ -473,6 +557,10 @@ void TlsDecryption::apply( PacketRecord& pkt, const Stream& stream,
         erase( stream.id ); // a new connection on the ports
     }
     if ( messages.bytes.data != nullptr && messages.bytes.size > 0 ) {
+        const auto it = sessions_.find( stream.id );
+        if ( it != sessions_.end() ) {
+            recent_.splice( recent_.end(), recent_, it->second->recent );
+        }
         records( pkt, stream, messages );
     }
     if ( flags & kTcpRst ) {
@@ -509,8 +597,12 @@ bool TlsDecryption::ensureKeys( Session& session )
     if ( !session.serverHello || !lookup_ ) {
         return false;
     }
+    if ( keyLogBytes_ && session.missedAt >= 0 && keyLogBytes_() == session.missedAt ) {
+        return false; // nothing was added to the key log since
+    }
     const auto* secrets = lookup_( session.clientRandom.data() );
     if ( secrets == nullptr ) {
+        session.missedAt = keyLogBytes_ ? keyLogBytes_() : -1;
         return false;
     }
     const auto& suite = *session.suite;
@@ -564,7 +656,7 @@ bool TlsDecryption::ensureKeys( Session& session )
 }
 
 bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t type, uint16_t version,
-                             ByteView fragment, std::vector<uint8_t>& plain, uint8_t& inner )
+                             ByteView fragment, tls::PlainBytes& plain, uint8_t& inner )
 {
     const auto& suite = *session.suite;
     if ( suite.tls13 ) {
@@ -583,6 +675,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
         for ( uint64_t k = 0; direction.cipher && !opened && k <= kSequenceLookahead; ++k ) {
             if ( open( *direction.cipher, direction.iv, direction.seq + k ) ) {
                 direction.seq += k + 1;
+                direction.skipped = k;
                 opened = true;
             }
         }
@@ -597,6 +690,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
                         direction.nextSecret.clear();
                         direction.application = true;
                         direction.seq = k + 1;
+                        direction.skipped = k;
                         opened = true;
                     }
                 }
@@ -649,6 +743,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
             additional( seq, length, aad );
             if ( direction.cipher->open( nonce, { aad, sizeof( aad ) }, ciphertext, plain ) ) {
                 direction.seq = seq + 1;
+                direction.skipped = k;
                 return true;
             }
         }
@@ -695,6 +790,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
                 return false;
             }
             direction.seq = seq + 1;
+            direction.skipped = k;
             return true;
         }
         return false;
@@ -717,10 +813,21 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
              && equalBytes( mac, plain.data() + length, macBytes ) ) {
             plain.resize( length );
             direction.seq = seq + 1;
+            direction.skipped = k;
             return true;
         }
     }
     return false;
+}
+
+void TlsDecryption::lost( Session& session, Direction& direction, uint8_t type )
+{
+    direction.handshake.lost();
+    // TLS 1.3 hides a record's type: those after the handshake are taken
+    // for application data.
+    if ( session.suite->tls13 ? direction.application : type == kApplicationData ) {
+        direction.lost = true;
+    }
 }
 
 void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messages )
@@ -728,7 +835,7 @@ void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messa
     auto& direction = session.dir[ d ];
     bool finished = false;
     bool keyUpdate = false;
-    forEachHandshakeMessage( messages, [ & ]( uint8_t type, ByteView body ) {
+    direction.handshake.add( messages, [ & ]( uint8_t type, ByteView body ) {
         if ( type == kFinished && !direction.application ) {
             finished = true;
         }
@@ -772,7 +879,8 @@ void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messa
 }
 
 std::pair<const char*, std::string> TlsDecryption::application( Session& session, unsigned d,
-                                                                const std::vector<uint8_t>& data,
+                                                                const tls::PlainBytes& data,
+                                                                const std::vector<size_t>& resyncs,
                                                                 const PacketRecord& pkt )
 {
     static constexpr char kPreface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -786,7 +894,23 @@ std::pair<const char*, std::string> TlsDecryption::application( Session& session
         if ( !direction.http2 ) {
             direction.http2 = std::make_unique<Http2Direction>();
         }
-        auto description = direction.http2->describe( data.data(), data.size() );
+        // The bytes between where data went missing are described each
+        // from a frame's start.
+        std::string description;
+        size_t from = 0;
+        for ( size_t i = 0; i <= resyncs.size(); ++i ) {
+            const auto to = i < resyncs.size() ? resyncs[ i ] : data.size();
+            if ( to > from ) {
+                const auto piece = direction.http2->describe( data.data() + from, to - from );
+                if ( !piece.empty() ) {
+                    description += ( description.empty() ? "" : ", " ) + piece;
+                }
+            }
+            if ( i < resyncs.size() ) {
+                direction.http2->resync();
+            }
+            from = std::max( from, to );
+        }
         auto charge = [ & ] {
             const auto memory = direction.http2->memory();
             http2Memory_ = http2Memory_ - direction.http2Charged + memory;
@@ -815,9 +939,10 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
     const auto n = messages.bytes.size;
     const auto d = stream.direction;
     std::vector<std::string> parts;
-    std::vector<uint8_t> application;
+    tls::PlainBytes application;
+    std::vector<size_t> resyncs; ///< Where in it application data went missing.
     size_t applicationPart = SIZE_MAX;
-    std::vector<uint8_t> plain;
+    tls::PlainBytes plain; // wiped when it goes or grows
     bool decrypted = false;
 
     for ( size_t at = 0; n - at >= kRecordHeaderBytes; ) {
@@ -859,10 +984,14 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
             if ( session->keyed && direction.failures < kMaxFailures ) {
                 ++direction.failures;
             }
+            lost( *session, direction, type );
             parts.emplace_back( protectedName( type ) );
             continue;
         }
         direction.failures = 0;
+        if ( direction.skipped > 0 ) {
+            lost( *session, direction, type );
+        }
         decrypted = true;
         if ( !session->decrypted ) {
             session->decrypted = true;
@@ -883,15 +1012,17 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
                 applicationPart = parts.size();
                 parts.emplace_back();
             }
+            if ( direction.lost ) {
+                resyncs.push_back( application.size() );
+                direction.lost = false;
+            }
             application.insert( application.end(), plain.begin(), plain.end() );
             break;
         default:
             parts.emplace_back( "Change Cipher Spec" );
             break;
         }
-        tls::wipe( plain.data(), plain.size() );
     }
-    tls::wipe( plain.data(), plain.capacity() );
     if ( !decrypted ) {
         return;
     }
@@ -900,11 +1031,10 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
     if ( applicationPart != SIZE_MAX ) {
         const auto it = sessions_.find( stream.id );
         if ( it != sessions_.end() ) {
-            auto described = this->application( *it->second, d, application, pkt );
+            auto described = this->application( *it->second, d, application, resyncs, pkt );
             label = described.first;
             parts[ applicationPart ] = std::move( described.second );
         }
-        tls::wipe( application.data(), application.capacity() );
     }
     auto description = std::string( kDecryptedMarker ) + kDescriptionSeparator + joinParts( parts );
     if ( messages.segments > 1 ) {

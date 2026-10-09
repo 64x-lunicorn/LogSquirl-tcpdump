@@ -256,7 +256,7 @@ std::unique_ptr<RecordCipher> RecordCipher::make( Cipher cipher, const SecretByt
 }
 
 bool RecordCipher::open( const uint8_t* nonce, ByteView aad, ByteView ciphertext,
-                         std::vector<uint8_t>& plaintext ) const
+                         PlainBytes& plaintext ) const
 {
     if ( ciphertext.size < kTagBytes ) {
         return false;
@@ -287,8 +287,7 @@ bool RecordCipher::open( const uint8_t* nonce, ByteView aad, ByteView ciphertext
     return true;
 }
 
-bool RecordCipher::decryptCbc( const uint8_t* iv, ByteView ciphertext,
-                               std::vector<uint8_t>& plaintext ) const
+bool RecordCipher::decryptCbc( const uint8_t* iv, ByteView ciphertext, PlainBytes& plaintext ) const
 {
     if ( ( cipher_ != Cipher::Aes128Cbc && cipher_ != Cipher::Aes256Cbc )
          || ciphertext.size % kAesBlockBytes != 0 ) {

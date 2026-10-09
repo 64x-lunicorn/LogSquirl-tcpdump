@@ -31,6 +31,7 @@
 #include "packet_formatter.h"
 #include "packet_layers.h"
 #include "pcap_converter.h"
+#include "pcapbuilder.h"
 #include "regex_lab.h"
 
 #include <QFile>
@@ -337,6 +338,114 @@ SCENARIO( "A packet past the capture or of a changed file is reported", "[captur
         {
             REQUIRE_FALSE( cursor.read( 1, packet ) );
             REQUIRE( cursor.error().contains( "is gone" ) );
+        }
+    }
+}
+
+SCENARIO( "A ring buffer file without the headers a checkpoint names is not misread",
+          "[capture_index]" )
+{
+    using namespace tcpdump_test;
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+    // A section header, a custom block, an interface and six packets.
+    Pcapng le;
+    const auto shb = le.shb();
+    const auto custom = le.block( 0x00000BAD, Bytes( 8, 0x11 ) );
+    const auto idb = le.idb( DltEthernet );
+    std::vector<Bytes> epbs;
+    for ( uint32_t i = 0; i < 6; ++i ) {
+        epbs.push_back( le.epb(
+            0, 1000 + i,
+            eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 5000, 6000 + i, Bytes( 20, 'a' ) ) ) ) ) );
+    }
+    Bytes whole = shb + custom + idb;
+    for ( const auto& epb : epbs ) {
+        whole = whole + epb;
+    }
+    const auto write = [ & ]( const QString& name, const Bytes& bytes ) {
+        const auto path = dir.filePath( name );
+        QFile file( path );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        file.write( reinterpret_cast<const char*>( bytes.data() ),
+                    static_cast<qint64>( bytes.size() ) );
+        file.close();
+        return QFileInfo( path ).canonicalFilePath();
+    };
+    const auto first = write( "ring-1.pcapng", whole );
+    const auto converted = convertWithInterval( first, dir.path(), 2 );
+
+    // A second file from packet 4 on, the section header and interface
+    // copied ahead of its records, as a ring buffer writes it.
+    const uint64_t cut = shb.size() + custom.size() + idb.size() + 3 * epbs[ 0 ].size();
+    Bytes second
+        = shb + idb + Bytes( whole.begin() + static_cast<std::ptrdiff_t>( cut ), whole.end() );
+    CapturePart part1;
+    part1.path = first;
+    CapturePart part2;
+    part2.path = write( "ring-2.pcapng", second );
+    part2.packetsBefore = 3;
+    part2.streamOffset = cut;
+    part2.headerLength = shb.size() + idb.size();
+    auto index = std::make_shared<CaptureIndex>( *converted.index );
+    CapturedPacket packet;
+
+    GIVEN( "the file's headers where it says" )
+    {
+        part2.headerOffsets = { { 0, 0 }, { shb.size() + custom.size(), shb.size() } };
+        index->setCaptureParts( { part1, part2 } );
+        CaptureCursor cursor( index );
+
+        THEN( "a packet after a checkpoint in it has its headers where they are" )
+        {
+            REQUIRE( cursor.read( 5, packet ) );
+            REQUIRE( packet.file == part2.path );
+            REQUIRE( packet.headers.records.size() == 2 );
+            REQUIRE( packet.headers.records[ 1 ].offset == shb.size() );
+        }
+    }
+
+    GIVEN( "the file without where its headers are" )
+    {
+        index->setCaptureParts( { part1, part2 } );
+        CaptureCursor cursor( index );
+
+        THEN( "the packet is not read, and the cursor says why" )
+        {
+            REQUIRE_FALSE( cursor.read( 5, packet ) );
+            REQUIRE( cursor.error().contains( "headers" ) );
+        }
+    }
+}
+
+SCENARIO( "A copy of the index shares the extents of its streams", "[capture_index]" )
+{
+    GIVEN( "an index of many streams, and a copy of it as a live snapshot takes" )
+    {
+        CaptureIndex index;
+        for ( uint32_t number = 1; number <= 20000; ++number ) {
+            index.noteStream( Transport::Tcp, static_cast<int>( number - 1 ), number );
+        }
+        const CaptureIndex copy( index );
+
+        THEN( "it shares their storage" )
+        {
+            REQUIRE( copy.streamChunksSharedWith( index ) > 1 );
+        }
+
+        WHEN( "the index goes on" )
+        {
+            index.noteStream( Transport::Tcp, 0, 20001 );
+            index.noteStream( Transport::Tcp, 20000, 20002 );
+
+            THEN( "the copy is as it was, and shares what did not change" )
+            {
+                REQUIRE( copy.streamExtent( Transport::Tcp, 0 )->last == 1 );
+                REQUIRE_FALSE( copy.streamExtent( Transport::Tcp, 20000 ) );
+                REQUIRE( index.streamExtent( Transport::Tcp, 0 )->last == 20001 );
+                REQUIRE( index.streamExtent( Transport::Tcp, 20000 )->first == 20002 );
+                REQUIRE( copy.streamChunksSharedWith( index ) > 0 );
+            }
         }
     }
 }

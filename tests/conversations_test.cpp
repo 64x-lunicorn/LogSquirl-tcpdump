@@ -230,6 +230,50 @@ SCENARIO( "The Conversations table counts each stream each way", "[conversations
     }
 }
 
+SCENARIO( "The Conversations table taken again shares the rows that did not change",
+          "[conversations]" )
+{
+    GIVEN( "more streams than a chunk of rows holds, the table taken" )
+    {
+        Pipeline pipeline;
+        const auto streams = static_cast<uint16_t>( ConversationRows::kChunkRows + 100 );
+        for ( uint16_t i = 0; i < streams; ++i ) {
+            pipeline.add( tcpPacket( "10.0.0.2", static_cast<uint16_t>( 1024 + i ), "10.0.0.1", 80,
+                                     100, 0, 60 ) );
+        }
+        const auto first = pipeline.stats.rows( pipeline.tracker, pipeline.labels, 100, 0 );
+        REQUIRE( first->size() == streams );
+        REQUIRE( first->chunks().size() == 2 );
+
+        WHEN( "a packet of a stream of the second chunk comes, and it is taken again" )
+        {
+            pipeline.add( tcpPacket( "10.0.0.1", 80, "10.0.0.2",
+                                     static_cast<uint16_t>( 1024 + streams - 1 ), 101, 0, 1500 ) );
+            const auto second = pipeline.stats.rows( pipeline.tracker, pipeline.labels, 100, 0 );
+
+            THEN( "the first chunk is the same, the second one made anew" )
+            {
+                REQUIRE( second->chunks()[ 0 ] == first->chunks()[ 0 ] );
+                REQUIRE( second->chunks()[ 1 ] != first->chunks()[ 1 ] );
+                REQUIRE( ( *second )[ streams - 1 ].packetsBToA == 1 );
+                REQUIRE( ( *first )[ streams - 1 ].packetsBToA == 0 );
+                REQUIRE( second->list() == pipeline.table() );
+            }
+        }
+
+        WHEN( "a packet earlier than the capture's first comes" )
+        {
+            const auto second = pipeline.stats.rows( pipeline.tracker, pipeline.labels, 99, 0 );
+
+            THEN( "every row's start is told anew" )
+            {
+                REQUIRE( second->chunks()[ 0 ] != first->chunks()[ 0 ] );
+                REQUIRE( ( *second )[ 0 ].startSeconds == Approx( 1.0 ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "The Converter collects the Conversations table", "[conversations]" )
 {
     QTemporaryDir out;
@@ -240,7 +284,7 @@ SCENARIO( "The Converter collects the Conversations table", "[conversations]" )
         const auto result = convertPcap( TCPDUMP_CORPUS_DIR "/mixed.pcap", out.path() );
         REQUIRE( result.status == ConversionResult::Status::Converted );
         REQUIRE( result.summary.conversations );
-        const auto& table = *result.summary.conversations;
+        const auto table = result.summary.conversations->list();
 
         THEN( "each numbered stream has a row, as its lines show it" )
         {
@@ -310,7 +354,7 @@ SCENARIO( "The Converter collects the Conversations table", "[conversations]" )
             const auto result = convertPcap( capture, out.path() );
             REQUIRE( result.status == ConversionResult::Status::Converted );
             const auto lines = packetLines( result );
-            const auto& table = *result.summary.conversations;
+            const auto table = result.summary.conversations->list();
 
             THEN( "a row's pattern finds exactly its packets, of its stream number" )
             {

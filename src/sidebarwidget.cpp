@@ -55,8 +55,10 @@
  */
 
 #include "sidebarwidget.h"
+
 #include "capture_file.h"
 #include "conversation_table.h"
+#include "display_filter_dialog.h"
 #include "follow_stream.h"
 #include "live_capture_form.h"
 #include "packet_export.h"
@@ -222,6 +224,12 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                          "Follow stream failed: " + QString::fromUtf8( e.what() ) );
             }
         } );
+    }
+
+    // A display filter, as Plugins > tcpdump > Display filter… asks for it:
+    // only a host that has the Regex Lab gets it.
+    if ( g_state.hostCapabilities.regexLab ) {
+        layout->addWidget( new DisplayFilterField );
     }
 
     // Progress of a running conversion, and a way to stop it
@@ -568,13 +576,13 @@ void SidebarWidget::exportSelectedPackets()
     // Only when the selection's packets are exported does its truncation matter.
     request.truncated = request.truncated && request.numbers == ofSelection;
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Exporting %1 packets of %2 to %3" )
-                                     .arg( request.numbers.size() )
+                                     .arg( request.numbers.count() )
                                      .arg( request.captureName, request.outputPath ) );
 
     auto cancelled = std::make_shared<std::atomic_bool>( false );
     cancelExport_ = cancelled;
     exportProgress_ = new QProgressDialog(
-        QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.size() ), "Cancel", 0,
+        QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.count() ), "Cancel", 0,
         1000, this );
     exportProgress_->setObjectName( "exportProgress" );
     exportProgress_->setWindowTitle( "Export Packets" );
@@ -666,25 +674,29 @@ void SidebarWidget::finishExport( const ExportRequest& request, ExportResult res
 
 void SidebarWidget::showPacketDetails()
 {
-    packetPanel_->refresh();
-    if ( packetPanel_->isVisible() ) {
-        return;
-    }
-    // The sidebar tab is not in front: say what it would show.
-    if ( packetPanel_->shownPacket() == 0 ) {
-        hostNotify( "Packet details: " + packetPanel_->statusText() );
-        return;
-    }
-    QStringList names;
-    for ( const auto& layer : packetPanel_->layers() ) {
-        names << QString::fromStdString( layer.name );
-    }
-    if ( !names.isEmpty() ) {
-        names.removeFirst(); // the frame
-    }
-    hostNotify( QString( "Packet %1: %2. Open the tcpdump sidebar tab for its fields and bytes." )
-                    .arg( packetPanel_->shownPacket() )
-                    .arg( names.join( " / " ) ) );
+    // The packet is read on the panel's worker: what it shows is told once read.
+    const QPointer<PacketPanel> panel( packetPanel_ );
+    packetPanel_->refresh( [ panel ] {
+        if ( !panel || panel->isVisible() ) {
+            return;
+        }
+        // The sidebar tab is not in front: say what it would show.
+        if ( panel->shownPacket() == 0 ) {
+            hostNotify( "Packet details: " + panel->statusText() );
+            return;
+        }
+        QStringList names;
+        for ( const auto& layer : panel->layers() ) {
+            names << QString::fromStdString( layer.name );
+        }
+        if ( !names.isEmpty() ) {
+            names.removeFirst(); // the frame
+        }
+        hostNotify(
+            QString( "Packet %1: %2. Open the tcpdump sidebar tab for its fields and bytes." )
+                .arg( panel->shownPacket() )
+                .arg( names.join( " / " ) ) );
+    } );
 }
 
 void SidebarWidget::followStreamContent()
@@ -698,7 +710,7 @@ void SidebarWidget::followStreamContent()
     if ( !packetPanel_->isVisible() ) {
         hostNotify( QString( "Follow stream content: the stream of packet %1 is shown in the "
                              "tcpdump sidebar tab." )
-                        .arg( packetPanel_->shownPacket() ) );
+                        .arg( packetPanel_->selectedPacket() ) );
     }
 }
 
@@ -1054,7 +1066,13 @@ void SidebarWidget::openLiveCapture( const QString& logPath, const QString& rawP
 
 void SidebarWidget::takeLiveSnapshot( const LiveSnapshot& snapshot )
 {
-    liveSnapshot_ = snapshot;
+    // The progress line needs the counts only; the summary is kept once,
+    // with its capture.
+    liveSnapshot_.elapsed = snapshot.elapsed;
+    liveSnapshot_.rawBytes = snapshot.rawBytes;
+    liveSnapshot_.rawFile = snapshot.rawFile;
+    liveSnapshot_.summary.packets = snapshot.summary.packets;
+    liveSnapshot_.summary.bytes = snapshot.summary.bytes;
     showLiveProgress();
     // Every tab of the capture shows its summary so far, and reads packets
     // through its latest index: one of a ring buffer's files deleted since

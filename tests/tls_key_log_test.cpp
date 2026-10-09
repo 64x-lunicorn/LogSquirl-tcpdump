@@ -119,6 +119,12 @@ SCENARIO( "The key log takes the secrets of TLS 1.2 and 1.3 sessions", "[tls][ke
                                            "SERVER_TRAFFIC_SECRET_0 "
                                          + kRandom + " " + std::string( 98, '2' )
                                          + "\n" // 49 bytes
+                                           "CLIENT_TRAFFIC_SECRET_0 "
+                                         + kRandom + " " + std::string( 80, '2' )
+                                         + "\n" // 40 bytes: no hash's
+                                           "CLIENT_HANDSHAKE_TRAFFIC_SECRET "
+                                         + kRandom + " " + std::string( 2, '2' )
+                                         + "\n" // 1 byte
                                            "\n \n" );
 
         THEN( "none of them is taken" )
@@ -165,6 +171,65 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
                 REQUIRE( secrets );
                 REQUIRE( secrets->masterSecret.size() == 48 );
             }
+        }
+    }
+
+    GIVEN( "a TLS 1.3 session's handshake secrets, its traffic secret half written" )
+    {
+        QFile file( path );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        const std::string master( 96, '3' ); // 48 bytes, SHA-384
+        file.write( ( "CLIENT_HANDSHAKE_TRAFFIC_SECRET " + kRandom + " " + master + "\n"
+                      + "SERVER_HANDSHAKE_TRAFFIC_SECRET " + kRandom + " " + master + "\n"
+                      + "CLIENT_TRAFFIC_SECRET_0 " + kRandom + " " + master.substr( 0, 64 ) )
+                        .c_str() );
+        file.flush();
+        KeyLogFile keyLog( path );
+
+        THEN( "the half line is not taken, though it would make a SHA-256 secret" )
+        {
+            const auto* secrets = keyLog.find( randomOf( 0xAA ).data() );
+            REQUIRE( secrets );
+            REQUIRE( secrets->clientHandshakeTraffic.size() == 48 );
+            REQUIRE( secrets->clientTraffic.empty() );
+        }
+
+        WHEN( "the rest of the line and the server's traffic secret are written" )
+        {
+            REQUIRE( keyLog.find( randomOf( 0xAA ).data() ) );
+            file.write( ( master.substr( 64 ) + "\nSERVER_TRAFFIC_SECRET_0 " + kRandom + " "
+                          + master + "\n" )
+                            .c_str() );
+            file.flush();
+            QThread::msleep(
+                static_cast<unsigned long>( KeyLogFile::kRereadInterval.count() + 50 ) );
+
+            THEN( "they are read for the session that has some of its secrets already" )
+            {
+                const auto* secrets = keyLog.find( randomOf( 0xAA ).data() );
+                REQUIRE( secrets );
+                REQUIRE( secrets->clientTraffic.size() == 48 );
+                REQUIRE( secrets->serverTraffic.size() == 48 );
+            }
+        }
+    }
+
+    GIVEN( "a file that does not grow" )
+    {
+        QFile file( path );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        file.write( "# nothing\n" );
+        file.flush();
+        KeyLogFile keyLog( path );
+        const auto read = keyLog.bytesRead();
+
+        THEN( "it is not read again, however often a session is looked for" )
+        {
+            QThread::msleep(
+                static_cast<unsigned long>( KeyLogFile::kRereadInterval.count() + 50 ) );
+            REQUIRE_FALSE( keyLog.find( randomOf( 0xAA ).data() ) );
+            REQUIRE( keyLog.reads() == 1 );
+            REQUIRE( keyLog.bytesRead() == read );
         }
     }
 

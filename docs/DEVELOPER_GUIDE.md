@@ -526,7 +526,10 @@ the declarations of the detectors and in-stream passes the tables use.
   for SETTINGS, PING and GOAWAY, the fixed length of PING, RST_STREAM,
   PRIORITY and WINDOW_UPDATE, no more than the default maximum frame size
   of 16384 bytes, the reserved bit unset), or the bytes are taken for no
-  frames. HPACK header blocks are not decoded; HTTP/2 over TLS is TLS
+  frames. Cleartext HTTP/2's HPACK header blocks are not decoded here: a
+  segment's frames are named only. HTTP/2 over TLS is TLS, unless a key log
+  decrypts it: then `Http2Direction` follows each direction's bytes whole
+  and decodes the header blocks (see *TLS Decryption*).
 - TLS: every record of a segment and every handshake message of a record
   is named, in order, up to four, then `…`; a ClientHello adds its server
   name, the highest version it offers (`supported_versions`, GREASE aside,
@@ -1193,7 +1196,12 @@ directions together at most the global limit, `kDefaultMemoryLimit` (64
 MiB) or the option *TCP reassembly memory at most*
 (`ConversionOptions::reassemblyMegabytes`, 1 to 1,024 MiB), counting
 `kEntryOverhead` (128 bytes) for each held direction and
-`kEarlySegmentOverhead` (32) for each segment held apart. On top of that,
+`kEarlySegmentOverhead` (32) for each segment held apart. The global limit
+is never passed: every buffer is made room for (`makeRoom()`, which lets go
+of the directions that waited longest) before it is reserved, the next
+message's after a segment completed one too; with no room even for its
+bytes at hand, the direction is let go and the segment marked
+`[reassembly limit]`. On top of that,
 the messages the last segment completed are kept until the next one (at
 most a direction's limit). A message longer than a direction's limit, or
 one that outgrows it, is not held: its segment keeps its own description,
@@ -1244,10 +1252,17 @@ it runs, and the text is the same as before.
 - **Key log** (`tls_key_log.h`): `KeyLog` holds the secrets of the NSS key
   log format by the ClientHello's random, `CLIENT_RANDOM` (the TLS 1.2
   master secret) and the four TLS 1.3 traffic secrets; other labels and
-  malformed lines are passed over. `KeyLogFile` reads the file (64 MiB at
-  most) when the conversion starts, and again for a session not in it, at
-  most every 500 ms, from where it stopped: a live capture's browser adds
-  to it. A last line without its line feed is taken but read again. The
+  malformed lines are passed over; a TLS 1.3 secret must be 32 or 48 bytes
+  long, a master secret 48. `KeyLogFile` reads the file (64 MiB at most)
+  when the conversion starts, and again for a session not in it, or one
+  with only some of its TLS 1.3 secrets (the browser writes them one by
+  one), at most every 500 ms and only when the file grew, from where it
+  stopped: a live capture's browser adds to it. A last line without its
+  line feed is not read until it has one, as it may be half written (a
+  48-byte secret cut short would pass for a 32-byte one); a key log
+  must end in a line feed. `TlsDecryption` looks for a session the key
+  log had no secrets for again only once `KeyLogFile::bytesRead()` grew,
+  not on each of its records. The
   secrets live in `tls::SecretBytes`, which wipe themselves
   (`mbedtls_platform_zeroize`); the bytes read are wiped too. Nothing logs
   or shows a secret; `error()` says only why the file could not be read.
@@ -1293,8 +1308,13 @@ it runs, and the text is the same as before.
   Other frames' payloads are skipped as they come; a header block frame is
   held until whole, at most 64 KiB, so that the HPACK table stays in step.
 - **Memory**: a session keeps its randoms, keys (Mbed TLS contexts) and
-  sequence numbers, no records; `kMaxSessions` (65,536) are followed, a
-  session is dropped on its connection's RST, both FINs or a new SYN. The
+  sequence numbers, no records, and of TLS 1.3 per direction a handshake
+  message over more than one record until it is whole (16 KiB at most):
+  about 3.3 KB a session with keys (measured: TLS 1.3, AES-128-GCM). A
+  session is dropped on its connection's RST, both FINs or a new SYN;
+  `kMaxSessions` (16,384, some 55 MB) are followed at most, and a new one
+  beyond takes the place of the session with the least recent record
+  (`recent_`), whose connection's end the capture did not see. The
   HTTP/2 directions together hold at most `kHttp2MemoryLimit` (32 MiB);
   one that would pass it stops decoding header blocks. The plaintext of a
   segment is held while it is described, then wiped.
@@ -1434,7 +1454,10 @@ in seconds with 6 decimals, or 9 at nanosecond precision, and
 `analyseTcp()` returns it with the markers (`TcpAnalysis`). Wireshark shows
 `tcp.analysis.initial_rtt` in the packet's details only, and on the first
 pure ACK in either direction even without a SYN-ACK; here it is in Info,
-and a stream whose handshake was not captured whole has none. Each stream
+and a stream whose handshake was not captured whole has none. The Packet
+Panel, which reads a packet back alone, without its stream, takes it from
+the selected line's `[iRTT=…]` into the TCP layer (`iRTT: 0.012345
+seconds`). Each stream
 shows it once: a SYN sent after the handshake does not arm it again, a new
 connection on the same ports does. The Converter collects the times in
 `CaptureStats::initialRtts`, a `RunningMedian`, for the summary's median:
@@ -1474,12 +1497,32 @@ addresses as "other endpoints".
 Memory therefore grows with the conversations and addresses in a capture,
 not with its size, and both are capped, so a port scan or a busy NAT cannot
 exhaust it. By default the caps are 1,000,000 streams and 100,000
-addresses, roughly 150 MB (and 70 MB more for the Conversations table's
-counts) and 10 MB; the options (`settings.h`,
-*Advanced* in the dialog) let the user raise each up to tenfold
-(`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
-addresses, roughly 2.2 GB and 100 MB) or lower it to 1. The summary says
-when a cap was hit.
+addresses; the options (`settings.h`, *Advanced* in the dialog) let the
+user raise each up to tenfold (`kMaxStreamCap`, `kMaxEndpointCap`:
+10,000,000 streams and 1,000,000 addresses) or lower it to 1. The summary
+says when a cap was hit. What a numbered stream costs, measured on a SYN
+flood of 1,100,000 packets (1,000,000 streams numbered, the rest past the
+cap), peak resident memory of the conversion over the plugin at rest:
+
+| Per numbered stream | Bytes |
+|---|---|
+| Stream Tracker: its key in the map, its `StreamState` (72) | about 175 |
+| Conversations table: its counts (`ConversationStats`) | 64 |
+| Conversations table: its row (`Conversation`, in a `ConversationRows` chunk) | 136 |
+| `CaptureIndex`: its first and last packet | 8 |
+| **All** (measured: 390 MB for 1,000,000 streams) | **about 390** |
+
+The addresses take about 100 bytes each (10 MB at the default cap). So the
+default stream cap takes some 390 MB, the tenfold one some 3.9 GB. A live
+capture's snapshots, one a second, add little: the `CaptureIndex` copy
+shares its stream extents in chunks of 4,096 (`SharedChunks`, copy on
+write), the summary's rows are shared chunks of 4,096
+(`ConversationStats::rows()` makes anew only those whose streams had a
+packet since the last snapshot, all when the capture's start moved), and
+the snapshot is moved, not copied, to the UI thread, which keeps one
+summary per capture. Measured live with the same flood, snapshots every
+second: 470 MB, where it was 1.2 GB with a full copy of the rows and the
+index per snapshot.
 
 #### The Log Format (`formats/tcpdump_log.json`)
 An lnav-compatible Log Format definition, as LogSquirl's built-in ones in
@@ -1612,9 +1655,12 @@ first packet line are flushed (LogSquirl recognises a Log Format once, at
 the first load with lines, LogSquirl#794, so the tab must not open on the
 header alone), and `snapshot( LiveSnapshot )` with the first packet and
 then at most every `kLiveSnapshotInterval` (1 s): the summary so far
-(`summariseSoFar()`, from a copy of the statistics), the time since the
-start, the bytes read and a copy of the `CaptureIndex` so far, pointing
-into the raw file (flushed first) as `CaptureIndex::Growth::Growing`. The
+(`summariseSoFar()`, from a copy of the statistics, its conversation rows
+shared with the last snapshot's where they did not change), the time since
+the start, the bytes read and a copy of the `CaptureIndex` so far (its
+stream extents shared), pointing into the raw file (flushed first) as
+`CaptureIndex::Growth::Growing`; the snapshot is moved to the observer,
+and on to the UI thread. The
 final result's index points into the closed raw file. So that a burst's last packets are not left out
 until the next packet, the wait before a read sleeps until the snapshot's
 turn while the stream stays idle (a stop turns `ready()` on). The stream
@@ -2140,8 +2186,15 @@ export, conversation statistics):
   reason in the status line. The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
-  and ASCII on each line. The packet is read on the UI thread: at most
-  `kCheckpointInterval` records from a local file.
+  and ASCII on each line. The packet is read off the UI thread, up to
+  `kCheckpointInterval` records: `showPacket()` says "Reading packet N…"
+  and hands the read (and `dissectLayers()`) to `pool_`, one thread, so
+  the reads take turns with the panel's `CaptureCursor`; the result comes
+  back through a `QFutureWatcher`. Each read is numbered (`generation_`):
+  one the selection moved on from is dropped when it ends, and not begun
+  when it has not (`latest_`). `refresh( then )` runs `then` once the
+  packet is shown, or why not, which Packet details uses for its
+  notification; the destructor waits for the read that runs.
 
 - **Follow stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a
@@ -2150,7 +2203,9 @@ export, conversation statistics):
   `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
-  panel keeps the Stream column of the line it shows (`shownStream_`).
+  panel keeps the number and Stream column of the line selected
+  (`selectedPacket_`, `shownStream_`), so that a stream can be followed
+  while its packet is still read.
   `StreamContentReader` reads the stream back: `open()` reads the packet
   for its transport, addresses and ports, then `read()` reads the packets
   from the stream's first to its last, which the Converter notes in the
@@ -2166,7 +2221,10 @@ export, conversation statistics):
   which the bytes before them are taken as missing; an ACK of the other
   direction past its bytes (but not past its FIN, which takes a sequence
   number and no byte) takes the bytes it lacks as missing, and so does the
-  stream's end for what is still held. A chunk is either bytes or a gap
+  stream's end for what is still held. An ACK further past the bytes seen
+  sent than the acknowledging side's window (scaled as its SYN offered, by
+  the most when the handshake was not seen) is bogus and passed over
+  (`plausibleAck()`). A chunk is either bytes or a gap
   (`missing`). `read()` stops at the end of a packet once a budget of bytes
   was handed out (`Status::More`), checks the cancel flag between packets
   and reports progress; it goes on where it stopped. `StreamRenderer`
@@ -2211,18 +2269,26 @@ export, conversation statistics):
   `SidebarWidget::updateSummary()` replaces a capture's summary and shows
   it if in front, the table keeping its sort and selected conversation; a
   live capture's snapshots come through it, each taken by
-  `summariseSoFar()` from copies of the `CaptureStats` and the table as it
-  stands, so the conversion goes on with them unchanged.
+  `summariseSoFar()` from a copy of the `CaptureStats` and the table as it
+  stands, so the conversion goes on with them unchanged. The rows are a
+  `ConversationRows`, chunks of 4,096 a summary shares with the one before
+  where their streams had no packet in between; the model orders pointers
+  to them.
   A click or *Filter on this conversation* opens the Regex Lab ("Filter")
   with `conversationPattern()`, the Follow stream pattern built from the
   row's stream number, addresses and ports.
 
 - **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
-  `exportPackets(index, numbers, path, cancel, progress)` sorts the
-  numbers, reads them with one `CaptureCursor` in one pass, and copies each
-  packet's record (`recordOffset`/`recordLength`) from the capture file
-  byte for byte through a `QSaveFile`, which appears only when complete, so
-  a cancel or a failure leaves nothing. Ahead of a packet go the records
+  `exportPackets(index, numbers, path, cancel, progress)` reads the
+  packets with one `CaptureCursor` in one pass and writes each packet's
+  record byte for byte through a `QSaveFile`, which appears only when
+  complete, so a cancel or a failure leaves nothing. The cursor keeps the
+  record it read (`keepRecords()`, `recordBytes()`: its `RecordingSource`
+  between the file and the reader keeps what the reader reads after the
+  record before, at most `kMaxKeptRecord`, 16 MiB), so the capture is read,
+  and a gzip one decompressed, once; only the headers, and a record it
+  could not keep (`ExportResult::recordsReadAgain`), are copied from the
+  file opened again (`recordOffset`/`recordLength`). Ahead of a packet go the records
   of its `CapturedPacket::headers` not written yet: a pcap's global header
   once; for a pcapng, its section's header block when the section changes
   (its section length set to -1, "unknown") and the section's interface
@@ -2234,7 +2300,11 @@ export, conversation statistics):
   itself is refused. `parsePacketSet()` reads packet lines (their No.) and
   numbers and ranges ("1-5, 9") and counts what names no packet;
   `packetLinesOf()` reads packet lines only, as the selection holds them;
-  `formatPacketRanges()` writes numbers back as ranges.
+  `formatPacketRanges()` writes numbers back as ranges. The numbers are a
+  `PacketNumbers`, ascending ranges apart from each other, never one entry
+  per packet: "1-3000000000" takes a few bytes and is counted at once. The
+  `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
+  change, not on every key.
   `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
   packets…) reads the selection with `get_selected_log_lines`, whose
   `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
@@ -2351,10 +2421,15 @@ calls `openDisplayFilter()`: a `DisplayFilterDialog` translates the text on
 every change with `displayFilterPattern()`, shows a rejection as "Column N:
 reason" below the field and enables *Open in Regex Lab* only for a valid
 filter; the filter accepted is logged and offered again next time, its
-pattern opened with `openRegexLab()` ("Display filter").
+pattern opened with `openRegexLab()` ("Display filter"). The sidebar has
+the same in a `DisplayFilterField` (on a host with `regexLab`): the field,
+*Open in Regex Lab* (or Enter) and the rejection below, sharing the
+dialog's error text, its opening and the filter it offers next time.
 `parseDisplayFilter()` is a tokenizer and a recursive-descent parser
 (`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
-as a `FilterError` with its index into the filter. Unsupported syntax
+as a `FilterError` with its index into the filter. Parentheses and
+negations nest at most `Parser::kMaxDepth` (64) deep, each a call deeper,
+so that a filter of many thousand cannot overflow the stack. Unsupported syntax
 (strings, slices, sets, `contains`, `matches`, `xor`, `=`, `&`, `===`) is
 rejected by the tokenizer, unknown fields, wrong operators and bad values
 (an IPv6 address for `ip.addr`, a port above 65535, two fields) by the

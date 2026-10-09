@@ -216,6 +216,22 @@ SCENARIO( "A TCP stream's content is read back in sequence order", "[stream_cont
         }
     }
 
+    GIVEN( "an acknowledgement far past what the client sent and its window allows" )
+    {
+        auto packets = handshake();
+        packets.push_back( client( 1, "aaaa" ) );
+        packets.push_back( segment( true, kAck, kServerIsn + 1, kClientIsn + 1000000000 ) );
+        packets.push_back( client( 5, "bb" ) );
+        packets.push_back( server( 1, "ok", 7 ) );
+        const Converted capture( packets );
+
+        THEN( "it is taken for bogus: no gap, the bytes after it in order" )
+        {
+            REQUIRE( describe( chunksOf( capture, 4 ) )
+                     == std::vector<std::string>{ "c:aaaa", "c:bb", "s:ok" } );
+        }
+    }
+
     GIVEN( "a lost segment nothing acknowledges, at the end of the capture" )
     {
         auto packets = handshake();

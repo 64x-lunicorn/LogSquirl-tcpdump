@@ -50,14 +50,59 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <vector>
 
 namespace tcpdump {
 
+/**
+ * Packet numbers as ascending ranges, apart from each other, so that
+ * "1-3000000000" takes a few bytes and is counted at once.
+ */
+class PacketNumbers {
+public:
+    struct Range {
+        uint32_t first = 0;
+        uint32_t last = 0; ///< Not less than first.
+        bool operator==( const Range& other ) const
+        {
+            return first == other.first && last == other.last;
+        }
+    };
+
+    PacketNumbers() = default;
+    /// The numbers @p numbers names, in any order, any number of times.
+    PacketNumbers( std::initializer_list<uint32_t> numbers );
+    PacketNumbers( const std::vector<uint32_t>& numbers );
+    /// The numbers the ranges @p ranges name, in any order, overlapping.
+    static PacketNumbers ofRanges( std::vector<Range> ranges );
+
+    const std::vector<Range>& ranges() const
+    {
+        return ranges_;
+    }
+    /// How many numbers there are.
+    uint64_t count() const;
+    bool empty() const
+    {
+        return ranges_.empty();
+    }
+    /// Every number, ascending: only for a set known to be small.
+    std::vector<uint32_t> list() const;
+
+    bool operator==( const PacketNumbers& other ) const
+    {
+        return ranges_ == other.ranges_;
+    }
+
+private:
+    std::vector<Range> ranges_;
+};
+
 /// Packet numbers a user chose, from packet lines or as numbers and ranges.
 struct PacketSet {
-    std::vector<uint32_t> numbers; ///< Ascending, each once.
+    PacketNumbers numbers; ///< Ascending, each once.
     /// Lines and numbers that named no packet of the capture: neither a
     /// packet line nor a number or range of its packets.
     int skipped = 0;
@@ -75,8 +120,8 @@ PacketSet parsePacketSet( const QString& text, uint32_t packets );
 /// the host tells; every other line is skipped and counted.
 PacketSet packetLinesOf( const QString& text, uint32_t packets );
 
-/// @p numbers, ascending, as ranges: "1-5, 9, 12-40".
-QString formatPacketRanges( const std::vector<uint32_t>& numbers );
+/// @p numbers as ranges: "1-5, 9, 12-40".
+QString formatPacketRanges( const PacketNumbers& numbers );
 
 /// The format of the capture file at @p path, as findCaptureStart() tells
 /// it; a pcap if it cannot be read.
@@ -92,6 +137,9 @@ struct ExportResult {
     Status status = Status::Failed;
     QString error;
     uint32_t packets = 0; ///< Packets written.
+    /// Packet records read from the capture file a second time, as the
+    /// cursor that found them could not keep them; 0 as a rule.
+    uint32_t recordsReadAgain = 0;
     CaptureFormat format = CaptureFormat::Pcap;
 };
 
@@ -103,9 +151,8 @@ struct ExportResult {
  * @param cancel    If set, checked between packets; stops the export.
  * @param progress  Called with the share of packets written, in permille.
  */
-ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
-                            std::vector<uint32_t> numbers, const QString& outputPath,
-                            const std::atomic_bool* cancel = nullptr,
+ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const PacketNumbers& numbers,
+                            const QString& outputPath, const std::atomic_bool* cancel = nullptr,
                             const std::function<void( int permille )>& progress = {} );
 
 } // namespace tcpdump

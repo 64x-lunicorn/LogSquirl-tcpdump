@@ -35,6 +35,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -67,10 +68,16 @@ constexpr const char* kDecryptedMarker = "TLS (decrypted)";
  * messages TcpReassembly::apply() returns).  A record the capture lost is
  * passed over: the next one is tried with the next kSequenceLookahead
  * sequence numbers too.  After kMaxFailures records in a row that would not
- * decrypt, a direction is given up.
+ * decrypt, a direction is given up.  HTTP/2 after application data that
+ * went missing so is read from the next record's start, a frame's, its
+ * header blocks no longer decoded (Http2Direction::resync()).
  *
  * Memory is bounded: a session keeps its randoms, its keys and sequence
- * numbers, no records; kMaxSessions are followed at most.  An HTTP/2
+ * numbers, no records, and of TLS 1.3 per direction an encrypted handshake
+ * message over more than one record until it is whole, up to 16 KiB:
+ * some 3.3 KB a session with keys.  kMaxSessions are followed at most
+ * (about 55 MB); a new one beyond takes the place of the session with the
+ * least recent record, whose connection's end was not captured or is far.  An HTTP/2
  * session keeps per direction what Http2Direction holds, all of them
  * together at most kHttp2MemoryLimit; one that would pass it names its
  * frames only.  The plaintext of a segment's records lives while the
@@ -81,9 +88,13 @@ public:
     /// The secrets of the session whose ClientHello has the random at
     /// the pointer, tls::kRandomBytes of it; null if there are none.
     using Lookup = std::function<const tls::SessionSecrets*( const uint8_t* clientRandom )>;
+    /// How much of the key log has been read (tls::KeyLogFile::bytesRead()):
+    /// a session it had no secrets for is looked for again once it grew.
+    using KeyLogBytes = std::function<int64_t()>;
 
-    /// TLS sessions followed at most; later ones are not decrypted.
-    static constexpr size_t kMaxSessions = 65536;
+    /// TLS sessions followed at most; a later one takes the place of the
+    /// one with the least recent record.
+    static constexpr size_t kMaxSessions = 16384;
     /// Records a direction may have lost, and still be decrypted after.
     static constexpr uint32_t kSequenceLookahead = 8;
     /// Records in a row that would not decrypt before a direction is given up.
@@ -91,7 +102,10 @@ public:
     /// Bytes the HTTP/2 sessions hold at most, all together.
     static constexpr size_t kHttp2MemoryLimit = 32 * 1024 * 1024;
 
-    explicit TlsDecryption( Lookup lookup );
+    /// Without @p keyLogBytes a session without secrets is looked for on
+    /// each of its records.  @p maxSessions are followed at most.
+    explicit TlsDecryption( Lookup lookup, KeyLogBytes keyLogBytes = {},
+                            size_t maxSessions = kMaxSessions );
     ~TlsDecryption();
     TlsDecryption( const TlsDecryption& ) = delete;
     TlsDecryption& operator=( const TlsDecryption& ) = delete;
@@ -137,19 +151,30 @@ private:
     bool setTrafficSecret( Session& session, Direction& direction, tls::SecretBytes secret );
     /// Decrypt a protected record into @p plain and its content type.
     bool decrypt( Session& session, Direction& direction, uint8_t type, uint16_t version,
-                  ByteView fragment, std::vector<uint8_t>& plain, uint8_t& inner );
+                  ByteView fragment, tls::PlainBytes& plain, uint8_t& inner );
     /// TLS 1.3: what the decrypted handshake @p messages of direction @p d
-    /// change: the keys after a Finished or a KeyUpdate, ALPN.
+    /// change: the keys after a Finished or a KeyUpdate, ALPN.  A message
+    /// over more than one record is read once it is whole.
     void afterHandshake( Session& session, unsigned d, ByteView messages );
     /// The label and description of the application data a segment of
     /// direction @p d carried, decrypted.
+    /// The application data went missing where @p resyncs say.
     std::pair<const char*, std::string> application( Session& session, unsigned d,
-                                                     const std::vector<uint8_t>& data,
+                                                     const tls::PlainBytes& data,
+                                                     const std::vector<size_t>& resyncs,
                                                      const PacketRecord& pkt );
+    /// A record of direction @p direction, of @p type as the record
+    /// header says, was lost or would not decrypt.
+    void lost( Session& session, Direction& direction, uint8_t type );
     void erase( int streamId );
 
     Lookup lookup_;
+    KeyLogBytes keyLogBytes_;
+    size_t maxSessions_;
     std::unordered_map<int, std::unique_ptr<Session>> sessions_;
+    /// The streams of the sessions, the one with the least recent record
+    /// first.
+    std::list<int> recent_;
     size_t sessionsDecrypted_ = 0;
     size_t http2Memory_ = 0;
 };

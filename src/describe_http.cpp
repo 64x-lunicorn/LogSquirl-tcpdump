@@ -576,8 +576,11 @@ void Http2Direction::frameDone( std::vector<std::string>& names, size_t nameInde
         return;
     }
     const auto summary = headerBlockSummary( fields );
-    if ( blockName_ < names.size() && !summary.empty() ) {
-        names[ blockName_ ] += ": " + summary;
+    // On the frame that began the block, or, when that was named by an
+    // earlier call, on the one that ends it.
+    const auto named = blockName_ < names.size() ? blockName_ : nameIndex;
+    if ( named < names.size() && !summary.empty() ) {
+        names[ named ] += ": " + summary;
     }
     blockName_ = SIZE_MAX;
 }
@@ -599,6 +602,15 @@ void Http2Direction::abandonHeaders()
         skip_ = kHttp2FrameHeaderBytes + frameLength_ - frame_.size();
         std::vector<uint8_t>().swap( frame_ );
     }
+}
+
+void Http2Direction::resync()
+{
+    abandonHeaders();
+    std::vector<uint8_t>().swap( frame_ );
+    frameLength_ = 0;
+    frameName_ = SIZE_MAX;
+    skip_ = 0;
 }
 
 } // namespace tcpdump
