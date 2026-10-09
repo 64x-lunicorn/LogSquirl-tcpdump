@@ -76,7 +76,7 @@ struct Fields {
     explicit Fields( QWidget* in )
         : source( in->findChild<QComboBox*>( "liveSource" ) )
         , status( in->findChild<QLabel*>( "liveSourceStatus" ) )
-        , interface( in->findChild<QComboBox*>( "liveInterface" ) )
+        , networkInterface( in->findChild<QComboBox*>( "liveInterface" ) )
         , refresh( in->findChild<QPushButton*>( "liveRefresh" ) )
         , filter( in->findChild<QLineEdit*>( "liveFilter" ) )
         , filterHint( in->findChild<QLabel*>( "liveFilterHint" ) )
@@ -85,7 +85,7 @@ struct Fields {
     {
         REQUIRE( source );
         REQUIRE( status );
-        REQUIRE( interface );
+        REQUIRE( networkInterface );
         REQUIRE( refresh );
         REQUIRE( filter );
         REQUIRE( filterHint );
@@ -95,7 +95,7 @@ struct Fields {
 
     QComboBox* source;
     QLabel* status;
-    QComboBox* interface;
+    QComboBox* networkInterface;
     QPushButton* refresh;
     QLineEdit* filter;
     QLabel* filterHint;
@@ -106,7 +106,7 @@ struct Fields {
 /// Wait until @p form has listed the fake's two interfaces.
 bool listed( const LiveCaptureForm* form, const Fields& fields )
 {
-    return waitFor( [ & ] { return !form->isListing() && fields.interface->count() == 2; } );
+    return waitFor( [ & ] { return !form->isListing() && fields.networkInterface->count() == 2; } );
 }
 
 } // namespace
@@ -132,14 +132,14 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
     {
         REQUIRE( fields.source->currentText() == "Fake" );
         REQUIRE( listed( form, fields ) );
-        REQUIRE( fields.interface->itemText( 0 ) == "fake0 \xe2\x80\x94 Fake Ethernet" );
-        REQUIRE( fields.interface->itemData( 1 ).toString() == "fake1" );
+        REQUIRE( fields.networkInterface->itemText( 0 ) == "fake0 \xe2\x80\x94 Fake Ethernet" );
+        REQUIRE( fields.networkInterface->itemData( 1 ).toString() == "fake1" );
         REQUIRE( fields.snaplen->value() == 262144 );
         REQUIRE( fields.start->isEnabled() );
 
         WHEN( "the second interface, a filter and a snaplen are chosen and Start is pressed" )
         {
-            fields.interface->setCurrentIndex( 1 );
+            fields.networkInterface->setCurrentIndex( 1 );
             fields.filter->setText( "udp port 9999 and host 10.0.0.1" );
             fields.snaplen->setValue( 1500 );
             fields.start->click();
@@ -203,25 +203,25 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
                     REQUIRE( restarted.liveForm()->choice()
                              == LiveChoice{ "fake", "", "fake1", "udp port 9999 and host 10.0.0.1",
                                             1500 } );
-                    REQUIRE( again.interface->currentIndex() == 1 );
+                    REQUIRE( again.networkInterface->currentIndex() == 1 );
                 }
             }
         }
 
         WHEN( "an interface the source does not list is typed" )
         {
-            fields.interface->setEditText( "any" );
+            fields.networkInterface->setEditText( "any" );
 
             THEN( "it is the choice" )
             {
-                REQUIRE( form->choice().interface == "any" );
+                REQUIRE( form->choice().networkInterface == "any" );
                 REQUIRE( fields.start->isEnabled() );
             }
         }
 
         WHEN( "Refresh is pressed" )
         {
-            fields.interface->setCurrentIndex( 1 );
+            fields.networkInterface->setCurrentIndex( 1 );
             const int before = fake->interfaceListings;
             fields.refresh->click();
             REQUIRE( form->isListing() );
@@ -230,7 +230,7 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
             THEN( "the interfaces are listed anew, and the one chosen stays chosen" )
             {
                 REQUIRE( fake->interfaceListings == before + 1 );
-                REQUIRE( form->choice().interface == "fake1" );
+                REQUIRE( form->choice().networkInterface == "fake1" );
             }
         }
 
@@ -288,7 +288,7 @@ SCENARIO( "An unavailable source says why, and a failed capture shows its error 
             REQUIRE_FALSE( fields.start->isEnabled() );
             REQUIRE( fields.start->toolTip() == fake->unavailableReason );
             REQUIRE( fake->interfaceListings == 0 );
-            REQUIRE_FALSE( fields.interface->isEnabled() );
+            REQUIRE_FALSE( fields.networkInterface->isEnabled() );
         }
 
         THEN( "starting it anyway is refused with the reason" )
@@ -439,9 +439,9 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
                 return;
             }
             const Fields fields( dialog );
-            if ( fields.interface->count() == 2 && fields.start->isEnabled() ) {
+            if ( fields.networkInterface->count() == 2 && fields.start->isEnabled() ) {
                 ++dialogs;
-                fields.interface->setCurrentIndex( 1 );
+                fields.networkInterface->setCurrentIndex( 1 );
                 fields.filter->setText( "udp" );
                 fields.start->click();
             }
@@ -455,7 +455,7 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
             REQUIRE( dialogs == 1 );
             REQUIRE( sidebar->isCapturing() );
             REQUIRE( fake->started().size() == 1 );
-            REQUIRE( fake->started().front().interface == "fake1" );
+            REQUIRE( fake->started().front().networkInterface == "fake1" );
             REQUIRE( fake->started().front().filter == "udp" );
         }
 
@@ -487,8 +487,8 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
         {
             sidebar->setStopConfirmer( []( QWidget*, const QString& ) { return true; } );
             sidebar->setLiveChoiceAsker( []( QWidget*, LiveChoice& choice ) {
-                REQUIRE( choice.interface == "fake1" ); // the last choice is shown
-                choice.interface = "fake0";
+                REQUIRE( choice.networkInterface == "fake1" ); // the last choice is shown
+                choice.networkInterface = "fake0";
                 return true;
             } );
             startEntry.trigger();
@@ -497,7 +497,7 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
             {
                 REQUIRE( waitFor( [ & ] { return fake->started().size() == 2; } ) );
                 REQUIRE( waitFor( [ & ] { return sidebar->isCapturing(); } ) );
-                REQUIRE( fake->started().back().interface == "fake0" );
+                REQUIRE( fake->started().back().networkInterface == "fake0" );
                 REQUIRE( waitFor( [ & ] {
                     return !host.openedFiles.isEmpty()
                            && QFileInfo( host.openedFiles.last() ).fileName() == "fake0.log";

@@ -67,6 +67,7 @@ private:
     QSpinBox* reassemblyMegabytes_ = nullptr;
     QLineEdit* someIpPorts_ = nullptr;
     QLineEdit* someIpNamesFile_ = nullptr;
+    QLineEdit* keyLogPath_ = nullptr;
 };
 
 } // namespace tcpdump

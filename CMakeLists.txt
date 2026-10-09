@@ -77,6 +77,44 @@ else()
     target_compile_options(tcpdump_zlib PRIVATE -w)
 endif()
 
+# ── Mbed TLS ──────────────────────────────────────────────────────────────
+# The cryptography of the TLS Decryption (tls_crypto.cpp): AES-GCM, AES-CBC,
+# ChaCha20-Poly1305, HMAC and HKDF of Mbed TLS (Apache-2.0 or
+# GPL-2.0-or-later, NOTICE): the 3.6 LTS release below, fetched by its hash
+# and built here as a static library with only those
+# (third_party/mbedtls_config.h).  Its symbols stay hidden in the plugin,
+# and its warnings do not fail the build.
+set(MBEDTLS_URL
+    https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2)
+set(MBEDTLS_SHA256 a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6)
+set(MBEDTLS_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls_config.h"
+    CACHE FILEPATH "Mbed TLS configuration of the plugin" FORCE)
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(GEN_FILES OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+set(DISABLE_PACKAGE_CONFIG_AND_INSTALL ON CACHE BOOL "" FORCE)
+# Linked into a shared library: position independent, and nothing of it
+# exported (the plugin exports its entry points only).
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+# Out of the default build and the install: only mbedcrypto is built, as
+# the plugin links it, and nothing of Mbed TLS is installed.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+    FetchContent_Declare(mbedtls URL ${MBEDTLS_URL} URL_HASH SHA256=${MBEDTLS_SHA256}
+                         EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(mbedtls)
+else()
+    FetchContent_Declare(mbedtls URL ${MBEDTLS_URL} URL_HASH SHA256=${MBEDTLS_SHA256})
+    FetchContent_GetProperties(mbedtls)
+    if(NOT mbedtls_POPULATED)
+        FetchContent_Populate(mbedtls)
+        add_subdirectory("${mbedtls_SOURCE_DIR}" "${mbedtls_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # ── Plugin shared library ─────────────────────────────────────────────────
 add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
@@ -103,6 +141,7 @@ add_library(logsquirl_tcpdump SHARED
     src/describe_someip.cpp
     src/describe_doip.cpp
     src/media_expectations.cpp
+    src/hpack.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp
     src/stream_tracker.cpp
@@ -110,6 +149,9 @@ add_library(logsquirl_tcpdump SHARED
     src/tcp_analysis.cpp
     src/byte_stream_orderer.cpp
     src/tcp_reassembly.cpp
+    src/tls_crypto.cpp
+    src/tls_key_log.cpp
+    src/tls_decryption.cpp
     src/capture_stats.cpp
     src/conversations.cpp
     src/capture_file.cpp
@@ -146,6 +188,11 @@ set_target_properties(logsquirl_tcpdump PROPERTIES
 if(NOT WIN32)
     target_compile_options(logsquirl_tcpdump PRIVATE -fvisibility=hidden)
 endif()
+# Nor anything of the static libraries linked in (Mbed TLS), where the
+# linker can be told so.
+if(UNIX AND NOT APPLE)
+    target_link_options(logsquirl_tcpdump PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 
 target_include_directories(logsquirl_tcpdump
     PRIVATE
@@ -159,6 +206,7 @@ target_link_libraries(logsquirl_tcpdump
         Qt6::Concurrent
         Qt6::Widgets
         tcpdump_zlib
+        mbedcrypto
 )
 
 # ── Install rule ──────────────────────────────────────────────────────────

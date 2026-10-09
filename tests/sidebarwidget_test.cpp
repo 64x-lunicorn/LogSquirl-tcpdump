@@ -712,6 +712,44 @@ SCENARIO( "the summary lists the capture's link-layer types", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary tells what the TLS decryption did", "[sidebar]" )
+{
+    GIVEN( "a capture converted with a key log" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.tlsSessionsDecrypted = 3;
+
+        THEN( "the sessions decrypted are counted" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>TLS decryption</b><br>Sessions decrypted: 3<br>" ) );
+        }
+    }
+
+    GIVEN( "a key log that could not be read" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.tlsSessionsDecrypted = 0;
+        summary.keyLogError = "Cannot read the TLS key log: <No such file>";
+
+        THEN( "it says why, as text" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
+            REQUIRE( html.contains( "<i>Cannot read the TLS key log: &lt;No such "
+                                    "file&gt;</i><br>Sessions decrypted: 0" ) );
+        }
+    }
+
+    GIVEN( "a capture converted without a key log" )
+    {
+        THEN( "nothing is said about TLS decryption" )
+        {
+            REQUIRE_FALSE( tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary() )
+                               .contains( "TLS decryption" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary shows the earliest and latest packet time", "[sidebar]" )
 {
     GIVEN( "a capture with packets" )

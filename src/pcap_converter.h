@@ -108,6 +108,13 @@ struct CaptureSummary {
     /// of all those addresses together.
     std::optional<uint64_t> otherEndpointPackets;
 
+    /// Set when a TLS key log was given (ConversionOptions::keyLogPath):
+    /// the TLS sessions with records decrypted.
+    std::optional<uint64_t> tlsSessionsDecrypted;
+    /// Why the key log could not be read, when it could not: never any of
+    /// its contents.
+    std::string keyLogError;
+
     bool operator==( const CaptureSummary& other ) const;
     bool operator!=( const CaptureSummary& other ) const
     {
@@ -216,6 +223,9 @@ struct ConversionOptions {
     /// (parseSomeIpNames()); empty: none.  One that cannot be read is
     /// ignored.
     QString someIpNamesFile;
+    /// The TLS key log (SSLKEYLOGFILE) to decrypt TLS sessions with
+    /// (tls_decryption.h); empty: none.  Read only, while converting.
+    QString keyLogPath;
 };
 
 /**
