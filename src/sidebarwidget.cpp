@@ -366,6 +366,17 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     }
     html += "<br>";
 
+    // TCP analysis markers
+    if ( !summary.tcpMarkers.empty() ) {
+        html += "<b>Analysis</b><br>";
+        for ( const auto& [ marker, count ] : summary.tcpMarkers ) {
+            html += QString( "%1: %2<br>" )
+                        .arg( QString::fromStdString( marker ).toHtmlEscaped() )
+                        .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
+        }
+        html += "<br>";
+    }
+
     // Top IPs
     html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
                 .arg( summary.otherEndpointPackets ? "more than " : "" )

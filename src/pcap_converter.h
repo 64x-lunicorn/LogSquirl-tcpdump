@@ -36,6 +36,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tcpdump {
@@ -62,6 +63,9 @@ struct CaptureSummary {
     std::map<std::string, uint64_t> protocolBytes;
     /// Packets per IP address, for every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
+    /// TCP segments per analysis marker ("TCP Retransmission", …), for the
+    /// kinds that occur, in the order of TcpMarker.
+    std::vector<std::pair<std::string, uint64_t>> tcpMarkers;
 
     /// Packets captured shorter than on the wire, cut at the snaplen; their
     /// lines say "[cut to N bytes]".  0 when every packet was captured whole.

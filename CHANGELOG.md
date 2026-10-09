@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TCP analysis markers.** TCP lines carry Wireshark's expert markers at
+  the start of Info, in its words and order: `[TCP Retransmission]`,
+  `[TCP Fast Retransmission]`, `[TCP Spurious Retransmission]`,
+  `[TCP Out-Of-Order]`, `[TCP Previous segment not captured]`,
+  `[TCP Dup ACK n#m]`, `[TCP Window Update]`, `[TCP ZeroWindow]`,
+  `[TCP ZeroWindowProbe]`, `[TCP ZeroWindowProbeAck]`, `[TCP Keep-Alive]`
+  and `[TCP Keep-Alive ACK]`, by Wireshark's rules as far as a few numbers
+  per direction of a stream allow (the Developer Guide lists the limits).
+  The Capture Summary counts the segments per marker under *Analysis*. Each
+  numbered stream takes 48 bytes more memory, some 48 MB at the stream cap.
 - **Relative TCP sequence and acknowledgement numbers.** `Seq=` and `Ack=`
   in Info count from the start of each direction of a TCP stream, as
   Wireshark shows them by default: the SYN is `Seq=0`, the first byte of

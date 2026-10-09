@@ -19,7 +19,8 @@
 
 /**
  * @file tcp_analysis_test.cpp
- * @brief BDD tests for the TCP Analysis: relative sequence numbers.
+ * @brief BDD tests for the TCP Analysis: relative sequence numbers and the
+ *        analysis markers.
  */
 
 #include <catch2/catch.hpp>
@@ -34,7 +35,9 @@ using namespace tcpdump_test;
 
 namespace {
 
+constexpr uint8_t kFin = 0x01;
 constexpr uint8_t kSyn = 0x02;
+constexpr uint8_t kRst = 0x04;
 constexpr uint8_t kAck = 0x10;
 constexpr uint8_t kPshAck = 0x18;
 
@@ -43,7 +46,7 @@ constexpr uint16_t kServer = 80;
 
 /// A segment from the client to the server, or back when @p fromServer.
 Bytes segment( bool fromServer, uint8_t flags, uint32_t seq, uint32_t ack,
-               const Bytes& payload = {} )
+               const Bytes& payload = {}, uint16_t window = 0xFFFF )
 {
     auto addresses = Ipv4Options{};
     if ( fromServer ) {
@@ -51,8 +54,8 @@ Bytes segment( bool fromServer, uint8_t flags, uint32_t seq, uint32_t ack,
     }
     return eth( EthertypeIpv4,
                 ipv4( IpProtoTcp,
-                      fromServer ? tcp( kServer, kClient, payload, 5, flags, seq, ack )
-                                 : tcp( kClient, kServer, payload, 5, flags, seq, ack ),
+                      fromServer ? tcp( kServer, kClient, payload, 5, flags, seq, ack, window )
+                                 : tcp( kClient, kServer, payload, 5, flags, seq, ack, window ),
                       addresses ) );
 }
 
@@ -68,6 +71,65 @@ std::vector<std::string> infoOf( const std::vector<Bytes>& segments,
         infos.push_back( pkt.info );
     }
     return infos;
+}
+
+/// The Info and the markers of each segment, captured @p gapUsec apart,
+/// after the TCP Analysis followed them in order.
+struct Analysed {
+    std::vector<std::string> infos;
+    std::vector<TcpMarkers> markers;
+};
+
+Analysed analyse( const std::vector<Bytes>& segments, uint32_t gapUsec = 1000000 )
+{
+    std::vector<Record> records;
+    uint64_t usec = 0;
+    for ( const auto& data : segments ) {
+        records.push_back( { data, static_cast<uint32_t>( 1000 + usec / 1000000 ),
+                             static_cast<uint32_t>( usec % 1000000 ), -1 } );
+        usec += gapUsec;
+    }
+    auto packets = parse( pcapFile( records ) ).packets;
+    REQUIRE( packets.size() == segments.size() );
+    StreamTracker tracker;
+    Analysed analysed;
+    for ( auto& pkt : packets ) {
+        analysed.markers.push_back( analyseTcp( pkt, tracker.track( pkt ) ) );
+        analysed.infos.push_back( pkt.info );
+    }
+    return analysed;
+}
+
+/// Whether @p info starts with @p prefix.
+bool startsWith( const std::string& info, const std::string& prefix )
+{
+    return info.compare( 0, prefix.size(), prefix ) == 0;
+}
+
+/// Whether @p info carries no marker: it starts with the ports.
+bool unmarked( const std::string& info )
+{
+    return !info.empty() && info[ 0 ] != '[';
+}
+
+constexpr uint32_t kC = 1000; ///< The client's initial sequence number.
+constexpr uint32_t kS = 5000; ///< The server's.
+
+/// A handshake: the client's next sequence number is kC + 1, the server's kS + 1.
+std::vector<Bytes> handshake()
+{
+    return {
+        segment( false, kSyn, kC, 0 ),
+        segment( true, kSyn | kAck, kS, kC + 1 ),
+        segment( false, kAck, kC + 1, kS + 1 ),
+    };
+}
+
+/// @p a followed by @p b.
+std::vector<Bytes> operator+( std::vector<Bytes> a, const std::vector<Bytes>& b )
+{
+    a.insert( a.end(), b.begin(), b.end() );
+    return a;
 }
 
 /// Whether @p info shows @p numbers ("Seq=1 Ack=1") right after the flags.
@@ -229,6 +291,369 @@ SCENARIO( "The whole-capture formatter shows relative numbers too", "[tcp_analys
         THEN( "its line shows Seq=0" )
         {
             REQUIRE( shows( formatAllPackets( packets ).at( 1 ), "Seq=0 Ack=0" ) );
+        }
+    }
+}
+
+SCENARIO( "A segment sent again is marked a retransmission", "[tcp_analysis]" )
+{
+    GIVEN( "data the server did not acknowledge, sent again a second later" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( false, kPshAck, kC + 6, kS + 1, text( "more" ) ),
+                                } );
+
+        THEN( "the second copy is a retransmission, at the start of Info as in Wireshark" )
+        {
+            REQUIRE( unmarked( a.infos[ 3 ] ) );
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP Retransmission] 40000 \xe2\x86\x92 80 " ) );
+            REQUIRE( a.markers[ 4 ] == TcpMarkers().set( TcpMarker::Retransmission ) );
+        }
+
+        THEN( "the data that follows it is not" )
+        {
+            REQUIRE( unmarked( a.infos[ 5 ] ) );
+            REQUIRE( a.markers[ 5 ].none() );
+        }
+    }
+
+    GIVEN( "a SYN sent again" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0 ),
+            segment( false, kSyn, kC, 0 ),
+        } );
+
+        THEN( "it is a retransmission too, as it takes up a sequence number" )
+        {
+            REQUIRE( startsWith( a.infos[ 1 ], "[TCP Retransmission] " ) );
+        }
+    }
+
+    GIVEN( "data the server has acknowledged already, sent again" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( true, kAck, kS + 1, kC + 6 ),
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                } );
+
+        THEN( "it is a spurious retransmission" )
+        {
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP Spurious Retransmission] 40000 " ) );
+            REQUIRE( a.markers[ 5 ] == TcpMarkers().set( TcpMarker::SpuriousRetransmission ) );
+        }
+    }
+
+    GIVEN( "a segment the receiver asked for with two duplicate ACKs, sent right away" )
+    {
+        const auto a = analyse( handshake()
+                                    + std::vector<Bytes>{
+                                        segment( false, kPshAck, kC + 1, kS + 1, Bytes( 10, 'a' ) ),
+                                        segment( false, kPshAck, kC + 11, kS + 1, Bytes( 10, 'b' ) ),
+                                        segment( false, kPshAck, kC + 21, kS + 1, Bytes( 10, 'c' ) ),
+                                        segment( true, kAck, kS + 1, kC + 11 ),
+                                        segment( true, kAck, kS + 1, kC + 11 ),
+                                        segment( true, kAck, kS + 1, kC + 11 ),
+                                        segment( false, kPshAck, kC + 11, kS + 1, Bytes( 10, 'b' ) ),
+                                    },
+                                1000 );
+
+        THEN( "it is a fast retransmission" )
+        {
+            REQUIRE( startsWith( a.infos[ 9 ], "[TCP Fast Retransmission] 40000 " ) );
+            REQUIRE( a.markers[ 9 ] == TcpMarkers().set( TcpMarker::FastRetransmission ) );
+        }
+    }
+}
+
+SCENARIO( "A segment that arrives shortly after a later one is out of order", "[tcp_analysis]" )
+{
+    const auto segments = handshake()
+                          + std::vector<Bytes>{
+                                segment( false, kPshAck, kC + 11, kS + 1, Bytes( 10, 'b' ) ),
+                                segment( false, kPshAck, kC + 1, kS + 1, Bytes( 10, 'a' ) ),
+                            };
+
+    GIVEN( "the two half a millisecond apart, within Wireshark's 3 ms of the server's last "
+           "segment" )
+    {
+        const auto a = analyse( segments, 500 );
+
+        THEN( "the later data shows the gap, the earlier data is out of order" )
+        {
+            REQUIRE( startsWith( a.infos[ 3 ], "[TCP Previous segment not captured] 40000 " ) );
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP Out-Of-Order] 40000 " ) );
+            REQUIRE( a.markers[ 4 ] == TcpMarkers().set( TcpMarker::OutOfOrder ) );
+        }
+    }
+
+    GIVEN( "the two a second apart" )
+    {
+        const auto a = analyse( segments );
+
+        THEN( "the earlier data is taken for a retransmission" )
+        {
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP Retransmission] " ) );
+        }
+    }
+}
+
+SCENARIO( "An ACK that repeats the previous one is a duplicate ACK", "[tcp_analysis]" )
+{
+    GIVEN( "the client acknowledging the same data three times after the handshake" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kAck, kC + 1, kS + 1 ),
+                                    segment( false, kAck, kC + 1, kS + 1 ),
+                                } );
+
+        THEN( "the repeats count from the last ACK that was not a duplicate, by its number" )
+        {
+            REQUIRE( unmarked( a.infos[ 2 ] ) );
+            REQUIRE( startsWith( a.infos[ 3 ], "[TCP Dup ACK 3#1] 40000 " ) );
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP Dup ACK 3#2] 40000 " ) );
+            REQUIRE( a.markers[ 4 ] == TcpMarkers().set( TcpMarker::DupAck ) );
+        }
+    }
+
+    GIVEN( "a plain ACK that acknowledges new data" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( true, kPshAck, kS + 1, kC + 1, text( "hi" ) ),
+                                    segment( false, kAck, kC + 1, kS + 3 ),
+                                    segment( false, kAck, kC + 1, kS + 3 ),
+                                } );
+
+        THEN( "it is not a duplicate, and starts the count afresh" )
+        {
+            REQUIRE( unmarked( a.infos[ 4 ] ) );
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP Dup ACK 5#1] " ) );
+        }
+    }
+
+    GIVEN( "the same ACK with another window, or with data" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "x" ), 1000 ),
+                                } );
+
+        THEN( "neither is a duplicate ACK: a window update, and data" )
+        {
+            REQUIRE( startsWith( a.infos[ 3 ], "[TCP Window Update] 40000 " ) );
+            REQUIRE( a.markers[ 3 ] == TcpMarkers().set( TcpMarker::WindowUpdate ) );
+            REQUIRE( unmarked( a.infos[ 4 ] ) );
+        }
+    }
+}
+
+SCENARIO( "A segment advertising no window is marked ZeroWindow", "[tcp_analysis]" )
+{
+    GIVEN( "the server's receive window running full" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( true, kAck, kS + 1, kC + 6, {}, 0 ),
+                                    segment( false, kPshAck, kC + 6, kS + 1, text( "x" ) ),
+                                    segment( true, kAck, kS + 1, kC + 6, {}, 0 ),
+                                    segment( false, kPshAck, kC + 6, kS + 1, text( "x" ) ),
+                                } );
+
+        THEN( "its ACK shows ZeroWindow" )
+        {
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP ZeroWindow] 80 \xe2\x86\x92 40000 " ) );
+            REQUIRE( a.markers[ 4 ] == TcpMarkers().set( TcpMarker::ZeroWindow ) );
+        }
+
+        THEN( "a byte sent into the closed window is a probe, also when it is sent again" )
+        {
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP ZeroWindowProbe] 40000 " ) );
+            REQUIRE( startsWith( a.infos[ 7 ], "[TCP ZeroWindowProbe] 40000 " ) );
+            REQUIRE( a.markers[ 7 ] == TcpMarkers().set( TcpMarker::ZeroWindowProbe ) );
+        }
+
+        THEN( "the ACK of a probe that keeps the window closed says so, Wireshark's last marker "
+              "first" )
+        {
+            REQUIRE( startsWith( a.infos[ 6 ], "[TCP ZeroWindowProbeAck] [TCP ZeroWindow] 80 " ) );
+            REQUIRE(
+                a.markers[ 6 ]
+                == TcpMarkers().set( TcpMarker::ZeroWindow ).set( TcpMarker::ZeroWindowProbeAck ) );
+        }
+    }
+
+    GIVEN( "a SYN, FIN or RST with a window of zero" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 0 ),
+            segment( true, kRst | kAck, 0, kC + 1, {}, 0 ),
+            segment( false, kFin | kAck, kC + 1, 1, {}, 0 ),
+        } );
+
+        THEN( "none is marked: their window does not matter" )
+        {
+            REQUIRE( unmarked( a.infos[ 0 ] ) );
+            REQUIRE( unmarked( a.infos[ 1 ] ) );
+            REQUIRE( unmarked( a.infos[ 2 ] ) );
+        }
+    }
+}
+
+SCENARIO( "A segment one byte behind the next sequence number is a keep-alive", "[tcp_analysis]" )
+{
+    GIVEN( "an idle connection kept alive by the client, and the server's answer" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( true, kAck, kS + 1, kC + 6 ),
+                                    segment( false, kAck, kC + 5, kS + 1 ),
+                                    segment( true, kAck, kS + 1, kC + 6 ),
+                                    segment( false, kAck, kC + 5, kS + 1, text( "?" ) ),
+                                } );
+
+        THEN( "the client's empty segment is a keep-alive, not a dup ACK" )
+        {
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP Keep-Alive] 40000 " ) );
+            REQUIRE( a.markers[ 5 ] == TcpMarkers().set( TcpMarker::KeepAlive ) );
+        }
+
+        THEN( "the server's repeated ACK answers it" )
+        {
+            REQUIRE( startsWith( a.infos[ 6 ], "[TCP Keep-Alive ACK] 80 " ) );
+            REQUIRE( a.markers[ 6 ] == TcpMarkers().set( TcpMarker::KeepAliveAck ) );
+        }
+
+        THEN( "a keep-alive carrying the byte again is no retransmission" )
+        {
+            REQUIRE( startsWith( a.infos[ 7 ], "[TCP Keep-Alive] 40000 " ) );
+            REQUIRE( a.markers[ 7 ] == TcpMarkers().set( TcpMarker::KeepAlive ) );
+        }
+    }
+
+    GIVEN( "a repeated ACK that does not follow a keep-alive" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( true, kAck, kS + 1, kC + 6 ),
+                                    segment( true, kAck, kS + 1, kC + 6 ),
+                                } );
+
+        THEN( "it is a dup ACK, not a keep-alive ACK" )
+        {
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP Dup ACK 5#1] " ) );
+        }
+    }
+
+    GIVEN( "a keep-alive with a closed window" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ) ),
+                                    segment( false, kAck, kC + 5, kS + 1, {}, 0 ),
+                                } );
+
+        THEN( "it carries both markers, Wireshark's last first" )
+        {
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP ZeroWindow] [TCP Keep-Alive] 40000 " ) );
+        }
+    }
+}
+
+SCENARIO( "The TCP Analysis marks nothing it cannot follow", "[tcp_analysis]" )
+{
+    GIVEN( "a stream past the stream cap, whose segments are repeated" )
+    {
+        auto packets = parse( pcapOf( { segment( false, kPshAck, kC, kS, text( "a" ) ),
+                                        segment( false, kPshAck, kC, kS, text( "a" ) ) } ) )
+                           .packets;
+        StreamTracker tracker( 0 );
+
+        THEN( "neither is marked" )
+        {
+            for ( auto& pkt : packets ) {
+                REQUIRE( analyseTcp( pkt, tracker.track( pkt ) ).none() );
+                REQUIRE( unmarked( pkt.info ) );
+            }
+        }
+    }
+
+    GIVEN( "a segment with a bogus header length, repeated" )
+    {
+        const auto bogus = eth( EthertypeIpv4,
+                                ipv4( IpProtoTcp, tcp( kClient, kServer, {}, 2, kAck, kC, kS ) ) );
+        const auto a = analyse( { bogus, bogus, bogus } );
+
+        THEN( "none is analysed, as Wireshark leaves a malformed header alone" )
+        {
+            REQUIRE( unmarked( a.infos[ 2 ] ) );
+            REQUIRE( a.markers[ 2 ].none() );
+        }
+    }
+
+    GIVEN( "the first segments of a stream captured mid-way" )
+    {
+        const auto a = analyse( {
+            segment( false, kAck, kC, kS ),
+            segment( true, kAck, kS, kC ),
+        } );
+
+        THEN( "they are not marked" )
+        {
+            REQUIRE( unmarked( a.infos[ 0 ] ) );
+            REQUIRE( unmarked( a.infos[ 1 ] ) );
+        }
+    }
+}
+
+SCENARIO( "Each marker kind has Wireshark's name", "[tcp_analysis]" )
+{
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::Retransmission ) ) == "TCP Retransmission" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::FastRetransmission ) )
+             == "TCP Fast Retransmission" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::SpuriousRetransmission ) )
+             == "TCP Spurious Retransmission" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::OutOfOrder ) ) == "TCP Out-Of-Order" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::PreviousSegmentNotCaptured ) )
+             == "TCP Previous segment not captured" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::WindowUpdate ) ) == "TCP Window Update" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::KeepAlive ) ) == "TCP Keep-Alive" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::KeepAliveAck ) ) == "TCP Keep-Alive ACK" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::DupAck ) ) == "TCP Dup ACK" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::ZeroWindowProbe ) ) == "TCP ZeroWindowProbe" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::ZeroWindow ) ) == "TCP ZeroWindow" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::ZeroWindowProbeAck ) )
+             == "TCP ZeroWindowProbeAck" );
+}
+
+SCENARIO( "Data beyond the next sequence number shows a segment was not captured",
+          "[tcp_analysis]" )
+{
+    GIVEN( "a gap in the client's data, and a reset beyond it" )
+    {
+        const auto a = analyse( handshake()
+                                + std::vector<Bytes>{
+                                    segment( false, kPshAck, kC + 11, kS + 1, Bytes( 10, 'b' ) ),
+                                    segment( false, kPshAck, kC + 21, kS + 1, Bytes( 10, 'c' ) ),
+                                    segment( false, kRst, kC + 100, 0 ),
+                                } );
+
+        THEN( "the segment after the gap says so, the next one and the reset do not" )
+        {
+            REQUIRE( startsWith( a.infos[ 3 ], "[TCP Previous segment not captured] 40000 " ) );
+            REQUIRE( a.markers[ 3 ] == TcpMarkers().set( TcpMarker::PreviousSegmentNotCaptured ) );
+            REQUIRE( unmarked( a.infos[ 4 ] ) );
+            REQUIRE( unmarked( a.infos[ 5 ] ) );
         }
     }
 }

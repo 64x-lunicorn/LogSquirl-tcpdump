@@ -26,7 +26,8 @@
  * precisions and protocols the parser handles, including malformed and
  * cut-off records.  After an intended change of the output, run the tests
  * with TCPDUMP_UPDATE_CORPUS=1 to rewrite the .txt files, and review the
- * difference.  interfaces.pcapng is written by tests/make_pcapng_corpus.py.
+ * difference.  interfaces.pcapng is written by tests/make_pcapng_corpus.py,
+ * tcp-analysis.pcap by tests/make_tcp_analysis_corpus.py.
  * The malformed-*.pcap files, mutated captures from fuzzing,
  * must merely be read to their end.
  */

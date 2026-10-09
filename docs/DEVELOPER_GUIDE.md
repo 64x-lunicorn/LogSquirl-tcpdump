@@ -173,8 +173,9 @@ a number), and the packet's direction in it, 0 or 1 (the same for every
 packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
 pointer. Every field added costs memory once per numbered stream: today a
-`TcpDirection` per direction (a base sequence number and whether it is
-known), 16 bytes, some 16 MB at the stream cap.
+`TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
+so 64 bytes per stream, some 64 MB at the stream cap. A UDP stream pays
+for it too, as both transports share `StreamState`.
 
 `analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
 by the Converter after the Stream Tracker, shows a TCP segment's `Seq=` and
@@ -195,14 +196,66 @@ TCP Analysis replaces that text; segments of a stream past the stream cap
 have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
 `tcpAck` stay the raw values.
 
+#### TCP analysis markers
+`analyseTcp()` then classifies the segment as Wireshark's TCP analysis does
+(`tcp_analyze_sequence_number()` in `epan/dissectors/packet-tcp.c`, with its
+default preferences), puts its markers at the start of Info in Wireshark's
+words, `[TCP Retransmission] 80 → 54321 [ACK, PSH] Seq=1 …`, and returns
+them as `TcpMarkers`, which the Converter counts in `CaptureStats` for the
+Capture Summary. Several markers stand in Wireshark's order, the last one
+it adds first: `[TCP ZeroWindow] [TCP Keep-Alive] …`. Each direction keeps
+what Wireshark's `tcp_flow_t` holds for the rules below, in relative numbers
+(0 meaning none seen yet, as in Wireshark): the next sequence number expected
+(`nextSeq`, one past the highest sent, a SYN and a FIN counting one), the
+last acknowledgement number, window and time, the number of duplicate ACKs
+and the packet they count from, and whether the last segment was a
+keep-alive or a zero window probe. With `fwd` the segment's direction,
+`rev` the other one and `len` its payload on the wire:
+
+| Marker | Rule |
+|--------|------|
+| `[TCP ZeroWindowProbe]` | `len` 1 at `fwd.nextSeq` while `rev`'s window is 0; it skips the ACK checks below and does not advance `nextSeq` |
+| `[TCP ZeroWindow]` | window 0, no SYN, FIN or RST |
+| `[TCP Previous segment not captured]` | sequence number beyond `fwd.nextSeq`, no RST |
+| `[TCP Keep-Alive]` | `len` 0 or 1 at `fwd.nextSeq - 1`, no SYN, FIN or RST |
+| `[TCP Window Update]` | `len` 0, a new window other than 0, same sequence number (`fwd.nextSeq`) and ACK as before |
+| `[TCP Keep-Alive ACK]` | `len` 0, the same window (not 0), sequence number and ACK as before, after a keep-alive from `rev` |
+| `[TCP ZeroWindowProbeAck]` | `len` 0, window still 0, the same sequence number and ACK (or one more) as before, after a probe from `rev` |
+| `[TCP Dup ACK n#m]` | `len` 0, the same window (not 0), sequence number and ACK as before: the `m`th repeat of the ACK of packet `n` |
+| `[TCP Spurious Retransmission]` | data (not a keep-alive) that `rev` has acknowledged already |
+| `[TCP Fast Retransmission]` | data, a SYN or a FIN before `fwd.nextSeq`, at the sequence number `rev` last acknowledged, after at least two duplicate ACKs of it, within 20 ms of `rev`'s last segment |
+| `[TCP Out-Of-Order]` | otherwise before `fwd.nextSeq`, within 3 ms of `rev`'s last segment, and not ending where `fwd.nextSeq` is (or ending there after a segment without data had raised it) |
+| `[TCP Retransmission]` | otherwise before `fwd.nextSeq` |
+
+Segments with a bogus TCP header length are not analysed, as in Wireshark.
+The limits, all where Wireshark keeps more than a few integers per
+direction:
+
+- No list of the segments sent is kept, so a segment within 3 ms of the
+  other direction's last one that was captured before is still called
+  out of order, where Wireshark knows it was seen and calls it a
+  retransmission; and `[TCP ACKed unseen segment]` is not shown.
+- The 3 ms out-of-order limit is Wireshark's for a connection whose
+  round-trip time it does not know; Wireshark takes the handshake's when it
+  saw the handshake, this analysis never does.
+- SACK blocks and the window scale option are not read, so there is no
+  SACK-based fast retransmission and no `[TCP Window Full]`; windows are
+  compared as sent.
+- `[TCP Port numbers reused]`, `[TCP Retransmission]`'s RTO and the other
+  fields Wireshark shows in its tree only are left out.
+- As in Wireshark, sequence numbers compare modulo 2^32, and a segment
+  captured before the other direction's last one (a capture that needs
+  reordering) counts as 0 ms after it.
+
 `CaptureStats` collects the sidebar summary's counts packet by packet
-(among them the packets cut at the snaplen),
+(among them the packets cut at the snaplen and the TCP segments per
+analysis marker kind),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
 
 Memory therefore grows with the conversations and addresses in a capture,
-not with its size, and both are capped (at roughly 100 MB and 10 MB), so a
+not with its size, and both are capped (at roughly 150 MB and 10 MB), so a
 port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
@@ -233,7 +286,7 @@ and the shared CI cannot yet pack it into the release archive (#58);
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream and the TCP Analysis show its numbers relative, formats the packet and appends its line to a new output file,
+its stream and the TCP Analysis show its numbers relative and mark it, counts its markers, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
@@ -259,8 +312,9 @@ Qt UI that provides:
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints, the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
-  (comma-separated when there are several), and the number of packets cut
-  at the snaplen when there are any
+  (comma-separated when there are several), the number of packets cut
+  at the snaplen when there are any, and under *Analysis* the TCP segments
+  per analysis marker kind when there are any
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
@@ -325,7 +379,10 @@ through the Payload Describer with a payload alone. `tests/corpus` holds capture
 convert to (`corpus_test.cpp`); run the tests with `TCPDUMP_UPDATE_CORPUS=1`
 to rewrite that text after an intended change of the output, and review the
 difference. The pcapng corpus capture, `interfaces.pcapng`, is made up byte
-for byte by `tests/make_pcapng_corpus.py`; the pcapng unit tests build their
+for byte by `tests/make_pcapng_corpus.py`, and `tcp-analysis.pcap`, a TCP
+connection that shows every analysis marker, by
+`tests/make_tcp_analysis_corpus.py`: a real lossy capture would need root
+for a lossy link (tc netem) and differ from run to run. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in

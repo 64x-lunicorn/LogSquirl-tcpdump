@@ -106,6 +106,12 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     summary.protocolPackets = std::move( stats.protocolPackets );
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );
+    for ( size_t i = 0; i < kTcpMarkerKinds; ++i ) {
+        if ( stats.tcpMarkers[ i ] > 0 ) {
+            summary.tcpMarkers.emplace_back( tcpMarkerName( static_cast<TcpMarker>( i ) ),
+                                             stats.tcpMarkers[ i ] );
+        }
+    }
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
@@ -253,7 +259,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         }
         stats.add( pkt );
         const auto stream = tracker.track( pkt );
-        analyseTcp( pkt, stream );
+        stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }

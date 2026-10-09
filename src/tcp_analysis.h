@@ -19,7 +19,8 @@
 
 /**
  * @file tcp_analysis.h
- * @brief Follows each TCP stream's sequence numbers over its segments.
+ * @brief Follows each TCP stream's sequence numbers over its segments, and
+ *        marks the segments Wireshark's TCP analysis would.
  *
  * Pure C++ — no Qt dependency.
  */
@@ -29,7 +30,66 @@
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
+#include <cstddef>
+#include <cstdint>
+
 namespace tcpdump {
+
+/**
+ * The kinds of marker the TCP Analysis puts at the start of Info, as
+ * Wireshark's "[TCP …]" expert markers.  In the order Wireshark adds them
+ * to Info, each in front of the ones before.
+ */
+enum class TcpMarker : uint8_t {
+    Retransmission,             ///< Data sent again, after a while.
+    FastRetransmission,         ///< Data sent again on two duplicate ACKs for it.
+    SpuriousRetransmission,     ///< Data sent again that was acknowledged already.
+    OutOfOrder,                 ///< Data that arrives shortly after later data.
+    PreviousSegmentNotCaptured, ///< Data beyond the next sequence number.
+    WindowUpdate,               ///< An ACK that only changes the window.
+    KeepAlive,                  ///< An empty or one-byte segment one byte behind.
+    KeepAliveAck,               ///< The ACK repeated in answer to a keep-alive.
+    DupAck,                     ///< An ACK that repeats the previous one.
+    ZeroWindowProbe,            ///< One byte sent into a closed window.
+    ZeroWindow,                 ///< A segment advertising a window of zero.
+    ZeroWindowProbeAck,         ///< The ACK of a probe that keeps the window closed.
+};
+
+/// How many kinds of TcpMarker there are.
+constexpr size_t kTcpMarkerKinds = 12;
+
+/// The marker's text without its brackets, as Wireshark writes it in
+/// Info: "TCP Retransmission", "TCP Dup ACK" (without its numbers), …
+const char* tcpMarkerName( TcpMarker marker );
+
+/// A set of TcpMarker, the markers of one segment.
+class TcpMarkers {
+public:
+    TcpMarkers& set( TcpMarker marker )
+    {
+        bits_ |= bit( marker );
+        return *this;
+    }
+    bool test( TcpMarker marker ) const
+    {
+        return ( bits_ & bit( marker ) ) != 0;
+    }
+    bool none() const
+    {
+        return bits_ == 0;
+    }
+    bool operator==( const TcpMarkers& other ) const
+    {
+        return bits_ == other.bits_;
+    }
+
+private:
+    static uint16_t bit( TcpMarker marker )
+    {
+        return static_cast<uint16_t>( 1u << static_cast<unsigned>( marker ) );
+    }
+    uint16_t bits_ = 0;
+};
 
 /**
  * Show @p pkt's sequence and acknowledgement numbers in Info relative to
@@ -46,9 +106,19 @@ namespace tcpdump {
  * numbers wrap around at 2^32 with the sequence numbers.  Without the ACK
  * flag the acknowledgement field means nothing and Ack=0 is shown.
  *
- * Packets other than TCP ones, and those of a stream past the stream cap,
- * which has no state, are left as they are.
+ * The segment is then classified by Wireshark's TCP analysis heuristics
+ * (packet-tcp.c, tcp_analyze_sequence_number()), as far as what each
+ * direction keeps allows (TcpDirection): its markers are put at the start
+ * of Info, "[TCP Retransmission] 80 → 54321 …", in Wireshark's wording and
+ * order, and returned.  A segment that cannot be classified, such as the
+ * first of a stream captured mid-way, gets none.  The Developer Guide
+ * lists the rules and where they fall short of Wireshark's.
+ *
+ * Packets other than TCP ones and those of a stream past the stream cap,
+ * which has no state, are left as they are.  A segment with a bogus TCP
+ * header length gets relative numbers but no markers, as Wireshark does
+ * not analyse it.
  */
-void analyseTcp( PacketRecord& pkt, const Stream& stream );
+TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream );
 
 } // namespace tcpdump

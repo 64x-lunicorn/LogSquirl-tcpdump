@@ -99,6 +99,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         pkt.tcpWindow = readBE16( data + 14 );
 
         const auto dataOffset = static_cast<size_t>( data[ 12 ] >> 4 ) * 4;
+        pkt.tcpHeaderLen = static_cast<uint8_t>( dataOffset );
 
         // Build base TCP info line
         std::ostringstream oss;

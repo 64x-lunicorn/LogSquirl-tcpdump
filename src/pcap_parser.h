@@ -146,6 +146,9 @@ struct PacketRecord {
     uint32_t tcpAck = 0;
     uint8_t tcpFlags = 0;
     uint16_t tcpWindow = 0;
+    /// The TCP header's length in bytes as its data offset gives it; less
+    /// than 20 is bogus, and the segment's payload unknown.
+    uint8_t tcpHeaderLen = 0;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
 
