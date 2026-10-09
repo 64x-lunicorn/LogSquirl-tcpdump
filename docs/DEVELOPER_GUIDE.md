@@ -132,6 +132,17 @@ description, or no match. It is the only module that knows which
 application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
+`payload_describer.cpp` holds the tables, the port hint and preview, and
+`describeInStream()`; the protocols' detectors live in a file each,
+following `icmp.cpp`: `describe_http.cpp` (HTTP, SSDP's messages, HTTP/2
+and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
+(with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
+over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
+`describe_socks.cpp` and `describe_nmea.cpp`. They share the internal
+header `describe_common.h` (namespace `tcpdump::describer`): the payload
+text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
+`hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
+of the detectors and in-stream passes the tables use.
 - TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, NMEA 0183, SOCKS4/5
   (only messages of the exact shape, in the right direction, on proxy
   ports), then the port hint
@@ -623,13 +634,17 @@ host, where saving fails with a notification.
 
 ## Adding Protocol Support
 
-An application protocol is one detector function plus one table entry in
-`payload_describer.cpp`:
-1. Write the detector with the common shape,
-   `std::optional<PayloadDescription> name( const Payload& )`: look at the
-   payload bytes and ports, return the label and a description if the
-   payload is yours, `std::nullopt` otherwise. Use `escapeBytes()` or
-   `firstLine()` for any text taken from the payload.
+An application protocol is a detector in a file of its own plus one table
+entry in `payload_describer.cpp`:
+1. Write `detectName( payload, len )` in `src/describe_name.cpp` (added to
+   both CMakeLists), declared in `describe_common.h`: the description if
+   the payload is yours, empty otherwise. Use `escapeBytes()`,
+   `fieldText()` or `firstLine()` for any text taken from the payload, and
+   a `FieldReader` for binary fields. In `payload_describer.cpp`, wrap it
+   in a function of the tables' common shape,
+   `std::optional<PayloadDescription> name( const Payload& )`, that looks
+   at the ports if it must and returns the label and the description, or
+   `std::nullopt`.
 2. Add it to `kTcpDetectors` or `kUdpDetectors`, for the transport it runs
    on, at the place in the order where it belongs: an entry earlier in the
    table wins over a later one, so a detector that recognises its payload

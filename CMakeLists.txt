@@ -42,6 +42,14 @@ add_library(logsquirl_tcpdump SHARED
     src/icmp.cpp
     src/pcapng_reader.cpp
     src/payload_describer.cpp
+    src/describe_text.cpp
+    src/describe_http.cpp
+    src/describe_nmea.cpp
+    src/describe_dns.cpp
+    src/describe_dhcp_ntp.cpp
+    src/describe_tls.cpp
+    src/describe_quic.cpp
+    src/describe_socks.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp
     src/stream_tracker.cpp
