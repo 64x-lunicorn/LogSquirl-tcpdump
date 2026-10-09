@@ -166,6 +166,7 @@ public:
             api_.get_selected_log_lines = []( void* handle, const char** text, std::size_t* length,
                                               std::size_t* lineCount ) {
                 auto* host = self( handle );
+                ++host->selectionCalls;
                 if ( !text ) {
                     return static_cast<int>( LOGSQUIRL_LOG_LINES_INVALID_ARGUMENT );
                 }
@@ -263,6 +264,8 @@ public:
     QStringList selectedLines;        ///< What get_selected_log_lines() returns.
     /** get_selected_log_lines()'s result when lines are selected, or a negative one to fail. */
     int selectionResult = LOGSQUIRL_LOG_LINES_OK;
+    /** How often get_selected_log_lines() was called. */
+    int selectionCalls = 0;
 
     /** The host API table, to pass to logsquirl_plugin_init() or _init_ex(). */
     const LogSquirlHostApi* api() const

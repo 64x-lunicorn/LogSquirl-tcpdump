@@ -33,6 +33,7 @@ add_executable(logsquirl_tcpdump_tests
     streaming_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    packet_panel_test.cpp
     follow_stream_test.cpp
     regex_lab_test.cpp
     corpus_test.cpp
@@ -100,6 +101,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"

@@ -64,6 +64,7 @@ add_library(logsquirl_tcpdump SHARED
     src/tempdirs.cpp
     src/settings.cpp
     src/configdialog.cpp
+    src/packet_panel.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
     src/regex_lab.cpp
