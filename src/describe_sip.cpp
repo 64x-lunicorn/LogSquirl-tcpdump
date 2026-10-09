@@ -758,14 +758,14 @@ std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
                        std::vector<SipCall>& calls )
 {
     const uint8_t* const end = payload + len;
-    const Text bytes{ payload, len };
-    auto start = startLineOf( bytes );
+    // Line ends before the first message are skipped as between messages.
+    const uint8_t* at = skipLineEnds( payload, end );
+    auto start = startLineOf( { at, static_cast<size_t>( end - at ) } );
     if ( !start ) {
         return {};
     }
     std::vector<std::string> messages;
     bool more = false;
-    const uint8_t* at = payload;
     while ( start ) {
         if ( messages.size() == kMaxSipMessages ) {
             more = true;
@@ -796,9 +796,22 @@ std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
     return more ? text + "; " + kEllipsis : text;
 }
 
+std::string detectSipKeepAlive( const uint8_t* payload, size_t len )
+{
+    if ( len == 4 && std::memcmp( payload, "\r\n\r\n", 4 ) == 0 ) {
+        return "Keep-alive (ping)";
+    }
+    if ( len == 2 && std::memcmp( payload, "\r\n", 2 ) == 0 ) {
+        return "Keep-alive (pong)";
+    }
+    return {};
+}
+
 std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len )
 {
-    const Text bytes{ payload, len };
+    // The keep-alives before a message go with it.
+    const auto* at = skipLineEnds( payload, payload + len );
+    const Text bytes{ at, static_cast<size_t>( payload + len - at ) };
     const auto start = startLineOf( bytes );
     if ( !start ) {
         return std::nullopt;

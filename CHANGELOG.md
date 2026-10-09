@@ -535,6 +535,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaces only what the same side of the call announced before, the side
   told by the `o=` line, where before it replaced every endpoint of the
   call on an address it named (#105).
+- **SIP keep-alives.** A SIP-over-TCP segment that begins with the CRLF
+  keep-alives of RFC 5626 before a message is described and reassembled
+  as that message, where before it was not SIP at all; a keep-alive alone
+  on port 5060 is `Keep-alive (ping)` (double CRLF) or `Keep-alive (pong)`
+  (#107).
 
 ## [0.3.0] — 2026-10-09
 

@@ -129,6 +129,9 @@ bool onPort( const Payload& p, uint16_t port )
     return p.srcPort == port || p.dstPort == port;
 }
 
+/// SIP's port, UDP and TCP (5061 is SIP over TLS).
+constexpr uint16_t kSipPort = 5060;
+
 /// DoIP's port, UDP and TCP (ISO 13400-2); over TLS it is 3496.
 constexpr uint16_t kDoipPort = 13400;
 
@@ -199,9 +202,14 @@ std::optional<PayloadDescription> mqttPackets( const Payload& p )
 
 /// SIP on any port, by its start line; the media its SDP bodies announce
 /// goes with the description.  Before HTTP, whose OPTIONS a SIP request
-/// shares.
+/// shares.  A keep-alive, only line ends, on SIP's port only.
 std::optional<PayloadDescription> sipMessages( const Payload& p )
 {
+    if ( onPort( p, kSipPort ) ) {
+        if ( auto keepAlive = detectSipKeepAlive( p.data, p.len ); !keepAlive.empty() ) {
+            return described( "SIP", std::move( keepAlive ) );
+        }
+    }
     std::vector<SipCall> calls;
     auto result
         = describedIfAny( "SIP", detectSip( p.data, p.len, p.transport == Transport::Tcp, calls ) );

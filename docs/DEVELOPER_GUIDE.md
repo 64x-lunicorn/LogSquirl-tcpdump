@@ -721,8 +721,11 @@ of the detectors and in-stream passes the tables use.
   a84b4c76e667…`, and an SDP body summarised by its media lines, `, SDP
   (audio 49170 RTP/AVP 0 8)`. The compact header names (`i`, `l`, `c`)
   count. Over TCP the messages of a segment follow each other by their
-  Content-Length (none: no body), line ends between them skipped, up to
-  four, joined by `; `, then `…`; over UDP a datagram is one message, its
+  Content-Length (none: no body), line ends before and between them
+  skipped (RFC 3261, 7.5; the keep-alives of RFC 5626), up to
+  four, joined by `; `, then `…`; a payload that is only a keep-alive, on
+  port 5060, is `Keep-alive (ping)` (a double CRLF) or `Keep-alive (pong)`
+  (one CRLF); over UDP a datagram is one message, its
   body the rest of it without a Content-Length. A message whose header
   section or body goes on in the next segment is reassembled
   (`frameSipMessage()`, see TCP Reassembly); one cut at the snaplen ends in

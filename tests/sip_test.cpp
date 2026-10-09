@@ -367,6 +367,37 @@ SCENARIO( "SIP over TCP is read message by message by its Content-Length", "[sip
         }
     }
 
+    GIVEN( "keep-alives before a message, and alone (RFC 5626)" )
+    {
+        const auto message = invite( sdp( "192.0.2.10", 49170 ) );
+
+        THEN( "the line ends before a message are skipped, a ping and a pong named on SIP's "
+              "port" )
+        {
+            const auto plain = overTcp( message, 5070 );
+            const auto after = overTcp( "\r\n\r\n" + message, 5070 );
+            REQUIRE( after.label == "SIP" );
+            REQUIRE( after.description == plain.description );
+            REQUIRE( after.sipCalls.size() == 1 );
+            REQUIRE( overUdp( "\r\n" + message ).description == plain.description );
+
+            const auto bytes = text( "\r\n\r\n" + message );
+            const auto extent = tcpMessageExtent( bytes.data(), bytes.size(), 50600, kSipPort );
+            REQUIRE( extent.complete() );
+            REQUIRE( std::string( extent.label ) == "SIP" );
+            REQUIRE( extent.length == bytes.size() );
+
+            const auto ping = overTcp( "\r\n\r\n" );
+            REQUIRE( ping.label == "SIP" );
+            REQUIRE_FALSE( ping.guessed );
+            REQUIRE( ping.description == "Keep-alive (ping)" );
+            REQUIRE( overTcp( "\r\n" ).description == "Keep-alive (pong)" );
+            REQUIRE( overUdp( "\r\n\r\n" ).description == "Keep-alive (ping)" );
+            REQUIRE( overTcp( "\r\n\r\n", 5070 ).label != "SIP" );
+            REQUIRE( overTcp( "\r\n\r\n\r\n" ).description != "Keep-alive (ping)" );
+        }
+    }
+
     GIVEN( "a segment that begins inside a message, on SIP's port" )
     {
         THEN( "it is SIP by its port alone" )

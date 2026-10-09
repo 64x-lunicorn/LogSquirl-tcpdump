@@ -263,9 +263,13 @@ std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, u
 std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort );
 /// The payload begins with an MQTT CONNECT (describe_mqtt.cpp).
 bool isMqttConnect( const uint8_t* payload, size_t len );
-/// The SIP messages a payload begins with, every one of a TCP segment
-/// (describe_sip.cpp): what their SDP bodies announce, and the calls a BYE
-/// ends, are added to @p calls.
+/// A keep-alive of a SIP connection (RFC 5626, 3.5.1), the whole payload:
+/// "Keep-alive (ping)" for a double CRLF, "Keep-alive (pong)" for one;
+/// otherwise empty (describe_sip.cpp).
+std::string detectSipKeepAlive( const uint8_t* payload, size_t len );
+/// The SIP messages a payload begins with, line ends before them skipped,
+/// every one of a TCP segment (describe_sip.cpp): what their SDP bodies
+/// announce, and the calls a BYE ends, are added to @p calls.
 std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
                        std::vector<SipCall>& calls );
 
@@ -340,8 +344,8 @@ std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
 std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
 /// An HTTP/1.x header section (describe_http.cpp).
 std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
-/// A SIP message, its body as long as its Content-Length says
-/// (describe_sip.cpp).
+/// A SIP message, its body as long as its Content-Length says, and the
+/// line ends before it (describe_sip.cpp).
 std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len );
 /// An MQTT control packet, by its Remaining Length (describe_mqtt.cpp).
 std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
