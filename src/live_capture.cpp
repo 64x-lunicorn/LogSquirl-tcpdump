@@ -26,7 +26,9 @@
 
 #include <QMetaObject>
 
+#include <algorithm>
 #include <exception>
+#include <vector>
 
 namespace tcpdump {
 
@@ -107,6 +109,10 @@ void LiveCapture::start()
         } );
         // May take a while: a capture program is ended here.
         source.reset();
+        post( [ this ] {
+            done_ = true;
+            emit done();
+        } );
     } );
 }
 
@@ -119,6 +125,56 @@ void LiveCapture::cancel()
 {
     cancel_->store( true );
     stop_->store( true );
+}
+
+namespace {
+
+/// The retired captures, on the UI thread.
+std::vector<std::unique_ptr<LiveCapture>>& retired()
+{
+    static std::vector<std::unique_ptr<LiveCapture>> captures;
+    return captures;
+}
+
+/// Let go of the retired captures that are done: destroying them waits for
+/// nothing (or for a worker's last moments, after done()).
+void sweep()
+{
+    auto& captures = retired();
+    captures.erase( std::remove_if( captures.begin(), captures.end(),
+                                    []( const auto& capture ) { return capture->isDone(); } ),
+                    captures.end() );
+}
+
+} // namespace
+
+void retireLiveCapture( std::unique_ptr<LiveCapture> capture )
+{
+    sweep();
+    if ( !capture ) {
+        return;
+    }
+    capture->disconnect();
+    capture->stop();
+    if ( !capture->isDone() ) {
+        retired().push_back( std::move( capture ) );
+    }
+}
+
+void joinLiveCaptures()
+{
+    auto& captures = retired();
+    for ( auto& capture : captures ) {
+        capture->stop();
+    }
+    // Each destructor waits for its worker.
+    captures.clear();
+}
+
+size_t retiredLiveCaptures()
+{
+    sweep();
+    return retired().size();
 }
 
 } // namespace tcpdump

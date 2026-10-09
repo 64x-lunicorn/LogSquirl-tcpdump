@@ -357,14 +357,16 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
 SidebarWidget::~SidebarWidget()
 {
-    // A live capture is stopped, not cancelled: its tab may stay open after
-    // a runtime disable.  Its worker is waited for, as the conversion's.
-    live_.reset();
-
     // The listings of the form and the dialog are waited for by
     // listingPool_, as the host unloads the library next: their programs
     // are killed first, so that this takes moments, not a listing's timeout.
+    // First, as a live capture's worker may be listing too.
     cancelListings();
+
+    // A live capture is stopped, not cancelled: its tab may stay open after
+    // a runtime disable.  Its worker is not waited for here: the plugin's
+    // shutdown joins it (joinLiveCaptures()), with its program ended.
+    retireLiveCapture( std::move( live_ ) );
 
     // The host unloads the library right after the plugin is shut down:
     // the worker must be done with it before.  It checks the cancel flag
@@ -823,8 +825,9 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Capturing live: " + name );
 
-    // The last capture's worker may still be ending its program.
-    live_.reset();
+    // The last capture's worker may still be ending its program: it ends
+    // on its own, never waited for here.
+    retireLiveCapture( std::move( live_ ) );
     live_ = std::make_unique<LiveCapture>(
         name, tempRoot_, loadConversionOptions( hostConfigDir() ), std::move( makeSource ) );
     live_->setLimits( limits );
@@ -832,6 +835,7 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     connect( live_.get(), &LiveCapture::readyToOpen, this, &SidebarWidget::openLiveCapture );
     connect( live_.get(), &LiveCapture::snapshotTaken, this, &SidebarWidget::takeLiveSnapshot );
     connect( live_.get(), &LiveCapture::finished, this, &SidebarWidget::finishLiveCapture );
+    connect( live_.get(), &LiveCapture::done, this, &SidebarWidget::startPendingLiveCapture );
     connect( live_.get(), &LiveCapture::stderrLine, this, [ this, name ]( const QString& line ) {
         hostLog( LOGSQUIRL_LOG_INFO, name + ": " + line );
         liveStderr_->appendPlainText( line );
@@ -930,9 +934,14 @@ void SidebarWidget::chooseAndStartLiveCapture()
         return;
     }
     if ( capturing_ ) {
-        // Started once the running one has ended (finishLiveCapture()).
+        // Started once the running one is done (startPendingLiveCapture()).
         pendingStart_ = choice;
         stopLiveCapture();
+        return;
+    }
+    if ( live_ && !live_->isDone() ) {
+        // Finished, but its program is still ending.
+        pendingStart_ = choice;
         return;
     }
     startLiveCapture( choice );
@@ -1072,18 +1081,19 @@ void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summa
 void SidebarWidget::finishLiveCapture( const ConversionResult& result )
 {
     reportLiveOutcome( result );
-    // Start live capture… asked for another one: after this signal, as
-    // starting it destroys the LiveCapture that sends it.
-    if ( pendingStart_ ) {
-        QTimer::singleShot( 0, this, [ this ] {
-            if ( !pendingStart_ ) {
-                return;
-            }
-            const auto choice = *pendingStart_;
-            pendingStart_.reset();
-            startLiveCapture( choice );
-        } );
+}
+
+void SidebarWidget::startPendingLiveCapture()
+{
+    // Start live capture… asked for another one: once the last one is done,
+    // its program ended too, so that two never capture at once.  Starting
+    // it retires the LiveCapture that sends this, which goes on living.
+    if ( !pendingStart_ ) {
+        return;
     }
+    const auto choice = *pendingStart_;
+    pendingStart_.reset();
+    startLiveCapture( choice );
 }
 
 void SidebarWidget::reportLiveOutcome( const ConversionResult& result )

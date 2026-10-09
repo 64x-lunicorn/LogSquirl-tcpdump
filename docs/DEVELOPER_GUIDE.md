@@ -1655,8 +1655,17 @@ ProcessCommand )` for a capture program), as a `ProcessSource` must be.
 `setLimits()` and `setClock()` before `start()` hand the conversion its
 `LiveLimits` and clock, the same for every source kind. The
 outcome is posted before the source is destroyed, so a program that takes
-up to `kTerminateGrace` to end does not delay it; the destructor stops and
-waits for the worker.
+up to `kTerminateGrace` to end does not delay it; `done()` follows once the
+source is gone (`isDone()`). The UI thread never waits for a worker: the
+sidebar hands a capture that may still run (the last one, as the next
+starts; its own, as it is destroyed) to `retireLiveCapture()`, which
+disconnects and stops it and keeps it until it is done; a restart from
+*Start live capture…* starts the next on the last one's `done()`, so that
+two capture programs never run at once. The plugin's shutdown is the one
+place that waits: `cancelListings()` first (a worker may be in a listing,
+e.g. adb's probe), `terminateCaptureProcesses()`, then `joinLiveCaptures()`
+stops and destroys every retired capture, whose destructor waits for its
+worker, before the library is unloaded.
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,

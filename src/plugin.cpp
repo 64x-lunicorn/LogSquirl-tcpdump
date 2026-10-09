@@ -376,7 +376,16 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 
     // No capture program may outlive the plugin: whatever runs still, also
     // on a thread the widget did not wait for, ends with what it started.
-    guarded( "ending capture programs", [] { tcpdump::terminateCaptureProcesses(); } );
+    // The live captures the widget retired are joined in between, the one
+    // wait for them, after their listings were cancelled and their
+    // programs ended, so that it takes moments: the library is unloaded
+    // next.
+    guarded( "ending capture programs", [] {
+        tcpdump::cancelListings();
+        tcpdump::terminateCaptureProcesses();
+        tcpdump::joinLiveCaptures();
+        tcpdump::terminateCaptureProcesses();
+    } );
 
     // The tabs close with LogSquirl: remove the files of every instance of
     // the plugin in this process, also those of instances before a runtime

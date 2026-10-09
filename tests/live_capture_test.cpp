@@ -25,6 +25,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "fake_live_source.h"
 #include "fakehost.h"
 #include "live_capture.h"
 #include "packet_panel.h"
@@ -42,6 +43,7 @@
 #include <QTemporaryDir>
 
 #include <memory>
+#include <thread>
 
 using namespace tcpdump;
 using namespace tcpdump_test;
@@ -133,6 +135,73 @@ SCENARIO( "A live capture that a stop condition ended says which", "[live_captur
 }
 
 #ifdef Q_OS_UNIX
+
+namespace {
+
+/// A source whose end, as a capture program's, takes its time.
+class SlowEndingSource : public ScriptedSource {
+public:
+    SlowEndingSource( Bytes bytes, const std::atomic_bool* stop )
+        : ScriptedSource( std::move( bytes ), {}, stop )
+    {
+    }
+    ~SlowEndingSource() override
+    {
+        std::this_thread::sleep_for( kEnding );
+    }
+
+    static constexpr std::chrono::milliseconds kEnding{ 1500 };
+};
+
+} // namespace
+
+SCENARIO( "The UI thread never waits for a live capture's source to end", "[live_capture]" )
+{
+    FakeHost host;
+    QTemporaryDir root;
+    const auto slow = factoryOf( []( const std::atomic_bool* stop ) {
+        return std::make_unique<SlowEndingSource>( pcapOf( { datagram( 0 ) } ), stop );
+    } );
+    auto sidebar = std::make_unique<SidebarWidget>();
+    sidebar->setTempRoot( root.path() );
+    REQUIRE( sidebar->startLiveCapture( "slow", slow ) );
+    REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1; } ) );
+    sidebar->stopLiveCapture();
+    REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+
+    WHEN( "the next capture starts while the last one's source is still ending" )
+    {
+        QElapsedTimer clock;
+        clock.start();
+        REQUIRE( sidebar->startLiveCapture( "next", slow ) );
+        const auto took = clock.elapsed();
+
+        THEN( "it starts at once, and the last one ends on its own" )
+        {
+            REQUIRE( took < 500 );
+            REQUIRE( retiredLiveCaptures() == 1 );
+            REQUIRE( waitFor( [ & ] { return retiredLiveCaptures() == 0; } ) );
+        }
+    }
+
+    WHEN( "the sidebar is closed while the source is still ending" )
+    {
+        QElapsedTimer clock;
+        clock.start();
+        sidebar.reset();
+        const auto took = clock.elapsed();
+
+        THEN( "it closes at once; the plugin's shutdown joins the worker" )
+        {
+            REQUIRE( took < 500 );
+            REQUIRE( retiredLiveCaptures() == 1 );
+            joinLiveCaptures();
+            REQUIRE( retiredLiveCaptures() == 0 );
+        }
+    }
+    sidebar.reset();
+    joinLiveCaptures();
+}
 
 SCENARIO( "A live capture opens its tab once a packet line is there, and Stop finalises it",
           "[live_capture]" )

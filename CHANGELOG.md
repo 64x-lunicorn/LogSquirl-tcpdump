@@ -489,6 +489,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- Stopping, restarting or closing a live capture no longer freezes
+  LogSquirl while its capture program takes its time to end (up to the
+  2 s grace, or a slow adb or ssh): the UI thread never waits for the
+  capture's worker, which ends on its own; a restart starts once the last
+  one is done; the plugin's shutdown cancels listings first and then joins
+  what is left (#123).
 - The Custom command examples for adb and ssh put `{filter}` into the line
   those programs hand the device's or server's shell, so a filter with `;`
   or `$(…)` ran there. New placeholders `{interface:sh}` and `{filter:sh}`

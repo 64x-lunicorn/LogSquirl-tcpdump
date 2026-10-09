@@ -36,7 +36,13 @@
  * LiveLimits, reached, ends it the same way.  Cancel also removes what was
  * written.  The outcome is posted before the source is destroyed, so that a
  * capture program that takes its time to end (ProcessSource::terminate())
- * does not hold it up.
+ * does not hold it up; done() follows once the source is gone.
+ *
+ * The UI thread never waits for a worker: a LiveCapture that may still run
+ * is handed to retireLiveCapture(), which stops it and keeps it until its
+ * worker is done, and the plugin's shutdown joins what is left
+ * (joinLiveCaptures()), the one place that waits, as the library is
+ * unloaded next.
  */
 
 #pragma once
@@ -74,7 +80,8 @@ public:
                  SourceFactory makeSource, QObject* parent = nullptr );
     /// Stops a capture that still runs, as stop() does, and waits for the
     /// worker: no code of the plugin runs on it afterwards.  What would have
-    /// been posted is dropped.
+    /// been posted is dropped.  On the UI thread, destroy one only once it
+    /// isDone(), or never started; hand others to retireLiveCapture().
     ~LiveCapture() override;
 
     LiveCapture( const LiveCapture& ) = delete;
@@ -110,6 +117,13 @@ public:
         return running_;
     }
 
+    /// Whether its worker is done, its source gone (done() was emitted), or
+    /// it was never started: destroying it then waits for nothing.
+    bool isDone() const
+    {
+        return !started_ || done_;
+    }
+
     const QString& name() const
     {
         return name_;
@@ -127,6 +141,8 @@ signals:
     /// (keeping what was captured, if a packet came), Cancelled, or Stopped
     /// before its capture header had come (nothing was captured).
     void finished( const tcpdump::ConversionResult& result );
+    /// After finished(): the source is gone too, its capture program ended.
+    void done();
 
 private:
     /// Run @p work on this object's thread, unless it is gone by then.
@@ -140,11 +156,26 @@ private:
     LiveClock clock_;
     bool running_ = false;
     bool started_ = false;
+    bool done_ = false;
     /// Ends the stream (Stop and Cancel), and removes what was written (Cancel).
     std::shared_ptr<std::atomic_bool> stop_ = std::make_shared<std::atomic_bool>( false );
     std::shared_ptr<std::atomic_bool> cancel_ = std::make_shared<std::atomic_bool>( false );
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
 };
+
+/// Stop @p capture and keep it until its worker is done, then let it go:
+/// on the UI thread, instead of destroying a capture that may still run.
+/// Its signals are disconnected; nothing waits.
+void retireLiveCapture( std::unique_ptr<LiveCapture> capture );
+
+/// Stop every retired capture and wait for their workers: the plugin's
+/// shutdown, after cancelListings() (a worker may be listing) and with the
+/// capture programs ended (terminateCaptureProcesses()), as the library is
+/// unloaded next.  On the UI thread.
+void joinLiveCaptures();
+
+/// The retired captures whose workers are not done yet.
+size_t retiredLiveCaptures();
 
 } // namespace tcpdump

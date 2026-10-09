@@ -339,9 +339,11 @@ private:
     void openLiveCapture( const QString& logPath, const QString& rawPath );
     /// The live capture's summary so far.
     void takeLiveSnapshot( const LiveSnapshot& snapshot );
-    /// Show the outcome of a live capture, return to idle, and start the
-    /// capture Start live capture… asked for meanwhile.
+    /// Show the outcome of a live capture, and return to idle.
     void finishLiveCapture( const ConversionResult& result );
+    /// The live capture's worker is done: start the capture Start live
+    /// capture… asked for meanwhile.
+    void startPendingLiveCapture();
     /// Show the outcome of a live capture and return to idle.
     void reportLiveOutcome( const ConversionResult& result );
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
