@@ -27,6 +27,7 @@
 #include "capture_reader.h"
 #include "packet_formatter.h"
 #include "stream_tracker.h"
+#include "tcp_analysis.h"
 #include "tempdirs.h"
 
 #include <QDir>
@@ -252,6 +253,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         }
         stats.add( pkt );
         const auto stream = tracker.track( pkt );
+        analyseTcp( pkt, stream );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }

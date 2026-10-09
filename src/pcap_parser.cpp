@@ -103,7 +103,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         // Build base TCP info line
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
-            << formatTcpFlags( pkt.tcpFlags ) << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck
+            << formatTcpFlags( pkt.tcpFlags ) << " " << formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck )
             << " Win=" << pkt.tcpWindow;
 
         // A header shorter than its 20 fixed bytes is malformed: where the
@@ -593,6 +593,11 @@ std::string formatTcpFlags( uint8_t flags )
         result += "none";
     result += "]";
     return result;
+}
+
+std::string formatTcpNumbers( uint32_t seq, uint32_t ack )
+{
+    return "Seq=" + std::to_string( seq ) + " Ack=" + std::to_string( ack );
 }
 
 // ── Byte sources ─────────────────────────────────────────────────────────

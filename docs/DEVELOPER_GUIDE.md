@@ -60,7 +60,7 @@ to the same dissection (`dissectPacket()`):
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
 
 #### The reader seam
-Everything past the reader (Converter, Stream Tracker, Packet Formatter, `CaptureStats`)
+Everything past the reader (Converter, Stream Tracker, TCP Analysis, Packet Formatter, `CaptureStats`)
 sees a capture through `CaptureReader` only, never through a file header.
 Each `PacketRecord` carries the link-layer type it was dissected with
 (`linkType`) and the resolution its timestamp was recorded in
@@ -108,7 +108,7 @@ preview and its caps. A description is finalised as one line before it
 leaves the describer, so one packet is always one line whatever a detector
 forgot to escape.
 
-### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
 Time, Source, Destination, Protocol, Length, Info. Both times have 6
@@ -167,12 +167,33 @@ after the first and every other packet without TCP/UDP ports show `-`. At
 most `StreamTracker::kMaxStreams` (1,000,000) conversations, both transports
 together, are numbered; packets of later ones show `?`.
 
-`track()` returns a `Stream`: the number and a pointer to the stream's
+`track()` returns a `Stream`: the number, a pointer to the stream's
 `StreamState`, the same slot for every packet of the stream (null without
-a number). The slot is empty for now; modules that follow a conversation
-(relative sequence numbers, TCP analysis, …) add their fields to it and
-read and update them through that pointer. Every field added costs memory
-once per numbered stream.
+a number), and the packet's direction in it, 0 or 1 (the same for every
+packet from the same address and port). Modules that follow a conversation
+keep their fields in the slot and read and update them through that
+pointer. Every field added costs memory once per numbered stream: today a
+`TcpDirection` per direction (a base sequence number and whether it is
+known), 16 bytes, some 16 MB at the stream cap.
+
+`analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
+by the Converter after the Stream Tracker, shows a TCP segment's `Seq=` and
+`Ack=` relative to the start of each direction, as Wireshark does by
+default. It follows Wireshark's rules: a SYN's sequence number is its
+direction's base, so the SYN shows `Seq=0`; a direction whose SYN was not
+captured takes one less than its first number seen as base (its first
+segment's sequence number, or the other direction's first acknowledgement
+number, whichever comes first), so a stream captured mid-way starts at
+`Seq=1 Ack=1` like one after its handshake. Without the ACK flag the
+acknowledgement field means nothing and `Ack=0` is shown. The arithmetic
+is modulo 2^32, so the numbers go on counting when the sequence numbers
+wrap. A SYN without ACK whose sequence number differs from its direction's
+base is a new connection on the same addresses and ports: both bases are
+forgotten and counting starts afresh; a retransmitted SYN keeps them. The
+parser writes the numbers as they are with `formatTcpNumbers()`, and the
+TCP Analysis replaces that text; segments of a stream past the stream cap
+have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
+`tcpAck` stay the raw values.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet
 (among them the packets cut at the snaplen),
@@ -212,7 +233,7 @@ and the shared CI cannot yet pack it into the release archive (#58);
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream, formats the packet and appends its line to a new output file,
+its stream and the TCP Analysis show its numbers relative, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new

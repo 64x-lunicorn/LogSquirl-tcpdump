@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Relative TCP sequence and acknowledgement numbers.** `Seq=` and `Ack=`
+  in Info count from the start of each direction of a TCP stream, as
+  Wireshark shows them by default: the SYN is `Seq=0`, the first byte of
+  data `Seq=1`. A stream captured mid-way counts from its first segment seen
+  (`Seq=1 Ack=1`), the numbers go on counting when the sequence numbers wrap
+  past 2^32, and a new connection on the same addresses and ports starts
+  afresh. A segment without the ACK flag shows `Ack=0`. Streams past the
+  stream cap keep the numbers as they are.
 - **pcapng captures.** Files saved by Wireshark (its default format) or by
   macOS's `tcpdump -P` open like a pcap, in either byte order and with several
   sections. Each packet is dissected with the link type of the interface it

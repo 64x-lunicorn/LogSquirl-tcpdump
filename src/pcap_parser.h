@@ -162,6 +162,14 @@ struct PacketRecord {
 std::string formatTcpFlags( uint8_t flags );
 
 /**
+ * Render a TCP segment's sequence and acknowledgement numbers as Info shows
+ * them, after its flags.
+ *
+ * @return String like "Seq=1 Ack=1".
+ */
+std::string formatTcpNumbers( uint32_t seq, uint32_t ack );
+
+/**
  * Dissect one captured packet into @p pkt, from its link-layer header up.
  *
  * @param linkType  The link-layer type (DLT_*) the packet was captured with.

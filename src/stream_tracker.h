@@ -29,6 +29,7 @@
 #include "pcap_parser.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <string>
@@ -38,15 +39,26 @@ namespace tcpdump {
 constexpr int kNoStream = -1;   ///< Stream column "-": the packet has no TCP or UDP header.
 constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
 
+/// What is known about one direction of a TCP stream.
+struct TcpDirection {
+    /// The sequence number relative numbers count from: the initial one,
+    /// or one less than the first seen when the SYN was not captured.
+    uint32_t baseSeq = 0;
+    bool baseSeqSet = false; ///< Whether a segment has told baseSeq yet.
+};
+
 /**
  * What is known about one stream, kept for as long as the capture is read.
  *
- * Empty for now: modules that follow a conversation over its packets
- * (relative sequence numbers, TCP analysis, …) add their fields here, and
- * read and update them through the Stream the tracker hands out.  Every
- * byte added here is paid once per numbered stream, see kMaxStreams.
+ * Modules that follow a conversation over its packets (the TCP Analysis,
+ * …) keep their fields here, and read and update them through the Stream
+ * the tracker hands out.  Every byte added here is paid once per numbered
+ * stream, see kMaxStreams.
  */
-struct StreamState {};
+struct StreamState {
+    /// TCP only: each direction, indexed by Stream::direction.
+    TcpDirection tcp[ 2 ];
+};
 
 /// The stream a packet belongs to.
 struct Stream {
@@ -55,6 +67,9 @@ struct Stream {
     /// Its state, the same for every packet of the stream; null unless
     /// the stream is numbered.
     StreamState* state = nullptr;
+    /// The packet's direction in the stream, 0 or 1: the same for every
+    /// packet from the same address and port.
+    unsigned direction = 0;
 };
 
 /**
