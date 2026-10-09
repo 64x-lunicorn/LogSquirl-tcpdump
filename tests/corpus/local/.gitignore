@@ -1,0 +1,4 @@
+# Real captures recorded by tests/make_real_corpus.sh stay on the machine
+# that recorded them: they are never committed.
+*
+!.gitignore

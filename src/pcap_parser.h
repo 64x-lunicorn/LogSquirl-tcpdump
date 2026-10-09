@@ -38,6 +38,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -108,6 +109,22 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 /// The transport a packet's payload was carried by.
 enum class Transport { Tcp, Udp };
 
+/// Separates the transport summary in Info from the description of the payload.
+constexpr const char* kDescriptionSeparator = " | ";
+
+/// What a payload begins that the rest of its stream builds on, as the
+/// Payload Describer recognised it: describeInStream() looks at the
+/// stream's later packets with it in mind.
+enum class StreamCue : uint8_t {
+    None,
+    QuicLongHeader, ///< A QUIC long header (or Version Negotiation packet).
+    Http2Preface,   ///< The HTTP/2 connection preface.
+};
+
+/// Payload bytes a PacketRecord keeps: enough for a QUIC long header's
+/// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
+constexpr size_t kPayloadHeadBytes = 48;
+
 /// Represents a single parsed network packet.
 struct PacketRecord {
     uint32_t number = 0; ///< 1-based packet index
@@ -146,8 +163,31 @@ struct PacketRecord {
     uint32_t tcpAck = 0;
     uint8_t tcpFlags = 0;
     uint16_t tcpWindow = 0;
+    /// The TCP header's length in bytes as its data offset gives it; less
+    /// than 20 is bogus, and the segment's payload unknown.
+    uint8_t tcpHeaderLen = 0;
+    /// The shift count of the header's window scale option, as sent (RFC
+    /// 7323 allows at most 14); unset without the option.  Only a SYN's
+    /// counts, see analyseTcp().
+    std::optional<uint8_t> tcpWindowShift;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
+
+    /// The first captured bytes of the TCP or UDP payload, payloadHeadLen
+    /// of them, for the Payload Describer to look at again once the packet's
+    /// stream is known (describeInStream).
+    std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
+    size_t payloadHeadLen = 0;
+    /// A detector of the Payload Describer recognised the TCP or UDP payload
+    /// and named protocol, rather than the ports suggesting it, by the
+    /// payload alone or in its stream (describeInStream).  Such a label
+    /// sticks to the packet's stream (StreamLabels).
+    bool protocolRecognised = false;
+    /// What the payload begins for its stream (describeInStream).
+    StreamCue streamCue = StreamCue::None;
+    /// Info ends in a preview of the payload's text this many bytes long,
+    /// after kDescriptionSeparator; 0 without one (limitPreview()).
+    size_t previewBytes = 0;
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
@@ -162,6 +202,16 @@ struct PacketRecord {
 std::string formatTcpFlags( uint8_t flags );
 
 /**
+ * Render a TCP segment's sequence and acknowledgement numbers and its window
+ * as Info shows them, after its flags.  Without an @p ack (a segment
+ * without the ACK flag, whose acknowledgement field means nothing) Ack is
+ * left out, as Wireshark does.
+ *
+ * @return String like "Seq=1 Ack=1 Win=65535", or "Seq=0 Win=65535".
+ */
+std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window );
+
+/**
  * Dissect one captured packet into @p pkt, from its link-layer header up.
  *
  * @param linkType  The link-layer type (DLT_*) the packet was captured with.
@@ -171,6 +221,18 @@ std::string formatTcpFlags( uint8_t flags );
  */
 void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* data,
                     size_t len );
+
+/**
+ * Dissect the IP packet an ICMP or ICMPv6 error message quotes into @p pkt,
+ * with the network parsers that dissect every packet: its addresses, its IP
+ * protocol and name (`protocol`, from ipProtocolName()), and the ports of a
+ * TCP or UDP header (`transport`), of which 4 bytes suffice, as a router
+ * quotes only 8.  Nothing past the ports is read, nor a packet the quote
+ * itself quotes.  Without the whole IP header, @p pkt keeps no address.
+ *
+ * @param data  The quoted bytes, @p len of them, an IPv4 or IPv6 header first.
+ */
+void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len );
 
 // ── Parser ───────────────────────────────────────────────────────────────
 

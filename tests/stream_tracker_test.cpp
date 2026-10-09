@@ -72,6 +72,16 @@ SCENARIO( "The Stream Tracker numbers TCP and UDP conversations", "[stream_track
             REQUIRE( tracker.track( replyTo( syn ) ).id == 0 );
             REQUIRE( tracker.track( syn ).id == 0 );
         }
+
+        THEN( "each direction keeps its own direction index" )
+        {
+            const auto forward = tracker.track( syn ).direction;
+            const auto backward = tracker.track( replyTo( syn ) ).direction;
+            REQUIRE( forward != backward );
+            REQUIRE( forward < 2 );
+            REQUIRE( backward < 2 );
+            REQUIRE( tracker.track( syn ).direction == forward );
+        }
     }
 
     GIVEN( "two TCP conversations between the same hosts" )

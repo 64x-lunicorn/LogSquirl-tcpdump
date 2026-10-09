@@ -1,3 +1,4 @@
 {
-  "host_ref": "v26.10.0"
+  "host_ref": "v26.10.0",
+  "package_files": ["formats/tcpdump_log.json"]
 }

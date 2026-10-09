@@ -53,6 +53,15 @@ void CaptureStats::add( const PacketRecord& pkt )
     countEndpoint( pkt.dstIp );
 }
 
+void CaptureStats::addTcpMarkers( const TcpMarkers& markers )
+{
+    for ( size_t i = 0; i < kTcpMarkerKinds; ++i ) {
+        if ( markers.test( static_cast<TcpMarker>( i ) ) ) {
+            ++tcpMarkers[ i ];
+        }
+    }
+}
+
 void CaptureStats::addLinkType( uint32_t linkType )
 {
     if ( std::find( linkTypes.begin(), linkTypes.end(), linkType ) == linkTypes.end() ) {

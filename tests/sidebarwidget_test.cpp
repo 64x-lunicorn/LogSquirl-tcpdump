@@ -27,6 +27,7 @@
 #include "fakehost.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
+#include "settings.h"
 #include "sidebarwidget.h"
 
 #include <QDir>
@@ -142,6 +143,59 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "magic" ) );
                 REQUIRE( child<QLabel>( widget, "summary" )->text().contains( "magic" ) );
+            }
+        }
+    }
+}
+
+SCENARIO( "each conversion reads the options saved when it starts", "[sidebar][settings]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar, a capture and options saved in the configuration directory" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        const auto capture = writeCapture( dir, "small.pcap", captureOf( 2 ) );
+        tcpdump::ConversionOptions options;
+        options.layout.timeColumns = tcpdump::TimeColumns::RelativeOnly;
+        options.preview = false;
+        REQUIRE( tcpdump::saveConversionOptions( host.configDir(), options ) );
+
+        auto convertAndRead = [ & ] {
+            widget.openPcapFile( capture );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+            REQUIRE_FALSE( host.openedFiles.isEmpty() );
+            QFile out( host.openedFiles.last() );
+            REQUIRE( out.open( QIODevice::ReadOnly ) );
+            return QString::fromUtf8( out.readAll() );
+        };
+
+        WHEN( "the capture is opened" )
+        {
+            const auto text = convertAndRead();
+
+            THEN( "it is converted with them" )
+            {
+                REQUIRE_FALSE( text.contains( "UTC Time" ) );
+                REQUIRE_FALSE( text.contains( "payload" ) );
+            }
+
+            AND_WHEN( "the options change and it is opened again" )
+            {
+                REQUIRE( tcpdump::saveConversionOptions( host.configDir(), {} ) );
+                const auto again = convertAndRead();
+
+                THEN( "the new conversion has the new options, the first keeps its own" )
+                {
+                    REQUIRE( again.contains( "UTC Time" ) );
+                    REQUIRE( again.contains( "payload" ) );
+                    QFile first( host.openedFiles.first() );
+                    REQUIRE( first.open( QIODevice::ReadOnly ) );
+                    REQUIRE( QString::fromUtf8( first.readAll() ) == text );
+                }
             }
         }
     }
@@ -564,6 +618,35 @@ SCENARIO( "the summary says what was cut", "[sidebar]" )
             REQUIRE_FALSE( html.contains( "cut off" ) );
             REQUIRE_FALSE( html.contains( "stream ?" ) );
             REQUIRE_FALSE( html.contains( "Other endpoints" ) );
+        }
+    }
+}
+
+SCENARIO( "the summary lists the TCP analysis markers", "[sidebar]" )
+{
+    GIVEN( "a capture with retransmissions and duplicate ACKs" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 5000;
+        summary.tcpMarkers = { { "TCP Retransmission", 1200 }, { "TCP Dup ACK", 3 } };
+
+        THEN( "they are counted under Analysis, in the summary's order" )
+        {
+            const auto html = tcpdump::summaryHtml( "lossy.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>Analysis</b><br>" ) );
+            REQUIRE( html.contains(
+                QString( "TCP Retransmission: %1<br>" ).arg( QLocale().toString( 1200 ) ) ) );
+            REQUIRE( html.contains( "TCP Dup ACK: 3<br>" ) );
+            REQUIRE( html.indexOf( "TCP Retransmission" ) < html.indexOf( "TCP Dup ACK" ) );
+        }
+    }
+
+    GIVEN( "a capture without any" )
+    {
+        THEN( "there is no Analysis heading" )
+        {
+            const auto html = tcpdump::summaryHtml( "clean.pcap", 100, tcpdump::CaptureSummary() );
+            REQUIRE_FALSE( html.contains( "Analysis" ) );
         }
     }
 }

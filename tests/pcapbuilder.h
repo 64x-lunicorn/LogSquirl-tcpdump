@@ -150,19 +150,20 @@ inline Bytes ipv6Fragment( uint8_t nextHeader, uint16_t offset, bool more, const
     return b + payload;
 }
 
-/** TCP header (PSH, ACK) around @p payload. */
+/** TCP header (PSH, ACK by default) around @p payload. */
 inline Bytes tcp( uint16_t srcPort, uint16_t dstPort, const Bytes& payload = {},
-                  uint8_t dataOffsetWords = 5, uint8_t flags = 0x18 )
+                  uint8_t dataOffsetWords = 5, uint8_t flags = 0x18, uint32_t seq = 1,
+                  uint32_t ack = 0, uint16_t window = 0xFFFF )
 {
     Bytes b;
     putBE16( b, srcPort );
     putBE16( b, dstPort );
-    putBE32( b, 1 ); // seq
-    putBE32( b, 0 ); // ack
+    putBE32( b, seq );
+    putBE32( b, ack );
     b.push_back( static_cast<uint8_t>( dataOffsetWords << 4 ) );
     b.push_back( flags );
-    putBE16( b, 0xFFFF ); // window
-    putBE32( b, 0 );      // checksum, urgent pointer
+    putBE16( b, window );
+    putBE32( b, 0 ); // checksum, urgent pointer
     if ( dataOffsetWords > 5 ) {
         b.resize( static_cast<size_t>( dataOffsetWords ) * 4, 1 ); // NOP options
     }

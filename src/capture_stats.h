@@ -27,7 +27,9 @@
 #pragma once
 
 #include "pcap_parser.h"
+#include "tcp_analysis.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -41,7 +43,8 @@ namespace tcpdump {
  * not be kept in memory.
  */
 struct CaptureStats {
-    /// Addresses counted by default: some 10 MB of memory at most.
+    /// Addresses counted by default: some 10 MB of memory at most.  The
+    /// options may raise it tenfold (kMaxEndpointCap, some 100 MB) or lower it.
     static constexpr size_t kMaxEndpoints = 100000;
 
     uint64_t packets = 0;
@@ -56,6 +59,9 @@ struct CaptureStats {
     /// Packets counted for addresses beyond maxEndpoints.
     uint64_t otherEndpointPackets = 0;
     size_t maxEndpoints = kMaxEndpoints;
+
+    /// TCP segments per kind of analysis marker, indexed by TcpMarker.
+    std::array<uint64_t, kTcpMarkerKinds> tcpMarkers{};
 
     /// Link-layer types (DLT_*) of the capture, each once, in the order they
     /// were first seen.  A capture holds few, so a list is searched.
@@ -72,6 +78,9 @@ struct CaptureStats {
 
     /// Count @p pkt in, with the link-layer type it was dissected with.
     void add( const PacketRecord& pkt );
+
+    /// Count the markers the TCP Analysis gave a segment.
+    void addTcpMarkers( const TcpMarkers& markers );
 
     /// List @p linkType, unless it is listed already: also for a type the
     /// capture declares without a packet of it.
