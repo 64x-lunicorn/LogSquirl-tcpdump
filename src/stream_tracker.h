@@ -29,6 +29,7 @@
 #include "pcap_parser.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <string>
@@ -38,15 +39,25 @@ namespace tcpdump {
 constexpr int kNoStream = -1;   ///< Stream column "-": the packet has no TCP or UDP header.
 constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
 
+/// What the Payload Describer knows about a QUIC connection on a UDP stream.
+struct QuicConnection {
+    bool seen = false; ///< A QUIC long header was seen on the stream.
+    /// The length of the destination connection ID of short headers sent
+    /// in each direction, indexed by Stream::direction; -1 while unknown.
+    int8_t dcidLength[ 2 ] = { -1, -1 };
+};
+
 /**
  * What is known about one stream, kept for as long as the capture is read.
  *
- * Empty for now: modules that follow a conversation over its packets
- * (relative sequence numbers, TCP analysis, …) add their fields here, and
- * read and update them through the Stream the tracker hands out.  Every
- * byte added here is paid once per numbered stream, see kMaxStreams.
+ * Modules that follow a conversation over its packets (the Payload
+ * Describer, …) keep their fields here, and read and update them through
+ * the Stream the tracker hands out.  Every byte added here is paid once per
+ * numbered stream, see kMaxStreams.
  */
-struct StreamState {};
+struct StreamState {
+    QuicConnection quic; ///< UDP only.
+};
 
 /// The stream a packet belongs to.
 struct Stream {
@@ -55,6 +66,9 @@ struct Stream {
     /// Its state, the same for every packet of the stream; null unless
     /// the stream is numbered.
     StreamState* state = nullptr;
+    /// The packet's direction in the stream, 0 or 1: the same for every
+    /// packet from the same address and port.
+    unsigned direction = 0;
 };
 
 /**

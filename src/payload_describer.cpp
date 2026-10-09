@@ -225,13 +225,14 @@ std::string payloadPreview( const uint8_t* payload, size_t len )
     return preview;
 }
 
-// ── TLS ──────────────────────────────────────────────────────────────────
+// ── Binary fields ────────────────────────────────────────────────────────
 
-/// Reads the fields of a TLS message from its bytes, never beyond them.
-/// A read that does not fit fails and leaves the reader as it was.
-class TlsReader {
+/// Reads the fields of a binary message (TLS, QUIC) from its bytes, never
+/// beyond them.  A read that does not fit fails and leaves the reader as it
+/// was.
+class FieldReader {
 public:
-    TlsReader( const uint8_t* data, size_t len, bool complete = true )
+    FieldReader( const uint8_t* data, size_t len, bool complete = true )
         : data_( data )
         , len_( len )
         , complete_( complete )
@@ -267,6 +268,35 @@ public:
         return true;
     }
 
+    bool u32( uint32_t& value )
+    {
+        if ( len_ - pos_ < 4 ) {
+            return false;
+        }
+        value = readBE32( data_ + pos_ );
+        pos_ += 4;
+        return true;
+    }
+
+    /// A QUIC variable-length integer (RFC 9000, 16): its first two bits
+    /// say whether it takes 1, 2, 4 or 8 bytes.
+    bool varint( uint64_t& value )
+    {
+        if ( len_ - pos_ < 1 ) {
+            return false;
+        }
+        const size_t n = size_t{ 1 } << ( data_[ pos_ ] >> 6 );
+        if ( len_ - pos_ < n ) {
+            return false;
+        }
+        value = data_[ pos_ ] & 0x3F;
+        for ( size_t i = 1; i < n; ++i ) {
+            value = ( value << 8 ) | data_[ pos_ + i ];
+        }
+        pos_ += n;
+        return true;
+    }
+
     bool skip( size_t n )
     {
         if ( len_ - pos_ < n ) {
@@ -285,16 +315,16 @@ public:
 
     /// The next @p n bytes as a reader of their own: as many of them as
     /// there are, so a cut message is read as far as it goes.
-    TlsReader take( size_t n )
+    FieldReader take( size_t n )
     {
         const size_t available = std::min( n, len_ - pos_ );
-        TlsReader part( data_ + pos_, available, available == n );
+        FieldReader part( data_ + pos_, available, available == n );
         pos_ += available;
         return part;
     }
 
     /// The next 8- or 16-bit length and the bytes it counts.
-    bool takeVector8( TlsReader& part )
+    bool takeVector8( FieldReader& part )
     {
         uint8_t n = 0;
         if ( !u8( n ) ) {
@@ -304,7 +334,7 @@ public:
         return true;
     }
 
-    bool takeVector16( TlsReader& part )
+    bool takeVector16( FieldReader& part )
     {
         uint16_t n = 0;
         if ( !u16( n ) ) {
@@ -341,6 +371,8 @@ private:
     size_t pos_ = 0;
     bool complete_;
 };
+
+// ── TLS ──────────────────────────────────────────────────────────────────
 
 /// Most bytes of a hello field (a server name, the protocol list) shown,
 /// the same cap as a first line's.
@@ -387,14 +419,14 @@ std::string tlsField( const uint8_t* p, size_t len )
 }
 
 /// The host name of a server_name extension (RFC 6066), or empty.
-std::string tlsServerName( TlsReader data )
+std::string tlsServerName( FieldReader data )
 {
-    TlsReader list( nullptr, 0 );
+    FieldReader list( nullptr, 0 );
     if ( !data.takeVector16( list ) ) {
         return {};
     }
     uint8_t type = 0;
-    TlsReader name( nullptr, 0 );
+    FieldReader name( nullptr, 0 );
     while ( list.u8( type ) && list.takeVector16( name ) && name.complete() ) {
         if ( type == 0 ) { // host_name
             return tlsField( name.here(), name.remaining() );
@@ -404,15 +436,15 @@ std::string tlsServerName( TlsReader data )
 }
 
 /// The protocols of an ALPN extension (RFC 7301), as "h2,http/1.1".
-std::string tlsAlpn( TlsReader data )
+std::string tlsAlpn( FieldReader data )
 {
-    TlsReader list( nullptr, 0 );
+    FieldReader list( nullptr, 0 );
     if ( !data.takeVector16( list ) ) {
         return {};
     }
     std::string protocols;
     size_t shown = 0;
-    TlsReader protocol( nullptr, 0 );
+    FieldReader protocol( nullptr, 0 );
     while ( list.takeVector8( protocol ) && protocol.complete() ) {
         if ( shown + protocol.remaining() > kMaxTlsFieldBytes ) {
             return protocols + ( protocols.empty() ? "" : "," ) + "\xe2\x80\xa6";
@@ -428,9 +460,9 @@ std::string tlsAlpn( TlsReader data )
 
 /// The highest version of a ClientHello's supported_versions extension
 /// (RFC 8446), GREASE aside; 0 if it names none.
-uint16_t tlsHighestVersion( TlsReader data )
+uint16_t tlsHighestVersion( FieldReader data )
 {
-    TlsReader list( nullptr, 0 );
+    FieldReader list( nullptr, 0 );
     if ( !data.takeVector8( list ) ) {
         return 0;
     }
@@ -449,17 +481,17 @@ uint16_t tlsHighestVersion( TlsReader data )
 /// them were read, so that a field one of them would have named is known
 /// to be absent.
 template <typename OnExtension>
-bool readTlsExtensions( TlsReader& hello, OnExtension onExtension )
+bool readTlsExtensions( FieldReader& hello, OnExtension onExtension )
 {
     if ( hello.readToEnd() ) {
         return true; // a hello without extensions
     }
-    TlsReader extensions( nullptr, 0 );
+    FieldReader extensions( nullptr, 0 );
     if ( !hello.takeVector16( extensions ) ) {
         return false;
     }
     uint16_t type = 0;
-    TlsReader data( nullptr, 0 );
+    FieldReader data( nullptr, 0 );
     while ( extensions.u16( type ) && extensions.takeVector16( data ) && data.complete() ) {
         onExtension( type, data );
     }
@@ -469,7 +501,7 @@ bool readTlsExtensions( TlsReader& hello, OnExtension onExtension )
 /// "Client Hello, SNI=example.com, TLS 1.3, ALPN=h2,http/1.1": the fields
 /// a ClientHello holds, each left out if absent or cut off.  The version is
 /// the highest the client offers.
-std::string tlsClientHello( TlsReader hello )
+std::string tlsClientHello( FieldReader hello )
 {
     std::string description = "Client Hello";
     uint16_t legacyVersion = 0;
@@ -485,7 +517,7 @@ std::string tlsClientHello( TlsReader hello )
     std::string serverName;
     std::string protocols;
     uint16_t version = 0;
-    const bool allRead = readTlsExtensions( hello, [ & ]( uint16_t type, TlsReader data ) {
+    const bool allRead = readTlsExtensions( hello, [ & ]( uint16_t type, FieldReader data ) {
         if ( type == 0x0000 && serverName.empty() ) {
             serverName = tlsServerName( data );
         }
@@ -513,7 +545,7 @@ std::string tlsClientHello( TlsReader hello )
 }
 
 /// "Server Hello, TLS 1.3": the version the server chose, if it is there.
-std::string tlsServerHello( TlsReader hello )
+std::string tlsServerHello( FieldReader hello )
 {
     std::string description = "Server Hello";
     uint16_t legacyVersion = 0;
@@ -522,7 +554,7 @@ std::string tlsServerHello( TlsReader hello )
         return description;
     }
     uint16_t version = 0;
-    const bool allRead = readTlsExtensions( hello, [ & ]( uint16_t type, TlsReader data ) {
+    const bool allRead = readTlsExtensions( hello, [ & ]( uint16_t type, FieldReader data ) {
         uint16_t selected = 0;
         if ( type == 0x002B && data.u16( selected ) ) {
             version = selected;
@@ -538,7 +570,7 @@ std::string tlsServerHello( TlsReader hello )
 }
 
 /// The name of a handshake message, with the fields of the hellos.
-std::string tlsHandshakeMessage( uint8_t type, TlsReader body )
+std::string tlsHandshakeMessage( uint8_t type, FieldReader body )
 {
     switch ( type ) {
     case 0:
@@ -589,7 +621,7 @@ std::string detectTls( const uint8_t* payload, size_t len )
 
     std::vector<std::string> names;
     bool afterChangeCipherSpec = false;
-    TlsReader segment( payload, len );
+    FieldReader segment( payload, len );
     while ( names.size() <= kMaxTlsMessages && segment.remaining() >= 5
             && isTlsRecordHeader( segment.here() ) ) {
         uint8_t contentType = 0;
@@ -620,7 +652,7 @@ std::string detectTls( const uint8_t* payload, size_t len )
                 break;
             }
             if ( !fragment.u24( messageLength ) ) {
-                names.push_back( tlsHandshakeMessage( type, TlsReader( nullptr, 0, false ) ) );
+                names.push_back( tlsHandshakeMessage( type, FieldReader( nullptr, 0, false ) ) );
                 break;
             }
             for ( ;; ) {
@@ -655,6 +687,212 @@ std::string detectTls( const uint8_t* payload, size_t len )
         description += name;
     }
     return description;
+}
+
+// ── QUIC ─────────────────────────────────────────────────────────────────
+
+constexpr uint8_t kQuicLongHeader = 0x80; ///< The header form bit: a long header.
+constexpr uint8_t kQuicFixedBit = 0x40;   ///< Set in every QUIC v1 and v2 packet.
+
+constexpr uint32_t kQuicV1 = 0x00000001;
+constexpr uint32_t kQuicV2 = 0x6B3343CF;
+
+/// Longest connection ID of QUIC v1 and v2; the version-independent
+/// header (RFC 8999) allows 255 bytes, in a Version Negotiation packet.
+constexpr size_t kMaxQuicCidBytes = 20;
+
+/// Most packets of one datagram named, the same cap as TLS records'.
+constexpr size_t kMaxQuicPackets = kMaxTlsMessages;
+
+/// Most versions of a Version Negotiation packet named.
+constexpr size_t kMaxQuicVersions = 8;
+
+/// A draft version of the IETF drafts that already have the long header of
+/// QUIC v1 (separate connection ID lengths): draft-22 to draft-34.
+bool isQuicDraft( uint32_t version )
+{
+    return ( version >> 8 ) == 0xFF0000 && ( version & 0xFF ) >= 22 && ( version & 0xFF ) <= 34;
+}
+
+/// A version whose packets the describer can read: v1, v2 and the drafts.
+bool isKnownQuicVersion( uint32_t version )
+{
+    return version == kQuicV1 || version == kQuicV2 || isQuicDraft( version );
+}
+
+/// A version as "1", "2", "draft-29", or "0x1A2A3A4A".
+std::string quicVersionName( uint32_t version )
+{
+    if ( version == kQuicV1 ) {
+        return "1";
+    }
+    if ( version == kQuicV2 ) {
+        return "2";
+    }
+    if ( isQuicDraft( version ) ) {
+        return "draft-" + std::to_string( version & 0xFF );
+    }
+    char buf[ 16 ];
+    std::snprintf( buf, sizeof( buf ), "0x%08X", version );
+    return buf;
+}
+
+/// The name of a long header packet type; QUIC v2 (RFC 9369) numbers them
+/// differently from v1 and the drafts.
+const char* quicLongPacketName( uint32_t version, uint8_t firstByte )
+{
+    static const char* const kV1[] = { "Initial", "0-RTT", "Handshake", "Retry" };
+    static const char* const kV2[] = { "Retry", "Initial", "0-RTT", "Handshake" };
+    const auto type = static_cast<size_t>( ( firstByte >> 4 ) & 0x03 );
+    return version == kQuicV2 ? kV2[ type ] : kV1[ type ];
+}
+
+/// Connection ID bytes in hex, as Wireshark shows them.
+std::string quicCid( const uint8_t* p, size_t len )
+{
+    static const char kDigits[] = "0123456789abcdef";
+    std::string out;
+    out.reserve( 2 * len );
+    for ( size_t i = 0; i < len; ++i ) {
+        out += kDigits[ p[ i ] >> 4 ];
+        out += kDigits[ p[ i ] & 0x0F ];
+    }
+    return out;
+}
+
+/// The fields every long header starts with (RFC 8999, 5.1).
+struct QuicLongHeader {
+    uint8_t firstByte = 0;
+    uint32_t version = 0;
+    FieldReader dcid{ nullptr, 0 };
+    FieldReader scid{ nullptr, 0 };
+};
+
+/// Read a long header's version-independent fields: true if the packet
+/// begins with a long header of a known version, or with a Version
+/// Negotiation packet's, whose connection IDs are whole.
+bool readQuicLongHeader( FieldReader& packet, QuicLongHeader& header )
+{
+    if ( !packet.u8( header.firstByte ) || !( header.firstByte & kQuicLongHeader )
+         || !packet.u32( header.version ) ) {
+        return false;
+    }
+    const bool negotiation = header.version == 0;
+    if ( !negotiation
+         && ( !( header.firstByte & kQuicFixedBit ) || !isKnownQuicVersion( header.version ) ) ) {
+        return false;
+    }
+    if ( !packet.takeVector8( header.dcid ) || !header.dcid.complete()
+         || !packet.takeVector8( header.scid ) || !header.scid.complete() ) {
+        return false;
+    }
+    return negotiation
+           || ( header.dcid.remaining() <= kMaxQuicCidBytes
+                && header.scid.remaining() <= kMaxQuicCidBytes );
+}
+
+/// ", DCID=…, SCID=…", each left out if empty.
+std::string quicCids( const QuicLongHeader& header )
+{
+    std::string out;
+    if ( header.dcid.remaining() > 0 ) {
+        out += ", DCID=" + quicCid( header.dcid.here(), header.dcid.remaining() );
+    }
+    if ( header.scid.remaining() > 0 ) {
+        out += ", SCID=" + quicCid( header.scid.here(), header.scid.remaining() );
+    }
+    return out;
+}
+
+/// "Version Negotiation, DCID=…, SCID=…, Versions=1,draft-29": the versions
+/// the server supports, if they are a whole list holding one this describer
+/// knows; a client never sends such a packet, so anything less is no QUIC.
+std::string quicVersionNegotiation( const QuicLongHeader& header, FieldReader versions )
+{
+    if ( versions.remaining() == 0 || versions.remaining() % 4 != 0 ) {
+        return {};
+    }
+    std::string names;
+    bool known = false;
+    size_t named = 0;
+    uint32_t version = 0;
+    while ( versions.u32( version ) ) {
+        known = known || isKnownQuicVersion( version );
+        if ( named == kMaxQuicVersions ) {
+            names += ",\xe2\x80\xa6";
+        }
+        if ( named++ < kMaxQuicVersions ) {
+            names += ( names.empty() ? "" : "," ) + quicVersionName( version );
+        }
+    }
+    if ( !known ) {
+        return {};
+    }
+    return "Version Negotiation" + quicCids( header ) + ", Versions=" + names;
+}
+
+/// Skip the rest of a long header packet after its connection IDs: true if
+/// another packet may follow it in the datagram (RFC 9000, 12.2).
+bool skipQuicLongPacket( FieldReader& packet, uint32_t version, uint8_t firstByte )
+{
+    const std::string name = quicLongPacketName( version, firstByte );
+    if ( name == "Retry" ) {
+        return false; // A Retry has no length: it fills the datagram.
+    }
+    uint64_t length = 0;
+    if ( name == "Initial" ) {
+        if ( !packet.varint( length ) || length > packet.remaining()
+             || !packet.skip( static_cast<size_t>( length ) ) ) {
+            return false;
+        }
+    }
+    return packet.varint( length ) && length <= packet.remaining()
+           && packet.skip( static_cast<size_t>( length ) );
+}
+
+/// Describe a QUIC datagram from the public header of its packets:
+/// "Initial, Handshake, Version 1, DCID=…, SCID=…".  Only a datagram that
+/// begins with a long header of a known version, or with a Version
+/// Negotiation packet, is QUIC by its bytes alone; a short header's is told
+/// by its stream (describeInStream).  The packets are encrypted: their
+/// type is all there is to name.  Packets coalesced behind the first are
+/// named up to kMaxQuicPackets, a short header one as Protected Payload.
+std::string detectQuic( const uint8_t* payload, size_t len )
+{
+    FieldReader datagram( payload, len );
+    QuicLongHeader first;
+    if ( !readQuicLongHeader( datagram, first ) ) {
+        return {};
+    }
+    if ( first.version == 0 ) {
+        return quicVersionNegotiation( first, datagram.take( datagram.remaining() ) );
+    }
+
+    std::vector<std::string> names{ quicLongPacketName( first.version, first.firstByte ) };
+    bool more = skipQuicLongPacket( datagram, first.version, first.firstByte );
+    while ( more && datagram.remaining() > 0 && names.size() <= kMaxQuicPackets ) {
+        const uint8_t firstByte = *datagram.here();
+        if ( ( firstByte & ( kQuicLongHeader | kQuicFixedBit ) ) == kQuicFixedBit ) {
+            names.emplace_back( "Protected Payload" ); // fills the datagram
+            break;
+        }
+        QuicLongHeader next;
+        if ( !readQuicLongHeader( datagram, next ) || next.version != first.version ) {
+            break; // Padding, or bytes that are no packet
+        }
+        names.emplace_back( quicLongPacketName( next.version, next.firstByte ) );
+        more = skipQuicLongPacket( datagram, next.version, next.firstByte );
+    }
+
+    if ( names.size() > kMaxQuicPackets ) {
+        names.resize( kMaxQuicPackets );
+        names.emplace_back( "\xe2\x80\xa6" );
+    }
+    std::string description;
+    for ( const auto& name : names ) {
+        description += ( description.empty() ? "" : ", " ) + name;
+    }
+    return description + ", Version " + quicVersionName( first.version ) + quicCids( first );
 }
 
 // ── SOCKS ────────────────────────────────────────────────────────────────
@@ -928,6 +1166,11 @@ std::optional<PayloadDescription> httpMessage( const Payload& p )
     return describedIfAny( "HTTP", detectHttp( p.data, p.len ) );
 }
 
+std::optional<PayloadDescription> quicPacket( const Payload& p )
+{
+    return describedIfAny( "QUIC", detectQuic( p.data, p.len ) );
+}
+
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
     return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
@@ -1000,8 +1243,8 @@ std::optional<PayloadDescription> dhcpPacket( const Payload& p )
 }
 
 /// The UDP detectors, in the order they are tried: ports first, then content.
-constexpr Detector kUdpDetectors[]
-    = { dnsMessage, ssdpMessage, ntpPacket, dhcpPacket, nmeaSentence, portHintAndPreview };
+constexpr Detector kUdpDetectors[] = { dnsMessage, ssdpMessage,  ntpPacket,         dhcpPacket,
+                                       quicPacket, nmeaSentence, portHintAndPreview };
 
 /// The detectors of a transport, as a range.
 template <size_t N>
@@ -1053,6 +1296,47 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
         }
     }
     return {};
+}
+
+void describeInStream( PacketRecord& pkt, const Stream& stream )
+{
+    if ( pkt.transport != Transport::Udp || !stream.state ) {
+        return;
+    }
+    auto& quic = stream.state->quic;
+    FieldReader head( pkt.payloadHead.data(), pkt.payloadHeadLen );
+
+    if ( pkt.protocol == "QUIC" ) {
+        // A long header the describer named: the connection ID its sender
+        // chose is the one the other side sends short headers to.
+        QuicLongHeader header;
+        if ( readQuicLongHeader( head, header ) ) {
+            quic.seen = true;
+            if ( header.version != 0 ) {
+                quic.dcidLength[ 1 - stream.direction ]
+                    = static_cast<int8_t>( header.scid.remaining() );
+            }
+        }
+        return;
+    }
+
+    // A short header: the fixed bit without the long header bit, and room
+    // for a packet number and the 16 bytes header protection samples.
+    const auto dcidLength = quic.dcidLength[ stream.direction ];
+    const size_t minimumLength = 1 + std::max<int>( dcidLength, 0 ) + 4 + 16;
+    uint8_t firstByte = 0;
+    if ( !quic.seen || !head.u8( firstByte )
+         || ( firstByte & ( kQuicLongHeader | kQuicFixedBit ) ) != kQuicFixedBit
+         || pkt.payloadLen < minimumLength ) {
+        return;
+    }
+    std::string description = "Protected Payload";
+    if ( dcidLength > 0 && head.remaining() >= static_cast<size_t>( dcidLength ) ) {
+        description += ", DCID=" + quicCid( head.here(), static_cast<size_t>( dcidLength ) );
+    }
+    pkt.protocol = "QUIC";
+    pkt.info = pkt.info.substr( 0, pkt.info.find( kDescriptionSeparator ) ) + kDescriptionSeparator
+               + description;
 }
 
 } // namespace tcpdump

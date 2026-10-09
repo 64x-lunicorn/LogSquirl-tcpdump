@@ -69,15 +69,15 @@ constexpr uint16_t kMax8023Length = 1500;
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
-/// Separates the transport summary from the description of the payload.
-constexpr const char* kDescriptionSeparator = " | ";
-
 /// Ask the describer what the @p len captured payload bytes are: its label
 /// becomes the packet's protocol, its description follows the transport
-/// summary in @p oss.
+/// summary in @p oss.  The first bytes are kept in @p pkt for when its
+/// stream is known.
 void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport transport,
                         const uint8_t* payload, size_t len )
 {
+    pkt.payloadHeadLen = std::min( len, kPayloadHeadBytes );
+    std::copy_n( payload, pkt.payloadHeadLen, pkt.payloadHead.begin() );
     const auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
     if ( !described.label.empty() ) {
         pkt.protocol = described.label;

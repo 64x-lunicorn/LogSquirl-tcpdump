@@ -105,12 +105,35 @@ tried: each transport has a table of detectors, all of the same shape
   is named, in order, up to four, then `…`; a ClientHello adds its server
   name, the highest version it offers (`supported_versions`, GREASE aside,
   else its own) and its ALPN protocols, a ServerHello the version chosen.
-  `TlsReader` reads the fields: a read that does not fit fails, and a length
+  `FieldReader` reads the fields: a read that does not fit fails, and a length
   that claims more than there is yields what there is, so a record cut by
   the snaplen or the segment is described as far as it goes. A version is
   named only if known: a cut hello whose extensions end before a
   `supported_versions` would have shown gets none
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, then NMEA and the port hint
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, QUIC, then NMEA and the port hint
+- QUIC: by its bytes, not its port. A datagram is QUIC if it begins with a
+  long header (header form and fixed bit set) of a version the describer
+  knows: v1, v2 (RFC 9369, whose packet types are numbered differently) or
+  draft-22 to draft-34 (`0xff0000xx`; older drafts had another header), or
+  with a Version Negotiation packet (version 0) that lists one of them. It
+  is described from its public header, `Initial, Version 1,
+  DCID=8394c8f03e515708, SCID=0a0b0c0d`: the packets coalesced in the
+  datagram, in order, up to four, then `…`, a short header among them as
+  `Protected Payload`, then the version and connection IDs of the first;
+  a Version Negotiation packet lists the versions offered. Everything
+  behind the header is encrypted, the server name of an Initial too (it
+  would take deriving the Initial keys). A short header carries no version
+  and its connection ID no length: by its bytes alone it is not QUIC, and
+  UDP 443 is still only the port hint `HTTPS`
+- `describeInStream()`, run by the Converter after the Stream Tracker, looks
+  at a packet again with its stream's state: it records in the stream's
+  `QuicConnection` that a long header was seen and how long the connection
+  ID its sender chose is, and labels the stream's short header packets
+  (fixed bit, no long header bit, long enough for header protection) QUIC,
+  `Protected Payload, DCID=…`, replacing the description after the
+  ` | ` separator (`kDescriptionSeparator`). For this the parser keeps the
+  first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
+  `PacketRecord::payloadHead`
 - The port hint, the last entry of both tables, names the service of a
   well-known port from the name tables, the source port's before the
   destination port's, and previews the payload: printable ASCII, other
@@ -194,12 +217,14 @@ after the first and every other packet without TCP/UDP ports show `-`. At
 most `StreamTracker::kMaxStreams` (1,000,000) conversations, both transports
 together, are numbered; packets of later ones show `?`.
 
-`track()` returns a `Stream`: the number and a pointer to the stream's
+`track()` returns a `Stream`: the number, a pointer to the stream's
 `StreamState`, the same slot for every packet of the stream (null without
-a number). The slot is empty for now; modules that follow a conversation
-(relative sequence numbers, TCP analysis, …) add their fields to it and
-read and update them through that pointer. Every field added costs memory
-once per numbered stream.
+a number), and the packet's direction in it, 0 or 1 (the same for every
+packet from the same address and port). Modules that follow a conversation
+keep their fields in the slot and read and update them through that
+pointer. Every field added costs memory once per numbered stream: today
+the Payload Describer's `QuicConnection` (whether a QUIC long header was
+seen, and the connection ID length of each direction), 3 bytes.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet
 (among them the packets cut at the snaplen),
@@ -239,7 +264,7 @@ and the shared CI cannot yet pack it into the release archive (#58);
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream, formats the packet and appends its line to a new output file,
+its stream and the Payload Describer look at it again in its stream, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new

@@ -30,6 +30,8 @@
 
 #include "packet_formatter.h"
 
+#include "payload_describer.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <sstream>
@@ -227,8 +229,10 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
     lines.reserve( packets.size() + 1 );
     lines.push_back( formatter.header() );
 
-    for ( const auto& pkt : packets ) {
-        lines.push_back( formatter.format( pkt, tracker.track( pkt ).id ) );
+    for ( auto pkt : packets ) {
+        const auto stream = tracker.track( pkt );
+        describeInStream( pkt, stream );
+        lines.push_back( formatter.format( pkt, stream.id ) );
     }
     return lines;
 }

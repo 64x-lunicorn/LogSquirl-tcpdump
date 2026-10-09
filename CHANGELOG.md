@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **QUIC on UDP.** A datagram that begins with a QUIC long header of v1, v2
+  or a draft version is labelled `QUIC` and described from its public
+  header, `Initial, Version 1, DCID=8394c8f03e515708, SCID=0a0b0c0d`: the
+  packet types of the datagram in order (Initial, 0-RTT, Handshake, Retry,
+  Protected Payload), the version and the connection IDs. A Version
+  Negotiation packet lists the versions the server offers. The short header
+  packets that follow on the same stream are `QUIC` too, `Protected
+  Payload, DCID=…`, with the connection ID the other side chose. Port 443
+  alone does not make a datagram QUIC; the server name is out of reach, as
+  it is encrypted even in the Initial.
 - **TLS hellos name the server, the version and ALPN.** A ClientHello line
   shows the server name the client asks for, the highest version it offers
   and its application protocols, `Client Hello, SNI=example.com, TLS 1.3,

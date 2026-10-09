@@ -118,7 +118,8 @@ private:
  * as the first line.
  *
  * Times are shown at the finest precision of the packets, streams numbered
- * by a Stream Tracker of their own.
+ * by a Stream Tracker of their own, and each packet described again in its
+ * stream by the Payload Describer.
  *
  * @param packets  Parsed packet records.
  * @return Vector of formatted text lines.

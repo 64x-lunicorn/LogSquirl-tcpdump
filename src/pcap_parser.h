@@ -38,6 +38,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -108,6 +109,13 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 /// The transport a packet's payload was carried by.
 enum class Transport { Tcp, Udp };
 
+/// Separates the transport summary in Info from the description of the payload.
+constexpr const char* kDescriptionSeparator = " | ";
+
+/// Payload bytes a PacketRecord keeps: enough for a QUIC long header's
+/// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
+constexpr size_t kPayloadHeadBytes = 48;
+
 /// Represents a single parsed network packet.
 struct PacketRecord {
     uint32_t number = 0; ///< 1-based packet index
@@ -148,6 +156,12 @@ struct PacketRecord {
     uint16_t tcpWindow = 0;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
+
+    /// The first captured bytes of the TCP or UDP payload, payloadHeadLen
+    /// of them, for the Payload Describer to look at again once the packet's
+    /// stream is known (describeInStream).
+    std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
+    size_t payloadHeadLen = 0;
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
