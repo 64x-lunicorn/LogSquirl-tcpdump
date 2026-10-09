@@ -109,6 +109,43 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 7. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
+### Options
+
+**Plugins → Plugin Management…**, **Configure…** on the plugin's card,
+opens its options:
+
+| Option | Default | Choices |
+|--------|---------|---------|
+| Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
+| Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet |
+| Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
+| Streams numbered at most (Advanced) | 1,000,000 | 1 to 10,000,000; later streams show `?` |
+| Endpoints counted at most (Advanced) | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
+
+They are kept in `settings.ini` in the plugin's configuration directory
+(`plugin_config/io.github.logsquirl.tcpdump` beside LogSquirl's plugin
+directory) and read when a capture is opened: a capture already open keeps
+the options it was converted with; open it again to apply new ones.
+
+The defaults write the packet list shown under [Example Output](#example-output),
+which the Log Format and every highlighter and filter written for it expect.
+Two options change the column layout:
+
+- **Time**: a line has one time column fewer. The [Log Format](#log-format)
+  still reads it, leaving the missing column empty: with the UTC time only,
+  `time` is empty; with the time since the first packet only, `timestamp`
+  is empty, so the line has no timestamp, and Δt, Go to timestamp, time
+  ranges and the Chart Panel's rates are lost. A highlighter or filter
+  that counts columns, or expects a time where the other one was, no
+  longer matches.
+- **Show MAC addresses as columns**: the two MAC columns come right before
+  Info, so the Log Format reads them as the start of `body`; the other
+  columns stay where they are. A highlighter or filter anchored at the
+  start of Info no longer matches.
+
+The payload preview and the caps change only what Info says or which
+streams are numbered, not the columns.
+
 ### Log Format
 
 LogSquirl recognises the packet list as a log with fields once it has the

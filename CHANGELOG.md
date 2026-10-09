@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beyond 14 counts as 14. No more memory per stream.
 
 ### Added
+- **Options dialog.** **Configure…** on the plugin's card in **Plugins →
+  Plugin Management…** opens the plugin's options: the time columns (UTC
+  time and time since the first packet, UTC time only, or time since the
+  first packet only), MAC addresses as columns (`Source MAC` and
+  `Destination MAC` before Info), the payload preview on or off and its
+  length up to 200 characters, and, under *Advanced*, the stream and
+  endpoint caps. They are kept in `settings.ini` in the plugin's
+  configuration directory and read when a capture is opened; a capture
+  already open keeps the options it was converted with. The defaults write
+  the packet list as before. The Log Format also reads the lines of the
+  other time and MAC choices, a missing time column left empty, the MAC
+  addresses as the start of Info; README's *Options* says which choices
+  change the columns that highlighters and filters may rely on.
 - **DHCP, DHCPv6 and NTP described.** DHCP Info names the message type as
   Wireshark does, with the transaction id, the address assigned, requested
   or held and the client's MAC, and the host name the client sends: `DHCP

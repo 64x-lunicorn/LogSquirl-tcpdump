@@ -2,12 +2,12 @@
     "$schema": "https://lnav.org/schemas/format-v1.schema.json",
     "logsquirl_tcpdump_log": {
         "title": "tcpdump / pcap Viewer packet list",
-        "description": "The packet list the tcpdump / pcap Viewer plugin converts a capture to: one line per packet with its number, stream, UTC time, time since the first packet, source, destination, protocol, length on the wire and info.",
+        "description": "The packet list the tcpdump / pcap Viewer plugin converts a capture to: one line per packet with its number, stream, UTC time, time since the first packet, source, destination, protocol, length on the wire and info. Either time column may be left out in the plugin's configuration, and is empty then; MAC columns the configuration adds start the info.",
         "url": "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format",
         "multiline": false,
         "regex": {
             "packet": {
-                "pattern": "^(?<number>\\d++) ++(?<stream>\\d++|[-?]) ++(?<timestamp>[+-]?\\d{4,}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d++Z) ++(?<time>-?\\d++\\.\\d++) ++(?<source>\\S++) ++(?<destination>\\S++) ++(?<protocol>\\S++) ++(?<length>\\d++) ++(?<body>.*)$"
+                "pattern": "^(?<number>\\d++) ++(?<stream>\\d++|[-?]) ++(?:(?<timestamp>[+-]?\\d{4,}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d++Z) ++)?(?:(?<time>-?\\d++\\.\\d++) ++)?(?<source>\\S++) ++(?<destination>\\S++) ++(?<protocol>\\S++) ++(?<length>\\d++) ++(?<body>.*)$"
             }
         },
         "timestamp-field": "timestamp",
@@ -27,7 +27,7 @@
             },
             "time": {
                 "kind": "string",
-                "description": "Seconds since the first packet of the capture, negative for an earlier one"
+                "description": "Seconds since the first packet of the capture, negative for an earlier one; empty when the plugin is configured to show the UTC time only"
             },
             "source": {
                 "kind": "string",

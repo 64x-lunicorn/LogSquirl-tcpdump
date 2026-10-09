@@ -50,6 +50,8 @@ add_library(logsquirl_tcpdump SHARED
     src/capture_stats.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
+    src/settings.cpp
+    src/configdialog.cpp
     src/sidebarwidget.cpp
 )
 

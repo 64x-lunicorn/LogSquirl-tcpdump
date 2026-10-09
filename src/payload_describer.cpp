@@ -110,9 +110,6 @@ std::string fieldText( const uint8_t* p, size_t len )
     return escapeBytes( p, kMaxFieldBytes, false ) + "\xe2\x80\xa6";
 }
 
-/// Longest payload preview, in characters, before it is cut with an ellipsis.
-constexpr size_t kMaxPreviewChars = 200;
-
 /// ASCII letter, independent of the C locale (unlike std::isalpha).
 bool isAsciiAlpha( uint8_t c )
 {
@@ -2156,6 +2153,7 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
         result.guessed = true;
     }
     result.description = payloadPreview( p.data, p.len );
+    result.preview = !result.description.empty();
     return result;
 }
 
@@ -2277,6 +2275,7 @@ namespace {
 /// sticks to the stream (StreamLabels).
 void redescribe( PacketRecord& pkt, const char* label, const std::string& description )
 {
+    pkt.previewBytes = 0;
     pkt.protocol = label;
     pkt.protocolRecognised = true;
     pkt.info = pkt.info.substr( 0, pkt.info.find( kDescriptionSeparator ) ) + kDescriptionSeparator
@@ -2351,6 +2350,37 @@ void describeInStream( PacketRecord& pkt, const Stream& stream )
     else {
         describeHttp2InStream( pkt, *stream.state );
     }
+}
+
+void limitPreview( PacketRecord& pkt, size_t maxChars )
+{
+    static const std::string kEllipsis = "\xe2\x80\xa6";
+    const std::string separator = kDescriptionSeparator;
+    auto& info = pkt.info;
+    // The preview and the separator before it end the Info, or there is none.
+    if ( pkt.previewBytes == 0 || info.size() < pkt.previewBytes + separator.size()
+         || info.compare( info.size() - pkt.previewBytes - separator.size(), separator.size(),
+                          separator )
+                != 0 ) {
+        return;
+    }
+    const auto start = info.size() - pkt.previewBytes;
+    if ( maxChars == 0 ) {
+        info.erase( start - separator.size() );
+        pkt.previewBytes = 0;
+        return;
+    }
+    // One character per byte, but for the describer's ellipsis.
+    const bool cut
+        = info.size() - start >= kEllipsis.size()
+          && info.compare( info.size() - kEllipsis.size(), kEllipsis.size(), kEllipsis ) == 0;
+    const auto chars = pkt.previewBytes - ( cut ? kEllipsis.size() : 0 );
+    if ( chars <= maxChars ) {
+        return;
+    }
+    info.erase( start + maxChars );
+    info += kEllipsis;
+    pkt.previewBytes = maxChars + kEllipsis.size();
 }
 
 } // namespace tcpdump

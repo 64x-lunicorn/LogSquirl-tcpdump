@@ -1,0 +1,135 @@
+/*
+ * Copyright (C) 2026 LogSquirl Contributors
+ *
+ * This file is part of logsquirl-tcpdump.
+ *
+ * logsquirl-tcpdump is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * logsquirl-tcpdump is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with logsquirl-tcpdump.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file settings.cpp
+ * @brief Implementation of the settings file.
+ */
+
+#include "settings.h"
+
+#include <QDir>
+#include <QSettings>
+
+#include <algorithm>
+
+namespace tcpdump {
+
+namespace {
+
+/// The keys of the settings file, all in its [conversion] group.
+constexpr const char* kTimeColumnsKey = "conversion/timeColumns";
+constexpr const char* kMacColumnsKey = "conversion/macColumns";
+constexpr const char* kPreviewKey = "conversion/preview";
+constexpr const char* kPreviewCharsKey = "conversion/previewChars";
+constexpr const char* kMaxStreamsKey = "conversion/maxStreams";
+constexpr const char* kMaxEndpointsKey = "conversion/maxEndpoints";
+
+/// The names of the time column choices in the file.
+struct TimeColumnsName {
+    TimeColumns value;
+    const char* name;
+};
+constexpr TimeColumnsName kTimeColumnsNames[] = {
+    { TimeColumns::Both, "both" },
+    { TimeColumns::AbsoluteOnly, "absolute" },
+    { TimeColumns::RelativeOnly, "relative" },
+};
+
+/// The number under @p key, within [@p min, @p max]; @p fallback if there is
+/// none.
+size_t readCount( const QSettings& file, const char* key, size_t fallback, size_t min, size_t max )
+{
+    bool ok = false;
+    const auto value = file.value( key ).toLongLong( &ok );
+    if ( !ok ) {
+        return fallback;
+    }
+    if ( value < static_cast<long long>( min ) ) {
+        return min;
+    }
+    return std::min( static_cast<size_t>( value ), max );
+}
+
+/// The flag under @p key; @p fallback if there is none.
+bool readFlag( const QSettings& file, const char* key, bool fallback )
+{
+    const auto value = file.value( key ).toString().toLower();
+    if ( value == "true" ) {
+        return true;
+    }
+    if ( value == "false" ) {
+        return false;
+    }
+    return fallback;
+}
+
+} // namespace
+
+QString settingsFilePath( const QString& configDir )
+{
+    return QDir( configDir ).filePath( QStringLiteral( "settings.ini" ) );
+}
+
+ConversionOptions loadConversionOptions( const QString& configDir )
+{
+    ConversionOptions options;
+    if ( configDir.isEmpty() ) {
+        return options;
+    }
+    const QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+
+    const auto timeColumns = file.value( kTimeColumnsKey ).toString();
+    for ( const auto& choice : kTimeColumnsNames ) {
+        if ( timeColumns == QLatin1String( choice.name ) ) {
+            options.layout.timeColumns = choice.value;
+        }
+    }
+    options.layout.macColumns = readFlag( file, kMacColumnsKey, options.layout.macColumns );
+    options.preview = readFlag( file, kPreviewKey, options.preview );
+    options.previewChars
+        = readCount( file, kPreviewCharsKey, options.previewChars, 1, kMaxPreviewChars );
+    options.maxStreams
+        = readCount( file, kMaxStreamsKey, options.maxStreams, kMinCap, kMaxStreamCap );
+    options.maxEndpoints
+        = readCount( file, kMaxEndpointsKey, options.maxEndpoints, kMinCap, kMaxEndpointCap );
+    return options;
+}
+
+bool saveConversionOptions( const QString& configDir, const ConversionOptions& options )
+{
+    if ( configDir.isEmpty() || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    for ( const auto& choice : kTimeColumnsNames ) {
+        if ( options.layout.timeColumns == choice.value ) {
+            file.setValue( kTimeColumnsKey, QLatin1String( choice.name ) );
+        }
+    }
+    file.setValue( kMacColumnsKey, options.layout.macColumns );
+    file.setValue( kPreviewKey, options.preview );
+    file.setValue( kPreviewCharsKey, static_cast<qulonglong>( options.previewChars ) );
+    file.setValue( kMaxStreamsKey, static_cast<qulonglong>( options.maxStreams ) );
+    file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+} // namespace tcpdump
