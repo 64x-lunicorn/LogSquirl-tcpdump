@@ -333,6 +333,74 @@ Bytes sshKexInit()
     return sshPacket( 20, body );
 }
 
+/// A WebSocket binary frame of @p size bytes, its length in 8 bytes,
+/// masked as a client's is.
+Bytes webSocketBinary( size_t size )
+{
+    Bytes b{ 0x82, 0x80 | 127 };
+    putBE32( b, static_cast<uint32_t>( static_cast<uint64_t>( size ) >> 32 ) );
+    putBE32( b, static_cast<uint32_t>( size ) );
+    b = b + Bytes{ 0x01, 0x02, 0x03, 0x04 };
+    b.resize( b.size() + size, 0x5A );
+    return b;
+}
+
+/// An SMB2 Read response carrying @p size bytes, behind its NetBIOS header.
+Bytes smbReadResponse( size_t size )
+{
+    Bytes smb{ 0xFE, 'S', 'M', 'B', 64, 0 };
+    smb.resize( 12, 0 );
+    smb = smb + Bytes{ 0x08, 0x00 }; // Read
+    smb.resize( 16, 0 );
+    smb.push_back( 0x01 ); // a response
+    smb.resize( 64, 0 );
+    smb = smb + Bytes{ 17, 0, 0x50, 0 };
+    putLE32( smb, static_cast<uint32_t>( size ) );
+    smb.resize( 64 + 16, 0 );
+    smb.resize( smb.size() + size, 0xA5 );
+    Bytes message{ 0x00, static_cast<uint8_t>( smb.size() >> 16 ) };
+    putBE16( message, static_cast<uint16_t>( smb.size() ) );
+    return message + smb;
+}
+
+/// An SMB2 Write request of @p size bytes, behind its NetBIOS header.
+Bytes smbWriteRequest( size_t size )
+{
+    Bytes smb{ 0xFE, 'S', 'M', 'B', 64, 0 };
+    smb.resize( 12, 0 );
+    smb = smb + Bytes{ 0x09, 0x00 }; // Write
+    smb.resize( 64, 0 );
+    smb = smb + Bytes{ 49, 0, 112, 0 };
+    putLE32( smb, static_cast<uint32_t>( size ) );
+    smb.resize( 64 + 48, 0 );
+    smb.resize( smb.size() + size, 0x5A );
+    Bytes message{ 0x00, 0x00 };
+    putBE16( message, static_cast<uint16_t>( smb.size() ) );
+    return message + smb;
+}
+
+/// The offsets that cut @p size bytes into segments of @p every bytes.
+std::vector<size_t> cutsEvery( size_t size, size_t every )
+{
+    std::vector<size_t> cuts;
+    for ( size_t at = every; at < size; at += every ) {
+        cuts.push_back( at );
+    }
+    return cuts;
+}
+
+/// @p segments sent by the server instead, numbered on from @p seq.
+std::vector<Segment> fromServer( std::vector<Segment> segments, uint32_t seq )
+{
+    const auto first = segments.empty() ? 0 : segments.front().seq;
+    for ( auto& s : segments ) {
+        s.fromClient = false;
+        s.seq = s.seq - first + seq;
+        s.ack = kClientIsn + 1;
+    }
+    return segments;
+}
+
 std::vector<Segment> operator+( std::vector<Segment> a, const std::vector<Segment>& b )
 {
     a.insert( a.end(), b.begin(), b.end() );
@@ -912,6 +980,210 @@ SCENARIO( "Segments are taken in sequence order", "[tcp_reassembly]" )
     }
 }
 
+SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_reassembly]" )
+{
+    GIVEN( "a WebSocket frame of 200 KiB in segments of 1448 bytes, then a short text frame" )
+    {
+        const auto big = webSocketBinary( 200 * 1024 );
+        const auto hello = webSocketText( "Hello" );
+        auto segments = cut( big, cutsEvery( big.size(), 1448 ), kWebSocketClientSeq, 8080 );
+        const auto bigSegments = segments.size();
+        segments
+            = segments
+              + cut( hello, {}, kWebSocketClientSeq + static_cast<uint32_t>( big.size() ), 8080 );
+        const auto first = webSocketUpgrade().size();
+
+        WHEN( "all of them are captured" )
+        {
+            TcpReassembly reassembly;
+            const auto lines = converted( webSocketUpgrade() + segments, reassembly );
+
+            THEN( "the frame's first segment is marked, the others are its continuation, and "
+                  "the text frame is described" )
+            {
+                REQUIRE( lines[ first ].protocol == "WebSocket" );
+                REQUIRE( lines[ first ].description.find( "WebSocket Binary" ) == 0 );
+                REQUIRE( lines[ first ].info.find( kReassemblyLimit ) != std::string::npos );
+                for ( size_t i = first + 1; i < first + bigSegments; ++i ) {
+                    INFO( "segment " << i - first );
+                    REQUIRE( lines[ i ].protocol == "WebSocket" );
+                    REQUIRE( lines[ i ].description == kContinuationOfMessage );
+                }
+                REQUIRE( lines.back().description
+                         == "WebSocket Text [FIN] [MASKED] len=5 \"Hello\"" );
+                REQUIRE( reassembly.directionsHeld() == 0 );
+                REQUIRE( reassembly.memoryUsed() == 0 );
+            }
+        }
+
+        WHEN( "segments inside the frame are lost, reordered and cut at the snaplen" )
+        {
+            auto mangled = segments;
+            mangled[ 21 ].capturedPayload = 100;
+            std::swap( mangled[ 30 ], mangled[ 31 ] );
+            mangled.erase( mangled.begin() + 10, mangled.begin() + 12 );
+            const auto lines = converted( webSocketUpgrade() + mangled );
+
+            THEN( "the frame's segments are still its continuation, and the text frame is "
+                  "described" )
+            {
+                for ( size_t i = first + 1; i + 1 < lines.size(); ++i ) {
+                    INFO( "line " << i );
+                    REQUIRE( lines[ i ].description == kContinuationOfMessage );
+                }
+                REQUIRE( lines.back().description
+                         == "WebSocket Text [FIN] [MASKED] len=5 \"Hello\"" );
+            }
+        }
+    }
+
+    GIVEN( "a WebSocket frame of 100 KiB whose last segment begins a text frame too" )
+    {
+        const auto big = webSocketBinary( 100 * 1024 );
+        const auto hello = webSocketText( "Hello" );
+        const auto stream = big + hello + webSocketText( "World" );
+        auto cuts = cutsEvery( big.size(), 1448 );
+        cuts.push_back( big.size() + hello.size() );
+        const auto segments = cut( stream, cuts, kWebSocketClientSeq, 8080 );
+
+        WHEN( "it is captured" )
+        {
+            const auto lines = converted( webSocketUpgrade() + segments );
+
+            THEN( "that segment is described from where the text frame begins" )
+            {
+                REQUIRE( lines[ lines.size() - 3 ].description == kContinuationOfMessage );
+                REQUIRE( lines[ lines.size() - 2 ].description
+                         == "WebSocket Text [FIN] [MASKED] len=5 \"Hello\"" );
+                REQUIRE( lines.back().description
+                         == "WebSocket Text [FIN] [MASKED] len=5 \"World\"" );
+            }
+        }
+
+        WHEN( "the segment where the frame ends is lost" )
+        {
+            auto lost = segments;
+            lost.erase( lost.end() - 2 );
+            const auto lines = converted( webSocketUpgrade() + lost );
+
+            THEN( "the stream resynchronises on the next segment that begins a frame" )
+            {
+                REQUIRE( lines[ lines.size() - 2 ].description == kContinuationOfMessage );
+                REQUIRE( lines.back().description
+                         == "WebSocket Text [FIN] [MASKED] len=5 \"World\"" );
+            }
+        }
+    }
+
+    GIVEN( "an MQTT PUBLISH of 100 KiB, then a short one" )
+    {
+        const auto big = mqttPublish( 100 * 1024 );
+        const auto small = mqttPublish( 5 );
+        auto segments = cut( big, cutsEvery( big.size(), 1448 ), kClientIsn + 1, 1883 );
+        const auto bigSegments = segments.size();
+        segments = segments
+                   + cut( small, {}, kClientIsn + 1 + static_cast<uint32_t>( big.size() ), 1883 );
+        const auto lines = converted( handshake( 1883 ) + segments );
+
+        THEN( "its segments after the first are its continuation, and the short one is "
+              "described" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "MQTT" );
+            REQUIRE( lines[ 3 ].info.find( kReassemblyLimit ) != std::string::npos );
+            for ( size_t i = 4; i < 3 + bigSegments; ++i ) {
+                INFO( "segment " << i - 3 );
+                REQUIRE( lines[ i ].protocol == "MQTT" );
+                REQUIRE( lines[ i ].description == kContinuationOfMessage );
+            }
+            REQUIRE( lines.back().protocol == "MQTT" );
+            REQUIRE( lines.back().description == describedWhole( small, 1883 ) );
+        }
+    }
+
+    GIVEN( "an SMB2 Read response of 200 KiB, then a Write request" )
+    {
+        const auto big = smbReadResponse( 200 * 1024 );
+        auto segments
+            = fromServer( cut( big, cutsEvery( big.size(), 1448 ), 0, 445 ), kServerIsn + 1 );
+        const auto bigSegments = segments.size();
+        segments = segments + cut( smbWriteRequest( 100 ), {}, kClientIsn + 1, 445 )
+                   + fromServer( cut( smbWriteRequest( 10 ), {}, 0, 445 ),
+                                 kServerIsn + 1 + static_cast<uint32_t>( big.size() ) );
+        const auto lines = converted( handshake( 445 ) + segments );
+
+        THEN( "its segments after the first are its continuation, and the next message is "
+              "described" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "SMB2" );
+            REQUIRE( lines[ 3 ].description.find( "Read Response" ) == 0 );
+            REQUIRE( lines[ 3 ].info.find( kReassemblyLimit ) != std::string::npos );
+            for ( size_t i = 4; i < 3 + bigSegments; ++i ) {
+                INFO( "segment " << i - 3 );
+                REQUIRE( lines[ i ].description == kContinuationOfMessage );
+            }
+            REQUIRE( lines[ lines.size() - 2 ].description == "Write Request Len:100 Off:0" );
+            REQUIRE( lines.back().description == "Write Request Len:10 Off:0" );
+        }
+    }
+
+    GIVEN( "a TLS record longer than a per-stream limit of 300 bytes, then a short one" )
+    {
+        const auto big = tlsRecord( 0x17, Bytes( 1000, 0xAA ) );
+        const auto small = tlsRecord( 0x17, Bytes( 10, 0xBB ) );
+        TcpReassembly reassembly( TcpReassembly::kDefaultMemoryLimit, 300 );
+        const auto lines
+            = converted( handshake() + cut( big + small, { 200, 600, big.size() } ), reassembly );
+
+        THEN( "the record's other segments are its continuation, and the short one is "
+              "described" )
+        {
+            REQUIRE( lines[ 3 ].info.find( kReassemblyLimit ) != std::string::npos );
+            REQUIRE( lines[ 4 ].protocol == "TLS" );
+            REQUIRE( lines[ 4 ].description == kContinuationOfMessage );
+            REQUIRE( lines[ 5 ].description == kContinuationOfMessage );
+            REQUIRE( lines[ 6 ].description == "Application Data" );
+            REQUIRE( reassembly.directionsHeld() == 0 );
+        }
+    }
+
+    GIVEN( "an MQTT PUBLISH whose length comes in its second segment, past a limit of 256" )
+    {
+        const auto big = mqttPublish( 1000 );
+        const auto small = mqttPublish( 5 );
+        TcpReassembly reassembly( TcpReassembly::kDefaultMemoryLimit, 256 );
+        const auto lines = converted(
+            handshake( 1883 )
+                + cut( big + small, { 1, 100, 400, 800, big.size() }, kClientIsn + 1, 1883 ),
+            reassembly );
+
+        THEN( "the segment that tells the length is marked, the later ones are the "
+              "continuation, and the short one is described" )
+        {
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].info.find( kReassemblyLimit ) != std::string::npos );
+            REQUIRE( lines[ 5 ].description == kContinuationOfMessage );
+            REQUIRE( lines[ 6 ].description == kContinuationOfMessage );
+            REQUIRE( lines[ 7 ].description == kContinuationOfMessage );
+            REQUIRE( lines[ 8 ].description == describedWhole( small, 1883 ) );
+            REQUIRE( reassembly.directionsHeld() == 0 );
+        }
+    }
+
+    GIVEN( "a WebSocket frame that announces more than the bytes skipped at most" )
+    {
+        auto huge = webSocketBinary( 2000 );
+        huge[ 2 ] = 0x7F; // 2^63 and more
+        const auto lines
+            = converted( webSocketUpgrade() + cut( huge, { 1000 }, kWebSocketClientSeq, 8080 ) );
+
+        THEN( "it is marked, and nothing is skipped" )
+        {
+            REQUIRE( lines[ lines.size() - 2 ].info.find( kReassemblyLimit ) != std::string::npos );
+            REQUIRE( lines.back().description != kContinuationOfMessage );
+        }
+    }
+}
+
 SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
 {
     const auto hello = clientHello( "example.com" );
@@ -1014,11 +1286,14 @@ SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]"
         { hello + record + record + hello, 443 },
         { sipInvite() + sipInvite() + sipInvite(), 5060 },
         { mqttPublish( 900 ) + mqttPublish( 10 ) + mqttPublish( 300 ), 1883 },
+        // Messages past the limit, skipped to their ends.
+        { mqttPublish( 5000 ) + mqttPublish( 10 ) + mqttPublish( 3000 ) + mqttPublish( 10 ), 1883 },
+        { record + tlsRecord( 0x17, Bytes( 6000, 0x5A ) ) + record, 443 },
     };
     std::mt19937 random( 78 );
     constexpr size_t kLimit = 4096;
 
-    for ( int round = 0; round < 450; ++round ) {
+    for ( int round = 0; round < 750; ++round ) {
         const auto& [ stream, port ] = streams[ round % std::size( streams ) ];
         // Random cuts, then shuffles, drops, duplicates, overlaps and flipped bytes.
         std::vector<size_t> cuts;

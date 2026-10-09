@@ -369,6 +369,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The Process Source tests wait for the fake capture programs to signal
   that they are ready instead of timing them, so they no longer fail on a
   loaded machine (#94).
+- **A message past the reassembly limit is skipped to its end.** When a
+  framed message (a WebSocket frame, an MQTT packet, an SMB2 Read
+  response, a TLS record, …) is longer than the 64 KB a stream direction
+  holds, its first segment is still marked `[reassembly limit]`, but the
+  segments after it are no longer read as if a new message began at their
+  first byte (random frames, `[Malformed Packet]`): the direction keeps
+  where the message ends, as its header announced (up to 1 GiB, 128 bytes
+  of the reassembly memory), labels the segments up to there `[continuation
+  of a message past the reassembly limit]` with its protocol, and
+  describes the next message normally, also when it begins inside the
+  segment that ends the large one. Segments lost, out of order or cut at
+  the snaplen inside it change nothing; if the segment where it ends is
+  lost, the stream resynchronises on the next segment that begins a
+  message, as before (#95).
 
 ## [0.3.0] — 2026-10-09
 

@@ -1027,8 +1027,8 @@ cannot describe it: its framer marks its extents
 segment of whole frames too, from all its bytes, and reassembled frames by
 `describeTcpMessages()`, which knows the framer, not by
 `describePayload()`. A frame longer than the direction's limit is
-`[reassembly limit]`, and the segments after it are read as frames from
-their first byte, as the stream keeps no count of the bytes left. A framer answers more
+`[reassembly limit]`, and the rest of it skipped (below), so that its
+later segments are not read as frames from their first byte. A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -1071,14 +1071,32 @@ MiB) or the option *TCP reassembly memory at most*
 the messages the last segment completed are kept until the next one (at
 most a direction's limit). A message longer than a direction's limit, or
 one that outgrows it, is not held: its segment keeps its own description,
-followed by `[reassembly limit]`. When the global limit would be passed,
+followed by `[reassembly limit]`. When the message's header announced its
+length (the framer answered more than one byte past those given), the
+direction skips the rest of it instead (`TcpReassembly::skip()`): its
+entry then holds no bytes, only the sequence numbers where the rest begins
+and ends (`Entry::skipFrom`, `skipEnd`), costs `kEntryOverhead`, and is let
+go like any other; at most `kMaxSkip` (1 GiB) is skipped, a longer length
+being likely none. A segment up to the end is described as `[continuation
+of a message past the reassembly limit]` (`kContinuationOfMessage`) with
+the message's label, its stream cue and SIP calls cleared; one that goes
+past it is taken from the end as one that begins messages
+(`startMessage()` with the skipped message's label, which describes those
+bytes alone, as the parser described the segment from its first byte); a
+segment of bytes before the rest is a retransmission, left as it is. As
+the end is a sequence number, segments lost, early or cut at the snaplen
+inside the rest change nothing, and the other side's acknowledgement is no
+gap there; if the segment that holds the end is lost, the next one is
+taken as any, so the stream resynchronises on one that begins a message.
+The entry goes once a segment reaches the end (or on FIN, SYN, RST). The
+per-direction count lives in the table, never in `StreamState`. When the global limit would be passed,
 the directions used longest ago are let go (`std::list` order, O(1)) and
 their next segment carries the marker; the direction being added to is
 never let go for itself. A direction is let go on its FIN, both on a SYN
 (a handshake, perhaps a new connection on the same ports, whose
 `StreamState` the TCP Analysis resets) or an RST; streams past the stream
 cap have no state and are never held. In `StreamState::reassembly`, bit
-`1 << d` says direction d holds bytes, so that the table is looked up only
+`1 << d` says direction d has an entry (holds bytes or skips a message), so that the table is looked up only
 then, and bit `4 << d` that it was let go. HTTP/2 streams are not
 reassembled. Conversion of a file and of a capture still being written
 go through the same loop, so both are reassembled alike.

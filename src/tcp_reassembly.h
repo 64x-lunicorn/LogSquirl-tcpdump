@@ -34,6 +34,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <list>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -43,6 +44,9 @@ namespace tcpdump {
 constexpr const char* kSegmentOfMessage = "[TCP segment of a reassembled PDU]";
 /// Ends the Info of a segment whose message could not be held.
 constexpr const char* kReassemblyLimit = "[reassembly limit]";
+/// Info of a segment that carries part of a message past the reassembly limit.
+constexpr const char* kContinuationOfMessage
+    = "[continuation of a message past the reassembly limit]";
 
 /// The messages a segment completed, as the TCP Reassembly put them together.
 struct ReassembledMessages {
@@ -82,12 +86,18 @@ struct ReassembledMessages {
  * buffer's capacity and the segments that came early together; all
  * directions together at most memoryLimit, with kEntryOverhead counted for
  * each.  A message that does not fit in a direction's limit is not held:
- * its segment keeps its own description, "[reassembly limit]" after it.
+ * its segment keeps its own description, "[reassembly limit]" after it;
+ * when its header announces its length, the direction then skips the rest
+ * of it, up to kMaxSkip bytes: it keeps only where the message ends, and
+ * describes each segment before that as kContinuationOfMessage, and the
+ * bytes after it as the messages they begin.  As the end is a sequence
+ * number, segments lost, early or cut inside the rest change nothing.
  * When all directions together would pass memoryLimit, those that waited
  * longest are let go, their next segment marked so.  A direction is let go
  * on its FIN, both on a SYN (a new connection) or an RST; a stream past the
  * stream cap has no state and is never held.  The state a stream keeps is
- * one byte of StreamState (StreamState::reassembly); the bytes live here.
+ * one byte of StreamState (StreamState::reassembly); the bytes, and where
+ * a skipped message ends, live here.
  */
 class TcpReassembly {
 public:
@@ -103,6 +113,9 @@ public:
     static constexpr size_t kEntryOverhead = 128;
     /// Bytes counted for a segment that came early besides its bytes.
     static constexpr size_t kEarlySegmentOverhead = 32;
+    /// Bytes of a message past the limit a direction skips at most; one
+    /// that announces more is not skipped, as its length is likely none.
+    static constexpr size_t kMaxSkip = size_t{ 1 } << 30;
 
     explicit TcpReassembly( size_t memoryLimit = kDefaultMemoryLimit,
                             size_t streamLimit = kStreamLimit );
@@ -141,6 +154,11 @@ private:
         ByteStreamOrderer order;
         /// Segments the held bytes came from.
         uint32_t segments = 0;
+        /// The rest of a message past the limit is skipped, not held: the
+        /// bytes from skipFrom to skipEnd, in sequence numbers, are its.
+        bool skipping = false;
+        uint32_t skipFrom = 0;
+        uint32_t skipEnd = 0;
         /// The protocol that frames the messages (MessageExtent::framer).
         uint8_t framer = 0;
         const char* label = nullptr;
@@ -168,12 +186,24 @@ private:
     /// Append the segments that came early and are next now.
     bool appendEarly( Entry& entry, Key key );
 
+    /// Skip the @p bytes of a message of protocol @p label from sequence
+    /// number @p from on, in place of what the direction holds; if they are
+    /// too many, or there is no memory, nothing is skipped.
+    void skip( const Stream& stream, const char* label, uint32_t from, size_t bytes );
+    /// Take a segment of a direction that skips a message: nullopt when it
+    /// lies past the message, to be taken as any.
+    std::optional<ReassembledMessages> skipSegment( PacketRecord& pkt, const Stream& stream,
+                                                    ByteView payload, Entry& entry );
     /// Take a segment's payload, in sequence order.
     ReassembledMessages segment( PacketRecord& pkt, const Stream& stream, ByteView payload );
     /// Describe what the held bytes of @p entry hold now.
     ReassembledMessages continueMessage( PacketRecord& pkt, const Stream& stream, Entry& entry );
     /// Hold the message a segment ends in, if it does, when nothing is held.
-    ReassembledMessages startMessage( PacketRecord& pkt, const Stream& stream, ByteView payload );
+    /// With @p after, the label of the message skipped before them, the
+    /// bytes are the end of the segment, past that message, and described
+    /// alone.
+    ReassembledMessages startMessage( PacketRecord& pkt, const Stream& stream, ByteView payload,
+                                      const char* after = nullptr );
 
     size_t memoryLimit_;
     size_t streamLimit_;

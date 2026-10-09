@@ -269,7 +269,7 @@ opens its options:
 | SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
 | Streams numbered at most (Advanced) | 1,000,000 | 1 to 10,000,000; later streams show `?` |
 | Endpoints counted at most (Advanced) | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
-| TCP reassembly memory at most (Advanced) | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]` |
+| TCP reassembly memory at most (Advanced) | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]`, and the segments after it up to its announced end are labelled `[continuation of a message past the reassembly limit]` |
 
 They are kept in `settings.ini` in the plugin's configuration directory
 (`plugin_config/io.github.logsquirl.tcpdump` beside LogSquirl's plugin
