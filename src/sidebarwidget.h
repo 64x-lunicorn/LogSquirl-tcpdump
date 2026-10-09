@@ -53,7 +53,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does)
  *   - progress bar and Cancel button, while a capture is converted
- *   - Summary label showing the last capture's stats
+ *   - Summary label showing the last capture's stats; the first one after
+ *     the plugin is loaded also links to the README section on installing
+ *     the Log Format, which the plugin cannot tell is installed
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -118,8 +120,9 @@ private:
     QPushButton* cancelButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
-    QString lastDir_;        ///< Remembers the last browsed directory.
-    FileChooser chooseFile_; ///< Shows the file dialog.
+    QString lastDir_;              ///< Remembers the last browsed directory.
+    bool formatHintShown_ = false; ///< The Log Format hint was shown once.
+    FileChooser chooseFile_;       ///< Shows the file dialog.
 
     bool converting_ = false;
     /// Cancels the running conversion.

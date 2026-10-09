@@ -343,6 +343,61 @@ SCENARIO( "each conversion writes a new private file", "[sidebar]" )
     }
 }
 
+SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar, as created when the plugin is loaded" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        auto* summary = child<QLabel>( widget, "summary" );
+        const QString readmeSection
+            = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+
+        WHEN( "a first capture is converted" )
+        {
+            widget.openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "the summary links to the README section on installing the Log Format" )
+            {
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+                REQUIRE( summary->text().contains( "href=\"" + readmeSection + "\"" ) );
+                REQUIRE( summary->openExternalLinks() );
+            }
+
+            AND_WHEN( "another capture is converted" )
+            {
+                widget.openPcapFile( writeCapture( dir, "second.pcap", captureOf( 1 ) ) );
+                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+                THEN( "its summary no longer carries the hint" )
+                {
+                    REQUIRE( summary->text().contains( "second.pcap" ) );
+                    REQUIRE_FALSE( summary->text().contains( readmeSection ) );
+                }
+            }
+        }
+
+        WHEN( "a conversion fails first" )
+        {
+            widget.openPcapFile( writeCapture( dir, "bad.pcap", Bytes( 64, 0 ) ) );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "the hint waits for the first converted capture" )
+            {
+                REQUIRE_FALSE( summary->text().contains( readmeSection ) );
+                widget.openPcapFile( writeCapture( dir, "good.pcap", captureOf( 1 ) ) );
+                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+                REQUIRE( summary->text().contains( readmeSection ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
 {
     GIVEN( "a capture whose file name, protocol and endpoint contain markup" )

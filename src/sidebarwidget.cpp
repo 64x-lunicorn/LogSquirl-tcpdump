@@ -50,6 +50,14 @@
 
 namespace tcpdump {
 
+namespace {
+
+/// The README section on installing the Log Format and what it unlocks.
+const char* const kLogFormatHelpUrl
+    = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+
+} // namespace
+
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
     , chooseFile_( []( QWidget* parent, const QString& dir ) {
@@ -94,6 +102,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
+    summaryLabel_->setOpenExternalLinks( true );
     layout->addWidget( summaryLabel_ );
 
     // Push everything up
@@ -254,8 +263,17 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
     }
 
-    summaryLabel_->setText( summaryHtml( QFileInfo( filePath ).fileName(),
-                                         QFileInfo( filePath ).size(), result.summary ) );
+    auto html = summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(),
+                             result.summary );
+    // Whether LogSquirl has the Log Format installed is not known to the
+    // plugin, so the hint is shown regardless, but only once per load.
+    if ( !formatHintShown_ ) {
+        formatHintShown_ = true;
+        html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
+                         "Log Format: <a href=\"%1\">install it once</a>.</i>" )
+                    .arg( kLogFormatHelpUrl );
+    }
+    summaryLabel_->setText( html );
 
     hostLog( LOGSQUIRL_LOG_INFO,
              QString( "Opened %1 packets from %2" ).arg( result.summary.packets ).arg( filePath ) );
