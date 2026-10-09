@@ -23,6 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`VXLAN`), `GRE`, `IPIP` or `6in4` between the tunnel endpoints. GRE
   carrying other protocols, PPTP's enhanced GRE among them, is still shown
   as GRE, now with its protocol type.
+- **Wi-Fi, PPP and PPPoE link layers.** Captures from a Wi-Fi monitor
+  interface (802.11, with or without a Radiotap header) and from PPP links
+  (PPP with or without HDLC-like framing, Cisco HDLC, PPPoE) are dissected
+  to their IP packets, in pcap and per interface in pcapng. 802.11
+  management and control frames are named as Wireshark names them, with
+  their sequence number and, where the frame carries one, the SSID: `Beacon
+  frame, SN=1000, FN=0, BI=100, SSID="HomeNet"`, `Probe Request, SN=1,
+  FN=0, SSID=Wildcard (Broadcast)`, `Authentication`, `Association
+  Request`, `Deauthentication`, `Request-to-send`, `Acknowledgement`; their
+  Source and Destination are MAC addresses. Data frames reach IPv4, IPv6
+  and ARP through LLC/SNAP; protected (encrypted) ones show as `QoS Data,
+  SN=6, FN=0, Protected`. The Radiotap header's length is honoured, its
+  extended present bitmaps walked, and a frame check sequence it announces
+  cut off. PPP control protocols are named with their message: `LCP
+  Configuration Request`, `IPCP Configuration Ack`, `PAP
+  Authenticate-Request` (no credentials shown), `CHAP Challenge`; PPPoE
+  discovery with its stage, `Active Discovery Offer (PADO)
+  AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
+  type` on every line, and PPPoE frames only their EtherType.
 
 ## [0.3.0] — 2026-10-09
 

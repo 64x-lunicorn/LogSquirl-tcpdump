@@ -28,8 +28,11 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
   only the first 256 KiB of a record are dissected, the rest is skipped
 - Reports a capture cut off inside a record (`truncated()`)
 - Dissects link-layer (Ethernet, Raw IP, Linux SLL, Linux SLL2, BSD
-  loopback DLT_NULL/DLT_LOOP, family read in the capture's byte order)
-- Strips stacked 802.1Q / 802.1ad (QinQ) VLAN tags
+  loopback DLT_NULL/DLT_LOOP, family read in the capture's byte order), and
+  hands 802.11, Radiotap, PPP, Cisco HDLC and PPPoE to `link_layers.h/cpp`
+  (see below)
+- Strips stacked 802.1Q / 802.1ad (QinQ) VLAN tags, then unwraps PPPoE
+  (EtherTypes 0x8863 and 0x8864) with `dissectPppoe()`
 - Dissects network layer (IPv4, IPv6 with hop-by-hop, routing, fragment,
   destination options and AH headers, ARP); bounds transport data by the IP
   length fields, falling back to the captured bytes for TSO/GSO lengths of 0;
@@ -42,7 +45,7 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
 - Hands a TCP or UDP payload with its ports to the Payload Describer, and
   appends the description it gets back to the transport summary after ` | `
 - Names an IP protocol or EtherType it does not dissect further from the
-  name tables (`IGMP`, `ESP`, `LLDP`, `PPPoES`), keeping the number in the
+  name tables (`IGMP`, `ESP`, `LLDP`, `EAPOL`), keeping the number in the
   Info column (`Protocol 2`, `EtherType 0x88CC`); one without a name stays
   numeric, `IP(200)` or `ETH(0x1234)`. An Ethernet type field of 1500 or
   less is the length of an IEEE 802.3 frame, shown as `LLC`
@@ -66,6 +69,50 @@ to the same dissection (`dissectPacket()`):
 - `if_tsoffset` is not applied: times are relative to the first packet
 
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
+
+#### Link layers beyond Ethernet (`link_layers.h/cpp`)
+Pure C++. `dissectsLinkLayer()` says which link-layer types
+`dissectLinkLayer()` reads: DLT_IEEE802_11 (105), DLT_IEEE802_11_RADIO
+(127), DLT_PPP (9), DLT_PPP_SERIAL (50), DLT_PPP_ETHER (51) and DLT_C_HDLC
+(104). A dissector either hands `dissectPacket()` the `NetworkLayer` the
+frame carries (an EtherType and its bytes), which goes on through the VLAN,
+PPPoE and network steps like an Ethernet frame's, or describes the frame
+itself in `protocol` and `info` and returns nothing. Every header is
+checked against the captured bytes first; a frame cut inside one is named
+as such (`Truncated 802.11 header`).
+- **Radiotap**: version 0, its length honoured (`Invalid Radiotap header
+  length N` for one shorter than 8 bytes or longer than the packet), the
+  extended present bitmaps walked within it. Only the flags field is read,
+  behind TSFT aligned to 8 bytes from the header's start: a frame check
+  sequence at the end is cut off (when the frame was captured whole), and
+  the data pad flag aligns the 802.11 header to 4 bytes.
+- **802.11**: frame names are Wireshark's (`Beacon frame`, `Probe
+  Request`, `QoS Data`, `Null function (No data)`, `Request-to-send`,
+  `Acknowledgement`). Protocol is `802.11`. Management and data frames add
+  the sequence and fragment numbers, `SN=…, FN=…`; a beacon and probe
+  response the interval `BI=`; those that carry one the SSID from the
+  information elements, `SSID="…"` escaped and cut like `fieldText()`, an
+  empty one in a probe request `SSID=Wildcard (Broadcast)`. Source and
+  Destination MAC are SA and DA, which address they are depending on the
+  To DS / From DS flags (the fourth address with both); a control frame has
+  its receiver as destination and its transmitter, if it names one, as
+  source. A frame with the Protected flag ends in `, Protected`, its body
+  not read; a fragment, an A-MSDU and a frame without data are named only.
+  A data frame's LLC/SNAP header (OUI 00:00:00 or 00:00:F8) gives the
+  EtherType; other LLC frames are `LLC` with their DSAP and SSAP.
+- **PPP**: HDLC-like framing (0xFF 0x03) or none, and a compressed
+  one-byte protocol field. IPv4 (0x0021) and IPv6 (0x0057) go on as
+  EtherTypes; LCP, IPCP, IPv6CP, CCP, PAP and CHAP are their own Protocol,
+  with the code's name as Info (`Configuration Request`, `Echo Reply`,
+  `Authenticate-Request`, `Challenge`); options, names and passwords are
+  not shown. Another protocol is `PPP`, `PPP protocol 0x0281`.
+  DLT_PPP_SERIAL tells Cisco HDLC (address 0x0F or 0x8F, then an
+  EtherType) from PPP by its first byte.
+- **PPPoE** (RFC 2516): the code tells a session frame (0x00), whose PPP
+  frame is bounded by the PPPoE length so that Ethernet padding is not
+  read, from a discovery message: `PPPoED`, its stage as Wireshark names
+  it, `Active Discovery Offer (PADO)`, with the access concentrator's
+  `AC-Name='…'` from the tags.
 
 #### ICMP and ICMPv6 (`icmp.h/cpp`)
 Pure C++. `describeIcmp()` and `describeIcmpv6()` turn a message of at
@@ -706,8 +753,9 @@ entry in `payload_describer.cpp`:
 A protocol that only needs a name, a well-known port, IP protocol number or
 EtherType, is one line in the tables of `protocol_names.cpp`, with a check
 in `tests/protocol_names_test.cpp`. A new link or network layer, in
-contrast, is parsed in `pcap_parser.cpp` and tested with the frame builders
-in `tests/pcapbuilder.h`.
+contrast, is parsed in `pcap_parser.cpp`, a link layer beyond Ethernet in
+`link_layers.cpp`, and tested with the frame builders in
+`tests/pcapbuilder.h`.
 
 ## Testing
 
@@ -738,7 +786,12 @@ discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
 lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
 by `tests/make_dhcp_ntp_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
 and IP-in-IP tunnels, nested and nested too deep, by
-`tests/make_tunnels_corpus.py`. The pcapng unit tests build their
+`tests/make_tunnels_corpus.py`; `wifi.pcap`, a station joining an access
+point behind Radiotap headers, and `ppp.pcapng`, a PPPoE session from
+discovery to teardown, PPP in HDLC-like framing and Cisco HDLC on three
+interfaces, by `tests/make_link_layers_corpus.py`. The link layers' tests,
+`tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
+frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too, in every `LineLayout`.

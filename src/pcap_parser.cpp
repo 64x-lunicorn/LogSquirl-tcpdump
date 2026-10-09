@@ -22,7 +22,8 @@
  * @brief Implementation of the pcap file parser.
  *
  * Parses pcap (libpcap) files, and the packets of any capture, with
- * Ethernet, Raw IP, Linux cooked capture and BSD loopback link layers.
+ * Ethernet, Raw IP, Linux cooked capture and BSD loopback link layers, and
+ * those of link_layers.h (802.11, PPP, Cisco HDLC, PPPoE).
  * Extracts IPv4/IPv6, TCP, UDP, ICMP, and ARP protocol fields from each
  * packet, unwrapping VXLAN, GRE and IP-in-IP tunnels to the packet inside.
  */
@@ -30,6 +31,7 @@
 #include "pcap_parser.h"
 
 #include "icmp.h"
+#include "link_layers.h"
 #include "payload_describer.h"
 #include "protocol_names.h"
 #include "wire_bytes.h"
@@ -657,6 +659,14 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         }
         pkt.etherType = etherType;
     }
+    else if ( dissectsLinkLayer( linkType ) ) {
+        if ( const auto network = dissectLinkLayer( pkt, linkType, pktData, pktRemaining ) ) {
+            etherType = network->etherType;
+            pkt.etherType = etherType;
+            networkData = network->data;
+            networkRemaining = network->len;
+        }
+    }
     else {
         pkt.protocol = "Unknown";
         pkt.info = "Unsupported link-layer type " + std::to_string( linkType );
@@ -673,6 +683,17 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         pkt.etherType = etherType;
         networkData += 4;
         networkRemaining -= 4;
+    }
+
+    // PPPoE: a session's PPP frame carries the network layer, a discovery
+    // message none.
+    if ( networkData
+         && ( etherType == EthertypePppoeDiscovery || etherType == EthertypePppoeSession ) ) {
+        const auto network = dissectPppoe( pkt, networkData, networkRemaining );
+        etherType = network ? network->etherType : 0;
+        pkt.etherType = network ? etherType : pkt.etherType;
+        networkData = network ? network->data : nullptr;
+        networkRemaining = network ? network->len : 0;
     }
 
     // Parse network and transport layers
@@ -782,6 +803,18 @@ std::string linkTypeName( uint32_t linkType )
         return "Linux SLL";
     case DltLinuxSll2:
         return "Linux SLL2";
+    case DltPpp:
+        return "PPP";
+    case DltPppSerial:
+        return "PPP HDLC";
+    case DltPppEther:
+        return "PPPoE";
+    case DltCiscoHdlc:
+        return "Cisco HDLC";
+    case DltIeee80211:
+        return "802.11";
+    case DltIeee80211Radio:
+        return "802.11 Radiotap";
     default:
         return std::to_string( linkType );
     }
