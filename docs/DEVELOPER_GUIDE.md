@@ -1682,6 +1682,11 @@ ended at the deadline, though nothing comes (only a wait: the rest of a
 record that has come is read). The first condition reached ends the
 conversion as Stop does, Converted, with `ConversionResult::stoppedBy`
 saying which; one reached before the capture header came ends Stopped.
+Packet numbers are 32 bits (`PacketRecord::number`, the index's
+checkpoints and stream ranges): every conversion, of a file too, stops
+with packet `kMaxPacketNumber` (`ConversionOptions::lastPacketNumber`,
+which a test lowers), a live one with `StopCondition::PacketNumbers`, and
+sets `CaptureSummary::packetNumbersUsedUp` (a file: if a packet follows).
 
 With a ring buffer (`LiveLimits::ringBuffer()`: files kept, and a file size
 or duration) the raw capture is a `RawCapture` of numbered files,

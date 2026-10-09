@@ -318,6 +318,33 @@ SCENARIO( "A live capture stops by itself at a packet count or a size", "[live_l
     }
 }
 
+SCENARIO( "A live capture stops with the last packet it can number", "[live_limits]" )
+{
+    const auto packets = datagrams( 6 );
+    QTemporaryDir out;
+
+    GIVEN( "a capture program that has sent six packets, and the last number lowered to four" )
+    {
+        ConversionOptions options;
+        options.lastPacketNumber = 4;
+        LimitedRun run( out.path(), {}, {}, options );
+        run.source.feed( pcapOf( packets ) );
+
+        THEN( "it ends Converted with the fourth, keeping it, and says why" )
+        {
+            REQUIRE( run.endsWithin( seconds( 5 ) ) );
+            const auto result = run.finish();
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.stoppedBy == StopCondition::PacketNumbers );
+            REQUIRE( result.summary.packets == 4 );
+            REQUIRE( result.summary.packetNumbersUsedUp );
+            REQUIRE( readLines( result.outputPath ).size() == 5 );
+            REQUIRE( fileBytes( result.rawPath )
+                     == pcapOf( { packets[ 0 ], packets[ 1 ], packets[ 2 ], packets[ 3 ] } ) );
+        }
+    }
+}
+
 SCENARIO( "A live capture stops by itself after a duration, by the clock it is given",
           "[live_limits]" )
 {

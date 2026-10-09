@@ -497,6 +497,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- **Packet numbers no longer wrap.** The No. column counted packets in 32
+  bits: a capture file of more than 4,294,967,295 packets started again at
+  0. The conversion now stops
+  with packet 4,294,967,295, and the summary says the rest was not
+  converted; a live capture stops there, as at a stop condition, with a
+  notification (#128)
 - Ring buffer: the text of a live capture is no longer rewritten in place
   as the oldest raw file is deleted (LogSquirl follows that file); each raw
   file has its own `.log` in a tab of its own, and the index of a capture

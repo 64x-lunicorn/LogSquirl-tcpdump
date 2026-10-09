@@ -325,6 +325,65 @@ SCENARIO( "The summary counts the packets cut at the snaplen", "[converter]" )
     }
 }
 
+SCENARIO( "No packet is numbered past the last number the No. column has", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a capture of six packets, and the last number lowered to four" )
+    {
+        std::vector<Record> records;
+        for ( int i = 0; i < 6; ++i ) {
+            records.push_back( { udpPacket( 1111 ) } );
+        }
+        const auto input = writeFile( dir, "many.pcap", pcapFile( records ) );
+        ConversionOptions options;
+        options.lastPacketNumber = 4;
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
+
+            THEN( "the first four packets are, and the summary says the rest was not" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.packets == 4 );
+                REQUIRE( result.summary.packetNumbersUsedUp );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( lines.size() == 5 );
+                REQUIRE( lines[ 4 ].startsWith( "4 " ) );
+            }
+        }
+    }
+
+    GIVEN( "a capture of exactly as many packets as there are numbers" )
+    {
+        std::vector<Record> records;
+        for ( int i = 0; i < 4; ++i ) {
+            records.push_back( { udpPacket( 1111 ) } );
+        }
+        const auto input = writeFile( dir, "four.pcap", pcapFile( records ) );
+        ConversionOptions options;
+        options.lastPacketNumber = 4;
+
+        THEN( "it is converted whole, with nothing said" )
+        {
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.packets == 4 );
+            REQUIRE_FALSE( result.summary.packetNumbersUsedUp );
+        }
+    }
+
+    THEN( "the No. column numbers up to the largest 32-bit number by default" )
+    {
+        REQUIRE( ConversionOptions().lastPacketNumber == kMaxPacketNumber );
+        REQUIRE( kMaxPacketNumber == 4294967295u );
+    }
+}
+
 SCENARIO( "The summary counts the TCP analysis markers per kind", "[converter]" )
 {
     QTemporaryDir dir;

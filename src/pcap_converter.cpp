@@ -563,6 +563,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         return std::nullopt;
     };
 
+    bool numbersUsedUp = false;
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
         if ( cancel && cancel->load() ) {
@@ -658,6 +659,21 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         }
         firstPacket = false;
         reportProgress();
+
+        // No packet is numbered past the last number, where a 32-bit count
+        // would wrap: a live capture stops with it, as at a stop condition;
+        // a file is converted that far, its summary saying it had more.
+        if ( reader.packetsRead() >= options.lastPacketNumber ) {
+            if ( live ) {
+                numbersUsedUp = true;
+                stoppedBy = StopCondition::PacketNumbers;
+            }
+            else {
+                PacketRecord rest;
+                numbersUsedUp = reader.next( rest );
+            }
+            break;
+        }
     }
     beforeWait = nullptr;
     reportProgress(); // a gzip stream's end lies behind its last packet
@@ -689,6 +705,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
     result.summary = withDecryption( summarise( std::move( stats ), tracker, labels, conversations,
                                                 reader, options.maxStreams ) );
+    result.summary.packetNumbersUsedUp = numbersUsedUp;
     if ( gzip && gzip->cutOff() ) {
         // The capture ends where its gzip stream does: as one cut off.
         result.summary.endsInsideRecord = true;
@@ -764,8 +781,9 @@ bool CaptureSummary::operator==( const CaptureSummary& other ) const
         return std::tie( s.packets, s.bytes, s.durationSeconds, s.firstTimeUtc, s.lastTimeUtc,
                          s.linkTypeNames, s.protocolPackets, s.protocolBytes, s.endpointPackets,
                          s.tunnelEndpointPackets, s.tcpMarkers, s.cutPackets, s.endsInsideRecord,
-                         s.compressionProblem, s.streamCap, s.otherEndpointPackets,
-                         s.tlsSessionsDecrypted, s.keyLogError, s.endpointNames );
+                         s.compressionProblem, s.packetNumbersUsedUp, s.streamCap,
+                         s.otherEndpointPackets, s.tlsSessionsDecrypted, s.keyLogError,
+                         s.endpointNames );
     };
     return fields( *this ) == fields( other );
 }

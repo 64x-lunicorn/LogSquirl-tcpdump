@@ -132,6 +132,9 @@ SCENARIO( "A live capture that a stop condition ended says which", "[live_captur
                     + " packets, as set." );
     REQUIRE( liveStopText( "eth0", StopCondition::Bytes, limits )
              == "The capture eth0 stopped at 2.0 MB captured, as set." );
+    REQUIRE( liveStopText( "eth0", StopCondition::PacketNumbers, limits )
+             == "The capture eth0 stopped at packet " + QLocale().toString( 4294967295ull )
+                    + ", the last one the No. column can number." );
 }
 
 #ifdef Q_OS_UNIX

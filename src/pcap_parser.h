@@ -221,9 +221,14 @@ constexpr size_t kMaxSipMessages = 4;
 /// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
 constexpr size_t kPayloadHeadBytes = 48;
 
+/// The last number the No. column gives a packet: a conversion stops with
+/// it (ConversionOptions::lastPacketNumber), as a 32-bit count would wrap.
+/// Some 12 hours of a live capture at 100,000 packets/s.
+constexpr uint32_t kMaxPacketNumber = UINT32_MAX;
+
 /// Represents a single parsed network packet.
 struct PacketRecord {
-    uint32_t number = 0; ///< 1-based packet index
+    uint32_t number = 0; ///< 1-based packet index, kMaxPacketNumber at most
     /// Seconds since the epoch: 64 bits, as a pcapng timestamp counts past
     /// 2106, where 32 bits of seconds end.
     int64_t timestampSec = 0;

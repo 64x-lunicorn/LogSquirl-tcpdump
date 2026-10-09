@@ -1351,6 +1351,11 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     else if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }
+    if ( summary.packetNumbersUsedUp ) {
+        html += QString( "<i>Stopped at packet %1, the last one the No. column can number; the "
+                         "rest was not converted.</i><br>" )
+                    .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
+    }
     html += "<br>";
 
     // Protocol breakdown
@@ -1525,6 +1530,10 @@ QString liveStopText( const QString& name, StopCondition condition, const LiveLi
     case StopCondition::Bytes:
         return QString( "The capture %1 stopped at %2 captured, as set." )
             .arg( name, formatBytes( limits.bytes ) );
+    case StopCondition::PacketNumbers:
+        return QString( "The capture %1 stopped at packet %2, the last one the No. column can "
+                        "number." )
+            .arg( name, QLocale().toString( static_cast<qulonglong>( kMaxPacketNumber ) ) );
     case StopCondition::None:
         break;
     }

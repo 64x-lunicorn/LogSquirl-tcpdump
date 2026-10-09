@@ -539,7 +539,10 @@ packet line is there, so no tab grows without bound. A text is never
 rewritten: the tabs of files the ring buffer has deleted stay open, as
 they are, until you close them, and their Packet Panel says *Rotated away*
 for their packets (their lines stay readable; only the packets' bytes are
-gone). The packet numbers in the No. column go on across the files.
+gone). The packet numbers in the No. column go on across the files, up
+to 4,294,967,295: a capture that gets to that packet stops with it, saying
+so in a notification (some 12 hours at 100,000 packets/s); a capture file
+with more packets is converted up to it, the summary saying so.
 Follow stream content starts at the first packet kept. The `.log` files
 stay in the private temporary directory until LogSquirl quits; close the
 tabs of old files to let LogSquirl forget them. **Save capture…** writes the files kept as one capture

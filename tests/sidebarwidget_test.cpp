@@ -868,6 +868,19 @@ SCENARIO( "the summary says what was cut", "[sidebar]" )
         }
     }
 
+    GIVEN( "a capture with more packets than the No. column can number" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packetNumbersUsedUp = true;
+
+        THEN( "the summary says the rest was not converted" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "huge.pcap", 100, summary )
+                         .contains( "the last one the No. column can number; the rest was not "
+                                    "converted" ) );
+        }
+    }
+
     GIVEN( "a capture with more conversations than were numbered" )
     {
         tcpdump::CaptureSummary summary;

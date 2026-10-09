@@ -106,6 +106,10 @@ struct CaptureSummary {
     /// Why a gzip-compressed capture's stream ended before its end, cut off
     /// or corrupt; empty otherwise.
     std::string compressionProblem;
+    /// The conversion stopped with the packet of the last number
+    /// (ConversionOptions::lastPacketNumber): a capture file had more
+    /// packets, which were not converted, or a live capture got to it.
+    bool packetNumbersUsedUp = false;
     /// Set when conversations past the stream cap went unnumbered and show
     /// stream "?" in the log: the cap, i.e. how many were numbered.
     std::optional<uint64_t> streamCap;
@@ -142,6 +146,9 @@ enum class StopCondition : uint8_t {
     Duration, ///< It ran for LiveLimits::duration.
     Packets,  ///< It converted LiveLimits::packets packets.
     Bytes,    ///< It read LiveLimits::bytes bytes.
+    /// It converted the packet of the last number the No. column has
+    /// (kMaxPacketNumber); not a LiveLimits setting.
+    PacketNumbers,
 };
 
 struct ConversionResult {
@@ -295,6 +302,9 @@ struct ConversionOptions {
     /// Addresses whose names are kept at most, with host names shown
     /// (LineLayout::hostNames, HostNames).
     size_t maxHostNames = HostNames::kMaxNames;
+    /// The number of the last packet converted (kMaxPacketNumber, which
+    /// only a test lowers).
+    uint32_t lastPacketNumber = kMaxPacketNumber;
 };
 
 /**
