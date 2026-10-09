@@ -383,6 +383,49 @@ SCENARIO( "Extcaps are found in their directories", "[extcap_source]" )
     }
 }
 
+#ifdef Q_OS_UNIX
+SCENARIO( "A Windows batch extcap is given nothing cmd.exe would read", "[extcap_source]" )
+{
+    QTemporaryDir root;
+    writeScript( root.filePath( "dump.bat" ), "exit 0" );
+    ExtcapPlaces places;
+    places.os = CaptureOs::Windows;
+    places.directories = { root.path() };
+    const ExtcapSourceKind kind( places );
+    REQUIRE( kind.program( "dump.bat" ) == root.filePath( "dump.bat" ) );
+    LiveChoice choice{ "extcap", "dump.bat", "eth0", "host 10.0.0.1", 96, {} };
+
+    THEN( "a plain filter and plain arguments pass" )
+    {
+        choice.options[ "eth0:--remote-host" ] = "router.local";
+        REQUIRE( kind.validate( choice ).isEmpty() );
+    }
+
+    THEN( "a filter cmd.exe would read is refused before anything runs" )
+    {
+        choice.filter = "host 10.0.0.1 & calc";
+        REQUIRE( kind.validate( choice ).contains( "is a batch file" ) );
+    }
+
+    THEN( "so is an argument's value, or an interface" )
+    {
+        choice.options[ "eth0:--remote-host" ] = "%COMSPEC%";
+        REQUIRE( kind.validate( choice ).contains( "is a batch file" ) );
+        choice.options.clear();
+        choice.networkInterface = "eth0|calc";
+        REQUIRE( kind.validate( choice ).contains( "is a batch file" ) );
+    }
+
+    THEN( "an extcap that is no batch file takes them as they are" )
+    {
+        writeScript( root.filePath( "dump.exe" ), "exit 0" );
+        choice.device = "dump.exe";
+        choice.filter = "host 10.0.0.1 & calc";
+        REQUIRE( kind.validate( choice ).isEmpty() );
+    }
+}
+#endif
+
 namespace {
 
 /// Write all of @p bytes into the pipe @p path, as an extcap does, and close it.

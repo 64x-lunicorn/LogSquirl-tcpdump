@@ -489,6 +489,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- **Security:** on Windows an extcap that is a batch file (`.bat`,
+  `.cmd`) ran through `cmd.exe` with the capture filter, the interface and
+  its arguments' values unescaped, so a `&` or `%…%` in them could run a
+  command. Such values are now refused for a batch file, before Start and
+  wherever a program is started (#106).
 - Live capture programs: a listing that timed out just as its program
   ended could send SIGKILL to LogSquirl's own process group (`kill(-0)`);
   a group is now never signalled without a pid. On Windows a capture

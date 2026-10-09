@@ -1790,6 +1790,12 @@ the executables (a name found twice is the first's), anew on each call;
 asked in time, is a target with a `problem`); `listInterfaces()` asks the
 chosen one; `config( device, interface, timeout )` asks for
 `--extcap-config` and `--extcap-dlts`. Every question is a `runListing()`.
+On Windows a `.bat` or `.cmd` extcap runs through `cmd.exe`, which reads
+`%`, `!`, `^`, `&`, `|`, `<`, `>`, `(`, `)`, `"` and line breaks in its
+arguments even inside quotes (BatBadBut): `batchArgumentProblem()` refuses
+them, in `validate()` before Start and in `startProcess()` for every
+program, listings included; there is no escaping that holds for all of
+them.
 The protocol's sentences (`keyword {key=value}…`, `\}` escaped) are read
 by `parseExtcapSentences()`, bounded (`kMaxExtcapSentences`, lines of at
 most `kMaxExtcapLine`), into `parseExtcapInterfaces()`, `parseExtcapDlts()`

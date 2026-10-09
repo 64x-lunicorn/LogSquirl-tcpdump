@@ -85,6 +85,40 @@ SCENARIO( "A command names its program", "[process_source]" )
     REQUIRE( shell.displayName() == "ssh" );
 }
 
+SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[process_source]" )
+{
+    GIVEN( "a batch file, as Windows runs it through cmd.exe" )
+    {
+        for ( const auto* program : { "C:/extcap/dump.bat", "C:/extcap/DUMP.CMD" } ) {
+            CAPTURE( program );
+
+            THEN( "a plain argument passes" )
+            {
+                REQUIRE( batchArgumentProblem(
+                             { program, { "--capture", "host 10.0.0.1 and port 443" } } )
+                             .isEmpty() );
+            }
+
+            THEN( "every character cmd.exe reads in an argument, quoted or not, is refused" )
+            {
+                for ( const auto* hostile : { "x & calc", "x | calc", "x > out", "x < in", "%PATH%",
+                                              "!x!", "a^b", "(x)", "\"x\" & calc", "x\r\ncalc" } ) {
+                    CAPTURE( hostile );
+                    const auto problem
+                        = batchArgumentProblem( { program, { "--capture-filter", hostile } } );
+                    REQUIRE( problem.contains( "is a batch file" ) );
+                }
+            }
+        }
+    }
+
+    THEN( "a program that is no batch file, or a command for the shell, is not checked" )
+    {
+        REQUIRE( batchArgumentProblem( { "C:/extcap/dump.exe", { "x & calc" } } ).isEmpty() );
+        REQUIRE( batchArgumentProblem( ProcessCommand::shell( "dump.bat x & calc" ) ).isEmpty() );
+    }
+}
+
 #ifdef Q_OS_UNIX
 
 #include "pcap_converter.h"

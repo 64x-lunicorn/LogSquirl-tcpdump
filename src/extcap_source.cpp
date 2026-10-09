@@ -616,7 +616,15 @@ QString ExtcapSourceKind::validate( const LiveChoice& choice ) const
     if ( program( choice.device ).isEmpty() ) {
         return QStringLiteral( "%1 is not in the extcap directories." ).arg( choice.device );
     }
-    return LiveSourceKind::validate( choice );
+    if ( auto problem = LiveSourceKind::validate( choice ); !problem.isEmpty() ) {
+        return problem;
+    }
+    // A .bat or .cmd extcap is run by cmd.exe, which reads its arguments
+    // again: startProcess() refuses them too, this says so before Start.
+    if ( places_.os == CaptureOs::Windows ) {
+        return batchArgumentProblem( command( choice ) );
+    }
+    return {};
 }
 
 LiveOptionsWidget* ExtcapSourceKind::makeOptionsWidget() const

@@ -418,6 +418,12 @@ password argument is on the extcap's command line, which other users of
 the computer may see in its process list while it runs. The snaplen is not
 passed: an extcap has its own option for that, if any.
 
+On Windows an extcap that is a batch file (`.bat`, `.cmd`) is run by
+`cmd.exe`, which reads its arguments again, quoted or not. For such an
+extcap the capture filter, the interface and every argument's value must
+not hold `%`, `!`, `^`, `&`, `|`, `<`, `>`, `(`, `)`, `"` or a line break:
+Start says which one is in the way, and the plugin never runs it with one.
+
 #### Custom command
 
 The **Custom command** source runs a command you write and converts what it
