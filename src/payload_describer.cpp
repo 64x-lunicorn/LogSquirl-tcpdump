@@ -1532,14 +1532,24 @@ std::string quicVersionName( uint32_t version )
     return buf;
 }
 
-/// The name of a long header packet type; QUIC v2 (RFC 9369) numbers them
+/// The packet types of a long header, numbered as in QUIC v1.
+enum class QuicLongPacketType : uint8_t { Initial, ZeroRtt, Handshake, Retry };
+
+/// The type of a long header packet; QUIC v2 (RFC 9369) numbers them
 /// differently from v1 and the drafts.
+QuicLongPacketType quicLongPacketType( uint32_t version, uint8_t firstByte )
+{
+    using Type = QuicLongPacketType;
+    static const Type kV2[] = { Type::Retry, Type::Initial, Type::ZeroRtt, Type::Handshake };
+    const auto type = static_cast<uint8_t>( ( firstByte >> 4 ) & 0x03 );
+    return version == kQuicV2 ? kV2[ type ] : static_cast<Type>( type );
+}
+
+/// The name of a long header packet type.
 const char* quicLongPacketName( uint32_t version, uint8_t firstByte )
 {
-    static const char* const kV1[] = { "Initial", "0-RTT", "Handshake", "Retry" };
-    static const char* const kV2[] = { "Retry", "Initial", "0-RTT", "Handshake" };
-    const auto type = static_cast<size_t>( ( firstByte >> 4 ) & 0x03 );
-    return version == kQuicV2 ? kV2[ type ] : kV1[ type ];
+    static const char* const kNames[] = { "Initial", "0-RTT", "Handshake", "Retry" };
+    return kNames[ static_cast<size_t>( quicLongPacketType( version, firstByte ) ) ];
 }
 
 /// Connection ID bytes in hex, as Wireshark shows them.
@@ -1630,12 +1640,12 @@ std::string quicVersionNegotiation( const QuicLongHeader& header, FieldReader ve
 /// another packet may follow it in the datagram (RFC 9000, 12.2).
 bool skipQuicLongPacket( FieldReader& packet, uint32_t version, uint8_t firstByte )
 {
-    const std::string name = quicLongPacketName( version, firstByte );
-    if ( name == "Retry" ) {
+    const auto type = quicLongPacketType( version, firstByte );
+    if ( type == QuicLongPacketType::Retry ) {
         return false; // A Retry has no length: it fills the datagram.
     }
     uint64_t length = 0;
-    if ( name == "Initial" ) {
+    if ( type == QuicLongPacketType::Initial ) {
         if ( !packet.varint( length ) || length > packet.remaining()
              || !packet.skip( static_cast<size_t>( length ) ) ) {
             return false;
@@ -2129,14 +2139,25 @@ std::optional<PayloadDescription> httpMessage( const Payload& p )
     return describedIfAny( "HTTP", detectHttp( p.data, p.len ) );
 }
 
+/// A description that begins what the rest of its stream builds on.
+std::optional<PayloadDescription> withCue( std::optional<PayloadDescription> result, StreamCue cue )
+{
+    if ( result ) {
+        result->streamCue = cue;
+    }
+    return result;
+}
+
 std::optional<PayloadDescription> http2Preface( const Payload& p )
 {
-    return describedIfAny( "HTTP2", detectHttp2Preface( p.data, p.len ) );
+    return withCue( describedIfAny( "HTTP2", detectHttp2Preface( p.data, p.len ) ),
+                    StreamCue::Http2Preface );
 }
 
 std::optional<PayloadDescription> quicPacket( const Payload& p )
 {
-    return describedIfAny( "QUIC", detectQuic( p.data, p.len ) );
+    return withCue( describedIfAny( "QUIC", detectQuic( p.data, p.len ) ),
+                    StreamCue::QuicLongHeader );
 }
 
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
@@ -2298,7 +2319,7 @@ void describeQuicInStream( PacketRecord& pkt, const Stream& stream )
     auto& quic = stream.state->quic;
     FieldReader head( pkt.payloadHead.data(), pkt.payloadHeadLen );
 
-    if ( pkt.protocol == "QUIC" ) {
+    if ( pkt.streamCue == StreamCue::QuicLongHeader ) {
         // A long header the describer named: the connection ID its sender
         // chose is the one the other side sends short headers to.
         QuicLongHeader header;
@@ -2333,8 +2354,8 @@ void describeQuicInStream( PacketRecord& pkt, const Stream& stream )
 /// whose header lies in the payload's first kPayloadHeadBytes.
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state )
 {
-    if ( pkt.protocol == "HTTP2" ) {
-        state.http2 = true; // the preface
+    if ( pkt.streamCue == StreamCue::Http2Preface ) {
+        state.http2 = true;
         return;
     }
     if ( !state.http2 ) {

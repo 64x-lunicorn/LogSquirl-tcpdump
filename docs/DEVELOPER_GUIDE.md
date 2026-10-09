@@ -243,7 +243,10 @@ tried: each transport has a table of detectors, all of the same shape
   header) is not described again: segments are not reassembled, and the
   Stream Labels make it an `HTTP2` `Continuation`. A packet labelled here
   counts as recognised (`PacketRecord::protocolRecognised`), so its label
-  sticks to the stream. For this the parser keeps the
+  sticks to the stream. The detectors mark the packet that begins such a
+  connection, a long header or the preface, with a `StreamCue`
+  (`PayloadDescription::streamCue`, kept in `PacketRecord::streamCue`):
+  that, not the label's text, is what `describeInStream()` goes by. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
 - The port hint, the last entry of both tables, names the service of a

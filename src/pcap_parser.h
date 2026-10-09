@@ -112,6 +112,15 @@ enum class Transport { Tcp, Udp };
 /// Separates the transport summary in Info from the description of the payload.
 constexpr const char* kDescriptionSeparator = " | ";
 
+/// What a payload begins that the rest of its stream builds on, as the
+/// Payload Describer recognised it: describeInStream() looks at the
+/// stream's later packets with it in mind.
+enum class StreamCue : uint8_t {
+    None,
+    QuicLongHeader, ///< A QUIC long header (or Version Negotiation packet).
+    Http2Preface,   ///< The HTTP/2 connection preface.
+};
+
 /// Payload bytes a PacketRecord keeps: enough for a QUIC long header's
 /// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
 constexpr size_t kPayloadHeadBytes = 48;
@@ -174,6 +183,8 @@ struct PacketRecord {
     /// payload alone or in its stream (describeInStream).  Such a label
     /// sticks to the packet's stream (StreamLabels).
     bool protocolRecognised = false;
+    /// What the payload begins for its stream (describeInStream).
+    StreamCue streamCue = StreamCue::None;
     /// Info ends in a preview of the payload's text this many bytes long,
     /// after kDescriptionSeparator; 0 without one (limitPreview()).
     size_t previewBytes = 0;

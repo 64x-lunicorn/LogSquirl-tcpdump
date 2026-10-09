@@ -176,6 +176,10 @@ SCENARIO( "A QUIC long header names its packet type, version and connection IDs"
             REQUIRE( described.description
                      == "Initial, Version 1, DCID=8394c8f03e515708, SCID=0a0b0c0d" );
         }
+        THEN( "it cues its stream that a QUIC connection began, by type, not by label" )
+        {
+            REQUIRE( described.streamCue == StreamCue::QuicLongHeader );
+        }
     }
 
     GIVEN( "a QUIC v2 Initial, whose packet types are numbered differently" )
