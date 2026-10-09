@@ -45,12 +45,14 @@ const std::string kEllipsis = "\xe2\x80\xa6";
 
 constexpr uint16_t kSipPort = 5060;
 
-/// An SDP body offering audio at @p ip, @p port, with @p extra lines.
-std::string sdp( const std::string& ip, uint16_t port, const std::string& extra = "" )
+/// An SDP body offering audio at @p ip, @p port, with @p extra lines, from
+/// @p user's session.
+std::string sdp( const std::string& ip, uint16_t port, const std::string& extra = "",
+                 const std::string& user = "alice" )
 {
     return "v=0\r\n"
-           "o=alice 2890844526 2890844526 IN IP4 "
-           + ip
+           "o="
+           + user + " 2890844526 2890844526 IN IP4 " + ip
            + "\r\n"
              "s=-\r\n"
              "c=IN IP4 "
@@ -193,9 +195,9 @@ Bytes offer( uint16_t port = 49170, const std::string& extra = "",
                       sdp( "192.0.2.10", port, extra ), "", callId ) );
 }
 
-Bytes answer( uint16_t port = 3456 )
+Bytes answer( uint16_t port = 3456, const std::string& ip = "192.0.2.20" )
 {
-    return text( sip( "SIP/2.0 200 OK", "1 INVITE", sdp( "192.0.2.20", port ) ) );
+    return text( sip( "SIP/2.0 200 OK", "1 INVITE", sdp( ip, port, "", "bob" ) ) );
 }
 
 Bytes bye( const std::string& callId = "a84b4c76e66710@pc33.example.com" )
@@ -616,6 +618,29 @@ SCENARIO( "Media expectations are capped and expire", "[sip][rtp]" )
         {
             REQUIRE( packets[ 2 ].protocol == "UDP" );
             REQUIRE( packets[ 3 ].protocol == "RTP" );
+        }
+    }
+
+    GIVEN( "an offer and an answer whose media are on the same address" )
+    {
+        const auto packets = throughExpectations( {
+            { kAlice, 5060, kBob, 5060, offer( 49170 ) },
+            { kBob, 5060, kAlice, 5060, answer( 3456, "192.0.2.10" ) },
+            { kBob, 4000, kAlice, 49170, rtp( 0, 1, 0, 1 ) },
+            { kBob, 4000, kAlice, 3456, rtp( 0, 1, 0, 2 ) },
+            { kAlice, 5060, kBob, 5060, offer( 50000 ) },
+            { kBob, 4000, kAlice, 49170, rtp( 0, 2, 160, 1 ) },
+            { kBob, 4000, kAlice, 50000, rtp( 0, 3, 320, 1 ) },
+            { kBob, 4000, kAlice, 3456, rtp( 0, 2, 160, 2 ) },
+        } );
+
+        THEN( "the answer keeps the offer's ports, a re-INVITE replaces only its own side's" )
+        {
+            REQUIRE( packets[ 2 ].protocol == "RTP" );
+            REQUIRE( packets[ 3 ].protocol == "RTP" );
+            REQUIRE( packets[ 5 ].protocol == "UDP" );
+            REQUIRE( packets[ 6 ].protocol == "RTP" );
+            REQUIRE( packets[ 7 ].protocol == "RTP" );
         }
     }
 

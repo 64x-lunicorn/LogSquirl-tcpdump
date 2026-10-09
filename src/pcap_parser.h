@@ -203,6 +203,10 @@ struct SipCall {
     std::string callId; ///< The Call-ID header's value, at most kMaxSipCallIdBytes
     /// The RTP media streams its SDP body announces, at most kMaxSdpMedia.
     std::vector<MediaEndpoint> media;
+    /// Who announces them: the SDP body's o= line but its version, which a
+    /// new offer of the same side counts up, at most kMaxSipCallIdBytes;
+    /// empty without one.
+    std::string origin;
     bool ends = false; ///< A BYE: the call's media is no longer expected.
 };
 

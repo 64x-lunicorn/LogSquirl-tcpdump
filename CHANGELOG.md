@@ -529,6 +529,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream. They are now SSH on port 22 only; on another port a stream
   reads them after its banner, as before, a NEWKEYS still encrypting the
   direction (#104).
+- **RTP of both ends on one address.** An SDP answer no longer makes the
+  offer's RTP and RTCP ports unexpected when both ends announce media on
+  the same address (two phones on one host, a media relay): a new SDP body
+  replaces only what the same side of the call announced before, the side
+  told by the `o=` line, where before it replaced every endpoint of the
+  call on an address it named (#105).
 
 ## [0.3.0] — 2026-10-09
 

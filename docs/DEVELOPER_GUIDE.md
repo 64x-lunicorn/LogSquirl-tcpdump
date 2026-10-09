@@ -765,7 +765,10 @@ of the detectors and in-stream passes the tables use.
   that replacing the one longest without a packet; an endpoint without a
   packet for `kIdleSeconds` (300) of capture time is forgotten when next
   looked up; a BYE forgets its call's endpoints, and a new SDP body of a
-  call (a re-INVITE) those at the addresses it announces anew
+  call (a re-INVITE) those its side announced before, the side told by
+  the body's `o=` line without its version (`SipCall::origin`), so that
+  an answer never forgets the offer's ports, also when both ends' media
+  are on one address
 - DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
   and the transaction id, then the address and the client's MAC (an
   Ethernet `chaddr`) and the host name (option 12, cut like every field),

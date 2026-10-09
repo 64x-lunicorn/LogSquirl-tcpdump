@@ -41,7 +41,7 @@ std::string endpointKey( const std::string& ip, uint16_t port )
 } // namespace
 
 void MediaExpectations::expect( const std::string& ip, uint16_t port, bool rtcp,
-                                const std::string& callId, int64_t now )
+                                const SipCall& call, int64_t now )
 {
     if ( max_ == 0 ) {
         return;
@@ -53,18 +53,16 @@ void MediaExpectations::expect( const std::string& ip, uint16_t port, bool rtcp,
             []( const auto& a, const auto& b ) { return a.second.lastSeen < b.second.lastSeen; } );
         expected_.erase( oldest );
     }
-    expected_[ std::move( key ) ] = { ip, callId, rtcp, now };
+    expected_[ std::move( key ) ] = { ip, call.callId, call.origin, rtcp, now };
 }
 
 void MediaExpectations::announce( const SipCall& call, int64_t now )
 {
-    // A BYE ends the call; a new SDP body replaces what its call expected
-    // at the addresses it names.
+    // A BYE ends the call; a new SDP body replaces what its call's side
+    // announced before, not the other side's, whatever their addresses.
     for ( auto it = expected_.begin(); it != expected_.end(); ) {
-        const bool replaced
-            = std::any_of( call.media.begin(), call.media.end(),
-                           [ & ]( const auto& m ) { return m.ip == it->second.ip; } );
-        if ( it->second.callId == call.callId && ( call.ends || replaced ) ) {
+        if ( it->second.callId == call.callId
+             && ( call.ends || it->second.origin == call.origin ) ) {
             it = expected_.erase( it );
         }
         else {
@@ -75,9 +73,9 @@ void MediaExpectations::announce( const SipCall& call, int64_t now )
         return;
     }
     for ( const auto& m : call.media ) {
-        expect( m.ip, m.rtpPort, false, call.callId, now );
+        expect( m.ip, m.rtpPort, false, call, now );
         if ( m.rtcpPort != 0 && m.rtcpPort != m.rtpPort ) {
-            expect( m.ip, m.rtcpPort, true, call.callId, now );
+            expect( m.ip, m.rtcpPort, true, call, now );
         }
     }
 }

@@ -361,6 +361,7 @@ struct Sdp {
     std::vector<std::string> media; ///< m= values, as shown
     size_t mediaCount = 0;
     std::vector<MediaEndpoint> endpoints;
+    std::string origin; ///< SipCall::origin
     bool malformed = false;
     bool cut = false;
 };
@@ -398,6 +399,20 @@ std::optional<Medium> mediaLine( Text value, const std::string& sessionIp )
     return medium;
 }
 
+/// The side an o= line's value names, "alice 2890844526 2890844526 IN IP4
+/// 192.0.2.10": all but the session's version, "alice 2890844526 IN IP4
+/// 192.0.2.10", at most kMaxSipCallIdBytes.
+std::string originOf( Text value )
+{
+    Text rest;
+    auto origin = word( value, rest ).str();  // the username
+    origin += ' ' + word( rest, rest ).str(); // the session's id
+    word( rest, rest );                       // its version
+    origin += ' ' + rest.str();
+    origin.resize( std::min( origin.size(), kMaxSipCallIdBytes ) );
+    return origin;
+}
+
 /// An SDP body (RFC 4566), @p complete if all of it was captured.
 Sdp describeSdp( Text body, bool complete )
 {
@@ -423,6 +438,9 @@ Sdp describeSdp( Text body, bool complete )
             continue; // a line of a medium past kMaxSdpMedia
         }
         switch ( line.data[ 0 ] ) {
+        case 'o':
+            sdp.origin = originOf( value );
+            break;
         case 'c':
             ( media.empty() ? sessionIp : media.back().ip ) = connectionAddress( value );
             break;
@@ -701,6 +719,7 @@ std::string messageText( const Message& m, SipCall& call )
             const auto sdp = describeSdp( m.body, !m.bodyCut );
             text += ", " + sdpText( sdp );
             call.media = sdp.endpoints;
+            call.origin = sdp.origin;
             if ( m.bodyCut && !sdp.cut ) {
                 text += " " + kEllipsis;
             }
