@@ -251,6 +251,12 @@ public:
     /// plugin's own are builtInLiveSources()).
     void setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
 
+    /// The kinds every SidebarWidget constructed afterwards offers until
+    /// setLiveSources(): builtInLiveSources(), unless @p sources is set.
+    /// The test runner sets an empty registry, so that no test runs a real
+    /// capture program (tcpdump -D, adb) by constructing a sidebar.
+    static void setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
+
     /// The Live capture section's form.
     LiveCaptureForm* liveForm() const
     {

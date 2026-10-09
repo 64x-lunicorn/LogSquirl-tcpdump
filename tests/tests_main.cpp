@@ -25,10 +25,19 @@
 #define CATCH_CONFIG_RUNNER
 #include <catch2/catch.hpp>
 
+#include "live_source.h"
+#include "sidebarwidget.h"
+
 #include <QApplication>
+
+#include <memory>
 
 int main( int argc, char* argv[] )
 {
     QApplication app( argc, argv );
+    // Hermetic: a sidebar offers no kind a test did not give it, so none
+    // runs a real capture program (tcpdump -D, adb devices) on this machine.
+    tcpdump::SidebarWidget::setDefaultLiveSources(
+        std::make_shared<tcpdump::LiveSourceRegistry>() );
     return Catch::Session().run( argc, argv );
 }

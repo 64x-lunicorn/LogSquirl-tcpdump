@@ -135,7 +135,19 @@ QString fileKey( const QString& filePath )
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
+/// What setDefaultLiveSources() set; null: builtInLiveSources().
+std::shared_ptr<const LiveSourceRegistry>& defaultLiveSources()
+{
+    static std::shared_ptr<const LiveSourceRegistry> sources;
+    return sources;
+}
+
 } // namespace
+
+void SidebarWidget::setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
+{
+    defaultLiveSources() = std::move( sources );
+}
 
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
@@ -336,7 +348,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
     setConverting( false );
     setCapturing( false );
-    setLiveSources( builtInLiveSources() );
+    setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
 }
 
 SidebarWidget::~SidebarWidget()
