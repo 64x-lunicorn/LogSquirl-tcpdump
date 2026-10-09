@@ -41,6 +41,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -616,6 +617,18 @@ public:
      * read already or past the end of the source.
      */
     virtual bool resume( const ReaderCheckpoint& checkpoint );
+
+    /**
+     * After resume() at a checkpoint taken by a reader of another file of
+     * the same capture (a ring buffer's, capture_index.h): the header records
+     * the checkpoint's state names lie at @p where of their offset in this
+     * file, so that headers() says where they are here.  A reader whose
+     * headers all come from open() has nothing to do.
+     */
+    virtual void relocateHeaders( const std::function<uint64_t( uint64_t )>& where )
+    {
+        static_cast<void>( where );
+    }
 
     /// Where the record of the last packet returned starts in the source:
     /// its pcap record header, or its pcapng block.

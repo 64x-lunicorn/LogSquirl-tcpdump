@@ -75,7 +75,8 @@ void LiveCapture::start()
     // The worker uses copies and the flags it shares; this object only to
     // post to, which outlives the worker (the destructor waits for it).
     pool_.start( [ this, name = name_, outputRoot = outputRoot_, options = options_,
-                   makeSource = makeSource_, stop = stop_, cancel = cancel_ ] {
+                   makeSource = makeSource_, limits = limits_, clock = clock_, stop = stop_,
+                   cancel = cancel_ ] {
         ConversionResult result;
         std::unique_ptr<ByteSource> source;
         try {
@@ -93,7 +94,8 @@ void LiveCapture::start()
             observer.snapshot = [ this ]( const LiveSnapshot& snapshot ) {
                 post( [ this, snapshot ] { emit snapshotTaken( snapshot ); } );
             };
-            result = convertStream( *source, name, outputRoot, cancel.get(), options, observer );
+            result = convertStream( *source, name, outputRoot, cancel.get(), options, observer,
+                                    limits, clock );
         }
         else if ( result.error.isEmpty() ) {
             result.error = QStringLiteral( "The capture source could not be opened" );

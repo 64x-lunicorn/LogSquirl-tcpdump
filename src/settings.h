@@ -69,7 +69,8 @@ ConversionOptions loadConversionOptions( const QString& configDir );
 bool saveConversionOptions( const QString& configDir, const ConversionOptions& options );
 
 /// The live capture choice saved in @p configDir; the snaplen within 1 to
-/// kMaxSnaplen.  Without a directory, or a file, an empty choice.
+/// kMaxSnaplen, the limits within theirs (kMaxLimitSeconds, …), none if
+/// none were saved.  Without a directory, or a file, an empty choice.
 LiveChoice loadLiveChoice( const QString& configDir );
 
 /// Save @p choice in @p configDir, its options as those of its source
@@ -80,5 +81,11 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice );
 /// The options last saved for @p source in @p configDir; none without a
 /// directory, a file, or options saved for it.
 LiveOptions loadLiveOptions( const QString& configDir, const QString& source );
+
+/// Save the option @p name of @p source in @p configDir at once, the other
+/// options and the choice as they are (a custom command saved by name);
+/// false if it could not be written.
+bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
+                     const QString& value );
 
 } // namespace tcpdump

@@ -43,6 +43,12 @@
  * keeps the access points its GzipSource kept, so that a packet is reached
  * by decompressing at most GzipSource::kAccessSpan bytes, not the whole
  * file before it.
+ *
+ * A live capture with a ring buffer (raw_capture.h) splits its raw capture
+ * into files, CaptureParts, and deletes the oldest: the packets keep their
+ * numbers across the files, the checkpoints point into the capture as it was
+ * read, and the cursor reads a packet from the file it is in.  A packet of a
+ * file deleted since is reported rotated away, not misread.
  */
 
 #pragma once
@@ -56,6 +62,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace tcpdump {
@@ -63,6 +70,26 @@ namespace tcpdump {
 class CaptureFile;
 class GzipAccessPoints;
 class HeadSource;
+
+/**
+ * One file of a capture split into several (a live capture's ring buffer):
+ * the headers the capture needs ahead of its records, copied, then the
+ * capture as it was read from streamOffset on.  The first file of a capture
+ * is the capture from its start, with nothing copied ahead.
+ */
+struct CapturePart {
+    QString path;
+    uint32_t packetsBefore = 0; ///< Packets in the files before it: its first is packetsBefore + 1.
+    uint64_t streamOffset = 0;  ///< Where its records start in the capture as it was read.
+    uint64_t headerLength = 0;  ///< Bytes of headers copied ahead of them.
+    /// Where each header record copied ahead lies in the capture as it was
+    /// read, and where in this file: offset there → offset here.
+    std::vector<std::pair<uint64_t, uint64_t>> headerOffsets;
+
+    /// Where the byte at @p offset of the capture as it was read lies in this
+    /// file; unset for one that is in neither its records nor its headers.
+    std::optional<uint64_t> fileOffset( uint64_t offset ) const;
+};
 
 /**
  * The checkpoints of a converted capture, kept with its summary.  Filled by
@@ -120,13 +147,37 @@ public:
         return gzipPoints_;
     }
 
+    /// Remember the files of a capture split into @p parts, in order, as
+    /// they are now; only the last one may be Growing.  The packets before
+    /// the first one's are rotated away.
+    void setCaptureParts( const std::vector<CapturePart>& parts, Growth growth = Growth::Fixed );
+
+    /// The capture's files, with their canonical paths: one for a capture
+    /// that is not split; none before setCaptureFile().
+    std::vector<CapturePart> parts() const;
+
+    /// The file packet @p number is in; null for one rotated away or past
+    /// the files.
+    const CapturePart* partOf( uint32_t number ) const;
+
+    /// Packets in files deleted since (a ring buffer's): numbers 1 to this.
+    uint32_t rotatedAway() const
+    {
+        return files_.empty() ? 0 : files_.front().part.packetsBefore;
+    }
+
     /// The checkpoint to read packet @p number from: the last one before
     /// it, or null to read from the start of the capture.
     const ReaderCheckpoint* nearest( uint32_t number ) const;
 
     /// Why the capture file can no longer be read as it was converted (gone
-    /// or changed since), or empty when it can.
+    /// or changed since), or empty when it can; of every file of a capture
+    /// split into several.
     QString fileProblem() const;
+
+    /// Why the file packet @p number is in can no longer be read as it was
+    /// converted, or empty when it can.
+    QString fileProblem( uint32_t number ) const;
 
     const std::vector<ReaderCheckpoint>& checkpoints() const
     {
@@ -144,10 +195,11 @@ public:
         return packets_;
     }
 
-    /// The capture file, as its canonical path; empty before setCaptureFile().
-    const QString& capturePath() const
+    /// The capture file, as its canonical path (the last one of a capture
+    /// split into several); empty before setCaptureFile().
+    QString capturePath() const
     {
-        return path_;
+        return files_.empty() ? QString() : files_.back().part.path;
     }
 
 private:
@@ -157,10 +209,19 @@ private:
     /// By stream id, per transport: the StreamTracker numbers them from 0.
     std::vector<StreamExtent> tcpStreams_;
     std::vector<StreamExtent> udpStreams_;
-    QString path_;
-    qint64 size_ = -1;
-    Growth growth_ = Growth::Fixed;
-    QDateTime modified_;
+    /// A capture file as it was when it was remembered.
+    struct File {
+        CapturePart part; ///< Its path canonical.
+        qint64 size = -1;
+        Growth growth = Growth::Fixed;
+        QDateTime modified;
+    };
+    /// Why @p file can no longer be read as it was converted, or empty.
+    static QString problemOf( const File& file );
+    /// The file packet @p number is in, or null.
+    const File* fileOf( uint32_t number ) const;
+
+    std::vector<File> files_;
     std::shared_ptr<const GzipAccessPoints> gzipPoints_;
 };
 
@@ -177,6 +238,9 @@ struct CapturedPacket {
     /// The records a file of it needs ahead of it, where they lie in the
     /// capture file: its format's header, a pcapng section's interfaces.
     CaptureHeaders headers;
+    /// The capture file it was read from, which the offsets are in: one of
+    /// the files of a capture split into several.
+    QString file;
 };
 
 /**
@@ -205,14 +269,17 @@ public:
     }
 
 private:
-    /// Open the capture again, at @p checkpoint if there is one.
-    bool reopen( const ReaderCheckpoint* checkpoint );
+    /// Open the file @p part again, at @p checkpoint (in it) if there is one.
+    bool reopen( const CapturePart& part, const ReaderCheckpoint* checkpoint );
     void close();
 
     std::shared_ptr<const CaptureIndex> index_;
     std::unique_ptr<CaptureFile> file_;
     std::unique_ptr<HeadSource> headSource_;
     std::unique_ptr<CaptureReader> reader_;
+    /// The file reader_ reads, and the packets of the capture before it.
+    QString readerPath_;
+    uint32_t readerPacketsBefore_ = 0;
     QString error_;
 };
 

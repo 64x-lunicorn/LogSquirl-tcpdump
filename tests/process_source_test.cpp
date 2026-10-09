@@ -326,6 +326,43 @@ SCENARIO( "A capture program that fails says why", "[process_source]" )
         }
     }
 
+    GIVEN( "a program that writes text, not a capture, to stdout and exits with 0" )
+    {
+        const auto program = fakeProgram( dir, "not-a-capture",
+                                          "echo 'usage: not-a-capture [-w file]' >&2\n"
+                                          "echo 'writing to the terminal instead' >&2\n"
+                                          "i=0; while [ $i -lt 20 ]; do echo 'Hello, world'; "
+                                          "i=$((i+1)); done" );
+        ProcessSource source( { program, {} } );
+        const auto result = convertStream( source, "live", out.path() );
+
+        THEN( "the capture fails as not a capture, with the program's last stderr lines" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.startsWith( "Not a capture: " ) );
+            REQUIRE( result.error.contains( "no pcap magic" ) );
+            REQUIRE( result.error.contains( "not-a-capture wrote on stderr:\n"
+                                            "usage: not-a-capture [-w file]\n"
+                                            "writing to the terminal instead" ) );
+        }
+    }
+
+    GIVEN( "a program that writes more text than a preamble may be, and runs on" )
+    {
+        const auto program = fakeProgram( dir, "chatty",
+                                          "echo 'chatty: started' >&2\n"
+                                          "while :; do echo 'not pcap, just text'; done" );
+        ProcessSource source( { program, {} } );
+        const auto result = convertStream( source, "live", out.path() );
+
+        THEN( "it fails as not a capture without waiting for the program to end" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.startsWith( "Not a capture: " ) );
+            REQUIRE( result.error.contains( "chatty: started" ) );
+        }
+    }
+
     GIVEN( "a program that crashes" )
     {
         const auto program = fakeProgram( dir, "fake-tcpdump",

@@ -43,11 +43,14 @@ add_executable(logsquirl_tcpdump_tests
     streaming_test.cpp
     capture_source_test.cpp
     live_conversion_test.cpp
+    live_limits_test.cpp
     live_capture_test.cpp
     live_source_test.cpp
     local_source_test.cpp
     adb_source_test.cpp
     extcap_source_test.cpp
+    ssh_source_test.cpp
+    command_source_test.cpp
     live_capture_ui_test.cpp
     process_source_test.cpp
     plugin_test.cpp
@@ -149,6 +152,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/gzip_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/raw_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
@@ -164,6 +168,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/extcap_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/extcap_options.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_pipe.cpp"
+        "${CMAKE_SOURCE_DIR}/src/ssh_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/command_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_form.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"

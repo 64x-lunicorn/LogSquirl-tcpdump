@@ -435,4 +435,9 @@ bool PipeSource::endedOnPurpose() const
     return process_ && process_->endedOnPurpose();
 }
 
+std::string PipeSource::writerSaid()
+{
+    return process_ ? process_->writerSaid() : std::string();
+}
+
 } // namespace tcpdump

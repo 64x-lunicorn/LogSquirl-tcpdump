@@ -144,6 +144,9 @@ public:
         return process_.get();
     }
 
+    /// What the program said (ProcessSource::writerSaid()); empty without one.
+    std::string writerSaid() override;
+
 protected:
     std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override;
     bool available() override;

@@ -230,6 +230,15 @@ the Command Palette), which shows the same fields in a dialog:
   error the section shows
 - **Snaplen**: the bytes kept of each packet, 262144 by default; a packet
   cut shorter is marked `[cut to N bytes]`
+- **Stop after time / packets / size**: the capture stops by itself at the
+  first of them it reaches, as with Stop (dumpcap's `-a duration`,
+  `packets`, `filesize`). The size is that of the raw capture, in MB of
+  1024 × 1024 bytes. The packet that reaches a count or a size is the last
+  one; the time also runs out while no packet comes. *No limit* by default
+- **Ring buffer** and **New file after**: for captures that run for hours
+  or days (dumpcap's `-b`). With *N files*, the raw capture is split into
+  files of the size or duration given, and only the newest N are kept;
+  see *Ring buffer* below. *Off* by default
 - **Start** and **Stop** (also **Plugins → tcpdump → Stop live capture**).
   Start is disabled while a capture file is read or a live capture runs;
   one live capture runs at a time, and the menu entry offers to stop the
@@ -317,6 +326,53 @@ tcpdump's stderr is kept in a file on the device and shown if the capture
 fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
 and removes its files.
 
+#### Remote capture over SSH
+
+The **SSH** source captures on a server: it runs `tcpdump` there over
+your system's OpenSSH client (`ssh` on `PATH`; on Windows
+`C:\Windows\System32\OpenSSH\ssh.exe`, the optional feature *OpenSSH
+Client*) and shows the traffic live. Type the **Host** as
+`[user@]host[:port]` (`[address]:port` for an IPv6 address with a port), or
+pick one of the `Host` entries of `~/.ssh/config` that name one host (no
+wildcards); press Enter to list its interfaces, which are what `tcpdump -D`
+lists on the server. Every ssh runs as
+
+```
+ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p <port>] -- <user@host> <remote command>
+```
+
+with nothing on stdin: **only your keys and the SSH agent are used**. ssh
+never asks for a password, a passphrase or whether to trust a host key, and
+the plugin never asks for or stores one. The remote command is a command
+line for the server's login shell (a POSIX shell: sh, bash, dash, zsh,
+ksh), the interface and the capture filter in single quotes, so nothing in
+them is run:
+
+```
+exec sudo -n tcpdump -i '<interface>' -s <snaplen> -U -w - '(<filter>) and not (host '"<client>"' and tcp port '"<SSH port>"')'
+```
+
+Two options below the fields:
+
+- **Run tcpdump with sudo -n** (on by default): capture as root with
+  `sudo -n`, which never prompts; a sudo that wants a password fails, and
+  the section says how to allow tcpdump without one. On the server, `sudo
+  visudo -f /etc/sudoers.d/tcpdump` and add `<user> ALL=(root) NOPASSWD:
+  /usr/bin/tcpdump` (the path `command -v tcpdump` prints). Off, tcpdump
+  runs as the SSH user, who then needs the capture capabilities: `sudo
+  setcap cap_net_raw,cap_net_admin=eip $(command -v tcpdump)`
+- **Exclude this SSH connection** (on by default): the capture filter gets
+  `and not (host <client> and tcp port <SSH port>)`, the address and port
+  the server sees this connection come from and arrive at (`$SSH_CLIENT`),
+  so that the capture does not capture its own transport
+
+When ssh, sudo or tcpdump fail, the section shows what they wrote and what
+to do: a host key ssh does not know (connect once in a terminal and accept
+it, after checking its fingerprint) or one that changed (`ssh-keygen -R`),
+keys the server refuses (`ssh-add`, `ssh-copy-id`, `IdentityFile`), a sudo
+that wants a password, tcpdump missing on the server or lacking
+permissions, a host that cannot be reached.
+
 #### Wireshark extcap: sshdump, androiddump, ciscodump, udpdump, …
 
 The **Wireshark extcap** source makes every
@@ -362,6 +418,45 @@ password argument is on the extcap's command line, which other users of
 the computer may see in its process list while it runs. The snaplen is not
 passed: an extcap has its own option for that, if any.
 
+#### Custom command
+
+The **Custom command** source runs a command you write and converts what it
+writes to stdout, which must be a **pcap or pcapng capture** (text before
+the capture's header, up to 4 KB, is skipped; messages belong on stderr,
+which the section shows). Use it for what the other sources do not cover:
+a vendor tool, `nc -l 9999`, a capture on a router. Examples to start from
+(choosing one fills the line; nothing runs until you press Start):
+
+```
+tcpdump -i {interface} -U -w - {filter}
+adb exec-out tcpdump -i {interface} -s {snaplen} -U -w - {filter}
+ssh -o BatchMode=yes user@host tcpdump -i {interface} -s {snaplen} -U -w - {filter}
+```
+
+The line is a program and its arguments, **split like a shell splits it,
+but no shell runs it**: blanks separate arguments, `'…'` and `"…"` quote
+(in `"…"`, `\"` and `\\` escape), `\` escapes the next character outside
+quotes; nothing is expanded (`$HOME`, `~`, `*`, `$(…)` stay as they are)
+and `|`, `;`, `&&` or `>` make no pipe, list or redirection (the form
+refuses them unquoted). The placeholders `{interface}`, `{filter}` and
+`{snaplen}` are replaced by the fields above inside the argument they are
+in, so a filter with spaces or quotes is still one argument; `{filter}`
+alone is left out when the filter is empty. `{interface}` needs an
+interface (this computer's are suggested; type any).
+
+**Run through the shell** (off by default) hands the line to `/bin/sh -c`
+(Windows: `cmd.exe /c`) as it is, for pipes and redirections, e.g. `ssh
+router 'tcpdump -U -w - {filter}' | tee router.pcap`. Everything in the
+line then runs, as you. The placeholders are put in quoted as one word
+each (single quotes; on Windows double quotes, and an interface or filter
+with `"`, `%` or `!` is refused): write them outside of quotes.
+
+Commands can be **saved** under a name (**Save**; saving under an existing
+name replaces it), chosen again from the list, and **deleted**; they are
+kept in `settings.ini` (`[live]`, `options/command/saved`) as soon as they
+are saved. A command whose output is not a capture fails with *Not a
+capture*, its last stderr lines and what it must write instead.
+
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:
 
@@ -381,6 +476,36 @@ is converted while it runs:
   copies the raw capture elsewhere, to convert again or open in Wireshark
 - If the source fails, e.g. the capture program exits with an error, the
   sidebar and a notification say why, and what was captured so far stays
+- With stop conditions, the sidebar also shows how far the capture is to
+  each (`Stops after 10:00 (35%), or at 1,000 packets (12%)`); one that
+  stops it says so in a notification
+
+The stop conditions and the ring buffer are the same for every source,
+and are remembered with the rest of the choice.
+
+#### Ring buffer
+
+With a ring buffer of N files, the raw capture is written to
+`<name>_00001_<time>.pcap`, `<name>_00002_<time>.pcap`, … (`.pcapng` for
+a pcapng stream; the time is when the file was started). A file ends after
+the packet that fills it, or the last packet before its duration is over,
+when the next packet comes: so no file is empty, a file may be one packet
+bigger than the size given, and one may cover more than its duration when
+no packet came for a while. Every file is a capture of its own: a pcap's
+header, or a pcapng's section header and interfaces, are repeated at its
+start, so Wireshark opens any of them. When the N+1st file starts, the
+oldest is deleted.
+
+The capture's tab is bounded too: it keeps the lines of the packets in
+the files kept. When the oldest file is deleted, its packets' lines are
+cut from the start of the `.log`, and LogSquirl reloads the tab, as it does
+a log that was truncated (marks on those lines go). The packet numbers in
+the No. column go on across the files. A line still selected from before
+(or in another view) of a packet whose file was deleted shows *Rotated
+away* in the Packet Panel; Follow stream content starts at the first
+packet kept. **Save capture…** writes the files kept as one capture
+(packets of the deleted files are gone); **Export packets…** copies the
+selected packets from the files they are in.
 
 ### Options
 

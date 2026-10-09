@@ -267,6 +267,110 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
     }
 }
 
+SCENARIO( "The stop conditions and the ring buffer are fields of the form, for every source",
+          "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir root;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->capture = pcapOf( { datagram( 0 ), datagram( 1 ), datagram( 2 ) } );
+
+    SidebarWidget sidebar;
+    sidebar.setTempRoot( root.path() );
+    sidebar.setLiveSources( registryOf( fake ) );
+    auto* form = sidebar.liveForm();
+    const Fields fields( &sidebar );
+    auto spin = [ & ]( const char* name ) {
+        auto* box = sidebar.findChild<QSpinBox*>( name );
+        REQUIRE( box );
+        return box;
+    };
+    auto* stopSeconds = spin( "liveStopSeconds" );
+    auto* stopPackets = spin( "liveStopPackets" );
+    auto* stopMegabytes = spin( "liveStopMegabytes" );
+    auto* ringFiles = spin( "liveRingFiles" );
+    auto* ringMegabytes = spin( "liveRingMegabytes" );
+    auto* ringSeconds = spin( "liveRingSeconds" );
+    REQUIRE( listed( form, fields ) );
+
+    THEN( "none is set at first: the capture runs until Stop, into one file" )
+    {
+        REQUIRE( form->choice().limits == LiveLimits{} );
+        REQUIRE( stopSeconds->text() == "no limit" );
+        REQUIRE( ringFiles->text() == "off" );
+        REQUIRE_FALSE( ringMegabytes->isEnabled() );
+        REQUIRE_FALSE( ringSeconds->isEnabled() );
+    }
+
+    WHEN( "they are set" )
+    {
+        stopSeconds->setValue( 3600 );
+        stopPackets->setValue( 1000 );
+        stopMegabytes->setValue( 50 );
+        ringFiles->setValue( 4 );
+        ringMegabytes->setValue( 10 );
+        ringSeconds->setValue( 300 );
+
+        THEN( "they are the choice's limits, the sizes in bytes" )
+        {
+            const auto limits = form->choice().limits;
+            REQUIRE( limits.duration == std::chrono::seconds( 3600 ) );
+            REQUIRE( limits.packets == 1000 );
+            REQUIRE( limits.bytes == 50 * kMegabyte );
+            REQUIRE( limits.ringFiles == 4 );
+            REQUIRE( limits.fileBytes == 10 * kMegabyte );
+            REQUIRE( limits.fileDuration == std::chrono::seconds( 300 ) );
+            REQUIRE( ringMegabytes->isEnabled() );
+            REQUIRE( fields.start->isEnabled() );
+        }
+
+        AND_WHEN( "the form is shown a choice in a new sidebar after a capture" )
+        {
+            REQUIRE( saveLiveChoice( host.configDir(), form->choice() ) );
+            SidebarWidget restarted;
+            restarted.setLiveSources( registryOf( fake ) );
+
+            THEN( "the fields are restored" )
+            {
+                REQUIRE( restarted.liveForm()->choice().limits == form->choice().limits );
+            }
+        }
+    }
+
+    WHEN( "a ring buffer keeps files but has no size or duration to start a new one at" )
+    {
+        ringFiles->setValue( 3 );
+
+        THEN( "Start is disabled with the reason" )
+        {
+            REQUIRE_FALSE( fields.start->isEnabled() );
+            REQUIRE( fields.start->toolTip().contains( "ring buffer needs a file size" ) );
+            REQUIRE_FALSE( sidebar.startLiveCapture( form->choice() ) );
+            REQUIRE( fake->started().empty() );
+        }
+    }
+
+    WHEN( "the capture is to stop after two packets, and three come" )
+    {
+        stopPackets->setValue( 2 );
+        fields.start->click();
+        REQUIRE( sidebar.isCapturing() );
+        auto* live = sidebar.findChild<QLabel*>( "liveProgress" );
+        const auto progress = live->text();
+        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+
+        THEN( "the counters showed the condition, and the capture ended by itself with two" )
+        {
+            REQUIRE( progress.contains( "Stops at 2 packets" ) );
+            REQUIRE( fake->started().front().limits.packets == 2 );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().contains( "stopped after 2 packets" ) );
+            REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
+            REQUIRE( readLines( host.openedFiles.first() ).size() == 3 );
+        }
+    }
+}
+
 SCENARIO( "An unavailable source says why, and a failed capture shows its error in the section",
           "[live_ui]" )
 {

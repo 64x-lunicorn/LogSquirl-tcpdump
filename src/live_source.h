@@ -69,6 +69,14 @@ constexpr int kDefaultSnaplen = 262144;
 /// The most the snaplen may be set to.
 constexpr int kMaxSnaplen = 262144;
 
+/// The most a live capture's durations (LiveLimits) may be set to, in
+/// seconds: 31 days.
+constexpr int kMaxLimitSeconds = 31 * 24 * 3600;
+/// The most a live capture's sizes may be set to, in mebibytes: 1 TiB.
+constexpr int kMaxLimitMegabytes = 1024 * 1024;
+/// The most files a ring buffer may keep.
+constexpr int kMaxRingFiles = 1000;
+
 /// A kind's own options, by name: e.g. ssh's "exclude own SSH port", an
 /// extcap's arguments, a saved command.  Names hold no '/'.
 using LiveOptions = QMap<QString, QString>;
@@ -95,12 +103,15 @@ struct LiveChoice {
     int snaplen = kDefaultSnaplen; ///< Bytes kept of each packet.
     /// The source's own options (makeOptionsWidget()); kept per source.
     LiveOptions options;
+    /// When the capture stops by itself, and its ring buffer: the same for
+    /// every source.
+    LiveLimits limits;
 
     bool operator==( const LiveChoice& other ) const
     {
         return source == other.source && device == other.device
                && networkInterface == other.networkInterface && filter == other.filter
-               && snaplen == other.snaplen && options == other.options;
+               && snaplen == other.snaplen && options == other.options && limits == other.limits;
     }
     bool operator!=( const LiveChoice& other ) const
     {
@@ -257,6 +268,11 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources();
 /// and a Wireshark display filter field such as ip.addr.
 QString captureFilterProblem( const QString& filter );
 
+/// Why @p limits cannot be captured with, for the Start button; empty if
+/// they can: a ring buffer that keeps files needs a size or a duration to
+/// start a new one at.
+QString liveLimitsProblem( const LiveLimits& limits );
+
 /// What a listing program printed, or why it did not finish.
 struct ListingOutput {
     QString out;       ///< Its stdout, as UTF-8.
@@ -300,6 +316,11 @@ public:
     ListingCancelScope( const ListingCancelScope& ) = delete;
     ListingCancelScope& operator=( const ListingCancelScope& ) = delete;
 };
+
+/// @p word single-quoted for a POSIX shell (a server's login shell over ssh,
+/// Android's mksh or toybox sh): one word, read as it is, whatever it holds
+/// ('\'' for a quote).
+QString shellQuote( const QString& word );
 
 /// A file name for a capture of @p choice: its interface, after its device
 /// if it has one, with anything but letters, digits, '.', '-' and '_'

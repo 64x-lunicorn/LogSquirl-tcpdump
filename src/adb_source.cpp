@@ -195,13 +195,6 @@ private:
 
 } // namespace
 
-QString shellQuote( const QString& word )
-{
-    auto quoted = word;
-    quoted.replace( QLatin1Char( '\'' ), QStringLiteral( "'\\''" ) );
-    return QLatin1Char( '\'' ) + quoted + QLatin1Char( '\'' );
-}
-
 std::vector<LiveTarget> parseAdbDevices( const QString& out )
 {
     static const QRegularExpression entry( QStringLiteral( "^(\\S+)\\s+(.*)$" ) );

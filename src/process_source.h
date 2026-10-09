@@ -169,6 +169,14 @@ public:
     /// or was ended on purpose.
     QString failure() const;
 
+    /// Why the program failed, or else "<name> wrote on stderr:" and its
+    /// last lines; after waiting kSaidGrace for a program still running to
+    /// end, so that its complaint is in.  Empty if it said nothing.
+    std::string writerSaid() override;
+
+    /// How long writerSaid() waits for a program still running.
+    static constexpr std::chrono::milliseconds kSaidGrace{ 500 };
+
     /// Whether the program was ended by terminate() or
     /// terminateCaptureProcesses().
     bool endedOnPurpose() const override;

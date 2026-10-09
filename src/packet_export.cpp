@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 
 namespace tcpdump {
 
@@ -57,11 +58,16 @@ const QRegularExpression& rangeRegex()
 /// Copies records from the capture to the export.
 class RecordCopier {
 public:
-    /// @param from  The capture, decompressed if need be (CaptureFile).
-    RecordCopier( ByteSource& from, QSaveFile& to )
-        : from_( from )
-        , to_( to )
+    explicit RecordCopier( QSaveFile& to )
+        : to_( to )
     {
+    }
+
+    /// Copy from @p from from now on: the capture file the next records are
+    /// in, decompressed if need be (CaptureFile).
+    void setSource( ByteSource& from )
+    {
+        from_ = &from;
     }
 
     /// Copy @p span; a pcapng section header with its section length unknown.
@@ -69,7 +75,7 @@ public:
     {
         // The spans come in ascending order: in a gzip-compressed capture
         // a seek decompresses on from the last one.
-        if ( !from_.seek( span.offset ) ) {
+        if ( !from_ || !from_->seek( span.offset ) ) {
             return fail( QStringLiteral( "The capture file ends before a record: it has "
                                          "changed since it was converted." ) );
         }
@@ -108,7 +114,7 @@ private:
         auto* data = reinterpret_cast<uint8_t*>( buffer_.data() );
         qint64 got = 0;
         while ( got < n ) {
-            const auto more = from_.read( data + got, static_cast<size_t>( n - got ) );
+            const auto more = from_->read( data + got, static_cast<size_t>( n - got ) );
             if ( more == 0 ) {
                 return false;
             }
@@ -123,7 +129,7 @@ private:
         return false;
     }
 
-    ByteSource& from_;
+    ByteSource* from_ = nullptr;
     QSaveFile& to_;
     QByteArray buffer_;
     QString error_;
@@ -258,16 +264,19 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
     }
 
     // Replacing the capture with some of its packets would lose the others.
-    if ( QFileInfo( outputPath ).canonicalFilePath() == index->capturePath() ) {
-        return failed( QStringLiteral( "The packets cannot replace the capture they are "
-                                       "from: choose another file." ) );
+    const auto target = QFileInfo( outputPath ).canonicalFilePath();
+    for ( const auto& part : index->parts() ) {
+        if ( !target.isEmpty() && target == part.path ) {
+            return failed( QStringLiteral( "The packets cannot replace the capture they are "
+                                           "from: choose another file." ) );
+        }
     }
 
-    CaptureFile capture;
+    // The file the packets are copied from, decompressed if need be; one of
+    // several, by packet, for a capture split by a ring buffer.
+    std::unique_ptr<CaptureFile> capture;
+    QString capturePath;
     QString problem;
-    if ( !capture.open( index->capturePath(), problem, index->gzipAccessPoints() ) ) {
-        return failed( problem );
-    }
     // Written aside and renamed when complete: a failed or cancelled export
     // leaves nothing behind.
     QSaveFile output( outputPath );
@@ -278,7 +287,7 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
 
     ExportResult result;
     CaptureCursor cursor( index );
-    RecordCopier copier( capture.source(), output );
+    RecordCopier copier( output );
     CapturedPacket packet;
     bool headerWritten = false;
     uint64_t section = 0;   ///< The pcapng section written last, by where it starts.
@@ -294,6 +303,15 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
             output.cancelWriting();
             return failed(
                 QStringLiteral( "Packet %1: %2" ).arg( numbers[ i ] ).arg( cursor.error() ) );
+        }
+        if ( !capture || capturePath != packet.file ) {
+            capture = std::make_unique<CaptureFile>();
+            if ( !capture->open( packet.file, problem, index->gzipAccessPoints() ) ) {
+                output.cancelWriting();
+                return failed( problem );
+            }
+            capturePath = packet.file;
+            copier.setSource( capture->source() );
         }
         const auto& headers = packet.headers;
         if ( headers.records.empty() ) {

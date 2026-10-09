@@ -20,8 +20,9 @@
 /**
  * @file live_capture_form.h
  * @brief The live capture UI's fields: source, device, interface, capture
- *        filter, snaplen; in the sidebar's Live capture section and in the
- *        Start live capture… dialog alike.
+ *        filter, snaplen, the stop conditions and the ring buffer; in the
+ *        sidebar's Live capture section and in the Start live capture…
+ *        dialog alike.
  *
  * The form lists the sources of a LiveSourceRegistry.  Choosing one shows
  * why it is unavailable, if it is, or lists its devices (if it has any) and
@@ -44,6 +45,11 @@
  * options of each source are kept apart, so that choosing another source
  * and back keeps them.
  *
+ * Below them, the same for every source, when the capture stops by itself
+ * (after a time, a number of packets, a size) and its ring buffer (the
+ * files kept, the size or duration a new one starts at): the LiveLimits of
+ * the choice, each 0, "no limit", unless set.
+ *
  * problem() says why the choice cannot be captured, for the Start button
  * of whoever holds the form; changed() tells it to ask again.
  */
@@ -61,6 +67,7 @@
 #include <memory>
 
 class QComboBox;
+class QFormLayout;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -141,8 +148,8 @@ public:
     std::shared_ptr<const LiveSourceKind> currentKind() const;
 
     /// Why choice() cannot be captured: no source, an unavailable one, a bad
-    /// capture filter, what the source's validate() says, or what its
-    /// options widget does; empty if it can.
+    /// capture filter, limits that do not go together, what the source's
+    /// validate() says, or what its options widget does; empty if it can.
     QString problem() const;
 
     /// Whether a listing runs.
@@ -184,6 +191,10 @@ private:
     void showOptionsWidget();
     /// Tell the options widget the device and interface chosen now.
     void tellTarget();
+    /// Add the fields of the stop conditions and the ring buffer to @p layout.
+    void addLimitFields( QFormLayout* layout );
+    /// The ring buffer's file size and duration only count with files kept.
+    void enableRingFields();
 
     std::shared_ptr<const LiveSourceRegistry> sources_;
     LiveChoice wanted_; ///< The choice setChoice() was given.
@@ -196,6 +207,13 @@ private:
     QLineEdit* filter_ = nullptr;
     QLabel* filterHint_ = nullptr;
     QSpinBox* snaplen_ = nullptr;
+    // LiveLimits, 0 for none: seconds, packets, MB; files, MB, seconds.
+    QSpinBox* stopSeconds_ = nullptr;
+    QSpinBox* stopPackets_ = nullptr;
+    QSpinBox* stopMegabytes_ = nullptr;
+    QSpinBox* ringFiles_ = nullptr;
+    QSpinBox* ringMegabytes_ = nullptr;
+    QSpinBox* ringSeconds_ = nullptr;
     /// The current source's options, if it has any; owned by the form.
     LiveOptionsWidget* options_ = nullptr;
     QString optionsSource_; ///< The source options_ is of.

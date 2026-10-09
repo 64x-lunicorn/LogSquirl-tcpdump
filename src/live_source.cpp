@@ -26,8 +26,10 @@
 #include "live_source.h"
 
 #include "adb_source.h"
+#include "command_source.h"
 #include "extcap_source.h"
 #include "local_source.h"
+#include "ssh_source.h"
 
 #include <QElapsedTimer>
 #include <QProcess>
@@ -84,8 +86,19 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources()
     // Custom command (#76).
     registry->add( std::make_shared<LocalSourceKind>() );
     registry->add( std::make_shared<AdbSourceKind>() );
+    registry->add( std::make_shared<SshSourceKind>() );
     registry->add( std::make_shared<ExtcapSourceKind>() );
+    registry->add( std::make_shared<CustomCommandSourceKind>() );
     return registry;
+}
+
+QString liveLimitsProblem( const LiveLimits& limits )
+{
+    if ( limits.ringFiles > 0 && !limits.ringBuffer() ) {
+        return QStringLiteral( "The ring buffer needs a file size or a file duration to start "
+                               "a new file at." );
+    }
+    return {};
 }
 
 QString captureFilterProblem( const QString& filter )
@@ -256,6 +269,13 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
     output.err = QString::fromUtf8( process.readAllStandardError() );
     output.exitCode = output.error.isEmpty() ? process.exitCode() : -1;
     return output;
+}
+
+QString shellQuote( const QString& word )
+{
+    auto quoted = word;
+    quoted.replace( QLatin1Char( '\'' ), QStringLiteral( "'\\''" ) );
+    return QLatin1Char( '\'' ) + quoted + QLatin1Char( '\'' );
 }
 
 QString liveCaptureName( const LiveChoice& choice )

@@ -161,6 +161,7 @@ add_library(logsquirl_tcpdump SHARED
     src/capture_file.cpp
     src/gzip_source.cpp
     src/capture_index.cpp
+    src/raw_capture.cpp
     src/packet_export.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
@@ -176,6 +177,8 @@ add_library(logsquirl_tcpdump SHARED
     src/extcap_source.cpp
     src/extcap_options.cpp
     src/capture_pipe.cpp
+    src/ssh_source.cpp
+    src/command_source.cpp
     src/live_capture_form.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp

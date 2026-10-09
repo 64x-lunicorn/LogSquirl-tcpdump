@@ -88,6 +88,14 @@ public:
         return error_;
     }
 
+    /// What the stream's writer said about itself, for the message of a
+    /// stream that is not a capture: a capture program's last lines on
+    /// stderr, or why it failed.  Empty by default.
+    virtual std::string writerSaid()
+    {
+        return {};
+    }
+
 protected:
     /// Wait at most @p timeout for data, and read up to @p n bytes of it into
     /// @p dst.  Returns how many were read, 0 if the stream has ended (on an

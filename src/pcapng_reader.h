@@ -101,6 +101,9 @@ public:
 
     bool resume( const ReaderCheckpoint& checkpoint ) override;
 
+    /// The section header and interface blocks the checkpoint resumed at.
+    void relocateHeaders( const std::function<uint64_t( uint64_t )>& where ) override;
+
     /// The section header block of the last packet's section and the
     /// interface description blocks declared in it so far.
     CaptureHeaders headers() const override;

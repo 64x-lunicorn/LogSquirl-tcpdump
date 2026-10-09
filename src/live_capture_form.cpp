@@ -37,7 +37,10 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
+#include <algorithm>
+#include <chrono>
 #include <exception>
+#include <limits>
 
 namespace tcpdump {
 
@@ -140,7 +143,61 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     } );
     connect( snaplen_, &QSpinBox::valueChanged, this, &LiveCaptureForm::changed );
 
+    addLimitFields( layout );
+
     sourceChanged();
+}
+
+void LiveCaptureForm::addLimitFields( QFormLayout* layout )
+{
+    // A spin box of 0 to @p max, 0 shown as @p none.
+    auto spin = [ this ]( const char* name, int max, const QString& suffix, const QString& none,
+                          const QString& tip ) {
+        auto* box = new QSpinBox;
+        box->setObjectName( name );
+        box->setRange( 0, max );
+        box->setSuffix( suffix );
+        box->setSpecialValueText( none );
+        box->setToolTip( tip );
+        box->setAccelerated( true );
+        connect( box, &QSpinBox::valueChanged, this, &LiveCaptureForm::changed );
+        return box;
+    };
+    const auto noLimit = QStringLiteral( "no limit" );
+    stopSeconds_ = spin( "liveStopSeconds", kMaxLimitSeconds, " s", noLimit,
+                         "Stop the capture after this many seconds" );
+    layout->addRow( "Stop after time:", stopSeconds_ );
+    stopPackets_ = spin( "liveStopPackets", std::numeric_limits<int>::max(), " packets", noLimit,
+                         "Stop the capture after this many packets" );
+    layout->addRow( "Stop after packets:", stopPackets_ );
+    stopMegabytes_ = spin( "liveStopMegabytes", kMaxLimitMegabytes, " MB", noLimit,
+                           "Stop the capture once this much was captured (the raw capture's "
+                           "size, 1 MB = 1024 \xc3\x97 1024 bytes)" );
+    layout->addRow( "Stop after size:", stopMegabytes_ );
+
+    ringFiles_ = spin( "liveRingFiles", kMaxRingFiles, " files", "off",
+                       "Keep the raw capture in this many files, starting a new one at the size "
+                       "or duration below and deleting the oldest; the tab keeps the packets of "
+                       "the files kept" );
+    layout->addRow( "Ring buffer:", ringFiles_ );
+    ringMegabytes_ = spin( "liveRingMegabytes", kMaxLimitMegabytes, " MB", "any size",
+                           "Start a new file once one is this big" );
+    ringSeconds_ = spin( "liveRingSeconds", kMaxLimitSeconds, " s", "any time",
+                         "Start a new file once one is this old" );
+    auto* fileRow = new QHBoxLayout;
+    fileRow->setContentsMargins( 0, 0, 0, 0 );
+    fileRow->addWidget( ringMegabytes_, 1 );
+    fileRow->addWidget( ringSeconds_, 1 );
+    layout->addRow( "New file after:", fileRow );
+    connect( ringFiles_, &QSpinBox::valueChanged, this, &LiveCaptureForm::enableRingFields );
+    enableRingFields();
+}
+
+void LiveCaptureForm::enableRingFields()
+{
+    const bool ring = ringFiles_->value() > 0;
+    ringMegabytes_->setEnabled( ring );
+    ringSeconds_->setEnabled( ring );
 }
 
 LiveCaptureForm::~LiveCaptureForm()
@@ -182,6 +239,21 @@ void LiveCaptureForm::setChoice( const LiveChoice& choice )
     source_->setCurrentIndex( index >= 0 ? index : ( source_->count() > 0 ? 0 : -1 ) );
     filter_->setText( choice.filter );
     snaplen_->setValue( choice.snaplen );
+    // Clamped, as settings.ini may hold more than a field shows.
+    auto clamped = []( uint64_t value, int max ) {
+        return static_cast<int>( std::min<uint64_t>( value, static_cast<uint64_t>( max ) ) );
+    };
+    const auto& limits = choice.limits;
+    stopSeconds_->setValue(
+        clamped( static_cast<uint64_t>( limits.duration.count() ), stopSeconds_->maximum() ) );
+    stopPackets_->setValue( clamped( limits.packets, stopPackets_->maximum() ) );
+    stopMegabytes_->setValue(
+        clamped( ( limits.bytes + kMegabyte - 1 ) / kMegabyte, stopMegabytes_->maximum() ) );
+    ringFiles_->setValue( clamped( limits.ringFiles, ringFiles_->maximum() ) );
+    ringMegabytes_->setValue(
+        clamped( ( limits.fileBytes + kMegabyte - 1 ) / kMegabyte, ringMegabytes_->maximum() ) );
+    ringSeconds_->setValue(
+        clamped( static_cast<uint64_t>( limits.fileDuration.count() ), ringSeconds_->maximum() ) );
     checkFilter();
     sourceChanged();
 }
@@ -197,6 +269,13 @@ LiveChoice LiveCaptureForm::choice() const
     choice.networkInterface = currentId( interface_ );
     choice.filter = filter_->text().trimmed();
     choice.snaplen = snaplen_->value();
+    auto& limits = choice.limits;
+    limits.duration = std::chrono::seconds( stopSeconds_->value() );
+    limits.packets = static_cast<uint64_t>( stopPackets_->value() );
+    limits.bytes = static_cast<uint64_t>( stopMegabytes_->value() ) * kMegabyte;
+    limits.ringFiles = static_cast<uint32_t>( ringFiles_->value() );
+    limits.fileBytes = static_cast<uint64_t>( ringMegabytes_->value() ) * kMegabyte;
+    limits.fileDuration = std::chrono::seconds( ringSeconds_->value() );
     if ( options_ ) {
         choice.options = options_->options();
     }
@@ -225,6 +304,9 @@ QString LiveCaptureForm::problem() const
     const auto current = choice();
     if ( const auto filter = captureFilterProblem( current.filter ); !filter.isEmpty() ) {
         return filter;
+    }
+    if ( const auto limits = liveLimitsProblem( current.limits ); !limits.isEmpty() ) {
+        return limits;
     }
     if ( auto invalid = kind->validate( current ); !invalid.isEmpty() ) {
         return invalid;

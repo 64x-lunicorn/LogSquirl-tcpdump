@@ -399,6 +399,32 @@ bool ProcessSource::endedOnPurpose() const
     return started_ && group_->ended;
 }
 
+std::string ProcessSource::writerSaid()
+{
+    if ( !started_ ) {
+        return failure().toStdString();
+    }
+    if ( process_->state() != QProcess::NotRunning
+         && process_->waitForFinished( static_cast<int>( kSaidGrace.count() ) ) ) {
+        // Ended by itself: a last line without a line end is complete.
+        drainStderr();
+        stderr_.finish();
+    }
+    drainStderr();
+    if ( process_->state() == QProcess::NotRunning ) {
+        if ( const auto failed = failure(); !failed.isEmpty() ) {
+            return failed.toStdString();
+        }
+    }
+    const auto lines = stderr_.last();
+    if ( lines.isEmpty() ) {
+        return {};
+    }
+    return QStringLiteral( "%1 wrote on stderr:\n%2" )
+        .arg( name_, lines.join( QLatin1Char( '\n' ) ) )
+        .toStdString();
+}
+
 QString ProcessSource::failure() const
 {
     if ( !started_ ) {

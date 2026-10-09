@@ -190,6 +190,43 @@ SCENARIO( "The last live capture choice is kept in settings.ini", "[live_source]
         }
     }
 
+    WHEN( "a choice with stop conditions and a ring buffer is saved" )
+    {
+        LiveChoice choice{ "fake", "", "fake0", "", 1500 };
+        choice.limits.duration = std::chrono::seconds( 3600 );
+        choice.limits.packets = 100000;
+        choice.limits.bytes = 500 * kMegabyte;
+        choice.limits.ringFiles = 5;
+        choice.limits.fileBytes = 100 * kMegabyte;
+        choice.limits.fileDuration = std::chrono::seconds( 600 );
+        REQUIRE( saveLiveChoice( configDir.path(), choice ) );
+
+        THEN( "they are read back, the sizes kept in MB" )
+        {
+            REQUIRE( loadLiveChoice( configDir.path() ) == choice );
+            const QSettings file( settingsFilePath( configDir.path() ), QSettings::IniFormat );
+            REQUIRE( file.value( "live/stopMegabytes" ).toInt() == 500 );
+            REQUIRE( file.value( "live/ringFiles" ).toInt() == 5 );
+        }
+
+        AND_WHEN( "the file holds values out of range" )
+        {
+            QSettings file( settingsFilePath( configDir.path() ), QSettings::IniFormat );
+            file.setValue( "live/ringFiles", 100000 );
+            file.setValue( "live/stopSeconds", -5 );
+            file.setValue( "live/stopPackets", "many" );
+            file.sync();
+
+            THEN( "they are the nearest allowed, or none" )
+            {
+                const auto limits = loadLiveChoice( configDir.path() ).limits;
+                REQUIRE( limits.ringFiles == static_cast<uint32_t>( kMaxRingFiles ) );
+                REQUIRE( limits.duration.count() == 0 );
+                REQUIRE( limits.packets == 0 );
+            }
+        }
+    }
+
     WHEN( "the snaplen in the file is out of range or not a number" )
     {
         QSettings file( settingsFilePath( configDir.path() ), QSettings::IniFormat );

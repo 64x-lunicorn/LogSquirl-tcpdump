@@ -29,6 +29,8 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <chrono>
+#include <limits>
 
 namespace tcpdump {
 
@@ -54,6 +56,14 @@ constexpr const char* kLiveDeviceKey = "live/device";
 constexpr const char* kLiveInterfaceKey = "live/interface";
 constexpr const char* kLiveFilterKey = "live/filter";
 constexpr const char* kLiveSnaplenKey = "live/snaplen";
+// A live capture's LiveLimits, in the units the form shows: seconds, packets,
+// mebibytes, files.
+constexpr const char* kLiveStopSecondsKey = "live/stopSeconds";
+constexpr const char* kLiveStopPacketsKey = "live/stopPackets";
+constexpr const char* kLiveStopMegabytesKey = "live/stopMegabytes";
+constexpr const char* kLiveRingFilesKey = "live/ringFiles";
+constexpr const char* kLiveRingMegabytesKey = "live/ringMegabytes";
+constexpr const char* kLiveRingSecondsKey = "live/ringSeconds";
 /// The group of a source's options: live/options/<source>/<name>.
 QString liveOptionsGroup( const QString& source )
 {
@@ -186,6 +196,21 @@ LiveChoice loadLiveChoice( const QString& configDir )
     choice.snaplen = static_cast<int>( readCount( file, kLiveSnaplenKey, kDefaultSnaplen, 1,
                                                   static_cast<size_t>( kMaxSnaplen ) ) );
     choice.options = loadLiveOptions( configDir, choice.source );
+    auto& limits = choice.limits;
+    limits.duration = std::chrono::seconds(
+        readCount( file, kLiveStopSecondsKey, 0, 0, static_cast<size_t>( kMaxLimitSeconds ) ) );
+    limits.packets = readCount( file, kLiveStopPacketsKey, 0, 0,
+                                static_cast<size_t>( std::numeric_limits<int>::max() ) );
+    limits.bytes
+        = readCount( file, kLiveStopMegabytesKey, 0, 0, static_cast<size_t>( kMaxLimitMegabytes ) )
+          * kMegabyte;
+    limits.ringFiles = static_cast<uint32_t>(
+        readCount( file, kLiveRingFilesKey, 0, 0, static_cast<size_t>( kMaxRingFiles ) ) );
+    limits.fileBytes
+        = readCount( file, kLiveRingMegabytesKey, 0, 0, static_cast<size_t>( kMaxLimitMegabytes ) )
+          * kMegabyte;
+    limits.fileDuration = std::chrono::seconds(
+        readCount( file, kLiveRingSecondsKey, 0, 0, static_cast<size_t>( kMaxLimitSeconds ) ) );
     return choice;
 }
 
@@ -215,6 +240,13 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
     file.setValue( kLiveInterfaceKey, choice.networkInterface );
     file.setValue( kLiveFilterKey, choice.filter );
     file.setValue( kLiveSnaplenKey, choice.snaplen );
+    const auto& limits = choice.limits;
+    file.setValue( kLiveStopSecondsKey, static_cast<qlonglong>( limits.duration.count() ) );
+    file.setValue( kLiveStopPacketsKey, static_cast<qulonglong>( limits.packets ) );
+    file.setValue( kLiveStopMegabytesKey, static_cast<qulonglong>( limits.bytes / kMegabyte ) );
+    file.setValue( kLiveRingFilesKey, limits.ringFiles );
+    file.setValue( kLiveRingMegabytesKey, static_cast<qulonglong>( limits.fileBytes / kMegabyte ) );
+    file.setValue( kLiveRingSecondsKey, static_cast<qlonglong>( limits.fileDuration.count() ) );
     if ( !choice.source.isEmpty() ) {
         file.remove( liveOptionsGroup( choice.source ) );
         file.beginGroup( liveOptionsGroup( choice.source ) );
@@ -227,6 +259,21 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
         }
         file.endGroup();
     }
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
+                     const QString& value )
+{
+    if ( configDir.isEmpty() || source.isEmpty() || name.isEmpty()
+         || name.contains( QLatin1Char( '/' ) ) || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.beginGroup( liveOptionsGroup( source ) );
+    file.setValue( name, value );
+    file.endGroup();
     file.sync();
     return file.status() == QSettings::NoError;
 }

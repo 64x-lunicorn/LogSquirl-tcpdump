@@ -64,6 +64,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shell so that no filter can inject a command; tcpdump's stderr is read
   from the device when a capture fails, and **Stop** kills tcpdump on the
   device too (#73)
+- **Live capture stop conditions and ring buffer.** A live capture, from
+  any source, can stop by itself after a time, a number of packets or a
+  size, the first reached ending it as Stop does; the sidebar shows how far
+  it is to each, and a notification which one stopped it. A **Ring
+  buffer** splits the raw capture into `<name>_00001_<time>.pcap`, … of a
+  size or duration and keeps the newest N, each a capture of its own (a
+  pcapng's section header and interfaces repeated). The tab keeps the
+  lines of the packets kept: the oldest file's lines are cut from the
+  `.log` when it is deleted, and the Packet Panel says *Rotated away* for
+  a packet that was in it. **Save capture…** writes the files kept as one
+  capture; Export packets… reads each packet from its file. The settings
+  are fields of the Live capture form, kept in `settings.ini` (#77)
+- **Custom command as a live source.** The **Custom command** source runs
+  a command whose stdout is a pcap or pcapng stream (a vendor tool, `nc`,
+  `ssh router tcpdump -w -`) and converts it live. The line is split like
+  a shell would split it (quotes, backslash escapes) but run without one,
+  nothing expanded; `{interface}`, `{filter}` and `{snaplen}` are replaced
+  inside an argument, never split. **Run through the shell** (off by
+  default, with a warning) is there for pipes and redirections, the
+  placeholders then quoted. Commands can be saved by name, chosen,
+  edited and deleted, kept in `settings.ini` at once; examples for
+  tcpdump, adb and ssh are offered, never run by themselves. A command
+  whose output is not a capture fails with *Not a capture*, its stderr and
+  what to write instead (#76)
+- **Remote live capture over SSH.** The **SSH** source captures on a
+  server with its `tcpdump`, over the system's OpenSSH client (Windows:
+  `System32\OpenSSH\ssh.exe`). The host is typed as `[user@]host[:port]`,
+  or picked from the `Host` entries of `~/.ssh/config`; its interfaces are
+  what `tcpdump -D` lists there. ssh always runs with `-o BatchMode=yes -o
+  ConnectTimeout=10 -T` and nothing on stdin, so only keys and the SSH
+  agent are used: no password, passphrase or host key prompt, ever. The
+  capture runs `sudo -n tcpdump -i IF -s N -U -w - FILTER` (sudo can be
+  turned off), the interface and filter single-quoted for the server's
+  shell, and by default excludes its own SSH connection (`not (host
+  <client> and tcp port <SSH port>)`, from `$SSH_CLIENT`). An unknown or
+  changed host key, refused keys, a sudo that wants a password, tcpdump
+  missing or lacking permissions come with what to do (#74)
 - **Local live capture.** The **Local** source captures on this
   computer's interfaces with Wireshark's `dumpcap` (preferred) or
   `tcpdump`, found on `PATH` or where their installers put them; without
@@ -437,6 +474,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each case.
 
 ### Changed
+- A live capture whose program exits without having written a capture
+  fails with *Not a capture* and the program's last stderr lines, not
+  the Parser's error alone (#76).
 - The *HTTP* filter and the *HTTP 4xx/5xx* highlighter also match
   decrypted HTTP/1.1 lines, `… | TLS (decrypted) | GET …`.
 - A segment that ends inside a TLS record, an HTTP header section, a

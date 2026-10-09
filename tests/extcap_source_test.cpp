@@ -904,6 +904,63 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
         }
     }
 
+    GIVEN( "an extcap that runs on, and a capture that stops after a packet" )
+    {
+        writeFile( extcaps.path( "hang" ), {} );
+        choice.limits.packets = 1;
+        auto sidebar = sidebarFor( extcaps, tempRoot );
+        REQUIRE( sidebar->startLiveCapture( choice ) );
+        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+
+        THEN( "the capture stops by itself, as for any source, and ends the extcap" )
+        {
+            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().contains( "stopped after 1 packets" ) );
+            REQUIRE( waitFor( [ & ] { return extcaps.calls().contains( "killed" ); } ) );
+            REQUIRE( host.openedFiles.size() == 1 );
+            REQUIRE( readText( host.openedFiles.first() ).count( "UDP" ) == 1 );
+        }
+    }
+
+    GIVEN( "an extcap whose capture fills a ring buffer of one file" )
+    {
+        choice.limits.ringFiles = 1;
+        choice.limits.fileBytes = 1;
+        auto sidebar = sidebarFor( extcaps, tempRoot );
+        REQUIRE( sidebar->startLiveCapture( choice ) );
+        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+
+        THEN( "the raw capture is split, only the newest file kept, and so are its lines" )
+        {
+            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
+            REQUIRE( host.openedFiles.size() == 1 );
+            const QFileInfo log( host.openedFiles.first() );
+            const auto files = log.dir().entryList( { "fakedump-fake0_*.pcap" }, QDir::Files );
+            REQUIRE( files.size() == 1 );
+            REQUIRE( files.first().startsWith( "fakedump-fake0_00002_" ) );
+            const auto text = readText( log.filePath() );
+            REQUIRE( text.count( "UDP" ) == 1 );
+            REQUIRE( text.contains( "two" ) );
+        }
+    }
+
+    GIVEN( "an extcap that writes something else than a capture into the FIFO" )
+    {
+        writeFile( extcaps.path( "capture.pcap" ), text( "usage: fakedump [options]\n" ) );
+        auto sidebar = sidebarFor( extcaps, tempRoot );
+        REQUIRE( sidebar->startLiveCapture( choice ) );
+        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+
+        THEN( "it is not a capture, with what the extcap wrote on stderr" )
+        {
+            const auto error = sidebar->findChild<QLabel*>( "liveError" )->text();
+            REQUIRE( error.contains( "Not a capture" ) );
+            REQUIRE( error.contains( "fakedump: capturing" ) );
+            REQUIRE( host.openedFiles.isEmpty() );
+        }
+    }
+
     GIVEN( "an extcap that fails" )
     {
         writeFile( extcaps.path( "fail" ), {} );

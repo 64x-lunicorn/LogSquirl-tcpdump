@@ -67,10 +67,6 @@
 
 namespace tcpdump {
 
-/// @p word single-quoted for a POSIX shell (Android's mksh or toybox sh):
-/// one word, read as it is, whatever it holds ('\'' for a quote).
-QString shellQuote( const QString& word );
-
 /// The devices of `adb devices -l` output @p out: serial, model (else
 /// product or device) as the description, and a problem for a device that is
 /// not in the state "device" (unauthorized, offline, no permissions, …).

@@ -422,6 +422,12 @@ read through a `DeviceSource`:
   program ended on purpose (`terminate()`, `terminateCaptureProcesses()`)
   did not fail: its stream reads as `stopped()`
   (`StreamSource::endedOnPurpose()`).
+- **Not a capture.** A program that exits with 0 but wrote no capture to
+  stdout (text, a usage message) fails with `Not a capture: <the reader's
+  error>` and `StreamSource::writerSaid()`: for a Process Source its
+  failure, or `<name> wrote on stderr:` and its last lines, after waiting
+  `kSaidGrace` (500 ms) for a program still running to end; a `PipeSource`
+  (an extcap writing into a FIFO) says what its program does.
 - **Ending it.** On Unix the program runs in a process group of its own
   (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
   group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
@@ -1578,13 +1584,66 @@ breaks off with an error after its first packet ends Failed with the
 message *and* `outputPath`, `rawPath` and the summary of what was captured;
 before a packet, it leaves nothing behind, as before.
 
+#### Stop conditions and the ring buffer (`LiveLimits`, `raw_capture.h/cpp`)
+`convertStream()` takes `LiveLimits` (dumpcap's `-a` and `-b`; 0 is "none"
+throughout) and a `LiveClock`, the clock their durations are measured with
+(a test's fake one; empty: the steady clock). The stop conditions, a
+duration, a packet count and a size (bytes read from the stream), are
+checked after each packet, so the packet that reaches a count or a size is
+the last one; the duration is also checked while the stream has nothing to
+read: with a duration set, `LiveInput` waits in 10 ms slices and reads as
+ended at the deadline, though nothing comes (only a wait: the rest of a
+record that has come is read). The first condition reached ends the
+conversion as Stop does, Converted, with `ConversionResult::stoppedBy`
+saying which; one reached before the capture header came ends Stopped.
+
+With a ring buffer (`LiveLimits::ringBuffer()`: files kept, and a file size
+or duration) the raw capture is a `RawCapture` of numbered files,
+`<name>_00001_<yyyyMMddHHmmss>.pcap` and on. A file that a packet filled
+(by size, the copied headers included), or whose duration is over, ends
+when the next packet comes, after the record of the last one before it:
+`RawCapture::rotate( cut, packetsBefore, headers )` moves what was written
+past the cut into the new file, behind a copy of the headers the reader
+held after that packet (`CaptureReader::headers()`: a pcap's global
+header; a pcapng's section header, its section length set to -1, and the
+interfaces declared so far), and deletes the oldest files beyond
+`ringFiles`. A file is therefore never empty, and a duration is the least
+a file covers, not the most. Each file is a `CapturePart`
+(`capture_index.h`): its path, the packets before it, where its records
+start in the stream, the header bytes ahead of them, and where each copied
+header record lay in the stream. The text keeps the lines of the packets
+in the files kept: the Converter notes where each file's lines start in
+the `.log` and, when a file is deleted, cuts its lines out of the file in
+place (`cutText()`, through a second, binary handle) and writes on at the
+new end. LogSquirl, which follows the tab, re-reads a file that changed in
+the range it indexed as it does a truncated log; marks on dropped lines
+go. A snapshot goes out right after each rotation, so the Packet Panel's
+index follows the files at once.
+
+The `CaptureIndex` keeps the parts (`setCaptureParts()`, `parts()`,
+`partOf( number )`, `rotatedAway()`): its checkpoints stay in stream
+offsets, and the `CaptureCursor` reads a packet from its file, translating
+a checkpoint that lies after a packet of that file into it
+(`CapturePart::fileOffset()`), and telling the reader where the header
+records the checkpoint's state names lie there
+(`CaptureReader::relocateHeaders()`: a pcapng's section header and
+interfaces). A packet of a file deleted since, also through an index taken
+before the deletion, fails with *Rotated away: …*, never with another
+packet's bytes. `CapturedPacket::file` is the file it was read from:
+Export packets copies each packet from its own file, Follow stream content
+starts at the first packet kept, and `saveCaptureParts()` writes the files
+kept as one capture (the first whole, the records of the others without
+their copied headers) for **Save capture…**.
+
 `LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
 own and posts what it is told to its own (the UI) thread as signals:
 `readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
 `finished( ConversionResult )`. The source is made on the worker by a
 `SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
 ProcessCommand )` for a capture program), as a `ProcessSource` must be.
-`stop()` sets the source's stop flag, `cancel()` also the cancel flag. The
+`stop()` sets the source's stop flag, `cancel()` also the cancel flag;
+`setLimits()` and `setClock()` before `start()` hand the conversion its
+`LiveLimits` and clock, the same for every source kind. The
 outcome is posted before the source is destroyed, so a program that takes
 up to `kTerminateGrace` to end does not delay it; the destructor stops and
 waits for the worker.
@@ -1620,7 +1679,10 @@ cancels its own listings as it goes); the kinds need not know of either. `captur
 what would be misread before libpcap sees a filter (a line break, a
 leading `-`, unbalanced parentheses, a display filter field such as
 `ip.addr`); the capture program compiles it. `liveCaptureName( choice )`
-names the capture's files after its device and interface.
+names the capture's files after its device and interface, and
+`shellQuote( word )` makes one word of anything for a POSIX shell (single
+quotes, `'` as `'\''`), for the kinds that hand a shell a command line
+(Android, SSH, Custom command).
 
 `builtInLiveSources()` is the one place a kind is registered: a source
 ticket adds a line there and nothing in the UI.
@@ -1678,6 +1740,34 @@ a device's tcpdump is not ended with the local adb), so that quoting,
 root through `adb root` and su, binary-clean streams and the kill on Stop
 are tested end to end.
 
+The **SSH** kind (`ssh_source.h/cpp`, id `ssh`) is `SshSourceKind(
+SshPrograms )`: `SshPrograms::forThisComputer()` holds the paths tried first
+(Windows: `%SystemRoot%\System32\OpenSSH\ssh.exe`), `PATH` (and `/usr/bin`)
+and `~/.ssh/config`; tests pass a fake `ssh` script and a config file of
+their own. Its devices are `Typed`: `SshDestination::parse()` takes
+`[user@]host[:port]` apart (`[v6]:port`; at the last `@`, as ssh does) and
+refuses what ssh could misread (a leading `-`, spaces, a bad port);
+`listDevices()` suggests `sshConfigHosts()`, the `Host` entries without
+`*`, `?` or `!`, described by their HostName, User and Port.
+`sshArguments()` is always `-T -o BatchMode=yes -o ConnectTimeout=10 [-p
+port] -- <destination> <remote command>`, so ssh never prompts (stdin is
+the null device too). `listInterfaces()` runs `tcpdump -D` remotely;
+`command()` runs `sshRemoteCaptureCommand( choice )`, a POSIX command line
+built with `shellQuote()` (single quotes, `'` as `'\''`): `exec [sudo -n]
+tcpdump -i '<if>' -s N -U -w - '<filter>'`, the filter extended, unless
+the option `excludeOwnConnection` is `false`, by `and not (host
+'"${SSH_CLIENT%% *}"' and tcp port '"${SSH_CLIENT##* }"')`, which the
+server's shell expands inside one argument. The options (`kSshSudoOption`
+`sudo`, `kSshExcludeOwnOption`, both `true` unless set to `false`) are two
+checkboxes, `sshSudo` and `sshExcludeOwn`. `explainSshFailure()` maps ssh's,
+sudo's and tcpdump's stderr (unknown or changed host key, refused keys,
+`sudo: a password is required`, tcpdump not found, a permission error, an
+unreachable host) to what to do; listings add it to their error,
+`explainFailure()` to a failed capture's. Tests run a fake `ssh` that logs
+its argv, insists on `BatchMode=yes` and runs the remote command with
+`/bin/sh`, `$SSH_CLIENT` set and fake `sudo` and `tcpdump` alone on `PATH`,
+also with hostile interfaces and filters.
+
 The **Wireshark extcap** kind (`extcap_source.h/cpp`, id `extcap`) is
 `ExtcapSourceKind( ExtcapPlaces )`: the directories looked in, in order
 (`forThisComputer()`: `WIRESHARK_EXTCAP_DIR`, the personal directory, the
@@ -1725,8 +1815,39 @@ out of `{range=}`, a value its `{validation=}` does not match, or a
 runs fake extcap scripts (`fakedump` answering from files and writing a
 synthetic pcap into the FIFO it is given, `brokendump` failing), so that
 discovery, every argument type, hostile values (passed as one word, no
-shell), a password kept out of `settings.ini`, Stop and a failing extcap
-are tested end to end.
+shell), a password kept out of `settings.ini`, Stop, a failing extcap, one
+writing no capture, and the stop conditions and ring buffer (which are the
+same for every kind) are tested end to end.
+
+The **Custom command** kind (`command_source.h/cpp`, id `command`) is
+`CustomCommandSourceKind( configDir, LocalPrograms )`, without devices; its
+interfaces are what the Local kind lists here, suggestions for
+`{interface}` (tests pass `LocalPrograms{}`, which lists nothing). Its
+options are `command` (the line), `shell` (`true`: run through the shell;
+`false` by default), `name` (the saved command it came from) and `saved`,
+the saved commands as a JSON array of `{name, command, shell}`
+(`savedCommands()`, `savedCommandsOption()`). `customCommand( choice )`
+builds the `ProcessCommand`, or says why it cannot (`validate()` returns
+that): without the shell, `splitCommandLine()` splits the line as a POSIX
+shell would, without running one (blanks; `'…'`; `"…"` with `\"` and `\\`;
+`\x` outside quotes; nothing expanded) and points out an unquoted word with
+`|&;<>` (`shellOperator`), which is refused; then `{interface}`,
+`{filter}`, `{snaplen}` are replaced inside each word in one pass (a value
+holding a placeholder is not replaced again), a word that is `{filter}`
+alone dropped for an empty filter. With the shell, the line goes to
+`ProcessCommand::shell()`, each value `shellQuote()`d (Windows: in double
+quotes, a value with `"`, `%`, `!` or a trailing `\` refused). A command
+using `{interface}` needs one, not starting with `-`. The options widget
+(`commandSaved`, `commandLine`, `commandShell`, `commandShellWarning`,
+`commandName`, `commandSave`, `commandDelete`) writes the saved commands
+to `settings.ini` as they are saved or deleted (`saveLiveOption()`), and
+shows them in every widget of the kind that is open (the sidebar's and the
+dialog's); choosing a saved command or one of `commandExamples()` fills
+the line and runs nothing. `explainFailure()` says what a command must
+write for `Not a capture`, what to check for `Cannot start`, and
+otherwise defers to the permission and SSH guidance. Tests run fake
+scripts that print their arguments, with hostile interfaces and filters,
+with and without the shell, and one that writes text instead of a capture.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview
