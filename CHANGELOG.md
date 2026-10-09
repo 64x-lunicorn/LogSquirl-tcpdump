@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the address, so the Log Format, the presets, Follow stream, the
   summary's filters and the display filters match as before. A and AAAA
   answers name their address with the name asked for, through CNAMEs; PTR
-  answers name the address they spell; over UDP and TCP. Passive and
+  answers name the address they spell; over UDP and TCP; an mDNS
+  response's additional records too, where a responder puts the addresses
+  of the service it answers for, but not a goodbye (TTL 0). Passive and
   streaming: a name labels only the packets after its answer, a later
   answer renames, names are shown unchecked (a spoofed answer is shown as
   any other). At most 8,192 addresses keep a name (about 2.5 MB), the
@@ -28,7 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decompressed on the fly, never as a whole, also when made of several
   gzip members; the progress bar counts compressed bytes. A gzip stream
   that is cut off or corrupt ends the capture there, reported in the
-  summary as cut off with the reason. The Packet Panel, Follow stream
+  summary as cut off with the reason; bytes after the last member that
+  are no member are ignored, as gzip ignores trailing garbage. The Packet
+  Panel, Follow stream
   content and Export packets read such a capture too: the Converter keeps
   an access point every 32 MiB of decompressed capture (32 KiB each), so
   that a packet is reached by decompressing at most that much; exported
@@ -48,8 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `settings.ini`, except passwords (and arguments the extcap says not to
   save), kept for the session only. It captures with `--capture --fifo`
   into a FIFO the plugin makes in its private temporary directory (a named
-  pipe on Windows), every value one argument, never through a shell;
-  **Stop** ends the extcap (#75)
+  pipe on Windows), every value one argument, never through a shell (on
+  Windows a batch-file extcap, which `cmd.exe` runs, refuses a filter,
+  interface or value with `&` or `%…%`); **Stop** ends the extcap (#75)
 - **Android live capture.** The **Android** source captures on a phone or
   an emulator with the device's tcpdump through `adb` (found on `PATH`,
   below `ANDROID_HOME`/`ANDROID_SDK_ROOT` or where the SDK is usually
@@ -63,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binary-clean, the interface and filter single-quoted for the device's
   shell so that no filter can inject a command; tcpdump's stderr is read
   from the device when a capture fails, and **Stop** kills tcpdump on the
-  device too (#73)
+  device too, also in the moment it is starting; the README says what a
+  LogSquirl crash leaves on the device (#73)
 - **Live capture stop conditions and ring buffer.** A live capture, from
   any source, can stop by itself after a time, a number of packets or a
   size, the first reached ending it as Stop does; the sidebar shows how far
@@ -83,7 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ssh router tcpdump -w -`) and converts it live. The line is split like
   a shell would split it (quotes, backslash escapes) but run without one,
   nothing expanded; `{interface}`, `{filter}` and `{snaplen}` are replaced
-  inside an argument, never split. **Run through the shell** (off by
+  inside an argument, never split, and `{interface:sh}` and `{filter:sh}`
+  single-quoted for a remote shell (a device's or server's, which the adb
+  and ssh examples hand them to). **Run through the shell** (off by
   default, with a warning) is there for pipes and redirections, the
   placeholders then quoted. Commands can be saved by name, chosen,
   edited and deleted, kept in `settings.ini` at once; examples for
@@ -94,15 +102,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server with its `tcpdump`, over the system's OpenSSH client (Windows:
   `System32\OpenSSH\ssh.exe`). The host is typed as `[user@]host[:port]`,
   or picked from the `Host` entries of `~/.ssh/config`; its interfaces are
-  what `tcpdump -D` lists there. ssh always runs with `-o BatchMode=yes -o
-  ConnectTimeout=10 -T` and nothing on stdin, so only keys and the SSH
-  agent are used: no password, passphrase or host key prompt, ever. The
+  what `sudo -n tcpdump -D` (without sudo while it is turned off) lists
+  there, or `ip -o link` when it lists none; the remote commands run with
+  `/bin/sh` whatever the login shell. ssh always runs with `-o
+  BatchMode=yes -o ConnectTimeout=10 -T` and nothing written to its stdin,
+  so only keys and the SSH agent are used: no password, passphrase or host
+  key prompt, ever. The
   capture runs `sudo -n tcpdump -i IF -s N -U -w - FILTER` (sudo can be
   turned off), the interface and filter single-quoted for the server's
   shell, and by default excludes its own SSH connection (`not (host
   <client> and tcp port <SSH port>)`, from `$SSH_CLIENT`). An unknown or
   changed host key, refused keys, a sudo that wants a password, tcpdump
-  missing or lacking permissions come with what to do (#74)
+  missing or lacking permissions come with what to do. **Stop** ends
+  tcpdump on the server too: a watchdog ends it once ssh's stdin, held
+  open by the plugin, closes (#74)
 - **Local live capture.** The **Local** source captures on this
   computer's interfaces with Wireshark's `dumpcap` (preferred) or
   `tcpdump`, found on `PATH` or where their installers put them; without
@@ -122,7 +135,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   display filter field, a leading `-`, a line break or unbalanced
   parentheses are pointed out below it) and the snaplen (262144 by
   default). **Start** is disabled while a capture is read or captured;
-  **Stop** (also **Plugins → tcpdump → Stop live capture**) finalises it.
+  **Stop** (also **Plugins → tcpdump → Stop live capture**) finalises it,
+  without the UI waiting for the capture program to end; a capture stopped
+  before its capture header came is not a failure: the sidebar says it
+  was stopped before anything was captured.
   The section shows the live counters, the capture program's stderr lines
   and, when a capture fails, its error and what the source says to do.
   The last choice is remembered in `settings.ini` (group `[live]`); no
@@ -148,6 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too), TLS 1.3 with AES-GCM and ChaCha20-Poly1305 and its key updates; a
   lost record is passed over. Sessions without secrets, or with wrong ones,
   keep their lines. A live capture reads the key log again as it grows.
+  The *HTTP* filter and the *HTTP 4xx/5xx* highlighter match the decrypted
+  HTTP/1.1 lines too.
   The secrets are read only, kept in memory for the conversion and wiped,
   never written or shown; a session keeps its keys and sequence numbers,
   no data, 16,384 sessions at a time, a new one in place of the one idle
@@ -227,7 +245,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a message that does not fit keeps its per-segment description, followed
   by `[reassembly limit]`, and when memory runs out, the streams that waited
   longest are let go. A direction is let go on its FIN, a stream on a SYN or
-  an RST; a segment of whole messages costs nothing. A new synthetic
+  an RST; a segment of whole messages costs nothing. The segments after
+  the first of a message past the limit, up to where its header says it
+  ends (at most 1 GiB away), say `[continuation of a message past the
+  reassembly limit]` with its protocol, and the message after it is
+  described as usual, also when it begins in the segment that ends the
+  large one. A new synthetic
   capture, `tests/corpus/reassembly.pcap` (written by
   `tests/make_reassembly_corpus.py`), shows each case.
 - **Packet Panel.** Below the sidebar summary, the packet of the selected
@@ -283,7 +306,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no column shows their addresses. The highlighters and filters in
   `presets/` read a tunnelled packet's Info past the tunnels (a SYN in
   VXLAN is a *TCP SYN/FIN*), and Follow stream follows the inner
-  conversation. At most 4 tunnels are unwrapped, a
+  conversation. An Ethernet frame in VXLAN or GRE is dissected as one on
+  the wire, a PPPoE session in it unwrapped to its IP packet. At most 4
+  tunnels are unwrapped, a
   deeper one is described as such (`IPv4-in-IPv4 not dissected: more than
   4 nested tunnels`). Before, such packets were shown as UDP to port 4789
   (`VXLAN`), `GRE`, `IPIP` or `6in4` between the tunnel endpoints. GRE
@@ -324,8 +349,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command opts into one. A program that cannot be started, exits with a
   code other than 0 or crashes ends the capture with a message naming it,
   the code and its last stderr lines. Ending it ends its whole process
-  group: SIGTERM, then SIGKILL after 2 s; on Windows it runs in a job
-  object that is terminated. Shutting the plugin down, as LogSquirl quits
+  group: SIGTERM, then SIGKILL after 2 s; on Windows it is started
+  suspended and put in a job object before it runs, so that nothing it
+  starts escapes, and the job is terminated (a job that cannot be made is
+  reported, and the program's process tree is ended instead). A program
+  that exits without having written a capture fails with *Not a capture*
+  and its last stderr lines. Shutting the plugin down, as LogSquirl quits
   or the plugin is disabled, ends every capture program still running.
 - **Live conversion.** A capture read from a stream is converted while it
   runs: its packet lines are flushed before every wait for more and at
@@ -370,11 +399,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   told apart by its Content-Length, and one that spans segments is
   reassembled (see *TCP reassembly*), the media its SDP body announces
   expected from the segment that completes it; a message cut at the
-  snaplen ends in `…`, a malformed one is `[Malformed Packet]`. The addresses and ports SDP
-  announces (`c=` and `m=` lines of the offer and the answer; RTCP on the
-  next port, `a=rtcp:` or `a=rtcp-mux`) are expected for RTP and RTCP, and
-  the UDP packets to or from them are described as `RTP` (`PT=PCMU,
-  SSRC=0x1234ABCD, Seq=1000, Time=8000, Mark`, payload types named as RFC
+  snaplen ends in `…`, a malformed one is `[Malformed Packet]`; CRLF
+  keep-alives (RFC 5626) before a message are passed over, and alone on
+  port 5060 are `Keep-alive (ping)` or `Keep-alive (pong)`. The addresses
+  and ports SDP announces (`c=` and `m=` lines of the offer and the
+  answer; RTCP on the next port, `a=rtcp:` or `a=rtcp-mux`) are expected
+  for RTP and RTCP, a new SDP body replacing only what the same side of
+  the call (its `o=` line) announced before, and the UDP packets to or
+  from them are described as `RTP` (`PT=PCMU, SSRC=0x1234ABCD, Seq=1000,
+  Time=8000, Mark`, payload types named as RFC
   3551 names them) and `RTCP` (`Sender Report, Source description`).
   UDP on other ports stays UDP. At most 1024 endpoints are expected; one
   is forgotten after 5 minutes without a packet, with its call's BYE, or
@@ -383,8 +416,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SOME/IP and SOME/IP-SD described.** SOME/IP over UDP and TCP, on
   port 30490, on the ports configured for it (the new option *SOME/IP
   also on ports*) and on any other where every message's header keeps to
-  the rules and the messages fill the payload, is labelled `SOME/IP` and
-  every message of a datagram or segment is named, up to eight: `Service
+  the rules, none is longer than 1 MiB and the messages fill the payload,
+  is labelled `SOME/IP` and every message of a datagram or segment is named, up to eight: `Service
   0x1234 Method 0x0001 Client 0x0010 Session 0x0001 REQUEST, 4 bytes`,
   `Event 0x8001 … NOTIFICATION`, `ERROR (E_NOT_OK)`, the SOME/IP-TP
   segments with their offset, the magic cookies of a TCP connection.
@@ -434,8 +467,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Elliptic Curve Diffie-Hellman Key Exchange Init/Reply`, the
   Diffie-Hellman group exchange, `New Keys`, and every packet a direction
   sends after its NEWKEYS as `Encrypted packet (len=64)`; the stream
-  remembers each direction's phase. On port 22 a connection whose key
-  exchange the capture lacks is shown as `SSH` `Encrypted packet (len=n)`.
+  remembers each direction's phase. Binary packets of the key exchange
+  with no banner before them are SSH on port 22 only, where a connection
+  whose key exchange the capture lacks is shown as `SSH` `Encrypted packet
+  (len=n)`.
   A packet_length or padding_length the unencrypted phase does not allow
   is `[Malformed Packet]`, every field is read within the captured bytes,
   a cut message ends in `…`, and a KEXINIT or key exchange reply that
@@ -454,8 +489,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lengths of 7, 16 and 64 bits are read; a control frame without FIN or
   longer than 125 bytes, a reserved opcode or a close with a one-byte
   payload is `[Malformed Packet]`, a cut frame ends in `…`, and a frame
-  that spans segments is reassembled. Detection is by the upgrade in the
-  same stream, not by port. A new synthetic capture,
+  that spans segments is reassembled; frames in the segment of the 101
+  response are described after it (`HTTP/1.1 101 …; WebSocket Text [FIN]
+  len=5 "hello"`). Detection is by the upgrade in the same stream, not by
+  port. A new synthetic capture,
   `tests/corpus/websocket.pcap` (written by
   `tests/make_websocket_corpus.py`), shows each case.
 - **SMB2/3 described.** SMB on TCP port 445 and over NetBIOS on 139 (and
@@ -482,14 +519,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each case.
 
 ### Changed
-- A live capture whose program exits without having written a capture
-  fails with *Not a capture* and the program's last stderr lines, not
-  the Parser's error alone (#76).
-- The *HTTP* filter and the *HTTP 4xx/5xx* highlighter also match
-  decrypted HTTP/1.1 lines, `… | TLS (decrypted) | GET …`.
-- A segment that ends inside a TLS record, an HTTP header section, a
-  DNS-over-TCP message, a SIP message or an MQTT packet on port 1883 no
-  longer names the message as far as it goes
+- A segment that ends inside a TLS record, an HTTP header section or a
+  DNS-over-TCP message no longer names the message as far as it goes
   (`Client Hello` without its server name, `Standard query response … (2
   answers)`), and the segment that ends it no longer says `Continuation`:
   the first says `[TCP segment of a reassembled PDU]`, the last describes
@@ -499,117 +530,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
-  0. The conversion now stops
-  with packet 4,294,967,295, and the summary says the rest was not
-  converted; a live capture stops there, as at a stop condition, with a
-  notification (#128)
-- Ring buffer: the text of a live capture is no longer rewritten in place
-  as the oldest raw file is deleted (LogSquirl follows that file); each raw
-  file has its own `.log` in a tab of its own, and the index of a capture
-  that runs for days no longer keeps the checkpoints of deleted files
-  (#125).
-- Stopping, restarting or closing a live capture no longer freezes
-  LogSquirl while its capture program takes its time to end (up to the
-  2 s grace, or a slow adb or ssh): the UI thread never waits for the
-  capture's worker, which ends on its own; a restart starts once the last
-  one is done; the plugin's shutdown cancels listings first and then joins
-  what is left (#123).
-- The Custom command examples for adb and ssh put `{filter}` into the line
-  those programs hand the device's or server's shell, so a filter with `;`
-  or `$(…)` ran there. New placeholders `{interface:sh}` and `{filter:sh}`
-  are single-quoted for that remote shell, and the examples use them; the
-  README and DEVELOPER_GUIDE state where a remote shell reads the filter
-  and how it is quoted (#121).
-- Android live capture: a Stop in the moment between starting tcpdump on
-  the device and writing its pid file orphaned tcpdump there. Stop now
-  leaves a stop mark that the capture's script looks for after writing
-  the pid, and the capture's files are removed on every path; README says
-  what a LogSquirl crash leaves on the device (#118).
-- SSH live capture lists the server's interfaces with `sudo -n tcpdump -D`
-  while *Run tcpdump with sudo -n* is on (anew as it is toggled), and with
-  `ip -o link` when tcpdump lists none, as #74 asked; the remote commands
-  run with `/bin/sh` whatever the login shell (#113).
-- SSH live capture: **Stop** left tcpdump running on the server, as root
-  behind sudo, until its next packet (ssh without a terminal gets no
-  hangup). The remote command is now a `/bin/sh` script with a watchdog
-  that ends tcpdump once ssh's stdin, held open by the plugin, closes
-  (#110).
-- **Security:** on Windows an extcap that is a batch file (`.bat`,
-  `.cmd`) ran through `cmd.exe` with the capture filter, the interface and
-  its arguments' values unescaped, so a `&` or `%…%` in them could run a
-  command. Such values are now refused for a batch file, before Start and
-  wherever a program is started (#106).
-- Live capture programs: a listing that timed out just as its program
-  ended could send SIGKILL to LogSquirl's own process group (`kill(-0)`);
-  a group is now never signalled without a pid. On Windows a capture
-  program is started suspended and put in its job object before it runs,
-  so nothing it starts escapes Stop; a job that cannot be made is reported,
-  and Stop then ends the program's process tree. Capture programs and
-  listings share one start and end (#103).
-- An Ethernet frame carried in VXLAN or GRE is dissected as one on the
-  wire: a PPPoE session frame inside is unwrapped to its IP packet, a
-  discovery message named, where before they showed as `PPPoES` /
-  `PPPoED` with `EtherType 0x8864` / `0x8863` (#67).
-- A live capture stopped before its capture header came (Stop pressed
-  early, or LogSquirl quitting while the capture program was still
-  starting) no longer fails with "not a capture": the sidebar says it was
-  stopped before anything was captured (`ConversionResult::Status::Stopped`).
-  The Process Source tests wait for the fake capture programs to signal
-  that they are ready instead of timing them, so they no longer fail on a
-  loaded machine (#94).
-- **A message past the reassembly limit is skipped to its end.** When a
-  framed message (a WebSocket frame, an MQTT packet, an SMB2 Read
-  response, a TLS record, …) is longer than the 64 KB a stream direction
-  holds, its first segment is still marked `[reassembly limit]`, but the
-  segments after it are no longer read as if a new message began at their
-  first byte (random frames, `[Malformed Packet]`): the direction keeps
-  where the message ends, as its header announced (up to 1 GiB, 128 bytes
-  of the reassembly memory), labels the segments up to there `[continuation
-  of a message past the reassembly limit]` with its protocol, and
-  describes the next message normally, also when it begins inside the
-  segment that ends the large one. Segments lost, out of order or cut at
-  the snaplen inside it change nothing; if the segment where it ends is
-  lost, the stream resynchronises on the next segment that begins a
-  message, as before (#95).
-- **WebSocket frames in the segment of the 101 response.** A server's
-  `101 Switching Protocols` with `Upgrade: websocket` that shares its
-  segment with the first frames now switches the framing for the rest of
-  the segment: the frames are described after the response
-  (`HTTP/1.1 101 …; WebSocket Text [FIN] len=5 "hello"`), and one cut at
-  the segment's end is held and described whole where it completes,
-  where before its rest was read as new frames and the stream desynced
-  (#102).
-- **SSH without a banner only on port 22.** Binary packets of SSH's key
-  exchange with no banner before them were taken for SSH on any port,
-  ahead of TLS, SIP and HTTP, so a binary protocol whose messages begin
-  like one (`00 00 01 2C 06 14 …`) was labelled `SSHv2` for its whole
-  stream. They are now SSH on port 22 only; on another port a stream
-  reads them after its banner, as before, a NEWKEYS still encrypting the
-  direction (#104).
-- **RTP of both ends on one address.** An SDP answer no longer makes the
-  offer's RTP and RTCP ports unexpected when both ends announce media on
-  the same address (two phones on one host, a media relay): a new SDP body
-  replaces only what the same side of the call announced before, the side
-  told by the `o=` line, where before it replaced every endpoint of the
-  call on an address it named (#105).
-- **SIP keep-alives.** A SIP-over-TCP segment that begins with the CRLF
-  keep-alives of RFC 5626 before a message is described and reassembled
-  as that message, where before it was not SIP at all; a keep-alive alone
-  on port 5060 is `Keep-alive (ping)` (double CRLF) or `Keep-alive (pong)`
-  (#107).
-- **gzip trailing garbage.** Bytes after a gzip member that begin with
-  `0x1f` but are no member (no `1f 8b` magic and deflate method) are now
-  ignored as gzip ignores trailing garbage, where before the capture was
-  reported cut off as corrupt; the check looks across the input's chunks
-  (#108).
-- **Names from mDNS.** The names from the capture's DNS answers now read
-  an mDNS response's additional records too, where a responder puts the
-  addresses of the service it answers for, and no longer learn a name
-  from an mDNS goodbye (TTL 0) (#111).
-- **MQTT and SOME/IP framing as described.** The TCP Reassembly no longer
-  frames an MQTT packet whose Remaining Length takes more bytes than it
-  needs, which the describer calls malformed, and SOME/IP found by its
-  header alone is, like its framing, no longer longer than 1 MiB (#114).
+  0. The conversion now stops with packet 4,294,967,295, and the summary
+  says the rest was not converted; a live capture stops there, as at a
+  stop condition, with a notification (#128)
 
 ## [0.3.0] — 2026-10-09
 
