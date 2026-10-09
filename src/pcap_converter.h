@@ -201,6 +201,13 @@ struct ConversionOptions {
     /// Whether every TCP segment shows its timestamps option in Info, as
     /// Wireshark does, rather than the SYNs only (showTcpTimestamps()).
     bool tcpTimestamps = false;
+    /// Ports SOME/IP is read on besides 30490, whatever its header says
+    /// (someip.h); at most kMaxSomeIpPorts.
+    std::vector<uint16_t> someIpPorts;
+    /// A file naming SOME/IP services, methods and eventgroups
+    /// (parseSomeIpNames()); empty: none.  One that cannot be read is
+    /// ignored.
+    QString someIpNamesFile;
 };
 
 /**

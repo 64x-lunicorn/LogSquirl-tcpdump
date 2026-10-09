@@ -378,14 +378,20 @@ following `icmp.cpp`: `describe_http.cpp` (HTTP, SSDP's messages, HTTP/2
 and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
 (with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
 over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
-`describe_socks.cpp` and `describe_nmea.cpp`. They share the internal
+`describe_socks.cpp`, `describe_mqtt.cpp` (with a connection on another
+port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
+`describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`),
+`describe_someip.cpp` (SOME/IP and SOME/IP-SD, and the name table of
+`someip.h`), `describe_doip.cpp` (DoIP and the UDS messages of its
+diagnostic messages) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, NMEA 0183, SOCKS4/5
-  (only messages of the exact shape, in the right direction, on proxy
-  ports), then the port hint
+- TCP: DNS on port 53, DoIP on port 13400, SOME/IP on its ports, TLS, SIP (before HTTP, whose
+  `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
+  behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
+  direction, on proxy ports), then the port hint
 - HTTP: a request is its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
   path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
@@ -414,8 +420,157 @@ of the detectors and in-stream passes the tables use.
   the snaplen or the segment is described as far as it goes. A version is
   named only if known: a cut hello whose extensions end before a
   `supported_versions` would have shown gets none
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, QUIC, then NMEA and
-  the port hint
+- MQTT (3.1, 3.1.1 and 5.0): every control packet of a segment is named as
+  Wireshark names it, up to four, then `…`: `Connect Command (MQTT 3.1.1,
+  Keep Alive 60, Clean Session, Client ID "sensor-1", User "bob")` (no
+  password, will skipped), `Connect Ack (Connection Accepted)`, `Publish
+  Message (QoS 1, id=2, Retain) [alerts/door] "open"` (the payload cut at
+  32 bytes), `Publish Ack (id=2)`, `Subscribe Request (id=1)
+  [sensors/+/temp, alerts/#]`, `Ping Request`, `Disconnect Req`. MQTT 5.0
+  properties are skipped by their length, each by the size its identifier
+  gives it; a reason code other than success is named in the
+  specification's words, with the reason string behind it, `Publish Ack
+  (id=2, No matching subscribers, "nobody listening")`. A packet carries
+  no version: a CONNECT earlier in the segment says which, else a CONNACK,
+  acknowledgement or DISCONNECT longer than MQTT 3.1.1 allows is MQTT 5.0,
+  and the bytes behind a PUBLISH's topic or a SUBSCRIBE's id are read as
+  properties if they parse as such. The `Fields` reader of
+  `describe_mqtt.cpp`, on a `FieldReader`, tells a field beyond the length
+  its packet declares (malformed) from one beyond the captured bytes (cut):
+  a packet that goes on in the next segment is reassembled on port 1883
+  (`frameMqttPacket()`, see TCP Reassembly), elsewhere described as far as
+  it goes and ending in ` …`, its rest a `Continuation`; one that breaks the
+  rules of its type (flags of its fixed header, a Remaining Length of more
+  than 4 bytes or not minimally encoded, a topic with a control character
+  or a wildcard, a property unknown, bytes left over) is `<name> [Malformed
+  Packet]`. The first packet of a segment must be well formed, or be the
+  only one and fill the segment, else the segment is taken for the middle
+  of a packet and is `MQTT` by its port alone. On another port, a segment
+  that begins with a CONNECT (protocol name and level of an MQTT version)
+  is MQTT and gives its stream `StreamCue::MqttConnect`: the stream's later
+  segments that no detector recognised are described from their first
+  kPayloadHeadBytes in `describeMqttInStream()`. MQTT over TLS (8883) is TLS
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, DoIP on port 13400,
+  SOME/IP on its ports, SIP, SOME/IP by its header, QUIC, then NMEA and the port hint
+- SOME/IP (AUTOSAR PRS_SOMEIPProtocol), on port 30490 (SOME/IP-SD's) and
+  the ports the user configured (`someIpPorts`) whatever the header says,
+  elsewhere only if every message's header keeps to the rules (protocol
+  version 1, a known message type, a return code up to 0x5E and E_OK in a
+  request or notification, a Length that covers the header) and the
+  messages fill the datagram or segment exactly. Labelled `SOME/IP`, or
+  `SOME/IP-SD` when the first message is SD's (service 0xFFFF, method
+  0x8100). Every message is named, up to eight, joined by `; `, then `…`:
+  `Service 0x1234 Method 0x0001 Client 0x0010 Session 0x0001 REQUEST, 4
+  bytes`; an ID with its high bit set is an `Event`; the message types as
+  AUTOSAR names them (`REQUEST_NO_RETURN`, `NOTIFICATION`, `RESPONSE`,
+  `ERROR`, the `_ACK` and `TP_` ones), an error with its return code as
+  Wireshark names it (`ERROR (E_NOT_OK)`), as is any code other than E_OK;
+  a SOME/IP-TP segment adds `Offset=… More`; the magic cookies of a TCP
+  connection are `Magic Cookie`. The name table (`SomeIpNames`) adds names
+  in parentheses, `Service 0x1234 (Navigation)`, escaped. A message cut at
+  the snaplen ends in ` …`; one whose header breaks the rules (on a port
+  that takes it anyway) is `[Malformed Packet]`, with `Protocol Version n`
+  if that is what is wrong. Over TCP, `frameSomeIpMessage()` frames a
+  message by its Length for the TCP Reassembly (by the header alone, up to
+  1 MiB, off SOME/IP's ports)
+- SOME/IP-SD (PRS_SOMEIPServiceDiscoveryProtocol): the entries, as
+  Wireshark names them, `Find Service 0x1234`, `Offer Service 0x1234
+  Instance 0x0001 v1.0 TTL=3`, `Stop Offer Service`, `Subscribe
+  Eventgroup 0x1234 Instance 0x0001 Eventgroup 0x0010 v1 TTL=3`, `Stop
+  Subscribe Eventgroup`, `Subscribe Eventgroup Ack` and `Nack` (TTL 0), an
+  instance or version of "any" left out, followed by the options of their
+  two runs in parentheses: endpoints as `192.0.2.10:30501 UDP`,
+  `[2001:db8::1]:30501 TCP`, with ` multicast` or ` SD` for those types,
+  `Configuration`, `Load Balancing`, `Option 0xNN`. At most 64 entries and
+  64 options are read, eight entries and four options of one named, then
+  `…`; the entries array must hold whole entries, an option index within
+  the options, else `[Malformed Packet]`; an endpoint option of the wrong
+  length is `[Malformed option]`; an SD message cut short ends in ` …`
+- DoIP (ISO 13400-2), on UDP and TCP port 13400 (a segment without payload
+  stays TCP): every message of a datagram or segment, up to eight, joined
+  by `; `, then `…`, named by its payload type as Wireshark names it, from
+  `Generic DoIP header NACK` and `Vehicle identification request` to
+  `Diagnostic message NACK`; another type is `Reserved payload type
+  0xNNNN` or, from 0xF000, `Manufacturer-specific payload type 0xNNNN`, with
+  its length. The fields follow the name: a vehicle announcement's `VIN`,
+  `Logical address`, `EID` and `GID` (and the further action and VIN/GID
+  sync status unless they are 0), routing activation's `Source 0x0E00,
+  Activation type Default` and `Tester …, Entity …, Routing successfully
+  activated (0x10)` (the response codes in ISO 13400-2's words), the entity
+  status, the power mode, the alive check's source, the NACK codes.
+  Diagnostic messages and their ACK and NACK name their addresses,
+  `Diagnostic message 0x0E00 → 0x1000`, and a diagnostic message the UDS
+  message it carries (ISO 14229-1), the service by its name: `UDS
+  ReadDataByIdentifier 0xF190, 0xF18C` (up to four identifiers, then `…`),
+  `UDS Positive Response DiagnosticSessionControl
+  extendedDiagnosticSession`, `UDS Negative Response ReadDataByIdentifier
+  NRC=0x31 (requestOutOfRange)`, the sub-functions of the services that
+  have one (`requestSeed 0x01`, `startRoutine 0xFF00`, a set suppress bit
+  as `, suppress positive response`), the identifier of the other
+  by-identifier services, the group of ClearDiagnosticInformation and the
+  block of TransferData; any other service is `Service 0xNN`. The header
+  must keep to its pattern, a known version (1 to 4, or 0xFF) followed by
+  its inverse, else the message is `Incorrect pattern format (version …,
+  inverse version …) [Malformed Packet]` and nothing after it is read; a
+  payload length its type does not allow is `Invalid payload length n
+  [Malformed Packet]`, as is a UDS message without the parameter its
+  service needs. Every field is read with a `FieldReader` within the
+  message's captured bytes; a message cut at the snaplen or the segment
+  ends in ` …`. Over TCP, `frameDoipMessage()` frames a message by its
+  payload length for the TCP Reassembly
+- SIP (RFC 3261), on any port, by its start line: a request line whose
+  version is `SIP/2.0` and whose URI has a scheme, or a status line with a
+  code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
+  a response `Status: 200 OK (INVITE)`, the method its CSeq names; then
+  the CSeq number and the Call-ID, cut after 12 bytes, `, CSeq 1, Call-ID
+  a84b4c76e667…`, and an SDP body summarised by its media lines, `, SDP
+  (audio 49170 RTP/AVP 0 8)`. The compact header names (`i`, `l`, `c`)
+  count. Over TCP the messages of a segment follow each other by their
+  Content-Length (none: no body), line ends between them skipped, up to
+  four, joined by `; `, then `…`; over UDP a datagram is one message, its
+  body the rest of it without a Content-Length. A message whose header
+  section or body goes on in the next segment is reassembled
+  (`frameSipMessage()`, see TCP Reassembly); one cut at the snaplen ends in
+  ` …`; one
+  without Call-ID or a CSeq of number and method, with a header line
+  without colon, more than 128 header lines or a Content-Length that is no
+  number up to 100,000,000 is `[Malformed Packet]`, as is an SDP body that
+  does not begin with `v=`. Every header and SDP line is looked for within
+  the message's bytes; an SDP body is read for 256 lines at most
+- SDP (RFC 4566) and the media it announces: each `m=` line with an RTP
+  transport (`RTP/AVP`, `RTP/SAVPF`, …) and a port other than 0, at the
+  address of the `c=` line of its own or of the session (an IPv4 or IPv6
+  address, written as the address columns write it, a multicast TTL
+  dropped; a host name announces nothing), is an RTP endpoint, and its RTCP
+  one on the next port, or on the port of `a=rtcp:`, or on the same with
+  `a=rtcp-mux`. At most `kMaxSdpMedia` (8) per body. The detector hands
+  them on in `PayloadDescription::sipCalls`, the parser keeps them in
+  `PacketRecord::sipCalls` with the Call-ID (at most `kMaxSipCallIdBytes`)
+  and whether the message is a BYE, for the `MediaExpectations`
+- RTP and RTCP (RFC 3550) are described where an SDP body announced them,
+  and nowhere else: RTP has no port of its own and no header that tells
+  it from any other UDP payload. The `MediaExpectations`
+  (`media_expectations.h/cpp`) are that capture-wide state, a side table
+  the Converter owns next to the Stream Tracker and runs on every packet
+  after `describeInStream()`, before the Stream Labels: not in
+  `StreamState`, since the signalling and the media are different
+  conversations and an endpoint is expected before its stream exists. It
+  maps "address port" to the call's Call-ID, whether RTP or RTCP is
+  expected and the capture time of the last packet or announcement. A UDP
+  packet from or to an expected endpoint (the destination looked up first)
+  is redescribed from its first kPayloadHeadBytes: RTP version 2 as
+  `PT=PCMU, SSRC=0x1234ABCD, Seq=1000, Time=8000, Mark`, the payload type
+  named as RFC 3551 names it, `DynamicRTP-Type-96` from 96 on, a number
+  otherwise; RTCP (packet types 200 to 207, which RTP on the same port is
+  told from by its second byte, RFC 5761) as the packets of its compound
+  packet, `Sender Report, Source description`, at most four. A CSRC list
+  or an RTCP length beyond the packet is `[Malformed Packet]`; a payload
+  without the header is left as it was. The table is bounded: at most
+  `MediaExpectations::kMaxExpectations` (1024) endpoints, a new one past
+  that replacing the one longest without a packet; an endpoint without a
+  packet for `kIdleSeconds` (300) of capture time is forgotten when next
+  looked up; a BYE forgets its call's endpoints, and a new SDP body of a
+  call (a re-INVITE) those at the addresses it announces anew
 - DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
   and the transaction id, then the address and the client's MAC (an
   Ethernet `chaddr`) and the host name (option 12, cut like every field),
@@ -723,9 +878,17 @@ Which bytes make a message is the describer's to say:
 `tcpMessageExtent()` (`payload_describer.h`) asks the framers of
 `kTcpFramers`, in the order of their detectors, how many bytes the message
 at the start of some bytes takes: a TLS record (5 + its length, at most
-2^14 + 2048), a DNS message behind its 2-byte length (port 53), an HTTP/1.x
-header section up to its empty line (the body is not held: a segment of
-body begins no message and is described as it is). A framer answers more
+2^14 + 2048), a DNS message behind its 2-byte length (port 53), a SIP
+message up to the end of the body its Content-Length gives (none without
+one, as over TCP it is mandatory), an HTTP/1.x header section up to its
+empty line (the body is not held: a segment of body begins no message and
+is described as it is), an MQTT control packet by its Remaining Length (port
+1883 only: a framer sees no stream state, so MQTT behind a CONNECT on
+another port is not reassembled), a SOME/IP message by its Length (8 + its
+value; on SOME/IP's ports whatever the header says, elsewhere if the header
+keeps to the rules and the message is at most 1 MiB), a DoIP message by its
+payload length (8 + its value; port 13400 only, if the header keeps to the
+pattern of version and inverse version). A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -737,7 +900,9 @@ with the message's protocol, recognised, so the label sticks) and the bytes
 from the message's start are held; whole messages before it in the segment
 are described alone. The segment that completes it is described by
 `describePayload()` from all held bytes, followed by `[reassembled from k
-segments]`, and `apply()` returns those bytes (`ReassembledMessages`) for
+segments]`, with the calls their SDP bodies announce (`PacketRecord::sipCalls`,
+cleared on the segments before; the `MediaExpectations` run after the
+reassembly for this), and `apply()` returns those bytes (`ReassembledMessages`) for
 a module that wants the whole messages. Bytes are taken in sequence order,
 by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
 C++, shared with Follow stream content): `place()` says whether a segment
@@ -960,15 +1125,18 @@ share a base name), and `cmake --install` puts them there too.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
-`makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream and the TCP Analysis show its numbers relative and mark it,
-lets the Payload Describer look at it again in its stream, the TCP
-Reassembly describe a message that spans segments where it completes, and
-the Stream Labels name it by its stream's protocol, counts its markers
-and its protocol, formats the packet and appends its line to a new output file,
-reporting progress and checking a
-cancel flag between packets, and notes each packet's place in a
-`CaptureIndex` (see *Packet Panel*). `convertStream()` does the same for a
+`makeCaptureReader()` picks for it and takes each packet through the same
+steps, in this order: `limitPreview()` cuts its preview, the Stream Tracker
+gives it its stream (`track()`), the TCP Analysis shows its numbers relative
+and marks it (`analyseTcp()`), the Payload Describer looks at it again in
+its stream (`describeInStream()`), the TCP Reassembly describes a message
+that spans segments where it completes (`TcpReassembly::apply()`), the
+`MediaExpectations` describe it as RTP or RTCP where SDP announced them
+(`apply()`), the Stream Labels name it by its stream's protocol
+(`StreamLabels::apply()`), the `ConversationStats` and the `CaptureStats`
+count it, the Packet Formatter writes its line to a new output file, and its
+place is noted in a `CaptureIndex` (see *Packet Panel*); progress is
+reported and a cancel flag checked between packets. `convertStream()` does the same for a
 capture read from a stream (*The Capture Source seam*), without progress
 but live (see *Live conversion* below): both run one loop
 (`convertOrThrow()`), so every packet of a file and of a stream goes
@@ -1026,13 +1194,21 @@ outcome is posted before the source is destroyed, so a program that takes
 up to `kTerminateGrace` to end does not delay it; the destructor stops and
 waits for the worker.
 
-`ConversionOptions` are everything the user can choose: the `LineLayout`,
-the payload preview (`preview`, `previewChars`), the stream and endpoint
-caps and the TCP Reassembly's memory (`reassemblyMegabytes`). The defaults write the text of `tests/corpus`; any other choice is
-the payload preview (`preview`, `previewChars`) and the stream and endpoint
-caps; besides, `checkpointInterval`, which tests lower. The defaults write the text of `tests/corpus`; any other choice is
-caps, the TCP Reassembly's memory (`reassemblyMegabytes`) and whether
-every TCP segment shows its timestamps (`tcpTimestamps`). The defaults write the text of `tests/corpus`; any other choice is
+`ConversionOptions` are everything the user can choose: the `LineLayout`
+(`layout`: the time columns and the MAC columns), the payload preview
+(`preview`, `previewChars`), the stream and endpoint caps (`maxStreams`,
+`maxEndpoints`), the TCP Reassembly's memory (`reassemblyMegabytes`),
+whether every TCP segment shows its timestamps (`tcpTimestamps`), the ports
+SOME/IP is read on besides 30490 (`someIpPorts`) and its name table
+(`someIpNamesFile`); besides, `checkpointInterval`, the packets between two
+checkpoints of the `CaptureIndex`, which tests lower. The Converter loads
+the name table (`loadSomeIpNames()`, `someip.h`; a file that cannot be read
+names nothing) and puts the ports and names in place for the Payload
+Describer on its thread with a `SomeIpScope` while it converts, a file or a
+live stream alike (a `thread_local` pointer, as the describer's signature
+stays the same for every protocol). The Packet Panel dissects without one:
+there, SOME/IP is read on 30490 and by its header, without names. The
+defaults write the text of `tests/corpus`; any other choice is
 tested by deriving its text from that one, not by more committed text.
 
 While it converts, the Converter notes every packet in a `CaptureIndex`
@@ -1050,7 +1226,10 @@ read through a `FileSource` (`capture_file.h/cpp`), which the
 (`get_config_dir`, part of the API since 26.10). A value that is missing or
 not one reads as its default, a number out of range as the nearest allowed:
 the preview 1 to `kMaxPreviewChars`, the caps `kMinCap` to ten times their
-default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB). `ConfigDialog` shows and edits the options and says that an open
+default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB); the
+SOME/IP ports are a list (`someIpPorts`, read by `parseSomeIpPorts()`: 1 to
+65535, at most `kMaxSomeIpPorts`, anything else skipped), the name table a
+path (`someIpNamesFile`). `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
@@ -1485,7 +1664,12 @@ written by `tests/make_stream_labels_corpus.py`. `icmp.pcap`, ICMP and
 ICMPv6 echoes, error messages with their quoted packets and neighbor
 discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
 lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
-by `tests/make_dhcp_ntp_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
+by `tests/make_dhcp_ntp_corpus.py`; `mqtt.pcap`, MQTT 3.1.1 and 5.0
+sessions on port 1883, a PUBLISH cut over two segments, and a session on
+another port found by its CONNECT, by `tests/make_mqtt_corpus.py`; `sip.pcap`, a SIP call over UDP with its
+SDP offer and answer, RTP and RTCP and UDP on ports SDP did not announce,
+SIP over TCP with two messages in a segment and an SDP body cut over two,
+and an OPTIONS on another port, by `tests/make_sip_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
 and IP-in-IP tunnels, nested and nested too deep, by
 `tests/make_tunnels_corpus.py`; `wifi.pcap`, a station joining an access
 point behind Radiotap headers, and `ppp.pcapng`, a PPPoE session from
@@ -1493,7 +1677,18 @@ discovery to teardown, PPP in HDLC-like framing and Cisco HDLC on three
 interfaces, by `tests/make_link_layers_corpus.py`; `reassembly.pcap`, a
 ClientHello over 3 segments, HTTP split in its headers, a DNS-over-TCP answer
 over 2 segments, segments out of order, retransmitted, overlapping and
-lost, by `tests/make_reassembly_corpus.py`. The link layers' tests,
+lost, by `tests/make_reassembly_corpus.py`; `someip.pcap`, SOME/IP-SD offers,
+finds, subscriptions with their acks and a nack and a withdrawn offer,
+SOME/IP over UDP on a port only its headers tell (request, response,
+several notifications in a datagram, an error, a SOME/IP-TP segment), over
+TCP with a magic cookie and a response over two segments, and a message
+with a wrong protocol version, by `tests/make_someip_corpus.py`; `doip.pcap`,
+vehicle identification requests and announcements, entity status and
+power mode over UDP, routing activation and diagnostic messages over TCP
+with UDS sessions, identifiers, a negative response, a response pending, a
+TransferData over two segments, a diagnostic message NACK and an alive
+check, an inverse version that does not match and a payload length its type
+does not allow, by `tests/make_doip_corpus.py`. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

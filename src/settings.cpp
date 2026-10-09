@@ -26,6 +26,7 @@
 
 #include <QDir>
 #include <QSettings>
+#include <QStringList>
 
 #include <algorithm>
 
@@ -42,6 +43,8 @@ constexpr const char* kMaxStreamsKey = "conversion/maxStreams";
 constexpr const char* kMaxEndpointsKey = "conversion/maxEndpoints";
 constexpr const char* kReassemblyMegabytesKey = "conversion/reassemblyMegabytes";
 constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
+constexpr const char* kSomeIpPortsKey = "conversion/someIpPorts";
+constexpr const char* kSomeIpNamesFileKey = "conversion/someIpNamesFile";
 
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
@@ -115,6 +118,10 @@ ConversionOptions loadConversionOptions( const QString& configDir )
     options.reassemblyMegabytes
         = readCount( file, kReassemblyMegabytesKey, options.reassemblyMegabytes, kMinCap,
                      kMaxReassemblyMegabytes );
+    // A list in the file ("30501, 30502"), or one port.
+    options.someIpPorts = parseSomeIpPorts(
+        file.value( kSomeIpPortsKey ).toStringList().join( QLatin1Char( ',' ) ).toStdString() );
+    options.someIpNamesFile = file.value( kSomeIpNamesFileKey ).toString();
     return options;
 }
 
@@ -137,6 +144,12 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );
     file.setValue( kReassemblyMegabytesKey,
                    static_cast<qulonglong>( options.reassemblyMegabytes ) );
+    QStringList ports;
+    for ( const auto port : options.someIpPorts ) {
+        ports << QString::number( port );
+    }
+    file.setValue( kSomeIpPortsKey, ports.isEmpty() ? QVariant( QString() ) : QVariant( ports ) );
+    file.setValue( kSomeIpNamesFileKey, options.someIpNamesFile );
     file.sync();
     return file.status() == QSettings::NoError;
 }

@@ -27,9 +27,11 @@
 #include "capture_file.h"
 #include "capture_reader.h"
 #include "capture_source.h"
+#include "media_expectations.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcapng_reader.h"
+#include "someip.h"
 #include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
@@ -236,9 +238,10 @@ using Clock = std::chrono::steady_clock;
  * (convertStream()), and the index points into its raw capture.
  *
  * Every packet goes through the same steps for a file and a stream: the
- * Parser's record, the stream it belongs to, its TCP analysis, its payload
- * described in the stream and reassembled, its stream labels, the summary's
- * counts, its line, and its place in the CaptureIndex.
+ * Parser's record (its preview limited), the stream it belongs to, its TCP
+ * analysis, its payload described in the stream and reassembled, the media
+ * an SDP announced, its stream labels, the conversations' and the
+ * summary's counts, its line, and its place in the CaptureIndex.
  */
 ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, const QString& name,
                                  uint64_t inputSize, const QString& outputRoot,
@@ -246,6 +249,15 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
                                  const std::function<void( int )>& progress,
                                  const ConversionOptions& options, const LiveObserver* live )
 {
+    // How SOME/IP is read, for the Payload Describer on this thread.
+    SomeIpConfig someIp;
+    someIp.ports = options.someIpPorts;
+    if ( !options.someIpNamesFile.isEmpty() ) {
+        someIp.names = loadSomeIpNames( QFile::encodeName( options.someIpNamesFile ).toStdString() )
+                           .value_or( SomeIpNames{} );
+    }
+    const SomeIpScope someIpScope( someIp );
+
     const auto started = Clock::now();
     // What to do before a wait for the stream, once there is output.
     std::function<void()> beforeWait;
@@ -321,6 +333,7 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
     ConversationStats conversations;
+    MediaExpectations media;
     TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
@@ -393,17 +406,18 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
             showTcpTimestamps( pkt );
         }
         const auto stream = tracker.track( pkt );
-        if ( pkt.transport ) {
-            index->noteStream( *pkt.transport, stream.id, reader.packetsRead() );
-        }
         stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
+        media.apply( pkt ); // after the reassembly, which completes SDP bodies
         labels.apply( pkt, stream );
         conversations.add( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
+        }
+        if ( pkt.transport ) {
+            index->noteStream( *pkt.transport, stream.id, reader.packetsRead() );
         }
         index->note( reader );
         if ( live ) {

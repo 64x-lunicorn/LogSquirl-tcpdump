@@ -39,6 +39,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -60,6 +61,9 @@ struct PayloadDescription {
     /// What the payload begins for its stream, which describeInStream()
     /// builds on (PacketRecord::streamCue).
     StreamCue streamCue = StreamCue::None;
+    /// The SIP messages of the payload that announce media or end a call
+    /// (PacketRecord::sipCalls).
+    std::vector<SipCall> sipCalls;
 };
 
 /**
@@ -102,7 +106,8 @@ struct MessageExtent {
 /**
  * The extent of the message the @p len bytes at @p data begin with, sent
  * from @p srcPort to @p dstPort over TCP: a TLS record, a DNS message
- * behind its length (port 53), an HTTP/1.x header section.  With @p framer
+ * behind its length (port 53), a SIP message by its Content-Length, an
+ * HTTP/1.x header section, an MQTT control packet (port 1883).  With @p framer
  * other than 0, only that protocol is tried, as a stream's later messages
  * are of the protocol of its first.
  */
@@ -131,7 +136,11 @@ void redescribe( PacketRecord& pkt, const char* label, const std::string& descri
  * begin with frame headers are labelled HTTP2 and described as
  * "HEADERS[1], DATA[1]", each frame's type and stream.  A packet so
  * labelled counts as recognised (PacketRecord::protocolRecognised), so its
- * label sticks to the stream.  Packets of other
+ * label sticks to the stream.  A TCP stream that began with an MQTT
+ * CONNECT on a port other than MQTT's is an MQTT connection: its segments
+ * no detector recognised that begin with MQTT packets are labelled MQTT
+ * and described as on MQTT's port, as far as the first kPayloadHeadBytes
+ * go.  Packets of other
  * streams, and of streams past the stream cap, which have no state, are
  * left as they are.
  */

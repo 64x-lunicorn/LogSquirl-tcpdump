@@ -31,15 +31,17 @@
 
 class QCheckBox;
 class QComboBox;
+class QLineEdit;
 class QSpinBox;
 
 namespace tcpdump {
 
 /**
  * Edits the ConversionOptions: the time columns, the MAC columns, the
- * payload preview and its length, the TCP timestamps on every segment, and, for advanced users, the
- * stream and endpoint caps.  Says that a capture already open keeps the options it was converted
- * with.  Saving them is the caller's (settings.h).
+ * payload preview and its length, the TCP timestamps on every segment, the
+ * SOME/IP ports and name table, and, for advanced users, the stream and
+ * endpoint caps.  Says that a capture already open keeps the options it was
+ * converted with.  Saving them is the caller's (settings.h).
  */
 class ConfigDialog : public QDialog {
     Q_OBJECT
@@ -63,6 +65,8 @@ private:
     QSpinBox* maxStreams_ = nullptr;
     QSpinBox* maxEndpoints_ = nullptr;
     QSpinBox* reassemblyMegabytes_ = nullptr;
+    QLineEdit* someIpPorts_ = nullptr;
+    QLineEdit* someIpNamesFile_ = nullptr;
 };
 
 } // namespace tcpdump

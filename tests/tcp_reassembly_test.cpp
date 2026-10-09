@@ -37,6 +37,7 @@
 #include <cstring>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace tcpdump;
@@ -85,6 +86,7 @@ struct Line {
     std::string description; ///< Info after " | ", empty without one
     Bytes completed;         ///< The messages the segment completed
     uint32_t segments = 0;
+    size_t sipCalls = 0; ///< The calls whose media its SDP bodies announce
 };
 
 /// Run @p segments through the Converter's steps, the payload taken from the
@@ -119,7 +121,7 @@ std::vector<Line> converted( const std::vector<Segment>& segments, TcpReassembly
         describeInStream( pkt, stream );
         const auto done = reassembly.apply( pkt, stream, reader->payloadOf( pkt ) );
         labels.apply( pkt, stream );
-        Line line{ pkt.protocol, pkt.info, {}, {}, done.segments };
+        Line line{ pkt.protocol, pkt.info, {}, {}, done.segments, pkt.sipCalls.size() };
         const auto at = pkt.info.find( kDescriptionSeparator );
         if ( at != std::string::npos ) {
             line.description = pkt.info.substr( at + std::strlen( kDescriptionSeparator ) );
@@ -216,6 +218,38 @@ Bytes dnsAnswer()
     Bytes framed;
     putBE16( framed, static_cast<uint16_t>( m.size() ) );
     return framed + m;
+}
+
+/// An MQTT PUBLISH to alerts/door with @p payloadBytes bytes of payload.
+Bytes mqttPublish( size_t payloadBytes )
+{
+    const std::string topic = "alerts/door";
+    const auto remaining = 2 + topic.size() + payloadBytes;
+    Bytes b{ 0x30 };
+    for ( auto rest = remaining;; ) {
+        const auto digit = static_cast<uint8_t>( rest & 0x7F );
+        rest >>= 7;
+        b.push_back( rest ? static_cast<uint8_t>( digit | 0x80 ) : digit );
+        if ( !rest ) {
+            break;
+        }
+    }
+    putBE16( b, static_cast<uint16_t>( topic.size() ) );
+    return b + text( topic ) + Bytes( payloadBytes, 'x' );
+}
+
+/// A SIP INVITE with an SDP body that announces audio on port 49170.
+Bytes sipInvite()
+{
+    const std::string sdp = "v=0\r\no=alice 1 1 IN IP4 192.0.2.10\r\ns=-\r\n"
+                            "c=IN IP4 192.0.2.10\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\n";
+    return text( "INVITE sip:bob@example.com SIP/2.0\r\n"
+                 "Via: SIP/2.0/TCP 192.0.2.10:50000;branch=z9hG4bK776asdhds\r\n"
+                 "Call-ID: a84b4c76e66710@pc33.example.com\r\n"
+                 "CSeq: 314159 INVITE\r\n"
+                 "Content-Type: application/sdp\r\n"
+                 "Content-Length: "
+                 + std::to_string( sdp.size() ) + "\r\n\r\n" + sdp );
 }
 
 /// @p message cut into segments from the client at @p cuts, numbered on
@@ -327,6 +361,60 @@ SCENARIO( "The describer frames the messages the reassembly puts together", "[tc
         }
     }
 
+    GIVEN( "an MQTT PUBLISH on port 1883" )
+    {
+        const auto publish = mqttPublish( 300 );
+        THEN( "its Remaining Length frames it, whole or cut" )
+        {
+            const auto whole = tcpMessageExtent( publish.data(), publish.size(), 50000, 1883 );
+            REQUIRE( whole.complete() );
+            REQUIRE( whole.length == publish.size() );
+            REQUIRE( std::string( whole.label ) == "MQTT" );
+            const auto part = tcpMessageExtent( publish.data(), 100, 50000, 1883 );
+            REQUIRE( part.needsMore );
+            REQUIRE( part.length == publish.size() );
+            const auto header = tcpMessageExtent( publish.data(), 2, 50000, 1883 );
+            REQUIRE( header.needsMore );
+            REQUIRE( header.length == 3 );
+        }
+        THEN( "on another port, or with a reserved type or a fifth length byte, it is none" )
+        {
+            REQUIRE( tcpMessageExtent( publish.data(), publish.size(), 50000, 1884 ).framer == 0 );
+            const Bytes reserved{ 0x00, 0x00 };
+            REQUIRE( tcpMessageExtent( reserved.data(), reserved.size(), 50000, 1883 ).framer
+                     == 0 );
+            const Bytes tooLong{ 0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0x01 };
+            REQUIRE( tcpMessageExtent( tooLong.data(), tooLong.size(), 50000, 1883 ).framer == 0 );
+        }
+    }
+
+    GIVEN( "a SIP request with a body" )
+    {
+        const auto invite = sipInvite();
+        THEN( "its Content-Length frames it on any port" )
+        {
+            const auto whole = tcpMessageExtent( invite.data(), invite.size(), 50000, 5080 );
+            REQUIRE( whole.complete() );
+            REQUIRE( whole.length == invite.size() );
+            REQUIRE( std::string( whole.label ) == "SIP" );
+            const auto body = tcpMessageExtent( invite.data(), invite.size() - 10, 50000, 5080 );
+            REQUIRE( body.needsMore );
+            REQUIRE( body.length == invite.size() );
+            const auto headers = tcpMessageExtent( invite.data(), 60, 50000, 5080 );
+            REQUIRE( headers.needsMore );
+            REQUIRE( headers.length == 61 );
+        }
+        THEN( "without Content-Length its headers are all of it" )
+        {
+            const auto options = text( "OPTIONS sip:bob@example.com SIP/2.0\r\nCSeq: 1 "
+                                       "OPTIONS\r\nCall-ID: x\r\n\r\nrest" );
+            const auto extent = tcpMessageExtent( options.data(), options.size(), 50000, 5060 );
+            REQUIRE( extent.complete() );
+            REQUIRE( std::string( extent.label ) == "SIP" );
+            REQUIRE( extent.length == options.size() - 4 );
+        }
+    }
+
     GIVEN( "bytes no framer knows" )
     {
         const auto other = text( "hello world" );
@@ -396,6 +484,82 @@ SCENARIO( "A message split over segments is described once, where it completes",
             REQUIRE( lines[ 4 ].description
                      == describedWhole( answer, 53 ) + reassembledFrom( 2 ) );
             REQUIRE( lines[ 4 ].description.find( "192.0.2.1" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "an MQTT PUBLISH split across 2 segments" )
+    {
+        const auto publish = mqttPublish( 300 );
+        const auto lines
+            = converted( handshake( 1883 ) + cut( publish, { 100 }, kClientIsn + 1, 1883 ) );
+
+        THEN( "it is described whole on the second" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "MQTT" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].protocol == "MQTT" );
+            REQUIRE( lines[ 4 ].description
+                     == describedWhole( publish, 1883 ) + reassembledFrom( 2 ) );
+            REQUIRE( lines[ 4 ].description.find( " \xe2\x80\xa6" ) == std::string::npos );
+        }
+    }
+
+    GIVEN( "a SIP INVITE split in its SDP body" )
+    {
+        const auto invite = sipInvite();
+        const auto lines = converted(
+            handshake( 5060 ) + cut( invite, { invite.size() - 20 }, kClientIsn + 1, 5060 ) );
+
+        THEN( "the media it announces are known where it completes, not before" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "SIP" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 3 ].sipCalls == 0 );
+            REQUIRE( lines[ 4 ].description
+                     == describedWhole( invite, 5060 ) + reassembledFrom( 2 ) );
+            REQUIRE( lines[ 4 ].description.find( "SDP (audio 49170 RTP/AVP 0)" )
+                     != std::string::npos );
+            REQUIRE( lines[ 4 ].sipCalls == 1 );
+        }
+    }
+
+    GIVEN( "a SOME/IP notification split across 2 segments, on a port told by its header" )
+    {
+        Bytes message{ 0x12, 0x34, 0x80, 0x01 };
+        putBE32( message, 8 + 600 );
+        message = message + Bytes{ 0x00, 0x10, 0x00, 0x01, 0x01, 0x01, 0x02, 0x00 }
+                  + Bytes( 600, 0x5A );
+        const auto lines
+            = converted( handshake( 30501 ) + cut( message, { 100 }, kClientIsn + 1, 30501 ) );
+
+        THEN( "it is described whole on the second" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "SOME/IP" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].protocol == "SOME/IP" );
+            REQUIRE( lines[ 4 ].description
+                     == "Service 0x1234 Event 0x8001 Client 0x0010 Session 0x0001 NOTIFICATION, "
+                        "600 bytes"
+                            + reassembledFrom( 2 ) );
+        }
+    }
+
+    GIVEN( "a DoIP diagnostic message split across 2 segments" )
+    {
+        Bytes message{ 0x02, 0xFD, 0x80, 0x01 };
+        putBE32( message, 4 + 2 + 600 );
+        message = message + Bytes{ 0x0E, 0x00, 0x10, 0x00, 0x36, 0x01 } + Bytes( 600, 0x5A );
+        const auto lines
+            = converted( handshake( 13400 ) + cut( message, { 100 }, kClientIsn + 1, 13400 ) );
+
+        THEN( "it is described whole on the second" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "DoIP" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].protocol == "DoIP" );
+            REQUIRE( lines[ 4 ].description
+                     == "Diagnostic message 0x0E00 \xe2\x86\x92 0x1000, UDS TransferData Block 1"
+                            + reassembledFrom( 2 ) );
         }
     }
 
@@ -627,11 +791,17 @@ SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]"
 {
     const auto hello = clientHello( "fuzz.example" );
     const auto record = tlsRecord( 0x17, Bytes( 700, 0x5A ) );
-    const auto stream = hello + record + record + hello;
+    // TLS, and the framers of SIP and MQTT on their ports.
+    const std::pair<Bytes, uint16_t> streams[] = {
+        { hello + record + record + hello, 443 },
+        { sipInvite() + sipInvite() + sipInvite(), 5060 },
+        { mqttPublish( 900 ) + mqttPublish( 10 ) + mqttPublish( 300 ), 1883 },
+    };
     std::mt19937 random( 78 );
     constexpr size_t kLimit = 4096;
 
-    for ( int round = 0; round < 300; ++round ) {
+    for ( int round = 0; round < 450; ++round ) {
+        const auto& [ stream, port ] = streams[ round % std::size( streams ) ];
         // Random cuts, then shuffles, drops, duplicates, overlaps and flipped bytes.
         std::vector<size_t> cuts;
         for ( size_t at = 0;; ) {
@@ -645,7 +815,7 @@ SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]"
         for ( int flips = random() % 4; flips > 0; --flips ) {
             data[ random() % data.size() ] = static_cast<uint8_t>( random() );
         }
-        auto segments = cut( data, cuts );
+        auto segments = cut( data, cuts, kClientIsn + 1, port );
         std::vector<Segment> mangled;
         for ( auto& s : segments ) {
             switch ( random() % 8 ) {
@@ -674,9 +844,10 @@ SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]"
         reset.fromClient = false;
         reset.seq = kServerIsn + 1;
         reset.flags = kRst;
+        reset.serverPort = port;
 
         TcpReassembly reassembly( kLimit, 2048 );
-        const auto lines = converted( handshake() + mangled, reassembly );
+        const auto lines = converted( handshake( port ) + mangled, reassembly );
         INFO( "round " << round );
         for ( const auto& line : lines ) {
             REQUIRE( line.info.find( '\n' ) == std::string::npos );
@@ -684,7 +855,7 @@ SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]"
         REQUIRE( reassembly.memoryUsed() <= kLimit );
 
         TcpReassembly resetOne( kLimit, 2048 );
-        converted( handshake() + mangled + std::vector<Segment>{ reset }, resetOne );
+        converted( handshake( port ) + mangled + std::vector<Segment>{ reset }, resetOne );
         REQUIRE( resetOne.directionsHeld() == 0 );
         REQUIRE( resetOne.memoryUsed() == 0 );
     }

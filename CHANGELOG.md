@@ -56,8 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lines the filter means; it runs with Qt's regular expressions, as the
   Regex Lab and LogSquirl's search run a pattern Vectorscan cannot read.
   Needs LogSquirl ≥ 26.11 (#82)
-- **TCP reassembly.** A TLS record, an HTTP/1.x header section or a
-  DNS-over-TCP message that spans TCP segments is described once, on the
+- **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
+  DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
+  control packet on port 1883 (by its Remaining Length), a SOME/IP
+  message (by its Length) or a DoIP message on port 13400 (by its payload
+  length) that spans TCP segments is described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
   example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
@@ -187,10 +190,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture's lines go through the same TCP reassembly and analysis as a
   file's, and the Packet Panel shows its packets, read from the raw
   capture, while it runs (up to the latest snapshot) and after.
+- **MQTT described.** MQTT 3.1, 3.1.1 and 5.0 on TCP port 1883, and on
+  any port behind a CONNECT, is described as Wireshark names its control
+  packets, every one in a segment: `Connect Command (MQTT 3.1.1, Keep
+  Alive 60, Clean Session, Client ID "sensor-1", User "bob")`, `Connect
+  Ack (Connection Accepted)`, `Publish Message (QoS 1, id=2, Retain)
+  [alerts/door] "open"`, `Publish Ack/Received/Release/Complete (id=…)`,
+  `Subscribe Request (id=1) [sensors/+/temp, alerts/#]`, `Subscribe Ack`,
+  `Unsubscribe Request/Ack`, `Ping Request/Response`, `Disconnect Req`,
+  `Authentication Exchange`. MQTT 5.0 properties are skipped by their
+  length, reason codes named with their reason strings (`Publish Ack
+  (id=2, No matching subscribers, "nobody listening")`). A packet that
+  goes on in the next segment is reassembled on port 1883 (see *TCP
+  reassembly*), and described as far as it goes on another port, its rest
+  a `Continuation`; a malformed one is `[Malformed Packet]`. Every length
+  is checked against the packet and the captured bytes. MQTT over TLS
+  (8883) stays TLS. Before, MQTT was named by its port alone, with a
+  preview of its bytes.
+- **SIP, SDP, RTP and RTCP described.** SIP on any port, over UDP and
+  TCP, is described as Wireshark names its messages: `Request: INVITE
+  sip:bob@example.com`, `Status: 200 OK (INVITE)`, with the CSeq number
+  and the Call-ID cut short, and an SDP body by its media, `SDP (audio
+  49170 RTP/AVP 0 8)`. Over TCP every message of a segment is described,
+  told apart by its Content-Length, and one that spans segments is
+  reassembled (see *TCP reassembly*), the media its SDP body announces
+  expected from the segment that completes it; a message cut at the
+  snaplen ends in `…`, a malformed one is `[Malformed Packet]`. The addresses and ports SDP
+  announces (`c=` and `m=` lines of the offer and the answer; RTCP on the
+  next port, `a=rtcp:` or `a=rtcp-mux`) are expected for RTP and RTCP, and
+  the UDP packets to or from them are described as `RTP` (`PT=PCMU,
+  SSRC=0x1234ABCD, Seq=1000, Time=8000, Mark`, payload types named as RFC
+  3551 names them) and `RTCP` (`Sender Report, Source description`).
+  UDP on other ports stays UDP. At most 1024 endpoints are expected; one
+  is forgotten after 5 minutes without a packet, with its call's BYE, or
+  for a newer one past the cap. Before, SIP was named by its port alone,
+  with a preview of its text, and RTP was plain UDP.
+- **SOME/IP and SOME/IP-SD described.** SOME/IP over UDP and TCP, on
+  port 30490, on the ports configured for it (the new option *SOME/IP
+  also on ports*) and on any other where every message's header keeps to
+  the rules and the messages fill the payload, is labelled `SOME/IP` and
+  every message of a datagram or segment is named, up to eight: `Service
+  0x1234 Method 0x0001 Client 0x0010 Session 0x0001 REQUEST, 4 bytes`,
+  `Event 0x8001 … NOTIFICATION`, `ERROR (E_NOT_OK)`, the SOME/IP-TP
+  segments with their offset, the magic cookies of a TCP connection.
+  SOME/IP-SD messages are labelled `SOME/IP-SD` and list their entries as
+  Wireshark names them, with their endpoint options: `Find Service
+  0x1234`, `Offer Service 0x1234 Instance 0x0001 v1.0 TTL=3
+  (192.0.2.10:30501 UDP, 192.0.2.10:30502 TCP)`, `Stop Offer Service`,
+  `Subscribe Eventgroup`, `Subscribe Eventgroup Ack/Nack`, IPv4 and IPv6,
+  unicast, multicast and SD endpoints. An optional name table (the new
+  option *SOME/IP name table*, a text file of `service`, `method`, `event`
+  and `eventgroup` lines) adds names: `Service 0x1234 (Navigation)`. Every
+  length is checked against the captured bytes, entries and options are
+  capped at 64, a cut message ends in `…`, a malformed one is `[Malformed
+  Packet]`; over TCP a message that spans segments is reassembled by its
+  Length. A new synthetic capture, `tests/corpus/someip.pcap` (written by
+  `tests/make_someip_corpus.py`), shows each case.
+- **DoIP described, with the UDS service of diagnostic messages.** DoIP
+  (Diagnostics over IP, ISO 13400-2) on UDP and TCP port 13400 is labelled
+  `DoIP` and every message of a datagram or segment is named as Wireshark
+  names its payload type, up to eight: `Vehicle identification request`
+  (with EID or VIN), `Vehicle announcement message/vehicle identification
+  response message, VIN …, Logical address 0x1000, EID …, GID …`,
+  `Routing activation request, Source 0x0E00, Activation type Default`,
+  `Routing activation response, … Routing successfully activated (0x10)`,
+  `Alive check request/response`, entity status, diagnostic power mode,
+  `Diagnostic message ACK/NACK` and `Generic DoIP header NACK` with their
+  codes. A diagnostic message names its addresses and the UDS service it
+  carries (ISO 14229-1), with its sub-function, data identifiers or routine
+  and, in a negative response, the NRC: `Diagnostic message 0x0E00 →
+  0x1000, UDS ReadDataByIdentifier 0xF190`, `UDS Positive Response
+  DiagnosticSessionControl extendedDiagnosticSession`, `UDS Negative
+  Response ReadDataByIdentifier NRC=0x31 (requestOutOfRange)`. A header
+  whose inverse version does not match its version is `Incorrect pattern
+  format … [Malformed Packet]`, a payload length its type does not allow
+  `Invalid payload length n [Malformed Packet]`; every length is checked
+  against the captured bytes, a cut message ends in `…`, and over TCP a
+  message that spans segments is reassembled by its payload length. A new
+  synthetic capture, `tests/corpus/doip.pcap` (written by
+  `tests/make_doip_corpus.py`), shows each case.
 
 ### Changed
-- A segment that ends inside a TLS record, an HTTP header section or a
-  DNS-over-TCP message no longer names the message as far as it goes
+- A segment that ends inside a TLS record, an HTTP header section, a
+  DNS-over-TCP message, a SIP message or an MQTT packet on port 1883 no
+  longer names the message as far as it goes
   (`Client Hello` without its server name, `Standard query response … (2
   answers)`), and the segment that ends it no longer says `Continuation`:
   the first says `[TCP segment of a reassembled PDU]`, the last describes

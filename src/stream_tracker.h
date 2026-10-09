@@ -109,7 +109,7 @@ struct TcpDirection {
  * bytes today, the two TcpDirections taking most, and 2 bytes are left
  * before the alignment adds 8.  A new
  * TCP connection on the same addresses and ports (see analyseTcp()) starts
- * from a fresh state, its HTTP/2 flag and label with it.
+ * from a fresh state, its HTTP/2 and MQTT flags and label with it.
  */
 struct StreamState {
     /// TCP only: each direction, indexed by Stream::direction.
@@ -117,6 +117,8 @@ struct StreamState {
     QuicConnection quic; ///< UDP only.
     /// TCP only: the stream began with the HTTP/2 connection preface.
     bool http2 = false;
+    /// TCP only: the stream began with an MQTT CONNECT.
+    bool mqtt = false;
     /// The protocol a detector recognised on the stream, as StreamLabels
     /// numbers it; 0 while none has.
     uint8_t label = 0;

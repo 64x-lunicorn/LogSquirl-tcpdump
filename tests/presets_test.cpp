@@ -411,6 +411,26 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "HTTP", { 2, 3 } },
               { "ICMP", { 7, 20 } },
           } },
+        { "mqtt.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 21, 22, 31, 32 } },
+              { "TCP handshakes", { 1, 2, 21, 22, 31, 32 } },
+          } },
+        { "sip.txt",
+          {
+              { "TCP SYN/FIN", { 17, 18 } },
+              { "TCP handshakes", { 17, 18 } },
+          } },
+        { "doip.txt",
+          {
+              { "TCP SYN/FIN", { 10, 11, 33, 34 } },
+              { "TCP handshakes", { 10, 11, 33, 34 } },
+          } },
+        { "someip.txt",
+          {
+              { "TCP SYN/FIN", { 11, 12, 17, 18 } },
+              { "TCP handshakes", { 11, 12, 17, 18 } },
+          } },
         { "reassembly.txt",
           {
               // the late, retransmitted and overlapping segments, the lost one

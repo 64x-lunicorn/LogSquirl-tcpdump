@@ -102,6 +102,15 @@ void describeMessages( PacketRecord& pkt, const uint8_t* data, size_t len, const
                        + std::to_string( segments ) + " segments]";
     }
     redescribe( pkt, described.label.empty() ? label : described.label.c_str(), description );
+    pkt.sipCalls = described.sipCalls; // what the messages' SDP bodies announce
+}
+
+/// Describe @p pkt as a segment of a message of protocol @p label that
+/// completes later: what its first bytes seemed to announce is not yet so.
+void describeSegment( PacketRecord& pkt, const char* label )
+{
+    redescribe( pkt, label, kSegmentOfMessage );
+    pkt.sipCalls.clear();
 }
 
 } // namespace
@@ -233,7 +242,7 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
 {
     const auto walk = walkMessages( entry.held.data(), entry.held.size(), pkt, entry.framer );
     if ( walk.end == 0 ) {
-        redescribe( pkt, entry.label, kSegmentOfMessage );
+        describeSegment( pkt, entry.label );
         return {};
     }
 
@@ -294,7 +303,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     stream.state->reassembly |= heldBit( stream.direction );
 
     if ( walk.end == 0 ) {
-        redescribe( pkt, first.label, kSegmentOfMessage );
+        describeSegment( pkt, first.label );
         return {};
     }
     describeMessages( pkt, payload.data, walk.end, first.label, 1 );
@@ -321,7 +330,7 @@ ReassembledMessages TcpReassembly::segment( PacketRecord& pkt, const Stream& str
         const auto place = entry->order.place( pkt.tcpSeq, payload.size );
         if ( place.fit == ByteStreamOrderer::Fit::Early ) {
             if ( holdEarly( *entry, key, pkt.tcpSeq, payload ) ) {
-                redescribe( pkt, entry->label, kSegmentOfMessage );
+                describeSegment( pkt, entry->label );
                 return {};
             }
             release( key ); // too much came early: a gap, which this segment is after

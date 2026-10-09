@@ -258,6 +258,44 @@ std::string detectTls( const uint8_t* payload, size_t len );
 std::string detectQuic( const uint8_t* payload, size_t len );
 /// A SOCKS message, told by its ports (describe_socks.cpp).
 std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, uint16_t dstPort );
+/// The MQTT packets of a TCP segment: any on MQTT's port, else only behind
+/// a CONNECT (describe_mqtt.cpp).
+std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort );
+/// The payload begins with an MQTT CONNECT (describe_mqtt.cpp).
+bool isMqttConnect( const uint8_t* payload, size_t len );
+/// The SIP messages a payload begins with, every one of a TCP segment
+/// (describe_sip.cpp): what their SDP bodies announce, and the calls a BYE
+/// ends, are added to @p calls.
+std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
+                       std::vector<SipCall>& calls );
+
+/// SOME/IP messages (describe_someip.cpp): their description, and whether
+/// the first is a SOME/IP-SD message.
+struct SomeIpDescription {
+    std::string text;
+    bool sd = false;
+};
+/// The SOME/IP messages a payload begins with, every one of a datagram or
+/// segment.  With @p heuristic, only if every message is whole and keeps
+/// to the rules of the header, and they fill the payload; otherwise empty.
+SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
+/// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
+bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
+/// The DoIP messages (ISO 13400-2) a payload begins with, every one of a
+/// datagram or segment, a diagnostic message with the UDS service it
+/// carries (describe_doip.cpp).
+std::string detectDoip( const uint8_t* payload, size_t len );
+
+// ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
+
+/// The payload begins with an RTCP header: version 2, an RTCP packet type.
+bool isRtcpHeader( const uint8_t* payload, size_t len );
+/// An RTP packet, "PT=PCMU, SSRC=0x…, Seq=…, Time=…", of @p wireLen bytes
+/// of which @p len were kept; empty if it is no RTP version 2 (or RTCP).
+std::string describeRtp( const uint8_t* payload, size_t len, size_t wireLen );
+/// The packets of a compound RTCP packet, "Sender Report, Source
+/// description"; empty if it does not begin with an RTCP header.
+std::string describeRtcp( const uint8_t* payload, size_t len, size_t wireLen );
 
 // ── Framing, for the TCP Reassembly ─────────────────────────────────────
 //
@@ -272,6 +310,17 @@ std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
 std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
 /// An HTTP/1.x header section (describe_http.cpp).
 std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
+/// A SIP message, its body as long as its Content-Length says
+/// (describe_sip.cpp).
+std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len );
+/// An MQTT control packet, by its Remaining Length (describe_mqtt.cpp).
+std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
+/// A SOME/IP message, by its Length: on SOME/IP's port whatever its header
+/// says, elsewhere only if the header keeps to its rules (describe_someip.cpp).
+std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bool onSomeIpPort );
+/// A DoIP message, by its payload length, if its header keeps to the
+/// pattern of version and inverse version (describe_doip.cpp).
+std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
 
 // ── In the stream ────────────────────────────────────────────────────────
 
@@ -282,5 +331,9 @@ void describeQuicInStream( PacketRecord& pkt, const Stream& stream );
 /// A TCP segment in its stream: HTTP/2 frames after the preface
 /// (describe_http.cpp).
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state );
+
+/// A TCP segment in its stream: MQTT packets after a CONNECT on another
+/// port than MQTT's (describe_mqtt.cpp).
+void describeMqttInStream( PacketRecord& pkt, StreamState& state );
 
 } // namespace tcpdump::describer
