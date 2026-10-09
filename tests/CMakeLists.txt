@@ -32,6 +32,8 @@ add_executable(logsquirl_tcpdump_tests
     sidebarwidget_test.cpp
     corpus_test.cpp
     conversion_options_test.cpp
+    settings_test.cpp
+    configdialog_test.cpp
     logformat_test.cpp
     packet_formatter_test.cpp
     payload_describer_test.cpp
@@ -77,6 +79,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
+        "${CMAKE_SOURCE_DIR}/src/settings.cpp"
+        "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
 )
 

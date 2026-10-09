@@ -172,7 +172,7 @@ SCENARIO( "The corpus converts without payload previews", "[converter][corpus]" 
     for ( const auto& capture : captures ) {
         const auto defaults = convert( capture, {} );
         ConversionOptions options;
-        options.previewChars = 0;
+        options.preview = false;
         const auto lines = convert( capture, options );
 
         INFO( "capture " << capture.fileName().toStdString() );

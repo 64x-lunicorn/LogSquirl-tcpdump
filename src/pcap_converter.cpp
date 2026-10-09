@@ -260,7 +260,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
-        limitPreview( pkt, options.previewChars );
+        limitPreview( pkt, options.preview ? options.previewChars : 0 );
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );

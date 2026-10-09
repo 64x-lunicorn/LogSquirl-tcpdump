@@ -32,6 +32,7 @@
 #include "sidebarwidget.h"
 #include "pcap_converter.h"
 #include "plugin.h"
+#include "settings.h"
 #include "tempdirs.h"
 
 #include <QFileDialog>
@@ -202,15 +203,17 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 
     // The Converter writes into a new private directory below the temporary
     // root, kept for its tab until LogSquirl quits, and reports every
-    // failure as a result: nothing is caught here.
+    // failure as a result: nothing is caught here.  It converts with the
+    // options saved when it starts: a change of them in the configuration
+    // dialog applies to the next capture, the tab of this one keeps its own.
     const auto tempRoot = tempRoot_;
+    const auto options = loadConversionOptions( hostConfigDir() );
     watcher_->setFuture( QtConcurrent::run(
-        &pool_, [ filePath, tempRoot, cancelled ]( QPromise<ConversionResult>& promise ) {
+        &pool_, [ filePath, tempRoot, cancelled, options ]( QPromise<ConversionResult>& promise ) {
             promise.setProgressRange( 0, 1000 );
-            promise.addResult(
-                convertPcap( filePath, tempRoot, cancelled.get(), [ &promise ]( int permille ) {
-                    promise.setProgressValue( permille );
-                } ) );
+            promise.addResult( convertPcap(
+                filePath, tempRoot, cancelled.get(),
+                [ &promise ]( int permille ) { promise.setProgressValue( permille ); }, options ) );
         } ) );
 }
 

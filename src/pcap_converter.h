@@ -110,8 +110,9 @@ struct ConversionResult {
 struct ConversionOptions {
     /// The time columns and whether the MAC columns are shown.
     LineLayout layout;
-    /// Characters of a payload preview at most, kMaxPreviewChars at most;
-    /// 0 leaves the preview out.
+    /// Whether a payload no detector recognises is previewed as text.
+    bool preview = true;
+    /// Characters of a payload preview at most, kMaxPreviewChars at most.
     size_t previewChars = kMaxPreviewChars;
     /// Conversations to number at most; later ones show stream "?".
     size_t maxStreams = StreamTracker::kMaxStreams;
