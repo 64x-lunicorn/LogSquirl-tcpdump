@@ -1316,13 +1316,16 @@ for byte the same as before.
   segment from port 53, the whole messages the TCP Reassembly completed in
   it, each behind its length. `dnsResolvedNames()` in `describe_dns.cpp`
   reads a standard query's response without an error code, its answer
-  section only, at most `kMaxResolvedNames` (32) records: an A or AAAA
+  section only (from port 5353 its additional section too, where mDNS
+  puts the A and AAAA records of a service it answers with a PTR and
+  SRV, and no record of TTL 0, mDNS's goodbye), at most
+  `kMaxResolvedNames` (32) records: an A or AAAA
   answer names its address with its owner followed back through the
   message's CNAME answers (at most 8 steps, names compared without case),
   so that the name is the one the client asked for; a PTR answer whose
   owner spells an IPv4 (`in-addr.arpa`) or IPv6 (`ip6.arpa`, 32 nibbles)
-  address names that address with its target. Authority and additional
-  records (glue, mDNS's additional A records) and TTLs are not read; DNS
+  address names that address with its target. Authority records, and in
+  DNS additional records (glue) and TTLs, are not read; DNS
   over TLS or HTTPS is not read, nor LLMNR. A response cut short gives
   the answers before the cut.
 - **Decisions**:

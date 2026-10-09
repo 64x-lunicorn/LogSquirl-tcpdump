@@ -92,7 +92,8 @@ private:
         std::list<std::string>::iterator age; ///< Its place in order_.
     };
 
-    void learnMessage( const uint8_t* message, size_t len );
+    /// Learn the names of a DNS message, of mDNS's with @p mdns.
+    void learnMessage( const uint8_t* message, size_t len, bool mdns );
 
     size_t maxNames_;
     std::unordered_map<std::string, Entry> names_;

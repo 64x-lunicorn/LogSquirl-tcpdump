@@ -575,8 +575,9 @@ Wireshark's name resolution does when it is fed from the capture:
   answers name their address with the name that was asked for, followed
   back through the CNAMEs of the answer (`www.example.com`, not
   `example.com`); PTR answers for `in-addr.arpa` and `ip6.arpa` names name
-  the address they spell. Only the answer section is read, and only
-  responses without an error. DNS over TLS and over HTTPS are not read
+  the address they spell. Only the answer section is read (in mDNS the
+  additional records too, where a service's addresses come; an mDNS
+  goodbye, TTL 0, names nothing), and only responses without an error. DNS over TLS and over HTTPS are not read
 - **From then on**: a name labels the packets after the answer that gave
   it; packets before it, and the answer itself, keep the address alone, so
   a live capture and a file read alike. A later answer that names the

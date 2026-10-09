@@ -545,6 +545,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignored as gzip ignores trailing garbage, where before the capture was
   reported cut off as corrupt; the check looks across the input's chunks
   (#108).
+- **Names from mDNS.** The names from the capture's DNS answers now read
+  an mDNS response's additional records too, where a responder puts the
+  addresses of the service it answers for, and no longer learn a name
+  from an mDNS goodbye (TTL 0) (#111).
 
 ## [0.3.0] — 2026-10-09
 

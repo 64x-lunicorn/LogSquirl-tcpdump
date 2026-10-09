@@ -216,13 +216,16 @@ struct ResolvedName {
  * CNAME answers of the message ("www.example.com CNAME example.com,
  * example.com A 93.184.216.34" names 93.184.216.34 www.example.com); a
  * PTR answer for an in-addr.arpa or ip6.arpa name names the address that
- * name spells.  Only the answer section is read, at most kMaxResolvedNames
- * of its records, and only a standard query's response without an error;
- * an answer cut short ends the list.  A name that is not a host name
- * (isHostName()) names nothing.  Nothing is validated beyond that: a
- * response that claims a name gets it.
+ * name spells.  Only the answer section is read, with @p mdns (a
+ * message of mDNS, whose responses put the addresses of a service in it)
+ * the additional section too, at most kMaxResolvedNames records in all,
+ * and only a standard query's response without an error; a record cut
+ * short ends the list.  An mDNS record with TTL 0, a goodbye, names
+ * nothing.  A name that is not a host name (isHostName()) names nothing.
+ * Nothing is validated beyond that: a response that claims a name gets
+ * it.
  */
-std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len );
+std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len, bool mdns = false );
 
 /// Answers of one DNS message dnsResolvedNames() reads at most.
 constexpr size_t kMaxResolvedNames = 32;
