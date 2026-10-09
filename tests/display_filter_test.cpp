@@ -32,6 +32,7 @@
 #include "fakehost.h"
 #include "plugin.h"
 #include "regex_lab.h"
+#include "sidebarwidget.h"
 
 #include <QApplication>
 #include <QFileInfo>
@@ -853,6 +854,93 @@ SCENARIO( "Display filter\xe2\x80\xa6 asks for a filter and opens its pattern in
             for ( const auto& action : host.menuActions ) {
                 REQUIRE( action.label != QString::fromUtf8( "Display filter\xe2\x80\xa6" ) );
             }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+}
+
+SCENARIO( "The sidebar's display filter field opens its pattern in the Regex Lab",
+          "[displayfilter]" )
+{
+    GIVEN( "a plugin loaded by a host with the Regex Lab" )
+    {
+        FakeHost host;
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+        auto* sidebar = tcpdump::g_state.sidebarWidget;
+        REQUIRE( sidebar );
+        auto* edit = sidebar->findChild<QLineEdit*>( "displayFilter" );
+        auto* error = sidebar->findChild<QLabel*>( "displayFilterError" );
+        auto* open = sidebar->findChild<QPushButton*>( "openDisplayFilter" );
+        REQUIRE( edit );
+        REQUIRE( error );
+        REQUIRE( open );
+
+        THEN( "an empty filter cannot be opened, and is no error yet" )
+        {
+            REQUIRE_FALSE( open->isEnabled() );
+            REQUIRE( error->text().isEmpty() );
+        }
+
+        WHEN( "a filter outside the subset is typed" )
+        {
+            edit->setText( "tcp.port == 80 && http.host" );
+
+            THEN( "the column and the reason are shown, as in the dialog, and nothing opens" )
+            {
+                REQUIRE( error->text().startsWith( "Column 19: The field http.host is not "
+                                                   "supported" ) );
+                REQUIRE_FALSE( open->isEnabled() );
+                emit edit->returnPressed();
+                REQUIRE( host.regexLabs.isEmpty() );
+            }
+        }
+
+        WHEN( "a filter of the subset is typed and opened" )
+        {
+            edit->setText( "udp.port == 5353" );
+            REQUIRE( open->isEnabled() );
+            open->click();
+
+            THEN( "the Regex Lab opens with its pattern, the filter logged and offered by the "
+                  "dialog next time" )
+            {
+                REQUIRE( host.regexLabs.size() == 1 );
+                REQUIRE( host.regexLabs.first().pattern
+                         == displayFilterPattern( "udp.port == 5353" ).pattern );
+                REQUIRE( host.logs.contains( "Display filter: udp.port == 5353" ) );
+                QString offered;
+                whenDialogOpens( [ &offered ]( DisplayFilterDialog& dialog ) {
+                    offered = dialog.filter();
+                    dialog.reject();
+                } );
+                openDisplayFilter( nullptr );
+                REQUIRE( offered == "udp.port == 5353" );
+            }
+
+            AND_WHEN( "Enter is pressed in the field" )
+            {
+                emit edit->returnPressed();
+
+                THEN( "it opens again" )
+                {
+                    REQUIRE( host.regexLabs.size() == 2 );
+                }
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+
+    GIVEN( "a plugin loaded by a host older than LogSquirl 26.11" )
+    {
+        FakeHost host( LOGSQUIRL_HOST_API_BASE_SIZE );
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+
+        THEN( "the sidebar has no display filter field" )
+        {
+            REQUIRE_FALSE(
+                tcpdump::g_state.sidebarWidget->findChild<QLineEdit*>( "displayFilter" ) );
         }
 
         logsquirl_plugin_shutdown();

@@ -55,8 +55,10 @@
  */
 
 #include "sidebarwidget.h"
+
 #include "capture_file.h"
 #include "conversation_table.h"
+#include "display_filter_dialog.h"
 #include "follow_stream.h"
 #include "live_capture_form.h"
 #include "packet_export.h"
@@ -222,6 +224,12 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                          "Follow stream failed: " + QString::fromUtf8( e.what() ) );
             }
         } );
+    }
+
+    // A display filter, as Plugins > tcpdump > Display filter… asks for it:
+    // only a host that has the Regex Lab gets it.
+    if ( g_state.hostCapabilities.regexLab ) {
+        layout->addWidget( new DisplayFilterField );
     }
 
     // Progress of a running conversion, and a way to stop it

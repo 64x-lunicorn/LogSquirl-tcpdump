@@ -2330,7 +2330,10 @@ calls `openDisplayFilter()`: a `DisplayFilterDialog` translates the text on
 every change with `displayFilterPattern()`, shows a rejection as "Column N:
 reason" below the field and enables *Open in Regex Lab* only for a valid
 filter; the filter accepted is logged and offered again next time, its
-pattern opened with `openRegexLab()` ("Display filter").
+pattern opened with `openRegexLab()` ("Display filter"). The sidebar has
+the same in a `DisplayFilterField` (on a host with `regexLab`): the field,
+*Open in Regex Lab* (or Enter) and the rejection below, sharing the
+dialog's error text, its opening and the filter it offers next time.
 `parseDisplayFilter()` is a tokenizer and a recursive-descent parser
 (`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
 as a `FilterError` with its index into the filter. Parentheses and

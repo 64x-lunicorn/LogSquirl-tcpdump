@@ -186,8 +186,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filtered with the other TCP problems. `tests/corpus/tcp-analysis.pcap`
   has a second connection that shows them.
 - **Display filters.** **Plugins → tcpdump → Display filter…** (also in
-  the Command Palette) takes a Wireshark-style display filter, such as
-  `ip.addr == 10.0.0.0/8 && tcp.port == 443 || dns`, and opens the Regex
+  the Command Palette), and the *Display filter* field in the sidebar,
+  take a Wireshark-style display filter, such as
+  `ip.addr == 10.0.0.0/8 && tcp.port == 443 || dns`, and open the Regex
   Lab with the pattern of the packet lines it selects, in every column
   layout. Supported: `ip.addr`/`src`/`dst` (an address or an IPv4
   network), `ipv6.addr`/`src`/`dst`, `tcp.port`/`srcport`/`dstport`, the

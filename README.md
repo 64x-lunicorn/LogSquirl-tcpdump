@@ -200,8 +200,10 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    The capture is read once from front to back in the background; a
    progress dialog shows how far, and Cancel leaves no file. Needs
    LogSquirl ≥ 26.11
-14. To filter as with a Wireshark display filter, choose **Plugins →
-   tcpdump → Display filter…** (also in the Command Palette) and type one,
+14. To filter as with a Wireshark display filter, type one in the
+   sidebar's **Display filter** field and press Enter or **Open in Regex
+   Lab**, or choose **Plugins → tcpdump → Display filter…** (also in the
+   Command Palette) and type one,
    such as `ip.addr == 10.0.0.1 && tcp.port == 443`: the Regex Lab opens
    with the pattern of the packet lines it selects; apply it to filter the
    view. A filter outside the [supported subset](#display-filters) is
@@ -743,8 +745,9 @@ choice of [columns](#options).
 
 ### Display filters
 
-**Plugins → tcpdump → Display filter…** translates a Wireshark-style
-display filter into a Regex Lab pattern over the packet line's columns.
+**Plugins → tcpdump → Display filter…**, and the sidebar's *Display
+filter* field, translate a Wireshark-style display filter into a Regex Lab
+pattern over the packet line's columns.
 The supported subset:
 
 | Filter | Selects the packet lines |

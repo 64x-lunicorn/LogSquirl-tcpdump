@@ -21,7 +21,7 @@
  * @file display_filter_dialog.h
  * @brief Plugins > tcpdump > Display filter…: the dialog in which the user
  *        types a display filter, told at once what is wrong with it, and
- *        the Regex Lab it opens.
+ *        the Regex Lab it opens; and the same field in the sidebar.
  */
 
 #pragma once
@@ -67,5 +67,27 @@ private:
 /// what the user does in the Lab are logged.  Call only when
 /// g_state.hostCapabilities has the Regex Lab, on the UI thread.
 void openDisplayFilter( QWidget* parent );
+
+/**
+ * The sidebar's display filter: the field, below it what is wrong with the
+ * filter, as the dialog says it, and Open in Regex Lab, which Enter in the
+ * field does too, for a filter of the subset.  What it opens is logged and
+ * offered by the dialog next time.  Only for a host with the Regex Lab.
+ */
+class DisplayFilterField : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit DisplayFilterField( QWidget* parent = nullptr );
+
+private:
+    void update();
+    void open();
+
+    QLineEdit* edit_ = nullptr;
+    QLabel* error_ = nullptr;
+    QPushButton* openButton_ = nullptr;
+    DisplayFilterPattern translated_;
+};
 
 } // namespace tcpdump
