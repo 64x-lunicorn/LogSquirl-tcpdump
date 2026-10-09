@@ -78,6 +78,49 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
                                     uint16_t srcPort, uint16_t dstPort );
 
 /**
+ * How far the application message at the start of some TCP payload
+ * reaches, as the Payload Describer frames its protocol's messages for the
+ * TCP Reassembly (tcp_reassembly.h).
+ */
+struct MessageExtent {
+    /// The protocol that frames the message, a number for
+    /// tcpMessageExtent() to keep to; 0: no message the describer can frame
+    /// begins there.
+    uint8_t framer = 0;
+    /// The protocol's label ("TLS", …); null with framer 0.
+    const char* label = nullptr;
+    /// The bytes the message takes, header and all: at most those given when
+    /// it is complete; otherwise at least this many are needed, one more
+    /// than given when its header does not say how many.
+    size_t length = 0;
+    /// The message goes on past the bytes given.
+    bool needsMore = false;
+
+    /// A whole message is there.
+    bool complete() const
+    {
+        return framer != 0 && !needsMore;
+    }
+};
+
+/**
+ * The extent of the message the @p len bytes at @p data begin with, sent
+ * from @p srcPort to @p dstPort over TCP: a TLS record, a DNS message
+ * behind its length (port 53), an HTTP/1.x header section.  With @p framer
+ * other than 0, only that protocol is tried, as a stream's later messages
+ * are of the protocol of its first.
+ */
+MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
+                                uint8_t framer = 0 );
+
+/**
+ * Put @p description in place of the one in @p pkt's Info (after
+ * kDescriptionSeparator), and @p label in place of its protocol: recognised
+ * from its content, so the label sticks to the stream (StreamLabels).
+ */
+void redescribe( PacketRecord& pkt, const char* label, const std::string& description );
+
+/**
  * Describe @p pkt again with what its @p stream has shown so far, and
  * remember in the stream's state what later packets need: run on every
  * packet, in capture order, after the Stream Tracker and the TCP Analysis

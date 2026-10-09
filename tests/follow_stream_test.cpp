@@ -302,7 +302,7 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
 
         THEN( "Plugins > tcpdump > Follow stream and the sidebar button are offered" )
         {
-            REQUIRE( host.menuActions.size() == 2 );
+            REQUIRE( host.menuActions.size() == 3 ); // Open pcap…, Packet details
             REQUIRE( host.menuActions.last().menuPath == "tcpdump" );
             REQUIRE( host.menuActions.last().label == "Follow stream" );
             REQUIRE( button );

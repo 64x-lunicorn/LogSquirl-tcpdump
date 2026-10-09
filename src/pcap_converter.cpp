@@ -24,6 +24,7 @@
 
 #include "pcap_converter.h"
 
+#include "capture_file.h"
 #include "capture_reader.h"
 #include "media_expectations.h"
 #include "packet_formatter.h"
@@ -31,6 +32,7 @@
 #include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
+#include "tcp_reassembly.h"
 #include "tempdirs.h"
 
 #include <QDir>
@@ -42,45 +44,9 @@
 #include <exception>
 #include <new>
 
-#ifdef Q_OS_UNIX
-#include <cerrno>
-#include <cstring>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
-
 namespace tcpdump {
 
 namespace {
-
-/// A ByteSource reading a QFile.
-class FileSource : public ByteSource {
-public:
-    explicit FileSource( QFile& file )
-        : file_( file )
-    {
-    }
-
-    size_t read( uint8_t* dst, size_t n ) override
-    {
-        const auto got = file_.read( reinterpret_cast<char*>( dst ), static_cast<qint64>( n ) );
-        return got > 0 ? static_cast<size_t>( got ) : 0;
-    }
-
-    bool skip( uint64_t n ) override
-    {
-        const auto target = static_cast<uint64_t>( file_.pos() ) + n;
-        if ( target > static_cast<uint64_t>( file_.size() ) ) {
-            file_.seek( file_.size() );
-            return false;
-        }
-        return file_.seek( static_cast<qint64>( target ) );
-    }
-
-private:
-    QFile& file_;
-};
 
 /// The summary of a converted capture, from what was collected on the way.
 CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
@@ -124,68 +90,6 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
         summary.otherEndpointPackets = stats.otherEndpointPackets;
     }
     return summary;
-}
-
-/// The message for a path that is not a regular file.
-QString notRegular( const QString& path )
-{
-    return QStringLiteral( "%1 is not a regular file" ).arg( path );
-}
-
-/**
- * Open @p path for reading if it is, or links to, a regular file.
- *
- * Reading a FIFO or a device can block for good, and a blocked worker would
- * block the plugin's shutdown, which waits for it.  On Unix the file is
- * opened without blocking and checked with fstat(), so that it cannot be
- * swapped for a FIFO between the check and the opening.  Reading a regular
- * file on a network share that stalls can still block; that is left to the
- * operating system's timeouts.
- */
-bool openRegularFile( const QString& path, QFile& file, QString& error )
-{
-    const QFileInfo info( path );
-    const auto target = info.canonicalFilePath(); // follows symbolic links
-    if ( target.isEmpty() ) {
-        error = QStringLiteral( "Cannot open file: %1 does not exist" ).arg( path );
-        return false;
-    }
-    if ( !QFileInfo( target ).isFile() ) {
-        error = notRegular( path );
-        return false;
-    }
-
-#ifdef Q_OS_UNIX
-    const int fd
-        = ::open( QFile::encodeName( target ).constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC );
-    if ( fd < 0 ) {
-        error = QStringLiteral( "Cannot open file: %1" )
-                    .arg( QString::fromLocal8Bit( std::strerror( errno ) ) );
-        return false;
-    }
-    struct stat st;
-    if ( ::fstat( fd, &st ) != 0 || !S_ISREG( st.st_mode ) ) {
-        ::close( fd );
-        error = notRegular( path );
-        return false;
-    }
-    const int flags = ::fcntl( fd, F_GETFL );
-    if ( flags != -1 ) {
-        ::fcntl( fd, F_SETFL, flags & ~O_NONBLOCK );
-    }
-    if ( !file.open( fd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle ) ) {
-        ::close( fd );
-        error = QStringLiteral( "Cannot open file: %1" ).arg( file.errorString() );
-        return false;
-    }
-#else
-    file.setFileName( target );
-    if ( !file.open( QIODevice::ReadOnly ) ) {
-        error = QStringLiteral( "Cannot open file: %1" ).arg( file.errorString() );
-        return false;
-    }
-#endif
-    return true;
 }
 
 /// A Failed result with @p error.
@@ -249,11 +153,13 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
     MediaExpectations media;
+    TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }
 
+    auto index = std::make_shared<CaptureIndex>( options.checkpointInterval );
     const auto inputSize = std::max<qint64>( input.size(), 1 );
     int lastPermille = -1;
     PacketRecord pkt;
@@ -268,11 +174,13 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         media.apply( pkt );
+        reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }
+        index->note( reader );
         if ( progress ) {
             const auto permille = static_cast<int>( std::min<uint64_t>(
                 reader.bytesRead() * 1000 / static_cast<uint64_t>( inputSize ), 1000 ) );
@@ -291,6 +199,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     result.status = ConversionResult::Status::Converted;
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
     result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
+    index->setCaptureFile( inputPath );
+    result.index = std::move( index );
     outputDir.setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );
 }

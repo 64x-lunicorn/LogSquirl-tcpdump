@@ -120,7 +120,7 @@ void MediaExpectations::apply( PacketRecord& pkt )
         return;
     }
     expectation->lastSeen = pkt.timestampSec;
-    describer::redescribe( pkt, rtcp ? "RTCP" : "RTP", text );
+    redescribe( pkt, rtcp ? "RTCP" : "RTP", text );
 }
 
 } // namespace tcpdump

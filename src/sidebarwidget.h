@@ -44,6 +44,8 @@
 
 namespace tcpdump {
 
+class PacketPanel;
+
 /// The capture summary shown in the sidebar, as rich text.  With
 /// @p filterLinks, each endpoint and protocol listed is a link that
 /// SidebarWidget opens in the Regex Lab as a filter.  A tunnel's endpoints
@@ -66,10 +68,13 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *     the Log Format, which the plugin cannot tell is installed; on a host
  *     with the Regex Lab, a click on an endpoint or a protocol listed opens
  *     the Lab on its lines, as Wireshark's Apply as Filter
+ *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
+ *     packet of the line selected in the tab in front
  *
  * The summaries of all captures converted while the plugin is loaded are
- * kept, keyed by the text file written for each, so that a capture's tab
- * that comes to the front again shows its own.
+ * kept with their CaptureIndex, keyed by the text file written for each, so
+ * that a capture's tab that comes to the front again shows its own, and the
+ * Packet Panel its packets.
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -111,6 +116,17 @@ public:
     /// Stop a running conversion; nothing is opened then.
     void cancel();
 
+    /// Plugins > tcpdump > Packet details: show the packet of the line
+    /// selected now in the Packet Panel; if the panel is not in view, a
+    /// notification names the packet's layers.
+    void showPacketDetails();
+
+    /// The Packet Panel.
+    PacketPanel* packetPanel() const
+    {
+        return packetPanel_;
+    }
+
     /// Create the temporary files below @p dir instead of the system's
     /// temporary directory (for tests).
     void setTempRoot( const QString& dir )
@@ -133,9 +149,11 @@ public:
 private:
     /// A capture converted while the plugin is loaded, as its summary shows it.
     struct ConvertedCapture {
-        QString fileName;            ///< The capture's name, without directory.
-        qint64 fileSize = 0;         ///< The capture's size in bytes.
-        CaptureSummary summary;      ///< What was converted.
+        QString fileName;       ///< The capture's name, without directory.
+        qint64 fileSize = 0;    ///< The capture's size in bytes.
+        CaptureSummary summary; ///< What was converted.
+        /// Where its packets are in the capture file, for the Packet Panel.
+        std::shared_ptr<const CaptureIndex> index;
         bool withFormatHint = false; ///< Links to the Log Format section.
     };
 
@@ -150,6 +168,7 @@ private:
     QPushButton* cancelButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
+    PacketPanel* packetPanel_ = nullptr;
     QString lastDir_;              ///< Remembers the last browsed directory.
     bool formatHintShown_ = false; ///< The Log Format hint was shown once.
     FileChooser chooseFile_;       ///< Shows the file dialog.

@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 #include "wire_bytes.h"
@@ -37,6 +38,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -278,6 +280,20 @@ std::string describeRtp( const uint8_t* payload, size_t len, size_t wireLen );
 /// description"; empty if it does not begin with an RTCP header.
 std::string describeRtcp( const uint8_t* payload, size_t len, size_t wireLen );
 
+// ── Framing, for the TCP Reassembly ─────────────────────────────────────
+//
+// How many bytes the message a TCP payload begins with takes, header and
+// all: more than len while it is not all there (one more than len when the
+// header does not say how many), nothing if no message of the protocol
+// begins there.
+
+/// A TLS record (describe_tls.cpp).
+std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
+/// A DNS message behind its 2-byte length (describe_dns.cpp).
+std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
+/// An HTTP/1.x header section (describe_http.cpp).
+std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
+
 // ── In the stream ────────────────────────────────────────────────────────
 
 /// A UDP packet in its stream: QUIC short headers after a long header
@@ -291,10 +307,5 @@ void describeHttp2InStream( PacketRecord& pkt, StreamState& state );
 /// A TCP segment in its stream: MQTT packets after a CONNECT on another
 /// port than MQTT's (describe_mqtt.cpp).
 void describeMqttInStream( PacketRecord& pkt, StreamState& state );
-
-/// Put @p description in place of the one in @p pkt's Info, and @p label
-/// in place of its protocol: recognised from its content, so the label
-/// sticks to the stream (StreamLabels).  In payload_describer.cpp.
-void redescribe( PacketRecord& pkt, const char* label, const std::string& description );
 
 } // namespace tcpdump::describer

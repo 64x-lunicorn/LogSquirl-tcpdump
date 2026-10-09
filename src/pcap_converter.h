@@ -24,11 +24,13 @@
 
 #pragma once
 
+#include "capture_index.h"
 #include "capture_stats.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
+#include "tcp_reassembly.h"
 
 #include <QString>
 
@@ -36,6 +38,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -106,7 +109,12 @@ struct ConversionResult {
     QString error;          ///< Why it failed, when Failed.
     QString outputPath;     ///< The text file, when Converted; see convertPcap().
     CaptureSummary summary; ///< What was converted, when Converted.
+    /// Where each packet of the text is in the capture file, when Converted.
+    std::shared_ptr<CaptureIndex> index;
 };
+
+/// Bytes in a mebibyte, the unit of ConversionOptions::reassemblyMegabytes.
+constexpr size_t kMegabyte = 1024 * 1024;
 
 /// Settings of a conversion, as the user chose them in the configuration
 /// dialog (settings.h).  The defaults write the text the Log Format is made
@@ -122,6 +130,10 @@ struct ConversionOptions {
     size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
+    /// Mebibytes the TCP Reassembly holds at most, of all streams together.
+    size_t reassemblyMegabytes = TcpReassembly::kDefaultMemoryLimit / kMegabyte;
+    /// Packets between two checkpoints of the CaptureIndex.
+    uint32_t checkpointInterval = CaptureIndex::kCheckpointInterval;
 };
 
 /**

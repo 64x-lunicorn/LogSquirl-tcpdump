@@ -41,11 +41,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace tcpdump {
+
+class PacketLayers;
 
 // ── pcap global header ───────────────────────────────────────────────────
 
@@ -232,6 +235,12 @@ struct PacketRecord {
     /// stream is known (describeInStream).
     std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
     size_t payloadHeadLen = 0;
+    /// Where the captured TCP or UDP payload lies in the bytes the packet
+    /// was dissected from, payloadCaptured bytes of it, which may be fewer
+    /// than payloadLen: CaptureReader::payloadOf() hands them out while
+    /// they are there, for the TCP Reassembly (tcp_reassembly.h).
+    uint32_t payloadOffset = 0;
+    uint32_t payloadCaptured = 0;
     /// A detector of the Payload Describer recognised the TCP or UDP payload
     /// and named protocol, rather than the ports suggesting it, by the
     /// payload alone or in its stream (describeInStream).  Such a label
@@ -254,6 +263,11 @@ struct PacketRecord {
     /// then describes the innermost packet, as Wireshark's columns do; the
     /// Packet Formatter names the tunnels before info.
     std::vector<Tunnel> tunnels;
+
+    /// Where the dissectors describe every layer they read, with its fields
+    /// and their bytes (packet_layers.h); null, as the Converter leaves it,
+    /// to describe none.  Set by dissectLayers() for the Packet Panel.
+    PacketLayers* layers = nullptr;
 };
 
 /**
@@ -304,6 +318,12 @@ constexpr size_t kMaxPreamble = 4096;
 
 /// Bytes of a packet that are dissected; the rest of a longer record is skipped.
 constexpr uint32_t kMaxDissectedBytes = 262144;
+
+/// Bytes someone else owns: @p size of them at @p data.
+struct ByteView {
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+};
 
 /// Where a CaptureReader reads the capture from.
 class ByteSource {
@@ -387,6 +407,27 @@ size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format
                          std::string& error );
 
 /**
+ * What a reader needs besides a position to go on reading a capture there,
+ * such as the interfaces a pcapng section declared before it: each reader
+ * derives its own.  Immutable, so that checkpoints can share one.
+ */
+struct ReaderState {
+    virtual ~ReaderState() = default;
+};
+
+/**
+ * A place in a capture where a reader can go on reading without reading
+ * what comes before it: the start of a packet's record, and the reader's
+ * state there.  Taken by CaptureReader::checkpoint() after a packet, handed
+ * to CaptureReader::resume() of a reader of the same capture.
+ */
+struct ReaderCheckpoint {
+    uint32_t packetsBefore = 0;               ///< Packets before it: the next is packetsBefore + 1.
+    uint64_t offset = 0;                      ///< Where the next record starts in the source.
+    std::shared_ptr<const ReaderState> state; ///< Null when the reader needs none.
+};
+
+/**
  * Reads a capture one packet at a time, so that a capture of any size needs
  * memory for one packet only: the seam between a file format and the rest
  * of the plugin.
@@ -439,6 +480,61 @@ public:
         return bytesRead_;
     }
 
+    /**
+     * The captured TCP or UDP payload of @p pkt, which next() must have
+     * returned last: a view into the reader's buffer, valid until next()
+     * is called again.  Empty for a packet without one, and for one whose
+     * payload does not lie within the buffer (an older packet's).
+     */
+    ByteView payloadOf( const PacketRecord& pkt ) const;
+
+    /// Packets returned so far; the number of the last one.
+    uint32_t packetsRead() const
+    {
+        return packetCount_;
+    }
+
+    /// Where the next packet's record starts, and what the reader needs to
+    /// go on reading there.  Take it after a packet was read.
+    virtual ReaderCheckpoint checkpoint() const;
+
+    /**
+     * Go on reading at @p checkpoint, which a reader of the same capture took:
+     * the next packet returned is number checkpoint.packetsBefore + 1.  Call
+     * after open(), before any packet is read; the source is skipped up to
+     * the checkpoint, never read back.  False if it lies behind what was
+     * read already or past the end of the source.
+     */
+    virtual bool resume( const ReaderCheckpoint& checkpoint );
+
+    /// Where the record of the last packet returned starts in the source:
+    /// its pcap record header, or its pcapng block.
+    uint64_t recordOffset() const
+    {
+        return recordOffset_;
+    }
+
+    /// The length of that record in the source, header and all.
+    uint64_t recordLength() const
+    {
+        return recordLength_;
+    }
+
+    /// The captured bytes of the last packet returned, as it was dissected:
+    /// at most kMaxDissectedBytes of them.
+    const std::vector<uint8_t>& packetBytes() const
+    {
+        return packet_;
+    }
+
+    /// Whether the capture's byte order (that of the section of the last
+    /// packet, in a pcapng) is the other one than this host's, as
+    /// dissectPacket() is told.
+    bool byteSwapped() const
+    {
+        return swap_;
+    }
+
 protected:
     /// @param start  Where the capture's first header starts in @p source.
     CaptureReader( ByteSource& source, uint64_t start )
@@ -457,6 +553,11 @@ protected:
     const uint64_t start_; ///< Where the first header starts; skipped by open().
     std::string error_;
     bool truncated_ = false;
+    bool swap_ = false;           ///< The capture is in the other byte order than this host's.
+    std::vector<uint8_t> packet_; ///< The last packet's bytes, as dissected.
+    uint32_t packetCount_ = 0;
+    uint64_t recordOffset_ = 0;
+    uint64_t recordLength_ = 0;
 
 private:
     ByteSource& source_;
@@ -490,18 +591,17 @@ public:
     /// The global header's link-layer type, once open.
     std::vector<uint32_t> linkTypes() const override;
 
+    bool resume( const ReaderCheckpoint& checkpoint ) override;
+
     const PcapGlobalHeader& header() const
     {
         return header_;
     }
 
 private:
-    std::vector<uint8_t> packet_;
     PcapGlobalHeader header_;
-    bool swap_ = false;
     bool open_ = false;
     bool headerRead_ = false;
-    uint32_t packetCount_ = 0;
 };
 
 } // namespace tcpdump

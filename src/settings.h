@@ -43,6 +43,9 @@ constexpr size_t kMinCap = 1;
 constexpr size_t kMaxStreamCap = 10 * StreamTracker::kMaxStreams;
 /// The most the endpoint cap may be set to: ten times the default.
 constexpr size_t kMaxEndpointCap = 10 * CaptureStats::kMaxEndpoints;
+/// The most the TCP Reassembly's memory may be set to, in mebibytes: sixteen
+/// times the default, 1 GiB.
+constexpr size_t kMaxReassemblyMegabytes = 16 * TcpReassembly::kDefaultMemoryLimit / kMegabyte;
 
 /// The settings file in @p configDir.
 QString settingsFilePath( const QString& configDir );
