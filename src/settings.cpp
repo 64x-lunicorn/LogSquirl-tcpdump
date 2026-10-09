@@ -42,6 +42,7 @@ constexpr const char* kMaxStreamsKey = "conversion/maxStreams";
 constexpr const char* kMaxEndpointsKey = "conversion/maxEndpoints";
 constexpr const char* kReassemblyMegabytesKey = "conversion/reassemblyMegabytes";
 constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
+constexpr const char* kKeyLogPathKey = "conversion/tlsKeyLogFile";
 
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
@@ -115,6 +116,7 @@ ConversionOptions loadConversionOptions( const QString& configDir )
     options.reassemblyMegabytes
         = readCount( file, kReassemblyMegabytesKey, options.reassemblyMegabytes, kMinCap,
                      kMaxReassemblyMegabytes );
+    options.keyLogPath = file.value( kKeyLogPathKey ).toString();
     return options;
 }
 
@@ -137,6 +139,7 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );
     file.setValue( kReassemblyMegabytesKey,
                    static_cast<qulonglong>( options.reassemblyMegabytes ) );
+    file.setValue( kKeyLogPathKey, options.keyLogPath );
     file.sync();
     return file.status() == QSettings::NoError;
 }

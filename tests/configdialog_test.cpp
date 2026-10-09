@@ -33,6 +33,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
@@ -89,6 +90,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
         options.maxEndpoints = 567;
         options.reassemblyMegabytes = 8;
         options.tcpTimestamps = true;
+        options.keyLogPath = "/home/user/sslkeys.log";
         ConfigDialog dialog( options );
 
         THEN( "its controls show them" )
@@ -103,6 +105,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->value() == 567 );
             REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->value() == 8 );
             REQUIRE( child<QCheckBox>( dialog, "tcpTimestamps" )->isChecked() );
+            REQUIRE( child<QLineEdit>( dialog, "keyLogPath" )->text() == "/home/user/sslkeys.log" );
             REQUIRE( dialog.options().layout.timeColumns == TimeColumns::AbsoluteOnly );
             REQUIRE( dialog.options().previewChars == 50 );
         }
@@ -124,6 +127,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             child<QSpinBox>( dialog, "maxEndpoints" )->setValue( 3000 );
             child<QSpinBox>( dialog, "reassemblyMegabytes" )->setValue( 128 );
             child<QCheckBox>( dialog, "tcpTimestamps" )->setChecked( false );
+            child<QLineEdit>( dialog, "keyLogPath" )->setText( " /tmp/other.keys " );
 
             THEN( "the dialog's options are the new ones" )
             {
@@ -137,6 +141,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( edited.maxEndpoints == 3000 );
                 REQUIRE( edited.reassemblyMegabytes == 128 );
                 REQUIRE_FALSE( edited.tcpTimestamps );
+                REQUIRE( edited.keyLogPath == "/tmp/other.keys" );
             }
         }
 
@@ -158,6 +163,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( restored.maxEndpoints == defaults.maxEndpoints );
                 REQUIRE( restored.reassemblyMegabytes == defaults.reassemblyMegabytes );
                 REQUIRE( restored.tcpTimestamps == defaults.tcpTimestamps );
+                REQUIRE( restored.keyLogPath.isEmpty() );
             }
         }
     }

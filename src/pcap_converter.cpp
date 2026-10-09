@@ -35,6 +35,8 @@
 #include "tcp_analysis.h"
 #include "tcp_reassembly.h"
 #include "tempdirs.h"
+#include "tls_decryption.h"
+#include "tls_key_log.h"
 
 #include <QDir>
 #include <QFile>
@@ -230,8 +232,9 @@ using Clock = std::chrono::steady_clock;
  *
  * Every packet goes through the same steps for a file and a stream: the
  * Parser's record, the stream it belongs to, its TCP analysis, its payload
- * described in the stream and reassembled, its stream labels, the summary's
- * counts, its line, and its place in the CaptureIndex.
+ * described in the stream, reassembled and, with a key log, decrypted, its
+ * stream labels, the summary's counts, its line, and its place in the
+ * CaptureIndex.
  */
 ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, const QString& name,
                                  uint64_t inputSize, const QString& outputRoot,
@@ -314,6 +317,23 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
     TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
+    // TLS sessions are decrypted only with a key log, read now and as it
+    // grows; its secrets go with it when the conversion ends.
+    std::optional<tls::KeyLogFile> keyLog;
+    std::optional<TlsDecryption> decryption;
+    if ( !options.keyLogPath.isEmpty() ) {
+        keyLog.emplace( options.keyLogPath );
+        decryption.emplace(
+            [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog->find( clientRandom ); } );
+    }
+    // The summary with what the decryption did.
+    auto withDecryption = [ & ]( CaptureSummary summary ) {
+        if ( decryption ) {
+            summary.tlsSessionsDecrypted = decryption->sessionsDecrypted();
+            summary.keyLogError = keyLog->error().toStdString();
+        }
+        return summary;
+    };
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
@@ -340,7 +360,8 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
             return;
         }
         LiveSnapshot snapshot;
-        snapshot.summary = summariseSoFar( stats, tracker, reader, options.maxStreams );
+        snapshot.summary
+            = withDecryption( summariseSoFar( stats, tracker, reader, options.maxStreams ) );
         snapshot.elapsed
             = std::chrono::duration_cast<std::chrono::milliseconds>( lastSnapshot - started );
         snapshot.rawBytes = liveInput->bytesRead();
@@ -389,7 +410,10 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
         }
         stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
-        reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
+        const auto messages = reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
+        if ( decryption ) {
+            decryption->apply( pkt, stream, messages );
+        }
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
@@ -463,7 +487,8 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     if ( live ) {
         result.rawPath = QFileInfo( raw.fileName() ).absoluteFilePath();
     }
-    result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
+    result.summary
+        = withDecryption( summarise( std::move( stats ), tracker, reader, options.maxStreams ) );
     index->setCaptureFile( live ? result.rawPath : inputPath );
     result.index = std::move( index );
     outputDir.setAutoRemove( false );
@@ -520,7 +545,8 @@ bool CaptureSummary::operator==( const CaptureSummary& other ) const
         return std::tie( s.packets, s.bytes, s.durationSeconds, s.firstTimeUtc, s.lastTimeUtc,
                          s.linkTypeNames, s.protocolPackets, s.protocolBytes, s.endpointPackets,
                          s.tunnelEndpointPackets, s.tcpMarkers, s.cutPackets, s.endsInsideRecord,
-                         s.streamCap, s.otherEndpointPackets );
+                         s.streamCap, s.otherEndpointPackets, s.tlsSessionsDecrypted,
+                         s.keyLogError );
     };
     return fields( *this ) == fields( other );
 }

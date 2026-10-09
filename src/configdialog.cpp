@@ -29,10 +29,12 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -96,6 +98,34 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     previewLayout->addRow( QStringLiteral( "At most:" ), previewChars_ );
     previewLayout->addRow( tcpTimestamps_ );
 
+    // TLS decryption
+    keyLogPath_ = new QLineEdit;
+    keyLogPath_->setObjectName( "keyLogPath" );
+    keyLogPath_->setPlaceholderText( QStringLiteral( "No key log: TLS stays encrypted" ) );
+    keyLogPath_->setClearButtonEnabled( true );
+    auto* browse = new QPushButton( QStringLiteral( "Browse\u2026" ) );
+    browse->setObjectName( "keyLogBrowse" );
+    connect( browse, &QPushButton::clicked, this, [ this ] {
+        const auto path = QFileDialog::getOpenFileName(
+            this, QStringLiteral( "TLS Key Log File" ), keyLogPath_->text(),
+            QStringLiteral( "Key log files (*.log *.txt *.keys *.keylog);;All files (*)" ) );
+        if ( !path.isEmpty() ) {
+            keyLogPath_->setText( path );
+        }
+    } );
+    auto* keyLogRow = new QHBoxLayout;
+    keyLogRow->addWidget( keyLogPath_ );
+    keyLogRow->addWidget( browse );
+    auto* tls = new QGroupBox( QStringLiteral( "TLS decryption" ) );
+    auto* tlsLayout = new QFormLayout( tls );
+    tlsLayout->addRow( QStringLiteral( "Key log file:" ), keyLogRow );
+    auto* tlsNote = new QLabel( QStringLiteral(
+        "<small>The file SSLKEYLOGFILE makes browsers, curl and OpenSSL write. Its secrets "
+        "decrypt every session they belong to: keep it as private as the traffic itself. The "
+        "plugin only reads it, while converting, and never shows or stores a secret.</small>" ) );
+    tlsNote->setWordWrap( true );
+    tlsLayout->addRow( tlsNote );
+
     // Memory caps
     maxStreams_ = countBox( "maxStreams", kMinCap, kMaxStreamCap );
     maxEndpoints_ = countBox( "maxEndpoints", kMinCap, kMaxEndpointCap );
@@ -131,6 +161,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     auto* layout = new QVBoxLayout( this );
     layout->addWidget( columns );
     layout->addWidget( previewBox );
+    layout->addWidget( tls );
     layout->addWidget( advanced );
     layout->addWidget( note );
     layout->addWidget( buttons );
@@ -150,6 +181,7 @@ void ConfigDialog::showOptions( const ConversionOptions& options )
     maxStreams_->setValue( static_cast<int>( options.maxStreams ) );
     maxEndpoints_->setValue( static_cast<int>( options.maxEndpoints ) );
     reassemblyMegabytes_->setValue( static_cast<int>( options.reassemblyMegabytes ) );
+    keyLogPath_->setText( options.keyLogPath );
 }
 
 ConversionOptions ConfigDialog::options() const
@@ -163,6 +195,7 @@ ConversionOptions ConfigDialog::options() const
     options.maxStreams = static_cast<size_t>( maxStreams_->value() );
     options.maxEndpoints = static_cast<size_t>( maxEndpoints_->value() );
     options.reassemblyMegabytes = static_cast<size_t>( reassemblyMegabytes_->value() );
+    options.keyLogPath = keyLogPath_->text().trimmed();
     return options;
 }
 

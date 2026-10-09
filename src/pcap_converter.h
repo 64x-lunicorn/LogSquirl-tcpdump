@@ -93,6 +93,13 @@ struct CaptureSummary {
     /// of all those addresses together.
     std::optional<uint64_t> otherEndpointPackets;
 
+    /// Set when a TLS key log was given (ConversionOptions::keyLogPath):
+    /// the TLS sessions with records decrypted.
+    std::optional<uint64_t> tlsSessionsDecrypted;
+    /// Why the key log could not be read, when it could not: never any of
+    /// its contents.
+    std::string keyLogError;
+
     bool operator==( const CaptureSummary& other ) const;
     bool operator!=( const CaptureSummary& other ) const
     {
@@ -191,6 +198,9 @@ struct ConversionOptions {
     /// Whether every TCP segment shows its timestamps option in Info, as
     /// Wireshark does, rather than the SYNs only (showTcpTimestamps()).
     bool tcpTimestamps = false;
+    /// The TLS key log (SSLKEYLOGFILE) to decrypt TLS sessions with
+    /// (tls_decryption.h); empty: none.  Read only, while converting.
+    QString keyLogPath;
 };
 
 /**

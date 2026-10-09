@@ -228,6 +228,12 @@ Line readLine( const QString& text )
     if ( separator >= 0 ) {
         line.description = line.info.mid( separator + 3 );
     }
+    // What decrypted TLS records carry, after the marker of the TLS
+    // Decryption (tls_decryption.h)
+    const QString decrypted = "TLS (decrypted) | ";
+    if ( line.description.startsWith( decrypted ) ) {
+        line.description = line.description.mid( decrypted.size() );
+    }
     return line;
 }
 
@@ -449,6 +455,28 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TLS",
                 { 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 24, 25 } }, // Continuations too
               { "TCP handshakes", { 1, 2, 12, 13, 21, 22 } },
+          } },
+        { "tls-decrypt.txt",
+          {
+              // the request after the record the capture lost
+              { "TCP problems", { 40 } },
+              { "TCP SYN/FIN",
+                { 1,  2,  12, 13, 15, 16, 25, 26, 28, 29, 42, 43, 45,  46,  56,  57,
+                  59, 60, 70, 71, 73, 74, 84, 85, 87, 88, 97, 98, 100, 101, 111, 112 } },
+              // the hellos, the decrypted handshakes and alerts, and the two
+              // sessions without their secrets
+              { "TLS", { 4,  5,  6,   7,   10,  11,  12,  13,  14,  18,  19,  25,  26, 27, 31,
+                         32, 33, 34,  36,  38,  39,  41,  42,  43,  44,  48,  49,  50, 51, 54,
+                         55, 56, 57,  58,  62,  63,  64,  65,  68,  69,  70,  71,  72, 76, 77,
+                         78, 79, 82,  83,  84,  85,  86,  90,  91,  92,  93,  94,  95, 96, 97,
+                         98, 99, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113 } },
+              { "TCP handshakes",
+                { 1,  2,  12, 13, 15, 16, 25, 26, 28, 29, 42, 43, 45,  46,  56,  57,
+                  59, 60, 70, 71, 73, 74, 84, 85, 87, 88, 97, 98, 100, 101, 111, 112 } },
+              { "TCP errors", { 40 } },
+              // the decrypted HTTP/1.1 requests and responses
+              { "HTTP", { 8, 9, 35, 37, 40, 52, 53, 66, 67, 80, 81 } },
+              { "HTTP 4xx/5xx", { 53 } },
           } },
         { "tunnels.txt",
           {

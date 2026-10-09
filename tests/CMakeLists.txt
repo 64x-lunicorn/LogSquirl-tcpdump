@@ -56,6 +56,10 @@ add_executable(logsquirl_tcpdump_tests
     tcp_options_test.cpp
     byte_stream_orderer_test.cpp
     tcp_reassembly_test.cpp
+    hpack_test.cpp
+    tls_crypto_test.cpp
+    tls_key_log_test.cpp
+    tls_decryption_test.cpp
     tunnels_test.cpp
     wire_bytes_test.cpp
 )
@@ -76,6 +80,7 @@ target_link_libraries(logsquirl_tcpdump_tests
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        mbedcrypto
 )
 
 # Compile plugin sources into the test binary
@@ -99,6 +104,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/describe_tls.cpp"
         "${CMAKE_SOURCE_DIR}/src/describe_quic.cpp"
         "${CMAKE_SOURCE_DIR}/src/describe_socks.cpp"
+        "${CMAKE_SOURCE_DIR}/src/hpack.cpp"
         "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
@@ -106,6 +112,9 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
         "${CMAKE_SOURCE_DIR}/src/byte_stream_orderer.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_reassembly.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tls_crypto.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tls_key_log.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tls_decryption.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"

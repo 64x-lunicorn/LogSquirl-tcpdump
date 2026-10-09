@@ -31,6 +31,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QLineEdit;
 class QSpinBox;
 
 namespace tcpdump {
@@ -63,6 +64,7 @@ private:
     QSpinBox* maxStreams_ = nullptr;
     QSpinBox* maxEndpoints_ = nullptr;
     QSpinBox* reassemblyMegabytes_ = nullptr;
+    QLineEdit* keyLogPath_ = nullptr;
 };
 
 } // namespace tcpdump

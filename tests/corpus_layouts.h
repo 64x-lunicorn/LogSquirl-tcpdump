@@ -84,6 +84,12 @@ inline QStringList convertedLines( const QString& capture, const tcpdump::LineLa
 {
     tcpdump::ConversionOptions options;
     options.layout = layout;
+    // As the corpus test converts it: with the key log beside it, if any.
+    const QFileInfo info( capture );
+    const auto keyLog = info.dir().filePath( info.completeBaseName() + ".keys" );
+    if ( QFile::exists( keyLog ) ) {
+        options.keyLogPath = keyLog;
+    }
     const auto result = tcpdump::convertPcap( capture, outputRoot, nullptr, {}, options );
     REQUIRE( result.status == tcpdump::ConversionResult::Status::Converted );
     QFile file( result.outputPath );
