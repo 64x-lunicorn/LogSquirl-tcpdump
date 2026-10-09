@@ -228,6 +228,20 @@ interfaces declared so far, each once, so a pcapng without packets names
 its interfaces' link types in the summary, as an empty pcap names its
 header's.
 
+A reader can also be stopped and taken up again elsewhere, for the Packet
+Panel (see *Packet Panel* below). `checkpoint()`, taken after a packet,
+gives a `ReaderCheckpoint`: the packets before it, where the next record
+starts in the source, and a `ReaderState` the reader needs to go on there
+(none for a pcap, whose global header `open()` reads again; the section's
+byte order and interfaces for a pcapng, shared between checkpoints until an
+interface is declared). `resume()`, called on a newly opened reader of the
+same file, skips to the checkpoint and goes on numbering from it. After
+each packet the reader also tells where its record lies (`recordOffset()`,
+`recordLength()`: the pcap record header or the pcapng block, header and
+all), its bytes as dissected (`packetBytes()`, at most
+`kMaxDissectedBytes`) and the byte order they were read in
+(`byteSwapped()`).
+
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
 ports and the transport, and returns a protocol label and a one-line
@@ -721,8 +735,16 @@ the result becomes Cancelled and the output is removed.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`,
 the payload preview (`preview`, `previewChars`) and the stream and endpoint
-caps. The defaults write the text of `tests/corpus`; any other choice is
+caps; besides, `checkpointInterval`, which tests lower. The defaults write the text of `tests/corpus`; any other choice is
 tested by deriving its text from that one, not by more committed text.
+
+While it converts, the Converter notes every packet in a `CaptureIndex`
+(`capture_index.h/cpp`), which keeps a `ReaderCheckpoint` every
+`kCheckpointInterval` (10,000) packets, the packet count, and the capture
+file's canonical path, size and modification time; a Converted result
+carries it as `index`. The capture file is opened by `openRegularFile()` and
+read through a `FileSource` (`capture_file.h/cpp`), which the
+`CaptureCursor` shares.
 
 ### Settings and configuration dialog (`settings.h/cpp`, `configdialog.h/cpp`)
 `loadConversionOptions()` and `saveConversionOptions()` keep the
@@ -756,8 +778,9 @@ Qt UI that provides:
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
+- The Packet Panel (see *Packet Panel* below), which takes the room left
 - The summary of the capture in the tab in front. Every converted capture's
-  summary is kept for the session, under the path of the text file written
+  summary, and its `CaptureIndex`, is kept for the session, under the path of the text file written
   for it (canonical, so that the host's spelling of the path finds it); the
   plugin's active-file callback calls `showSummaryFor()` on every tab
   switch, which shows the kept summary or "No capture in this tab." for a
@@ -781,10 +804,73 @@ directories are left alone. Only regular files are read, so the worker
 cannot block on a FIFO or device; destroying the widget cancels a running
 conversion and waits for the worker.
 
+### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`)
+The sidebar's companion to the packet list: the layer tree and hex dump of
+the packet of the selected line, as Wireshark's lower panes. Three parts,
+each usable on its own by later features (follow-stream content, packet
+export, conversation statistics):
+
+- **The line → record index.** `CaptureIndex` (see *Converter*) is kept
+  with the capture's summary in the sidebar, as a
+  `shared_ptr<const CaptureIndex>`, under the text file's path. A
+  `CaptureCursor` over it reads packet N (`read(number, CapturedPacket&)`):
+  from the nearest checkpoint before N (`nearest()`), or on from where the
+  cursor is when N lies ahead and no checkpoint lies between, so a sorted
+  set of packets is read in one pass from front to back. At most
+  `kCheckpointInterval - 1` packets are read to reach one; no packet and no
+  per-packet offset is kept in memory. A `CapturedPacket` holds the
+  `PacketRecord` as the reader dissected it (without what its stream adds:
+  stream number, stream labels, TCP analysis), its captured bytes, the byte
+  order, and its record's offset and length in the file. Before every read
+  the file's size and modification time are compared with those at the
+  conversion (`fileProblem()`): a changed or removed file is reported with
+  a message for the user, never misread. A live capture would keep adding
+  checkpoints and update the file's identity as it grows.
+- **The layer description.** The dissectors describe the layers they read
+  when the `PacketRecord`'s `layers` points at a `PacketLayers`: each
+  header as a `PacketLayer` (name, offset, length) with its `LayerField`s
+  (name, value as shown, offset, length), outermost first. They pass
+  pointers into the packet, which `PacketLayers` turns into offsets cut to
+  the captured bytes. The payload is a layer named by the Payload
+  Describer's label ("Data" without one) with its description as a field;
+  what only its stream tells is not known for a packet read alone.
+  `dissectLayers()` dissects one record that way behind a Frame layer
+  (number, time, lengths, link type). The Converter leaves `layers` null,
+  so its output and speed are unchanged; a new dissector should describe
+  its header with `layer()` and `field()` behind `if ( auto* layers =
+  pkt.layers )`, using `hexField()`, `etherTypeField()` and
+  `ipProtocolField()` for values.
+- **The widget.** `PacketPanel` gets the tab in front's index from
+  `SidebarWidget::showSummaryFor()` (null for a foreign tab) and reads the
+  selection through `get_selected_log_lines`. LogSquirl has no
+  selection-changed callback, so it asks every `kPollIntervalMs` (250 ms)
+  while it is visible: the timer starts in `showEvent()` and stops in
+  `hideEvent()`, and a selection whose text and result did not change
+  leaves the panel as it is. `refresh()` asks at once; Plugins → tcpdump →
+  Packet details calls it through `SidebarWidget::showPacketDetails()`,
+  which notifies the packet's layers when the panel is out of view. The
+  first selected line is read with `packetLineRegex()`; a line that is not a
+  packet line, no selection, a foreign tab or a cursor error show the
+  reason in the status line. The tree items keep their layer's or field's
+  offset and length; selecting one highlights them in the dump through
+  `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
+  and ASCII on each line. The packet is read on the UI thread: at most
+  `kCheckpointInterval` records from a local file.
+
+Without `selectedLogLines` (a host older than 26.11) there is no Packet
+details entry and no polling; the panel says what it needs.
+`capture_index_test.cpp` reads every packet of every corpus capture (pcap
+and pcapng) in shuffled order with a checkpoint every 4 packets and checks
+it against its line and an in-memory parse, and that its layers stay
+within its bytes; `packet_layers_test.cpp` checks layer and field names,
+values and offsets on built packets; `packet_panel_test.cpp` drives the
+panel through the `FakeHost` (scripted selection, active file, call count
+of `get_selected_log_lines`).
+
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entries (Open pcap…, and Follow stream where the host can serve
-it) and the active-file callback with the host application. No exception may leave them: their work runs
+the menu entries (Open pcap…, and Packet details and Follow stream where
+the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
