@@ -378,6 +378,24 @@ enum class CaptureFormat : uint8_t {
 size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
                          std::string& error );
 
+/// Where a record of a capture lies in its source: a header, a block, a packet's record.
+struct RecordSpan {
+    uint64_t offset = 0; ///< Where it starts.
+    uint64_t length = 0; ///< Its length, header and all.
+};
+
+/**
+ * The records a capture file needs ahead of a packet for the packet's record
+ * to be read as it is: what a file of some of its packets copies before them.
+ */
+struct CaptureHeaders {
+    CaptureFormat format = CaptureFormat::Pcap;
+    /// A pcap's global header; or a pcapng's section header block, then the
+    /// interface description blocks its section declared so far, in order,
+    /// so that a packet block's interface ID is the index of its own.
+    std::vector<RecordSpan> records;
+};
+
 /**
  * What a reader needs besides a position to go on reading a capture there,
  * such as the interfaces a pcapng section declared before it: each reader
@@ -492,6 +510,13 @@ public:
         return recordLength_;
     }
 
+    /// The records a file of the last packet returned needs ahead of it;
+    /// none before open().
+    virtual CaptureHeaders headers() const
+    {
+        return {};
+    }
+
     /// The captured bytes of the last packet returned, as it was dissected:
     /// at most kMaxDissectedBytes of them.
     const std::vector<uint8_t>& packetBytes() const
@@ -564,6 +589,9 @@ public:
     std::vector<uint32_t> linkTypes() const override;
 
     bool resume( const ReaderCheckpoint& checkpoint ) override;
+
+    /// The global header.
+    CaptureHeaders headers() const override;
 
     const PcapGlobalHeader& header() const
     {

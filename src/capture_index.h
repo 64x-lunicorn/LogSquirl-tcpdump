@@ -123,6 +123,9 @@ struct CapturedPacket {
     bool byteSwapped = false;  ///< As CaptureReader::byteSwapped() said.
     uint64_t recordOffset = 0; ///< Where its record starts in the capture file.
     uint64_t recordLength = 0; ///< Its record's length in the file, header and all.
+    /// The records a file of it needs ahead of it, where they lie in the
+    /// capture file: its format's header, a pcapng section's interfaces.
+    CaptureHeaders headers;
 };
 
 /**

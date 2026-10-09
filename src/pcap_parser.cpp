@@ -1225,6 +1225,15 @@ bool PcapReader::resume( const ReaderCheckpoint& checkpoint )
     return true;
 }
 
+CaptureHeaders PcapReader::headers() const
+{
+    CaptureHeaders headers;
+    if ( headerRead_ ) {
+        headers.records.push_back( { start_, 24 } );
+    }
+    return headers;
+}
+
 std::vector<uint32_t> PcapReader::linkTypes() const
 {
     if ( !headerRead_ ) {

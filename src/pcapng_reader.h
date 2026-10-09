@@ -98,6 +98,10 @@ public:
 
     bool resume( const ReaderCheckpoint& checkpoint ) override;
 
+    /// The section header block of the last packet's section and the
+    /// interface description blocks declared in it so far.
+    CaptureHeaders headers() const override;
+
 private:
     /// A timestamp unit: 10^-exponent or, if binary, 2^-exponent seconds.
     struct TimeUnit {
@@ -110,6 +114,7 @@ private:
         uint32_t snaplen = 0; ///< 0: no limit
         TimeUnit unit;
         TimePrecision precision = TimePrecision::Microseconds;
+        RecordSpan block; ///< Its interface description block.
     };
 
     struct BlockHeader {
@@ -122,6 +127,7 @@ private:
     /// What a checkpoint keeps of the section it lies in.
     struct SectionState : ReaderState {
         bool swap = false;
+        RecordSpan sectionHeader;
         std::vector<Interface> interfaces;
     };
 
@@ -135,6 +141,7 @@ private:
     bool readPacket( BlockHeader& block, PacketRecord& pkt );
     bool readBlocksUpToPacket();
 
+    RecordSpan sectionHeader_;          ///< The current section's header block.
     std::vector<Interface> interfaces_; ///< The current section's.
     /// The section state the last checkpoint kept, while it is still current.
     mutable std::shared_ptr<const SectionState> sectionState_;

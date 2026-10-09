@@ -62,6 +62,7 @@ add_library(logsquirl_tcpdump SHARED
     src/conversations.cpp
     src/capture_file.cpp
     src/capture_index.cpp
+    src/packet_export.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/settings.cpp

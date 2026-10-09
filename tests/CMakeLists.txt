@@ -22,6 +22,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     packet_layers_test.cpp
     capture_index_test.cpp
+    packet_export_test.cpp
     link_layers_test.cpp
     socks_test.cpp
     tls_test.cpp
@@ -102,6 +103,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
