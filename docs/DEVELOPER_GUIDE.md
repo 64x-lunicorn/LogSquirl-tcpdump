@@ -73,8 +73,18 @@ hit.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture with `PcapReader`, formats each packet and
-appends its line to a new output file (created with `NewOnly`, owner-only
-permissions), reporting progress and checking a cancel flag between packets.
+appends its line to a new output file, reporting progress and checking a
+cancel flag between packets. The file, `<name>.log`, is created with
+`NewOnly` and owner-only permissions in a new
+`logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
+output root that only the user can enter. The result is one of three
+outcomes and a `CaptureSummary`: Converted (with the output path), Failed
+(with a message) or Cancelled. Failed is the only error mode: an unreadable
+input, an output that cannot be created or written, a memory allocation
+failure or any other exception ends as Failed, and nothing is left behind.
+`applyCancelRequest()` decides, for the Converter and its caller alike,
+that a cancel request wins even over a conversion that had just finished:
+the result becomes Cancelled and the output is removed.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:
@@ -83,11 +93,12 @@ Qt UI that provides:
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints, packets per second, file size, link-layer type name
 
-It runs `convertPcap()` on a worker thread of its own `QThreadPool` and shows
-the outcome on the GUI thread. Each conversion writes to a new
-`logsquirl-tcpdump-<pid>-XXXXXX` directory in the system's temporary
-directory (`tempdirs.h/cpp`); a failed or cancelled conversion removes it at
-once. The process ID in the name is the only record of the directories of
+It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
+the system's temporary directory as the output root, and shows the outcome
+on the GUI thread: it prints the summary it is given and catches nothing
+itself. A failed or cancelled conversion leaves no directory behind; a
+converted one's is kept for its tab. The process ID in the name is the only
+record of the directories of
 files opened in tabs, so that it survives a runtime disable, update and
 re-enable of the plugin: when LogSquirl quits, every directory with this
 process's ID is removed, and at `init()` those of processes that no longer

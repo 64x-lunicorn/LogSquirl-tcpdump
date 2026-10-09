@@ -25,11 +25,16 @@
 #include "pcap_converter.h"
 
 #include "packet_formatter.h"
+#include "tempdirs.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QTemporaryDir>
 
 #include <algorithm>
+#include <exception>
+#include <new>
 
 #ifdef Q_OS_UNIX
 #include <cerrno>
@@ -155,53 +160,65 @@ bool openRegularFile( const QString& path, QFile& file, QString& error )
     return true;
 }
 
-} // namespace
-
-ConversionResult convertPcap( const QString& inputPath, const QString& outputPath,
-                              const std::atomic_bool* cancel,
-                              const std::function<void( int )>& progress,
-                              const ConversionOptions& options )
+/// A Failed result with @p error.
+ConversionResult failed( const QString& error )
 {
     ConversionResult result;
-    CaptureStats stats;
-    stats.maxEndpoints = options.maxEndpoints;
+    result.status = ConversionResult::Status::Failed;
+    result.error = error;
+    return result;
+}
 
+/// The conversion itself; whatever it throws, convertPcap() turns into Failed.
+ConversionResult convertOrThrow( const QString& inputPath, const QString& outputRoot,
+                                 const std::atomic_bool* cancel,
+                                 const std::function<void( int )>& progress,
+                                 const ConversionOptions& options )
+{
     QFile input;
-    if ( !openRegularFile( inputPath, input, result.error ) ) {
-        return result;
+    QString inputError;
+    if ( !openRegularFile( inputPath, input, inputError ) ) {
+        return failed( inputError );
     }
     FileSource source( input );
     PcapReader reader( source );
     if ( !reader.open() ) {
-        result.error = QString::fromStdString( reader.error() );
-        return result;
+        return failed( QString::fromStdString( reader.error() ) );
     }
 
-    QFile output( outputPath );
+    // The directory is removed with this object unless the conversion ends
+    // Converted: on every other return, and when an exception unwinds.
+    QTemporaryDir outputDir( tempDirTemplate( outputRoot ) );
+    if ( !outputDir.isValid() ) {
+        return failed( QStringLiteral( "Cannot create a temporary directory: %1" )
+                           .arg( outputDir.errorString() ) );
+    }
+    auto baseName = QFileInfo( inputPath ).completeBaseName();
+    if ( baseName.isEmpty() ) {
+        baseName = QStringLiteral( "capture" );
+    }
+    QFile output( outputDir.filePath( baseName + QStringLiteral( ".log" ) ) );
     // Never write into an existing file or through a link planted in its place.
     if ( !output.open( QIODevice::WriteOnly | QIODevice::NewOnly | QIODevice::Text ) ) {
-        result.error
-            = QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() );
-        return result;
+        return failed(
+            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
     }
     output.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
-    auto fail = [ &output, &result ]( const QString& error ) {
-        output.remove();
-        result.status = ConversionResult::Status::Failed;
-        result.error = error;
-        return result;
+    auto writeFailed = [ &output ] {
+        return failed(
+            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
     };
-
     auto writeLine = [ &output ]( const std::string& line ) {
         return output.write( line.data(), static_cast<qint64>( line.size() ) )
                    == static_cast<qint64>( line.size() )
                && output.write( "\n", 1 ) == 1;
     };
 
+    CaptureStats stats;
+    stats.maxEndpoints = options.maxEndpoints;
     PacketFormatter formatter( reader.header().nanoseconds, options.maxStreams );
     if ( !writeLine( formatter.header() ) ) {
-        return fail(
-            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
+        return writeFailed();
     }
 
     const auto inputSize = std::max<qint64>( input.size(), 1 );
@@ -209,14 +226,13 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
         if ( cancel && cancel->load() ) {
-            output.remove();
+            ConversionResult result;
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt ) ) ) {
-            return fail(
-                QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
+            return writeFailed();
         }
         if ( progress ) {
             const auto permille = static_cast<int>( std::min<uint64_t>(
@@ -227,20 +243,48 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
             }
         }
     }
-    if ( cancel && cancel->load() ) {
-        output.remove();
-        result.status = ConversionResult::Status::Cancelled;
-        return result;
-    }
     if ( !output.flush() ) {
-        return fail(
-            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
+        return writeFailed();
     }
     output.close();
 
-    result.summary = summarise( std::move( stats ), formatter, reader, options.maxStreams );
+    ConversionResult result;
     result.status = ConversionResult::Status::Converted;
-    return result;
+    result.outputPath = output.fileName();
+    result.summary = summarise( std::move( stats ), formatter, reader, options.maxStreams );
+    outputDir.setAutoRemove( false );
+    return applyCancelRequest( std::move( result ), cancel );
+}
+
+} // namespace
+
+ConversionResult convertPcap( const QString& inputPath, const QString& outputRoot,
+                              const std::atomic_bool* cancel,
+                              const std::function<void( int )>& progress,
+                              const ConversionOptions& options )
+{
+    try {
+        return convertOrThrow( inputPath, outputRoot, cancel, progress, options );
+    } catch ( const std::bad_alloc& ) {
+        return failed( QStringLiteral( "Not enough memory to read the capture" ) );
+    } catch ( const std::exception& e ) {
+        return failed( QString::fromUtf8( e.what() ) );
+    } catch ( ... ) {
+        return failed( QStringLiteral( "Unknown error" ) );
+    }
+}
+
+ConversionResult applyCancelRequest( ConversionResult result, const std::atomic_bool* cancel )
+{
+    if ( !cancel || !cancel->load() ) {
+        return result;
+    }
+    if ( !result.outputPath.isEmpty() ) {
+        QDir( QFileInfo( result.outputPath ).absolutePath() ).removeRecursively();
+    }
+    ConversionResult cancelled;
+    cancelled.status = ConversionResult::Status::Cancelled;
+    return cancelled;
 }
 
 } // namespace tcpdump

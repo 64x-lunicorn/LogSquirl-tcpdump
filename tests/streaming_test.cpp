@@ -29,8 +29,11 @@
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 
+#include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+
+#include <stdexcept>
 
 using namespace tcpdump;
 using namespace tcpdump_test;
@@ -51,6 +54,12 @@ QString writeFile( const QTemporaryDir& dir, const QString& name, const Bytes& c
                          static_cast<qint64>( content.size() ) )
              == static_cast<qint64>( content.size() ) );
     return path;
+}
+
+/// Whether @p root holds no output directory (and no file) at all.
+bool nothingBelow( const QTemporaryDir& root )
+{
+    return QDir( root.path() ).isEmpty();
 }
 
 QStringList readLines( const QString& path )
@@ -173,28 +182,33 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
 SCENARIO( "A capture is converted to a text file packet by packet", "[converter]" )
 {
     QTemporaryDir dir;
+    QTemporaryDir out;
     REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
 
     GIVEN( "a capture with three packets" )
     {
         auto bytes = pcapOf( { udpPacket( 1111 ), udpPacket( 2222 ), udpPacket( 1111 ) } );
         const auto input = writeFile( dir, "three.pcap", bytes );
-        const auto output = dir.filePath( "three.log" );
 
         WHEN( "it is converted" )
         {
             std::vector<int> progress;
-            const auto result = convertPcap( input, output, nullptr,
+            const auto result = convertPcap( input, out.path(), nullptr,
                                              [ &progress ]( int p ) { progress.push_back( p ); } );
 
-            THEN( "the text file holds the same lines as formatting the parsed capture" )
+            THEN( "the text file, named after the capture in a directory of its own below the "
+                  "root, holds the same lines as formatting the parsed capture" )
             {
                 REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( QFileInfo( result.outputPath ).fileName() == "three.log" );
+                REQUIRE( QFileInfo( QFileInfo( result.outputPath ).absolutePath() ).absolutePath()
+                         == QFileInfo( out.path() ).absoluteFilePath() );
                 QStringList expected;
                 for ( const auto& line : formatAllPackets( parse( bytes ).packets ) ) {
                     expected << QString::fromStdString( line );
                 }
-                REQUIRE( readLines( output ) == expected );
+                REQUIRE( readLines( result.outputPath ) == expected );
             }
 
             THEN( "the summary covers every packet, and nothing was cut" )
@@ -219,12 +233,51 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
         WHEN( "the conversion is cancelled" )
         {
             std::atomic_bool cancel{ true };
-            const auto result = convertPcap( input, output, &cancel );
+            const auto result = convertPcap( input, out.path(), &cancel );
 
-            THEN( "it says so and leaves no output file behind" )
+            THEN( "it says so and leaves nothing behind" )
             {
                 REQUIRE( result.status == ConversionResult::Status::Cancelled );
-                REQUIRE_FALSE( QFile::exists( output ) );
+                REQUIRE( result.outputPath.isEmpty() );
+                REQUIRE( nothingBelow( out ) );
+            }
+        }
+
+        WHEN( "the progress callback throws in the middle of the capture" )
+        {
+            const auto result = convertPcap( input, out.path(), nullptr, []( int ) {
+                throw std::runtime_error( "the disk is on fire" );
+            } );
+
+            THEN( "the conversion fails with that message and leaves nothing behind" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Failed );
+                REQUIRE( result.error == "the disk is on fire" );
+                REQUIRE( nothingBelow( out ) );
+            }
+        }
+
+        WHEN( "memory runs out in the middle of the capture" )
+        {
+            const auto result
+                = convertPcap( input, out.path(), nullptr, []( int ) { throw std::bad_alloc(); } );
+
+            THEN( "the conversion fails saying so" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Failed );
+                REQUIRE( result.error.contains( "Not enough memory" ) );
+                REQUIRE( nothingBelow( out ) );
+            }
+        }
+
+        WHEN( "the output root does not exist" )
+        {
+            const auto result = convertPcap( input, dir.filePath( "no-such-dir" ) );
+
+            THEN( "the conversion fails, naming the directory as the problem" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Failed );
+                REQUIRE( result.error.contains( "Cannot create a temporary directory" ) );
             }
         }
     }
@@ -245,14 +298,13 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
         const auto input = writeFile(
             dir, "many.pcap",
             pcapOf( { segmentFrom( 2, 1001 ), segmentFrom( 3, 1002 ), segmentFrom( 4, 1003 ) } ) );
-        const auto output = dir.filePath( "many.log" );
 
         WHEN( "it is converted with both caps lowered to one" )
         {
             ConversionOptions options;
             options.maxStreams = 1;
             options.maxEndpoints = 1;
-            const auto result = convertPcap( input, output, nullptr, {}, options );
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
 
             THEN( "the summary says that both caps were reached, and by how much" )
             {
@@ -266,7 +318,7 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
 
         WHEN( "it is converted with the default caps" )
         {
-            const auto result = convertPcap( input, output );
+            const auto result = convertPcap( input, out.path() );
 
             THEN( "neither cap is reached" )
             {
@@ -279,14 +331,13 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
     GIVEN( "a file that is not a capture" )
     {
         const auto input = writeFile( dir, "junk.pcap", Bytes( 100, 0xEE ) );
-        const auto output = dir.filePath( "junk.log" );
 
         THEN( "the conversion fails with the parser's error and writes nothing" )
         {
-            const auto result = convertPcap( input, output );
+            const auto result = convertPcap( input, out.path() );
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE( result.error.contains( "magic" ) );
-            REQUIRE_FALSE( QFile::exists( output ) );
+            REQUIRE( nothingBelow( out ) );
         }
     }
 
@@ -294,10 +345,64 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
     {
         THEN( "the conversion fails" )
         {
-            const auto result
-                = convertPcap( dir.filePath( "missing.pcap" ), dir.filePath( "x.log" ) );
+            const auto result = convertPcap( dir.filePath( "missing.pcap" ), out.path() );
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE_FALSE( result.error.isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "A cancel request wins, even over a conversion that has just finished", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+    const auto input = writeFile( dir, "done.pcap", pcapOf( { udpPacket( 1 ) } ) );
+
+    GIVEN( "a conversion that completed" )
+    {
+        auto result = convertPcap( input, out.path() );
+        REQUIRE( result.status == ConversionResult::Status::Converted );
+        REQUIRE( QFile::exists( result.outputPath ) );
+
+        WHEN( "a cancel request came after it" )
+        {
+            std::atomic_bool cancel{ true };
+            const auto settled = applyCancelRequest( result, &cancel );
+
+            THEN( "it is cancelled and its output is gone" )
+            {
+                REQUIRE( settled.status == ConversionResult::Status::Cancelled );
+                REQUIRE( settled.outputPath.isEmpty() );
+                REQUIRE( nothingBelow( out ) );
+            }
+        }
+
+        WHEN( "no cancel was requested" )
+        {
+            std::atomic_bool cancel{ false };
+
+            THEN( "the result and its output stay as they are" )
+            {
+                REQUIRE( applyCancelRequest( result, &cancel ).status
+                         == ConversionResult::Status::Converted );
+                REQUIRE( applyCancelRequest( result, nullptr ).outputPath == result.outputPath );
+                REQUIRE( QFile::exists( result.outputPath ) );
+            }
+        }
+    }
+
+    GIVEN( "a conversion that failed" )
+    {
+        const auto result = convertPcap( dir.filePath( "missing.pcap" ), out.path() );
+        REQUIRE( result.status == ConversionResult::Status::Failed );
+
+        THEN( "a cancel request still wins" )
+        {
+            std::atomic_bool cancel{ true };
+            REQUIRE( applyCancelRequest( result, &cancel ).status
+                     == ConversionResult::Status::Cancelled );
         }
     }
 }
@@ -325,8 +430,7 @@ SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
 
             THEN( "the summary calls it " + name )
             {
-                const auto result = convertPcap(
-                    input, dir.filePath( QString( "link-%1.log" ).arg( linkType ) ) );
+                const auto result = convertPcap( input, dir.path() );
                 REQUIRE( result.status == ConversionResult::Status::Converted );
                 REQUIRE( result.summary.linkTypeName == name );
             }
@@ -340,7 +444,9 @@ SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
 SCENARIO( "Only regular files are converted", "[converter]" )
 {
     QTemporaryDir dir;
+    QTemporaryDir out;
     REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
 
     GIVEN( "a FIFO, which would block the reader until something writes to it" )
     {
@@ -349,10 +455,10 @@ SCENARIO( "Only regular files are converted", "[converter]" )
 
         THEN( "it is refused at once, with a message saying why" )
         {
-            const auto result = convertPcap( fifo, dir.filePath( "out.log" ) );
+            const auto result = convertPcap( fifo, out.path() );
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE( result.error.contains( "not a regular file" ) );
-            REQUIRE_FALSE( QFile::exists( dir.filePath( "out.log" ) ) );
+            REQUIRE( nothingBelow( out ) );
         }
 
         AND_GIVEN( "a symbolic link to it" )
@@ -362,7 +468,7 @@ SCENARIO( "Only regular files are converted", "[converter]" )
 
             THEN( "the link is refused too" )
             {
-                const auto result = convertPcap( link, dir.filePath( "out.log" ) );
+                const auto result = convertPcap( link, out.path() );
                 REQUIRE( result.status == ConversionResult::Status::Failed );
                 REQUIRE( result.error.contains( "not a regular file" ) );
             }
@@ -373,7 +479,7 @@ SCENARIO( "Only regular files are converted", "[converter]" )
     {
         THEN( "it is refused" )
         {
-            const auto result = convertPcap( "/dev/zero", dir.filePath( "out.log" ) );
+            const auto result = convertPcap( "/dev/zero", out.path() );
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE( result.error.contains( "not a regular file" ) );
         }
@@ -387,7 +493,7 @@ SCENARIO( "Only regular files are converted", "[converter]" )
 
         THEN( "it is converted" )
         {
-            REQUIRE( convertPcap( link, dir.filePath( "alias.log" ) ).status
+            REQUIRE( convertPcap( link, out.path() ).status
                      == ConversionResult::Status::Converted );
         }
     }

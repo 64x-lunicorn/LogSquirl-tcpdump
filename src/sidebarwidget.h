@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include <QFutureWatcher>
 #include <QLabel>
 #include <QProgressBar>
 #include <QPushButton>
@@ -98,8 +99,7 @@ private Q_SLOTS:
 
 private:
     /// Show the outcome of a conversion and return to idle.
-    void finishConversion( const QString& filePath, const QString& outPath,
-                           ConversionResult result );
+    void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
 
@@ -114,8 +114,8 @@ private:
     std::shared_ptr<std::atomic_bool> cancelRunning_;
     /// Where the private temporary directories are created.
     QString tempRoot_;
-    /// Temporary directory of the running conversion, which no tab shows yet.
-    QString runningDir_;
+    /// The running conversion's outcome, delivered on this thread.
+    QFutureWatcher<ConversionResult>* watcher_ = nullptr;
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
 };

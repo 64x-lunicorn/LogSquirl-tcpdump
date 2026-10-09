@@ -34,22 +34,17 @@
 #include "plugin.h"
 #include "tempdirs.h"
 
-#include <QDir>
-#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFutureWatcher>
 #include <QLocale>
 #include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
-#include <QTemporaryDir>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <exception>
 #include <map>
-#include <new>
 #include <vector>
 
 namespace tcpdump {
@@ -114,9 +109,10 @@ SidebarWidget::~SidebarWidget()
     }
     pool_.waitForDone();
 
-    // A running conversion's file never reached a tab.
-    if ( !runningDir_.isEmpty() ) {
-        QDir( runningDir_ ).removeRecursively();
+    // A conversion that finished before the cancel reached it wrote a file
+    // no tab will show: the cancel wins, and the file goes.
+    if ( watcher_ && watcher_->future().resultCount() > 0 ) {
+        applyCancelRequest( watcher_->result(), cancelRunning_.get() );
     }
 }
 
@@ -163,76 +159,41 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
 
-    // Write to a new file in a new directory that only the user can enter,
-    // so that no other user can read the capture's text or plant a file or
-    // link in its place, and no earlier tab's file is overwritten.  It is
-    // kept for its tab until LogSquirl quits.
-    QTemporaryDir tempDir( tempDirTemplate( tempRoot_ ) );
-    if ( !tempDir.isValid() ) {
-        ConversionResult result;
-        result.error = "Cannot create a temporary directory: " + tempDir.errorString();
-        finishConversion( filePath, {}, std::move( result ) );
-        return;
-    }
-    tempDir.setAutoRemove( false );
-    const auto outDir = tempDir.path();
-    auto baseName = QFileInfo( filePath ).completeBaseName();
-    if ( baseName.isEmpty() ) {
-        baseName = "capture";
-    }
-    const auto outPath = tempDir.filePath( baseName + ".log" );
-
     auto cancelled = std::make_shared<std::atomic_bool>( false );
     cancelRunning_ = cancelled;
-    runningDir_ = outDir;
     setConverting( true );
     summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
                                 .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
 
     // The watcher lives on this thread, so its signals are delivered here.
-    auto* watcher = new QFutureWatcher<ConversionResult>( this );
-    connect( watcher, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
+    watcher_ = new QFutureWatcher<ConversionResult>( this );
+    connect( watcher_, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
              &QProgressBar::setValue );
-    connect( watcher, &QFutureWatcher<ConversionResult>::finished, this,
-             [ this, watcher, cancelled, filePath, outDir, outPath ] {
-                 watcher->deleteLater();
+    connect( watcher_, &QFutureWatcher<ConversionResult>::finished, this,
+             [ this, cancelled, filePath ] {
                  ConversionResult result;
-                 if ( watcher->future().resultCount() > 0 ) {
-                     result = watcher->result();
+                 if ( watcher_->future().resultCount() > 0 ) {
+                     result = watcher_->result();
                  }
                  else {
                      result.error = "The conversion ended without a result";
                  }
-                 // Cancel wins even over a conversion that had just finished.
-                 if ( cancelled->load() ) {
-                     result.status = ConversionResult::Status::Cancelled;
-                 }
-                 if ( result.status != ConversionResult::Status::Converted ) {
-                     QDir( outDir ).removeRecursively();
-                 }
-                 finishConversion( filePath, outPath, std::move( result ) );
+                 finishConversion( filePath,
+                                   applyCancelRequest( std::move( result ), cancelled.get() ) );
              } );
 
-    watcher->setFuture( QtConcurrent::run( &pool_, [ filePath, outPath, cancelled ](
-                                                       QPromise<ConversionResult>& promise ) {
-        promise.setProgressRange( 0, 1000 );
-        ConversionResult result;
-        try {
-            result = convertPcap( filePath, outPath, cancelled.get(), [ &promise ]( int permille ) {
-                promise.setProgressValue( permille );
-            } );
-        } catch ( const std::bad_alloc& ) {
-            result = ConversionResult();
-            result.error = "Not enough memory to read the capture";
-        } catch ( const std::exception& e ) {
-            result = ConversionResult();
-            result.error = QString::fromUtf8( e.what() );
-        } catch ( ... ) {
-            result = ConversionResult();
-            result.error = "Unknown error";
-        }
-        promise.addResult( std::move( result ) );
-    } ) );
+    // The Converter writes into a new private directory below the temporary
+    // root, kept for its tab until LogSquirl quits, and reports every
+    // failure as a result: nothing is caught here.
+    const auto tempRoot = tempRoot_;
+    watcher_->setFuture( QtConcurrent::run(
+        &pool_, [ filePath, tempRoot, cancelled ]( QPromise<ConversionResult>& promise ) {
+            promise.setProgressRange( 0, 1000 );
+            promise.addResult(
+                convertPcap( filePath, tempRoot, cancelled.get(), [ &promise ]( int permille ) {
+                    promise.setProgressValue( permille );
+                } ) );
+        } ) );
 }
 
 void SidebarWidget::cancel()
@@ -255,11 +216,11 @@ void SidebarWidget::setConverting( bool converting )
     progressBar_->setValue( 0 );
 }
 
-void SidebarWidget::finishConversion( const QString& filePath, const QString& outPath,
-                                      ConversionResult result )
+void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
 {
     cancelRunning_.reset();
-    runningDir_.clear();
+    watcher_->deleteLater();
+    watcher_ = nullptr;
     setConverting( false );
 
     switch ( result.status ) {
@@ -282,7 +243,7 @@ void SidebarWidget::finishConversion( const QString& filePath, const QString& ou
 
     // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
+        g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
     }
 
     summaryLabel_->setText( summaryHtml( QFileInfo( filePath ).fileName(),
