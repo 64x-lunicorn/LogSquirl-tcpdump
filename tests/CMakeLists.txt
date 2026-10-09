@@ -5,10 +5,12 @@
 # ============================================================================
 
 include(FetchContent)
+# The release's source archive, pinned by its SHA-256 as zlib and Mbed TLS
+# are: a git tag can be moved, a hash cannot.
 FetchContent_Declare(
     Catch2
-    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG        v2.13.10
+    URL      https://github.com/catchorg/Catch2/archive/refs/tags/v2.13.10.tar.gz
+    URL_HASH SHA256=d54a712b7b1d7708bc7a819a8e6e47b2fde9536f487b89ccbca295072a7d9943
 )
 FetchContent_MakeAvailable(Catch2)
 

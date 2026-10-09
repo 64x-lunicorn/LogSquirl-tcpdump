@@ -855,7 +855,8 @@ No.    Stream  UTC Time                     Time           Source               
   by its SHA-256, and links it in statically (for gzip-compressed captures)
 - A C++17-capable compiler (GCC ≥ 9, Clang ≥ 14, MSVC ≥ 19.29)
 - Network access at configure time: CMake fetches Mbed TLS 3.6.7 (and,
-  for the tests, Catch2), pinned to its release and checked by its hash
+  for the tests, Catch2 2.13.10), each pinned to its release archive and
+  checked by its SHA-256
 
 ## Build
 
