@@ -154,6 +154,14 @@ public:
     /// been ended.
     void terminate();
 
+    /// Why the program failed, or else "<name> wrote on stderr:" and its
+    /// last lines; after waiting kSaidGrace for a program still running to
+    /// end, so that its complaint is in.  Empty if it said nothing.
+    std::string writerSaid() override;
+
+    /// How long writerSaid() waits for a program still running.
+    static constexpr std::chrono::milliseconds kSaidGrace{ 500 };
+
 protected:
     std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override;
     bool available() override;

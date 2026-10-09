@@ -367,8 +367,8 @@ SCENARIO( "Hostile interfaces and filters reach tcpdump as they are, run nothing
         const auto expectedFilter
             = excludeOwn ? "(" + filter + ") and not (host 10.9.8.7 and tcp port 2222)" : filter;
         REQUIRE( arguments
-                 == "[-i]\n[" + hostileInterface + "]\n[-s]\n[96]\n[-U]\n[-w]\n[-]\n[" + expectedFilter
-                        + "]\n" );
+                 == "[-i]\n[" + hostileInterface + "]\n[-s]\n[96]\n[-U]\n[-w]\n[-]\n["
+                        + expectedFilter + "]\n" );
         REQUIRE_FALSE( QFileInfo::exists( pwned ) );
     }
 }

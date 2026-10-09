@@ -216,6 +216,22 @@ std::optional<ConversionResult> streamFailure( const ByteSource& input )
                        .arg( QString::fromStdString( stream->error() ) ) );
 }
 
+/// Failed with @p error, the reader's: for a stream "Not a capture: …" with
+/// what its writer said (a capture program's stderr), which is where a
+/// program that writes text instead of a capture says why.
+ConversionResult notACapture( ByteSource& input, const std::string& error )
+{
+    auto* stream = dynamic_cast<StreamSource*>( &input );
+    if ( !stream ) {
+        return failed( QString::fromStdString( error ) );
+    }
+    auto message = QStringLiteral( "Not a capture: %1" ).arg( QString::fromStdString( error ) );
+    if ( const auto said = stream->writerSaid(); !said.empty() ) {
+        message += QLatin1Char( '\n' ) + QString::fromStdString( said );
+    }
+    return failed( message );
+}
+
 /// Stopped, if @p input is a stream that was stopped (rather than closed or
 /// broken off), for a stream whose header has not come.
 std::optional<ConversionResult> stoppedBeforeHeader( const ByteSource& input )
@@ -279,9 +295,14 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     if ( !reader.open() ) {
         // A stream stopped before its header came was not read: it did not
         // fail, and a cancel request still wins.
-        auto result = stoppedBeforeHeader( input ).value_or(
-            streamFailure( input ).value_or( failed( QString::fromStdString( reader.error() ) ) ) );
-        return applyCancelRequest( std::move( result ), cancel );
+        auto result = stoppedBeforeHeader( input );
+        if ( !result ) {
+            result = streamFailure( input );
+        }
+        if ( !result ) {
+            result = notACapture( input, reader.error() );
+        }
+        return applyCancelRequest( std::move( *result ), cancel );
     }
 
     // The directory is removed with this object unless the conversion ends
