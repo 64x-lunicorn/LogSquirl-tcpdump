@@ -95,6 +95,10 @@ struct MessageExtent {
     size_t length = 0;
     /// The message goes on past the bytes given.
     bool needsMore = false;
+    /// Its protocol is told by the stream, not by the message's bytes
+    /// (WebSocket): the parser could not describe it, so the TCP
+    /// Reassembly describes whole messages too, by describeTcpMessages().
+    bool describedInStream = false;
 
     /// A whole message is there.
     bool complete() const
@@ -111,10 +115,20 @@ struct MessageExtent {
  * (port 1883).  With @p framer other than 0, only that protocol is tried, as
  * a stream's later messages are of the protocol of its first.  With
  * @p stream, the payload's stream and direction, what its state knows
- * (SSH's phase) is kept to.
+ * (SSH's phase, a WebSocket upgrade, after which only WebSocket frames
+ * are framed) is kept to.
  */
 MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
                                 uint8_t framer = 0, const Stream* stream = nullptr );
+
+/**
+ * Describe the @p len bytes at @p data, whole messages of the protocol
+ * tcpMessageExtent() numbered @p framer, sent from @p srcPort to
+ * @p dstPort: WebSocket frames as such, any other protocol's messages as
+ * describePayload() does.
+ */
+PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_t srcPort,
+                                        uint16_t dstPort, uint8_t framer );
 
 /**
  * Put @p description in place of the one in @p pkt's Info (after
@@ -145,7 +159,11 @@ void redescribe( PacketRecord& pkt, const char* label, const std::string& descri
  * go.  A TCP stream that carried an SSH-2 banner is an SSH connection: a
  * direction's segments after its NEWKEYS are labelled SSHv2 and described
  * as "Client: Encrypted packet (len=N)", those before it no detector
- * recognised as the binary packets they begin with.  Packets of other
+ * recognised as the binary packets they begin with.  A TCP stream an HTTP
+ * "101 Switching Protocols" response with "Upgrade: websocket" upgraded is
+ * a WebSocket connection: its later segments are labelled WebSocket and
+ * their frames described, as far as the first kPayloadHeadBytes go (the
+ * TCP Reassembly describes them from all the bytes).  Packets of other
  * streams, and of streams past the stream cap, which have no state, are
  * left as they are.
  */
@@ -157,7 +175,8 @@ void describeInStream( PacketRecord& pkt, const Stream& stream );
  * packets: run on every packet, in capture order, after the TCP
  * Reassembly (after describeInStream() where there is none).  An SSH-2
  * banner makes the stream an SSH connection, a NEWKEYS encrypts what its
- * direction sends after it.
+ * direction sends after it, a 101 response with "Upgrade: websocket" makes
+ * it a WebSocket connection.
  */
 void rememberInStream( const PacketRecord& pkt, const Stream& stream );
 

@@ -384,7 +384,9 @@ port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
 `describe_someip.cpp` (SOME/IP and SOME/IP-SD, and the name table of
 `someip.h`), `describe_doip.cpp` (DoIP and the UDS messages of its
 diagnostic messages), `describe_ssh.cpp` (SSH's banner and key exchange,
-and its phases in the stream) and `describe_nmea.cpp`. They share the internal
+and its phases in the stream), `describe_websocket.cpp` (WebSocket frames
+on a stream an HTTP upgrade made WebSocket; no detector, as nothing in a
+frame tells it) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
@@ -403,7 +405,11 @@ of the detectors and in-stream passes the tables use.
   only in the header section (before the empty line), on a whole line the
   segment holds up to its line feed, its name in any case; its value is
   shown without the blanks around it, escaped and cut like every field.
-  SSDP (UDP 1900) is described the same way
+  A `101` response also shows its `Upgrade` and `Sec-WebSocket-Extensions`
+  headers, `HTTP/1.1 101 Switching Protocols, Upgrade: websocket,
+  Sec-WebSocket-Extensions: permessage-deflate`, and one whose Upgrade is
+  `websocket` (any case) gives its stream `StreamCue::WebSocketUpgrade`
+  (`isWebSocketUpgrade()`). SSDP (UDP 1900) is described the same way
 - HTTP/2: the connection preface, `PRI * HTTP/2.0`, is labelled `HTTP2`
   and described as `Magic`, then the frames behind it in the segment. A
   frame is named with its type and stream, `HEADERS[1]`, Wireshark's way,
@@ -554,6 +560,23 @@ of the detectors and in-stream passes the tables use.
   `StreamCue::SshBanner`, a NEWKEYS `StreamCue::SshNewKeys`; see
   `describeInStream()` and `rememberInStream()` for what the stream makes of
   them, and the TCP Reassembly for how `frameSshMessage()` frames them
+- WebSocket (RFC 6455), on TCP, only on a stream an HTTP 101 response
+  with `Upgrade: websocket` upgraded (no port, no detector): every frame
+  of a segment as Wireshark names it, up to eight, joined by `, `, then
+  `…`: `WebSocket` and its opcode (`Text`, `Binary`, `Continuation`,
+  `Connection Close`, `Ping`, `Pong`, else `Unknown 0x03`), `[FIN]`,
+  `[MASKED]`, `[COMPRESSED]` (RSV1, a permessage-deflate message, whose
+  bytes are not shown), `len=n` from the 7-, 16- or 64-bit length, then
+  for text the first 40 bytes of the payload, unmasked, quoted and escaped
+  (`"Hello"`, `"…"…` when longer) and for a close its status code, named
+  as Wireshark names it (`Normal Closure (1000)`, else `Status 4000`), and
+  its reason. A control frame without FIN, longer than 125 bytes or
+  compressed, a reserved opcode, a close with a one-byte payload and a
+  64-bit length with its top bit set are `[Malformed Packet]`, and the
+  bytes after them are not read as frames; a frame whose header is cut ends
+  in ` …`. `describeWebSocketFrames()` reads the captured bytes only;
+  `frameWebSocketFrame()` frames a frame by its header (2 to 14 bytes) and
+  payload length for the TCP Reassembly
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
   code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
@@ -697,7 +720,7 @@ of the detectors and in-stream passes the tables use.
   direction d sent its NEWKEYS. Every protocol a stream is found to speak
   (HTTP/2, MQTT, SSH, WebSocket) takes bits of this one byte, named on
   `StreamState`, not a field of its own: `StreamState` is paid once per
-  numbered stream. A NEWKEYS
+  numbered stream (two bytes and the bits 0x40 and 0x80 are left). A NEWKEYS
   may complete a message the TCP Reassembly put together (a key exchange
   reply too long for one segment), so the bits are set by
   `rememberInStream()`, which the Converter runs after the reassembly, from
@@ -709,6 +732,13 @@ of the detectors and in-stream passes the tables use.
   length, whatever the detectors made of it; before it, a segment no
   detector recognised (cut, malformed, on a port other than 22) is read as
   the binary packets in its first kPayloadHeadBytes
+- WebSocket's upgrade is kept in `StreamState::protocols` too, bit
+  `kWebSocket`, set by `rememberInStream()` from a 101 response's
+  `StreamCue::WebSocketUpgrade` (the response may be reassembled). After
+  it, `describeInStream()` labels every segment with payload `WebSocket`
+  and describes the frames in its first kPayloadHeadBytes, whatever the
+  detectors made of it; the TCP Reassembly then describes them from all
+  the bytes
 - The port hint, the last entry of both tables, names the service of a
   well-known port from the name tables, the source port's before the
   destination port's, and previews the payload: printable ASCII, other
@@ -950,7 +980,17 @@ before it in the bytes, a NEWKEYS with all the bytes after it, and in a
 direction past its NEWKEYS all its bytes as one whole message, so that no
 other framer takes an encrypted packet for the start of one of its own;
 a stream on port 22 whose banner the capture did not see is not framed,
-as its packets may be encrypted ones whose length is in the clear. A framer answers more
+as its packets may be encrypted ones whose length is in the clear, and on
+a stream upgraded to WebSocket (`StreamState::kWebSocket`), first and
+alone, as the stream carries nothing else, a WebSocket frame by its header
+and payload length. Nothing in a WebSocket frame tells it, so the parser
+cannot describe it: its framer marks its extents
+`MessageExtent::describedInStream`, and the reassembly describes a
+segment of whole frames too, from all its bytes, and reassembled frames by
+`describeTcpMessages()`, which knows the framer, not by
+`describePayload()`. A frame longer than the direction's limit is
+`[reassembly limit]`, and the segments after it are read as frames from
+their first byte, as the stream keeps no count of the bytes left. A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -1756,7 +1796,14 @@ exchange, NEWKEYS with and without an encrypted packet behind it and
 encrypted packets after, a connection on port 2222 told by its banner with
 the Diffie-Hellman group exchange, encrypted packets of a connection whose
 key exchange the capture lacks, and a packet_length and a padding_length
-the unencrypted phase does not allow, by `tests/make_ssh_corpus.py`. The link layers' tests,
+the unencrypted phase does not allow, by `tests/make_ssh_corpus.py`;
+`websocket.pcap`, a chat on port 80 from its upgrade to its closing
+handshake with masked and unmasked text, a ping and pong, a fragmented
+message, a binary frame with a 16-bit length, a long text frame over two
+segments and three frames in one segment, a connection that negotiated
+permessage-deflate with compressed frames, a ping without FIN and a close
+with a one-byte payload, and the same frames on a stream without the
+upgrade, by `tests/make_websocket_corpus.py`. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

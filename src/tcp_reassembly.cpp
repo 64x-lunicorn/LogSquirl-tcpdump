@@ -92,11 +92,11 @@ void mark( PacketRecord& pkt, const char* marker )
 }
 
 /// Describe @p pkt from the @p len bytes at @p data, whole messages of
-/// protocol @p label, put together from @p segments segments.
-void describeMessages( PacketRecord& pkt, const uint8_t* data, size_t len, const char* label,
-                       uint32_t segments )
+/// protocol @p framer, @p label, put together from @p segments segments.
+void describeMessages( PacketRecord& pkt, const uint8_t* data, size_t len, uint8_t framer,
+                       const char* label, uint32_t segments )
 {
-    const auto described = describePayload( Transport::Tcp, data, len, pkt.srcPort, pkt.dstPort );
+    const auto described = describeTcpMessages( data, len, pkt.srcPort, pkt.dstPort, framer );
     auto description = described.description;
     if ( segments > 1 ) {
         description += ( description.empty() ? "" : " " ) + std::string( "[reassembled from " )
@@ -254,6 +254,7 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
     completed_ = std::move( entry.held );
     entry.held = std::vector<uint8_t>();
     const auto segments = entry.segments;
+    const auto framer = entry.framer;
     const auto* label = entry.label;
     const auto key = keyOf( stream, stream.direction );
     if ( walk.incomplete.framer == 0 ) {
@@ -268,7 +269,7 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
         recharge( entry );
     }
     completed_.resize( walk.end );
-    describeMessages( pkt, completed_.data(), completed_.size(), label, segments );
+    describeMessages( pkt, completed_.data(), completed_.size(), framer, label, segments );
     return { { completed_.data(), completed_.size() }, segments };
 }
 
@@ -282,6 +283,11 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     }
     const auto walk = walkMessages( payload.data, payload.size, pkt, stream, first.framer );
     if ( walk.incomplete.framer == 0 ) {
+        if ( first.describedInStream && walk.end > 0 ) {
+            // Whole messages the parser could not tell: described from all
+            // the bytes, not only the first ones describeInStream() had.
+            describeMessages( pkt, payload.data, walk.end, first.framer, first.label, 1 );
+        }
         return {}; // whole messages: the parser described them
     }
 
@@ -311,7 +317,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
         describeSegment( pkt, first.label );
         return {};
     }
-    describeMessages( pkt, payload.data, walk.end, first.label, 1 );
+    describeMessages( pkt, payload.data, walk.end, first.framer, first.label, 1 );
     return { { payload.data, walk.end }, 1 };
 }
 

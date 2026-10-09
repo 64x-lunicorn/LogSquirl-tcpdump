@@ -36,7 +36,8 @@
  * tests/make_reassembly_corpus.py, mqtt.pcap by tests/make_mqtt_corpus.py,
  * sip.pcap by tests/make_sip_corpus.py, someip.pcap by
  * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py,
- * ssh.pcap by tests/make_ssh_corpus.py.
+ * ssh.pcap by tests/make_ssh_corpus.py, websocket.pcap by
+ * tests/make_websocket_corpus.py.
  * Captures of real loopback traffic, recorded by tests/make_real_corpus.sh,
  * stay uncommitted in tests/corpus/local and are converted too when present.
  * The malformed-*.pcap files, mutated captures from fuzzing,

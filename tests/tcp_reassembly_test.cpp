@@ -339,6 +339,51 @@ std::vector<Segment> operator+( std::vector<Segment> a, const std::vector<Segmen
     return a;
 }
 
+/// A WebSocket text frame carrying @p message, masked as a client's is.
+Bytes webSocketText( const std::string& message )
+{
+    static const uint8_t kMask[ 4 ] = { 0x01, 0x02, 0x03, 0x04 };
+    Bytes b{ 0x81 };
+    if ( message.size() < 126 ) {
+        b.push_back( static_cast<uint8_t>( 0x80 | message.size() ) );
+    }
+    else {
+        b.push_back( 0x80 | 126 );
+        putBE16( b, static_cast<uint16_t>( message.size() ) );
+    }
+    b.insert( b.end(), kMask, kMask + 4 );
+    for ( size_t i = 0; i < message.size(); ++i ) {
+        b.push_back( static_cast<uint8_t>( message[ i ] ) ^ kMask[ i % 4 ] );
+    }
+    return b;
+}
+
+/// The client's request to upgrade its connection to WebSocket.
+const Bytes kWebSocketRequest = text( "GET /chat HTTP/1.1\r\nHost: example.com\r\n"
+                                      "Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n" );
+
+/// The client's sequence number after webSocketUpgrade().
+const uint32_t kWebSocketClientSeq
+    = kClientIsn + 1 + static_cast<uint32_t>( kWebSocketRequest.size() );
+
+/// The upgrade of a connection to port 8080 to WebSocket: the client's
+/// request and the server's 101 response, after the handshake.
+std::vector<Segment> webSocketUpgrade()
+{
+    const auto& request = kWebSocketRequest;
+    const auto response = text( "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                "Connection: Upgrade\r\n\r\n" );
+    auto segments = handshake( 8080 ) + cut( request, {}, kClientIsn + 1, 8080 );
+    Segment reply;
+    reply.fromClient = false;
+    reply.seq = kServerIsn + 1;
+    reply.ack = kClientIsn + 1 + static_cast<uint32_t>( request.size() );
+    reply.payload = response;
+    reply.serverPort = 8080;
+    segments.push_back( reply );
+    return segments;
+}
+
 std::string reassembledFrom( uint32_t k )
 {
     return " [reassembled from " + std::to_string( k ) + " segments]";
@@ -643,6 +688,50 @@ SCENARIO( "A message split over segments is described once, where it completes",
         {
             REQUIRE( lines[ 3 ].description == "Client: Encrypted packet (len=300)" );
             REQUIRE( lines[ 4 ].description == "Client: Encrypted packet (len=306)" );
+        }
+    }
+
+    GIVEN( "WebSocket frames after the upgrade: one split across 2 segments, then several "
+           "in one segment, longer than the bytes the parser keeps" )
+    {
+        const auto split = webSocketText( std::string( 100, 'a' ) );
+        const auto several = webSocketText( std::string( 30, 'b' ) )
+                             + webSocketText( std::string( 30, 'c' ) ) + webSocketText( "d" );
+        const auto lines = converted(
+            webSocketUpgrade()
+            + cut( split + several, { 30, split.size() }, kWebSocketClientSeq, 8080 ) );
+
+        THEN( "the split one is described whole on the second, the others all named" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "HTTP" );
+            REQUIRE( lines[ 4 ].description
+                     == "HTTP/1.1 101 Switching Protocols, Upgrade: websocket" );
+            REQUIRE( lines[ 5 ].protocol == "WebSocket" );
+            REQUIRE( lines[ 5 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 6 ].protocol == "WebSocket" );
+            REQUIRE( lines[ 6 ].description
+                     == "WebSocket Text [FIN] [MASKED] len=100 \"" + std::string( 40, 'a' )
+                            + "\"\xe2\x80\xa6" + reassembledFrom( 2 ) );
+            REQUIRE( lines[ 7 ].protocol == "WebSocket" );
+            REQUIRE( lines[ 7 ].description
+                     == "WebSocket Text [FIN] [MASKED] len=30 \"" + std::string( 30, 'b' )
+                            + "\", WebSocket Text [FIN] [MASKED] len=30 \"" + std::string( 30, 'c' )
+                            + "\", WebSocket Text [FIN] [MASKED] len=1 \"d\"" );
+            REQUIRE( lines[ 7 ].completed.empty() );
+        }
+    }
+
+    GIVEN( "WebSocket frames on a stream without the upgrade" )
+    {
+        const auto frames = webSocketText( std::string( 100, 'a' ) );
+        const auto lines
+            = converted( handshake( 8080 ) + cut( frames, { 30 }, kClientIsn + 1, 8080 ) );
+
+        THEN( "no segment is held" )
+        {
+            REQUIRE( lines[ 3 ].protocol != "WebSocket" );
+            REQUIRE( lines[ 3 ].description != kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].protocol != "WebSocket" );
         }
     }
 

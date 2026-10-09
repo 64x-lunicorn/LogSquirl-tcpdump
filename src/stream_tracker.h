@@ -140,6 +140,9 @@ struct StreamState {
     {
         return static_cast<uint8_t>( 0x08u << direction );
     }
+    /// protocols: an HTTP "101 Switching Protocols" response upgraded the
+    /// stream to WebSocket: what follows it are frames (describe_websocket.cpp).
+    static constexpr uint8_t kWebSocket = 0x20;
 };
 
 /// The stream a packet belongs to.

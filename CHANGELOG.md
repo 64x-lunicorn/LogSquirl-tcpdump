@@ -60,8 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
   control packet on port 1883 (by its Remaining Length), a SOME/IP
   message (by its Length), a DoIP message on port 13400 (by its payload
-  length) or an SSH packet of the key exchange (by its packet_length,
-  only before the direction's NEWKEYS) that spans TCP segments is
+  length), an SSH packet of the key exchange (by its packet_length,
+  only before the direction's NEWKEYS) or a WebSocket frame (by its
+  payload length, on an upgraded stream) that spans TCP segments is
   described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
@@ -289,6 +290,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spans segments is reassembled. A new synthetic capture,
   `tests/corpus/ssh.pcap` (written by `tests/make_ssh_corpus.py`), shows
   each case.
+- **WebSocket described: the upgrade and its frames.** The `GET … Upgrade:
+  websocket` request and the `101 Switching Protocols` response stay HTTP,
+  the response showing its `Upgrade` and `Sec-WebSocket-Extensions`
+  (`permessage-deflate`); every later segment of the stream, on any port,
+  is `WebSocket`, its frames named as Wireshark names them, every one of a
+  segment: `WebSocket Text [FIN] [MASKED] len=5 "Hello"` (a client's text
+  unmasked for the preview), `WebSocket Binary [FIN] len=300`,
+  `Continuation`, `Ping`, `Pong`, `WebSocket Connection Close [FIN] len=5
+  Normal Closure (1000) "bye"`, a compressed message `[COMPRESSED]`.
+  Lengths of 7, 16 and 64 bits are read; a control frame without FIN or
+  longer than 125 bytes, a reserved opcode or a close with a one-byte
+  payload is `[Malformed Packet]`, a cut frame ends in `…`, and a frame
+  that spans segments is reassembled. Detection is by the upgrade in the
+  same stream, not by port. A new synthetic capture,
+  `tests/corpus/websocket.pcap` (written by
+  `tests/make_websocket_corpus.py`), shows each case.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section, a

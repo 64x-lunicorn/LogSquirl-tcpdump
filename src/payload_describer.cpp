@@ -146,10 +146,9 @@ std::optional<PayloadDescription> tlsRecord( const Payload& p )
     return describedIfAny( "TLS", detectTls( p.data, p.len ) );
 }
 
-std::optional<PayloadDescription> httpMessage( const Payload& p )
-{
-    return describedIfAny( "HTTP", detectHttp( p.data, p.len ) );
-}
+/// HTTP/1.x; a 101 response that upgrades its stream to WebSocket tells
+/// the rest of the stream to be read as frames.
+std::optional<PayloadDescription> httpMessage( const Payload& p );
 
 /// A description that begins what the rest of its stream builds on.
 std::optional<PayloadDescription> withCue( std::optional<PayloadDescription> result, StreamCue cue )
@@ -158,6 +157,14 @@ std::optional<PayloadDescription> withCue( std::optional<PayloadDescription> res
         result->streamCue = cue;
     }
     return result;
+}
+
+std::optional<PayloadDescription> httpMessage( const Payload& p )
+{
+    auto result = describedIfAny( "HTTP", detectHttp( p.data, p.len ) );
+    return isWebSocketUpgrade( p.data, p.len )
+               ? withCue( std::move( result ), StreamCue::WebSocketUpgrade )
+               : result;
 }
 
 std::optional<PayloadDescription> http2Preface( const Payload& p )
@@ -276,7 +283,21 @@ using Frame = std::optional<size_t> ( * )( const Payload& );
 struct Framer {
     const char* label; ///< As its detector names it.
     Frame frame;
+    /// Its messages are told by their stream, which the detectors do not
+    /// know (MessageExtent::describedInStream).
+    bool inStream = false;
 };
+
+/// WebSocket frames on a stream an HTTP 101 response upgraded, and nowhere
+/// else: nothing in their bytes tells them.
+std::optional<size_t> webSocketFrame( const Payload& p )
+{
+    if ( !p.stream || !p.stream->state
+         || !( p.stream->state->protocols & StreamState::kWebSocket ) ) {
+        return std::nullopt;
+    }
+    return frameWebSocketFrame( p.data, p.len );
+}
 
 std::optional<size_t> dnsOverTcpFrame( const Payload& p )
 {
@@ -339,13 +360,23 @@ std::optional<size_t> mqttFrame( const Payload& p )
     return frameMqttPacket( p.data, p.len );
 }
 
+/// The WebSocket framer's number in kTcpFramers.
+constexpr uint8_t kWebSocketFramer = 1;
+
 /// The TCP framers, in the order of their detectors in kTcpDetectors (SOME/IP
-/// on its port aside, which frames by its header too); a
+/// on its port aside, which frames by its header too), WebSocket, which has
+/// none, before them all, as an upgraded stream carries nothing else; a
 /// protocol is numbered by its place, from 1 (MessageExtent::framer).
 constexpr Framer kTcpFramers[] = {
-    { "DNS", dnsOverTcpFrame }, { "DoIP", doipFrame },      { "SSHv2", sshFrame },
-    { "TLS", tlsFrame },        { "SIP", sipFrame },        { "HTTP", httpFrame },
-    { "MQTT", mqttFrame },      { "SOME/IP", someIpFrame },
+    { "WebSocket", webSocketFrame, true },
+    { "DNS", dnsOverTcpFrame },
+    { "DoIP", doipFrame },
+    { "SSHv2", sshFrame },
+    { "TLS", tlsFrame },
+    { "SIP", sipFrame },
+    { "HTTP", httpFrame },
+    { "MQTT", mqttFrame },
+    { "SOME/IP", someIpFrame },
 };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
@@ -479,10 +510,23 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
             extent.label = kTcpFramers[ i ].label;
             extent.length = *length;
             extent.needsMore = *length > len;
+            extent.describedInStream = kTcpFramers[ i ].inStream;
             return extent;
         }
     }
     return {};
+}
+
+PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_t srcPort,
+                                        uint16_t dstPort, uint8_t framer )
+{
+    if ( framer != kWebSocketFramer ) {
+        return describePayload( Transport::Tcp, data, len, srcPort, dstPort );
+    }
+    PayloadDescription result;
+    result.label = "WebSocket";
+    result.description = oneLine( describer::describeWebSocketFrames( data, len, len ) );
+    return result;
 }
 
 void describeInStream( PacketRecord& pkt, const Stream& stream )
@@ -497,6 +541,7 @@ void describeInStream( PacketRecord& pkt, const Stream& stream )
         describer::describeHttp2InStream( pkt, *stream.state );
         describer::describeMqttInStream( pkt, *stream.state );
         describer::describeSshInStream( pkt, stream );
+        describer::describeWebSocketInStream( pkt, stream );
     }
 }
 
@@ -506,6 +551,7 @@ void rememberInStream( const PacketRecord& pkt, const Stream& stream )
         return;
     }
     describer::rememberSshInStream( pkt, stream );
+    describer::rememberWebSocketInStream( pkt, stream );
 }
 
 void limitPreview( PacketRecord& pkt, size_t maxChars )

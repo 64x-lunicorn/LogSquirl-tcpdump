@@ -286,6 +286,10 @@ bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
 /// on port 22, any other payload as an encrypted packet, a guess.
 std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
                                              uint16_t dstPort );
+/// An HTTP "101 Switching Protocols" response with "Upgrade: websocket"
+/// in its header section, which makes its stream WebSocket
+/// (describe_http.cpp).
+bool isWebSocketUpgrade( const uint8_t* payload, size_t len );
 /// The DoIP messages (ISO 13400-2) a payload begins with, every one of a
 /// datagram or segment, a diagnostic message with the UDS service it
 /// carries (describe_doip.cpp).
@@ -327,6 +331,17 @@ std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bo
 /// pattern of version and inverse version (describe_doip.cpp).
 std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
 
+/// A WebSocket frame, by its payload length (describe_websocket.cpp): on
+/// an upgraded stream only, as nothing in its bytes tells it.
+std::optional<size_t> frameWebSocketFrame( const uint8_t* payload, size_t len );
+
+/// The WebSocket frames at @p p, the @p len captured bytes of a
+/// @p wireLen-byte TCP payload of an upgraded stream, as Wireshark names
+/// them, "WebSocket Text [FIN] [MASKED] len=5 \"hello\"": up to 8, then
+/// "…"; a cut frame ends in "…", a malformed one says so
+/// (describe_websocket.cpp).
+std::string describeWebSocketFrames( const uint8_t* p, size_t len, size_t wireLen );
+
 /// How far one direction of an SSH connection is, as its stream's state
 /// says (StreamState::kSshBannerSeen, StreamState::sshEncrypted()).
 enum class SshPhase {
@@ -359,6 +374,15 @@ void describeMqttInStream( PacketRecord& pkt, StreamState& state );
 /// it the packets no detector recognised, as the stream's SSH phase says
 /// (describe_ssh.cpp).
 void describeSshInStream( PacketRecord& pkt, const Stream& stream );
+
+/// A TCP segment in its stream: after the HTTP 101 response that upgraded
+/// it, the WebSocket frames in the payload's first kPayloadHeadBytes
+/// (describe_websocket.cpp).
+void describeWebSocketInStream( PacketRecord& pkt, const Stream& stream );
+
+/// After the TCP Reassembly: a 101 response upgrades its stream to
+/// WebSocket (describe_websocket.cpp).
+void rememberWebSocketInStream( const PacketRecord& pkt, const Stream& stream );
 
 /// After the TCP Reassembly: what a segment's SSH banner or NEWKEYS tells
 /// its stream's later segments (describe_ssh.cpp).

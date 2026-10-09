@@ -431,6 +431,13 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TCP SYN/FIN", { 1, 2, 15, 16, 18, 19, 30, 31, 36, 37, 42, 43 } },
               { "TCP handshakes", { 1, 2, 15, 16, 18, 19, 30, 31, 36, 37, 42, 43 } },
           } },
+        { "websocket.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 18, 19, 21, 22, 30, 31, 33, 34, 40, 41, 43, 44, 48, 49 } },
+              { "TCP handshakes",
+                { 1, 2, 18, 19, 21, 22, 30, 31, 33, 34, 40, 41, 43, 44, 48, 49 } },
+              { "HTTP", { 4, 5, 24, 25, 36, 37 } }, // the upgrades; WebSocket frames are not HTTP
+          } },
         { "someip.txt",
           {
               { "TCP SYN/FIN", { 11, 12, 17, 18 } },
