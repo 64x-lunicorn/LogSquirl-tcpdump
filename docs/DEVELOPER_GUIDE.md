@@ -752,6 +752,10 @@ host, set `host_ref` to that release and refresh the header with
 LogSquirl-Plugin-CI's `scripts/sync-plugin.sh <this checkout>` (or copy the
 file from the LogSquirl release tag); never edit it by hand. A function the
 new header adds goes into `HostCapabilities` before anything calls it.
+`host_ref` may name a LogSquirl beta (`v26.11.0-beta1`) while the next host
+release is in beta; CI builds against it, but CI Release refuses to publish
+a plugin built against a beta, so switch to the final release before
+tagging.
 
 ## Adding Protocol Support
 
