@@ -97,7 +97,7 @@ struct MessageExtent {
     /// The message goes on past the bytes given.
     bool needsMore = false;
     /// Its protocol is told by the stream, not by the message's bytes
-    /// (WebSocket): the parser could not describe it, so the TCP
+    /// (WebSocket, SSH's binary packets off port 22): the parser could not describe it, so the TCP
     /// Reassembly describes whole messages too, by describeTcpMessages().
     bool describedInStream = false;
     /// The framer of the bytes after the message, which upgraded the
@@ -130,7 +130,8 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
 /**
  * Describe the @p len bytes at @p data, whole messages of the protocol
  * tcpMessageExtent() numbered @p framer, sent from @p srcPort to
- * @p dstPort: WebSocket frames as such, any other protocol's messages as
+ * @p dstPort: WebSocket frames, and SSH's binary packets on any port, as
+ * their stream tells them, any other protocol's messages as
  * describePayload() does.  WebSocket frames after a message that upgrades
  * the stream (MessageExtent::upgradesTo) are described after it, "; " in
  * between, and the description tells the stream of the upgrade.

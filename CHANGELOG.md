@@ -522,6 +522,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the segment's end is held and described whole where it completes,
   where before its rest was read as new frames and the stream desynced
   (#102).
+- **SSH without a banner only on port 22.** Binary packets of SSH's key
+  exchange with no banner before them were taken for SSH on any port,
+  ahead of TLS, SIP and HTTP, so a binary protocol whose messages begin
+  like one (`00 00 01 2C 06 14 …`) was labelled `SSHv2` for its whole
+  stream. They are now SSH on port 22 only; on another port a stream
+  reads them after its banner, as before, a NEWKEYS still encrypting the
+  direction (#104).
 
 ## [0.3.0] — 2026-10-09
 

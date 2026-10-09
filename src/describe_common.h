@@ -281,11 +281,16 @@ struct SomeIpDescription {
 SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
 /// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
 bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
-/// The SSH banner or binary packets of the unencrypted phase a TCP
-/// payload begins with, on any port, labelled "SSHv2" (describe_ssh.cpp);
-/// on port 22, any other payload as an encrypted packet, a guess.
+/// SSH's port.
+constexpr uint16_t kSshPort = 22;
+/// The SSH banner a TCP payload begins with, on any port, and the binary
+/// packets of the unencrypted phase behind it, labelled "SSHv2"
+/// (describe_ssh.cpp).  Binary packets without a banner on port 22 only,
+/// as any binary protocol may begin as they do, or with @p inSshStream,
+/// on a stream that showed a banner, on any port, cut or malformed said
+/// so; on port 22, any other payload as an encrypted packet, a guess.
 std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
-                                             uint16_t dstPort );
+                                             uint16_t dstPort, bool inSshStream = false );
 /// An HTTP "101 Switching Protocols" response with "Upgrade: websocket"
 /// in its header section, which makes its stream WebSocket
 /// (describe_http.cpp).

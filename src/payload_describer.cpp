@@ -230,8 +230,11 @@ std::optional<PayloadDescription> someIpByHeader( const Payload& p )
     return describedIfAny( found.sd ? "SOME/IP-SD" : "SOME/IP", found.text );
 }
 
-/// SSH, by its banner or the binary packets of its key exchange on any
-/// port; on port 22 whatever the payload holds, as a guess.
+/// SSH, by its banner on any port, the binary packets of its key exchange
+/// on port 22, where whatever else the payload holds is taken for an
+/// encrypted packet, as a guess.  Before TLS, SIP and HTTP; the packets
+/// of a stream that showed a banner on another port are the stream's to
+/// tell (describeInStream(), sshFrame()).
 std::optional<PayloadDescription> sshMessages( const Payload& p )
 {
     return detectSsh( p.data, p.len, p.srcPort, p.dstPort );
@@ -310,13 +313,19 @@ constexpr Detector kTcpDetectors[]
 /// describe_common.h), nothing if it is none of the protocol's.
 using Frame = std::optional<size_t> ( * )( const Payload& );
 
+/// Whether the message at the start of a payload is one only its stream
+/// tells, which the detectors do not know (MessageExtent::describedInStream).
+using ToldByStream = bool ( * )( const Payload& );
+
 /// A protocol whose messages the TCP Reassembly puts together.
 struct Framer {
     const char* label; ///< As its detector names it.
     Frame frame;
-    /// Its messages are told by their stream, which the detectors do not
-    /// know (MessageExtent::describedInStream).
-    bool inStream = false;
+    /// Its messages are told by their stream, if so; never if null.
+    ToldByStream inStream = nullptr;
+    /// Describes whole messages of the protocol, as its stream tells them
+    /// (describeTcpMessages()); describePayload() if null.
+    Detector describe = nullptr;
     /// Tells a message after which the stream carries WebSocket frames
     /// (MessageExtent::upgradesTo); none if no message does.
     bool ( *upgrades )( const uint8_t*, size_t ) = nullptr;
@@ -325,6 +334,16 @@ struct Framer {
 /// WebSocket frames on a stream an HTTP 101 response upgraded, or after
 /// such a response in the bytes walked, and nowhere else: nothing in their
 /// bytes tells them.
+bool always( const Payload& )
+{
+    return true;
+}
+
+std::optional<PayloadDescription> webSocketFrames( const Payload& p )
+{
+    return described( "WebSocket", describeWebSocketFrames( p.data, p.len, p.len ) );
+}
+
 std::optional<size_t> webSocketFrame( const Payload& p )
 {
     if ( !p.continuing
@@ -358,10 +377,9 @@ std::optional<size_t> smbFrame( const Payload& p )
     return frameSmbMessage( p.data, p.len, onSmbPort( p ) );
 }
 
-/// SSH as far as its stream's phase lets it be framed: a banner always,
-/// binary packets once a banner was seen, or one came before in the
-/// direction, nothing after NEWKEYS.
-std::optional<size_t> sshFrame( const Payload& p )
+/// The phase of the SSH connection the payload is of, as far as its
+/// stream knows: clear after a banner, or one came before in the direction.
+SshPhase sshPhase( const Payload& p )
 {
     auto phase = SshPhase::Unknown;
     if ( p.stream && p.stream->state ) {
@@ -370,7 +388,29 @@ std::optional<size_t> sshFrame( const Payload& p )
     if ( phase == SshPhase::Unknown && p.continuing ) {
         phase = SshPhase::Clear;
     }
-    return frameSshMessage( p.data, p.len, phase );
+    return phase;
+}
+
+/// SSH as far as its stream's phase lets it be framed: a banner always,
+/// binary packets once a banner was seen, or one came before in the
+/// direction, nothing after NEWKEYS.
+std::optional<size_t> sshFrame( const Payload& p )
+{
+    return frameSshMessage( p.data, p.len, sshPhase( p ) );
+}
+
+/// The binary packets of the clear phase off port 22, which the detector
+/// does not take for SSH without a banner before them.
+bool sshToldByStream( const Payload& p )
+{
+    return !onPort( p, kSshPort ) && sshPhase( p ) == SshPhase::Clear
+           && !( p.len >= 4 && std::memcmp( p.data, "SSH-", 4 ) == 0 );
+}
+
+/// SSH messages framed as such: binary packets on any port.
+std::optional<PayloadDescription> sshInStream( const Payload& p )
+{
+    return detectSsh( p.data, p.len, p.srcPort, p.dstPort, true );
 }
 
 std::optional<size_t> tlsFrame( const Payload& p )
@@ -410,14 +450,14 @@ constexpr uint8_t kWebSocketFramer = 1;
 /// none, before them all, as an upgraded stream carries nothing else; a
 /// protocol is numbered by its place, from 1 (MessageExtent::framer).
 constexpr Framer kTcpFramers[] = {
-    { "WebSocket", webSocketFrame, true },
+    { "WebSocket", webSocketFrame, always, webSocketFrames },
     { "DNS", dnsOverTcpFrame },
     { "DoIP", doipFrame },
     { "SMB2", smbFrame },
-    { "SSHv2", sshFrame },
+    { "SSHv2", sshFrame, sshToldByStream, sshInStream },
     { "TLS", tlsFrame },
     { "SIP", sipFrame },
-    { "HTTP", httpFrame, false, isWebSocketUpgrade },
+    { "HTTP", httpFrame, nullptr, nullptr, isWebSocketUpgrade },
     { "MQTT", mqttFrame },
     { "SOME/IP", someIpFrame },
 };
@@ -553,7 +593,7 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
             extent.label = kTcpFramers[ i ].label;
             extent.length = *length;
             extent.needsMore = *length > len;
-            extent.describedInStream = kTcpFramers[ i ].inStream;
+            extent.describedInStream = kTcpFramers[ i ].inStream && kTcpFramers[ i ].inStream( p );
             if ( kTcpFramers[ i ].upgrades && !extent.needsMore
                  && kTcpFramers[ i ].upgrades( data, *length ) ) {
                 extent.upgradesTo = kWebSocketFramer;
@@ -567,11 +607,12 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
 PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_t srcPort,
                                         uint16_t dstPort, uint8_t framer )
 {
-    if ( framer == kWebSocketFramer ) {
-        PayloadDescription result;
-        result.label = "WebSocket";
-        result.description = oneLine( describer::describeWebSocketFrames( data, len, len ) );
-        return result;
+    if ( framer != 0 && framer <= std::size( kTcpFramers ) && kTcpFramers[ framer - 1 ].describe ) {
+        const Payload p{ data, len, srcPort, dstPort, Transport::Tcp };
+        if ( auto result = kTcpFramers[ framer - 1 ].describe( p ) ) {
+            result->description = oneLine( std::move( result->description ) );
+            return *result;
+        }
     }
     // The frames after a message that upgrades the stream are described
     // after the messages before them.

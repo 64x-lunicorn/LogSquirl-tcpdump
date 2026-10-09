@@ -38,8 +38,6 @@ namespace {
 const std::string kEllipsis = "\xe2\x80\xa6";
 const std::string kMalformed = " [Malformed Packet]";
 
-constexpr uint16_t kSshPort = 22;
-
 /// Longest identification string, CR LF included (RFC 4253, 4.2).
 constexpr size_t kMaxBannerBytes = 255;
 
@@ -458,7 +456,7 @@ const char* labelOf( int version )
 } // namespace
 
 std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
-                                             uint16_t dstPort )
+                                             uint16_t dstPort, bool inSshStream )
 {
     if ( len == 0 ) {
         return std::nullopt;
@@ -481,14 +479,15 @@ std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len,
         return result;
     }
 
+    const bool onSshPort = srcPort == kSshPort || dstPort == kSshPort;
     const auto packets = readPackets( payload, len );
-    if ( packets.plausible ) {
+    if ( inSshStream || ( packets.plausible && onSshPort ) ) {
         result.label = "SSHv2";
         result.description += packets.text;
         result.streamCue = packets.newKeys ? StreamCue::SshNewKeys : StreamCue::None;
         return result;
     }
-    if ( srcPort == kSshPort || dstPort == kSshPort ) {
+    if ( onSshPort ) {
         // No packet of the unencrypted phase: one of a connection whose
         // key exchange the capture did not see, as far as the port tells.
         result.label = "SSH";
@@ -553,14 +552,22 @@ void describeSshInStream( PacketRecord& pkt, const Stream& stream )
         redescribe( pkt, "SSHv2", side + encryptedPacket( pkt.payloadLen ) );
         return;
     }
-    if ( pkt.protocolRecognised || pkt.payloadHeadLen == 0 ) {
+    if ( pkt.payloadHeadLen == 0
+         || ( pkt.protocolRecognised && pkt.protocol.rfind( "SSH", 0 ) == 0 ) ) {
         return;
     }
-    // Packets of the key exchange that did not read as SSH on their own:
-    // those in the payload's first kPayloadHeadBytes, what is cut or
-    // malformed said so.
+    // Packets of the key exchange that did not read as SSH on their own
+    // (off port 22): those in the payload's first kPayloadHeadBytes, what
+    // is cut or malformed said so; over another protocol's description
+    // only if they read as packets.
     const auto packets = readPackets( pkt.payloadHead.data(), pkt.payloadHeadLen );
+    if ( pkt.protocolRecognised && !packets.plausible ) {
+        return;
+    }
     redescribe( pkt, "SSHv2", side + packets.text );
+    if ( packets.newKeys ) {
+        pkt.streamCue = StreamCue::SshNewKeys;
+    }
 }
 
 void rememberSshInStream( const PacketRecord& pkt, const Stream& stream )

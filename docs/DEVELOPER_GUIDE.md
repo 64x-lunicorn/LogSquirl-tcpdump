@@ -485,7 +485,7 @@ text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 of the detectors and in-stream passes the tables use.
 - TCP: DNS on port 53, DoIP on port 13400, SMB (on ports 445 and 139, or
   by its protocol ID behind an NBSS header), SOME/IP on its ports, SSH (its
-  banner or key exchange on any port, anything on port 22), TLS, SIP (before HTTP, whose
+  banner on any port, its key exchange and anything else on port 22), TLS, SIP (before HTTP, whose
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
@@ -679,9 +679,13 @@ of the detectors and in-stream passes the tables use.
   `FieldReader` within the captured bytes, a message whose fields
   overrun its payload is `[Malformed Packet]`, one cut short ends in ` …`.
   After a NEWKEYS the rest of the payload is `Encrypted packet (len=n)`.
-  Without a banner before them, packets are only taken for SSH if every
-  one is whole and of the transport layer (the last may be cut if it is a
-  KEXINIT or follows a whole one); on port 22 anything else is the guess
+  Without a banner before them, packets are only taken for SSH on port 22
+  (any binary protocol may begin as they do), and only if every one is
+  whole and of the transport layer (the last may be cut if it is a
+  KEXINIT or follows a whole one); elsewhere the stream tells them, after
+  its banner (`describeInStream()`, and the TCP Reassembly, which
+  describes their whole messages again with `detectSsh( …, inSshStream )`
+  as `MessageExtent::describedInStream`). On port 22 anything else is the guess
   `SSH`, `Client: Encrypted packet (len=n)` (a connection whose key
   exchange the capture did not see). The banner gives its stream
   `StreamCue::SshBanner`, a NEWKEYS `StreamCue::SshNewKeys`; see
@@ -862,8 +866,10 @@ of the detectors and in-stream passes the tables use.
   as the stream's earlier packets left them: a direction past its NEWKEYS
   is `SSHv2`, `Client: Encrypted packet (len=n)`, n the segment's payload
   length, whatever the detectors made of it; before it, a segment no
-  detector recognised (cut, malformed, on a port other than 22) is read as
-  the binary packets in its first kPayloadHeadBytes
+  detector recognised (cut, malformed, on a port other than 22), or one
+  another detector took that reads as packets, is read as the binary
+  packets in its first kPayloadHeadBytes, a NEWKEYS among them giving it
+  `StreamCue::SshNewKeys`
 - WebSocket's upgrade is kept in `StreamState::protocols` too, bit
   `kWebSocket`, set by `rememberInStream()` from a 101 response's
   `StreamCue::WebSocketUpgrade` (the response may be reassembled). After
