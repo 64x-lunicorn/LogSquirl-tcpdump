@@ -216,7 +216,9 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
         file.remove( liveOptionsGroup( choice.source ) );
         file.beginGroup( liveOptionsGroup( choice.source ) );
         for ( auto option = choice.options.cbegin(); option != choice.options.cend(); ++option ) {
-            if ( !option.key().isEmpty() && !option.key().contains( QLatin1Char( '/' ) ) ) {
+            // A secret (a password) is the session's, never the file's.
+            if ( !option.key().isEmpty() && !option.key().contains( QLatin1Char( '/' ) )
+                 && !isSecretLiveOption( option.key() ) ) {
                 file.setValue( option.key(), option.value() );
             }
         }

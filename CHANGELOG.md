@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Wireshark extcap live capture.** The **Wireshark extcap** source makes
+  every extcap a live source (`sshdump`, `androiddump`, `ciscodump`,
+  `udpdump`, `randpktdump`, a vendor's), found in `WIRESHARK_EXTCAP_DIR`,
+  the personal extcap directory and Wireshark's own on each OS (each with
+  its `wireshark` subdirectory). The extcaps are listed with their
+  interfaces (`--extcap-interfaces`; one that fails is listed with its
+  error), and the chosen interface's arguments (`--extcap-config`) become a
+  form: text, numbers with their range, check boxes, drop-down and radio
+  choices, multi-check lists and file paths, with their defaults, a
+  required one keeping Start disabled. Values are remembered per interface
+  in `settings.ini`, except passwords (and arguments the extcap says not to
+  save), kept for the session only. It captures with `--capture --fifo`
+  into a FIFO the plugin makes in its private temporary directory (a named
+  pipe on Windows), every value one argument, never through a shell;
+  **Stop** ends the extcap (#75)
 - **Android live capture.** The **Android** source captures on a phone or
   an emulator with the device's tcpdump through `adb` (found on `PATH`,
   below `ANDROID_HOME`/`ANDROID_SDK_ROOT` or where the SDK is usually

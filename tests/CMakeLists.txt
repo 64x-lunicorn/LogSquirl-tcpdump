@@ -42,6 +42,7 @@ add_executable(logsquirl_tcpdump_tests
     live_source_test.cpp
     local_source_test.cpp
     adb_source_test.cpp
+    extcap_source_test.cpp
     live_capture_ui_test.cpp
     process_source_test.cpp
     plugin_test.cpp
@@ -149,6 +150,9 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/live_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/local_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/adb_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/extcap_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/extcap_options.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_pipe.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_form.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"

@@ -26,6 +26,7 @@
 #include "live_source.h"
 
 #include "adb_source.h"
+#include "extcap_source.h"
 #include "local_source.h"
 
 #include <QElapsedTimer>
@@ -83,6 +84,7 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources()
     // Custom command (#76).
     registry->add( std::make_shared<LocalSourceKind>() );
     registry->add( std::make_shared<AdbSourceKind>() );
+    registry->add( std::make_shared<ExtcapSourceKind>() );
     return registry;
 }
 

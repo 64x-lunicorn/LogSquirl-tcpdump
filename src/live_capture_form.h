@@ -73,6 +73,10 @@ namespace tcpdump {
  * the kind is chosen (LiveSourceKind::makeOptionsWidget()): the form hands
  * it the options kept for its kind and reads them back for choice().  It
  * emits changed() when they change, so that problem() is asked again.
+ *
+ * Options that depend on the device and interface (an extcap's arguments
+ * are its interface's) follow setTarget(), which the form calls whenever
+ * they change.
  */
 class LiveOptionsWidget : public QWidget {
     Q_OBJECT
@@ -84,6 +88,21 @@ public:
     virtual void setOptions( const LiveOptions& options ) = 0;
     /// The options the fields hold.
     virtual LiveOptions options() const = 0;
+
+    /// The device (empty for a kind without devices) and the interface the
+    /// form's fields hold now; by default ignored.
+    virtual void setTarget( const QString& device, const QString& networkInterface )
+    {
+        (void)device;
+        (void)networkInterface;
+    }
+
+    /// Why options() cannot be captured with (a required field is empty),
+    /// for LiveCaptureForm::problem(); empty (the default) if they can.
+    virtual QString problem() const
+    {
+        return {};
+    }
 
 signals:
     void changed();
@@ -122,7 +141,8 @@ public:
     std::shared_ptr<const LiveSourceKind> currentKind() const;
 
     /// Why choice() cannot be captured: no source, an unavailable one, a bad
-    /// capture filter, or what the source's validate() says; empty if it can.
+    /// capture filter, what the source's validate() says, or what its
+    /// options widget does; empty if it can.
     QString problem() const;
 
     /// Whether a listing runs.
@@ -162,6 +182,8 @@ private:
     void dropOptionsWidget();
     /// Show the options widget of the current source, if it has one.
     void showOptionsWidget();
+    /// Tell the options widget the device and interface chosen now.
+    void tellTarget();
 
     std::shared_ptr<const LiveSourceRegistry> sources_;
     LiveChoice wanted_; ///< The choice setChoice() was given.

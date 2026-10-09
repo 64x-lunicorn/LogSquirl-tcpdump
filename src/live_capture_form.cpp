@@ -128,7 +128,11 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
         ++generation_;
         listInterfaces();
     } );
-    connect( interface_, &QComboBox::currentTextChanged, this, &LiveCaptureForm::changed );
+    connect( interface_, &QComboBox::currentTextChanged, this, [ this ] {
+        tellTarget();
+        emit changed();
+    } );
+    connect( device_, &QComboBox::currentTextChanged, this, &LiveCaptureForm::tellTarget );
     connect( refresh_, &QPushButton::clicked, this, &LiveCaptureForm::refresh );
     connect( filter_, &QLineEdit::textChanged, this, [ this ] {
         checkFilter();
@@ -222,7 +226,10 @@ QString LiveCaptureForm::problem() const
     if ( const auto filter = captureFilterProblem( current.filter ); !filter.isEmpty() ) {
         return filter;
     }
-    return kind->validate( current );
+    if ( auto invalid = kind->validate( current ); !invalid.isEmpty() ) {
+        return invalid;
+    }
+    return options_ ? options_->problem() : QString();
 }
 
 void LiveCaptureForm::refresh()
@@ -468,6 +475,19 @@ void LiveCaptureForm::showOptionsWidget()
     layout->addRow( options_ );
     options_->setEnabled( kind->availability().available );
     connect( options_, &LiveOptionsWidget::changed, this, &LiveCaptureForm::changed );
+    tellTarget();
+}
+
+void LiveCaptureForm::tellTarget()
+{
+    if ( !options_ ) {
+        return;
+    }
+    const auto kind = currentKind();
+    const auto device = kind && kind->devices() != LiveSourceKind::Devices::None
+                            ? currentId( device_ )
+                            : QString();
+    options_->setTarget( device, currentId( interface_ ) );
 }
 
 void LiveCaptureForm::checkFilter()

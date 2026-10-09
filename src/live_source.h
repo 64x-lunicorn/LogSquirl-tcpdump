@@ -40,7 +40,9 @@
  *
  * The capture filter is BPF, handed to the capture program as one argument
  * (or quoted for a remote shell by a kind that needs one): never through a
- * local shell.  The plugin never asks for or stores a password.
+ * local shell.  The plugin never stores a password: a kind's option that
+ * holds one (an extcap's password argument) is a secret option, kept in
+ * memory for the session only (isSecretLiveOption()).
  *
  * builtInLiveSources() is the one place a kind is registered.
  */
@@ -70,6 +72,16 @@ constexpr int kMaxSnaplen = 262144;
 /// A kind's own options, by name: e.g. ssh's "exclude own SSH port", an
 /// extcap's arguments, a saved command.  Names hold no '/'.
 using LiveOptions = QMap<QString, QString>;
+
+/// What the name of a secret option (a password) starts with: it is handed
+/// to the kind for this session, but never written to settings.ini.
+inline constexpr QChar kSecretOptionMark = QLatin1Char( '*' );
+
+/// Whether the option @p name is a secret (kSecretOptionMark).
+inline bool isSecretLiveOption( const QString& name )
+{
+    return name.startsWith( kSecretOptionMark );
+}
 
 class LiveOptionsWidget;
 

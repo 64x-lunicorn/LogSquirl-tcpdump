@@ -275,6 +275,28 @@ would not wait. Two exist:
 A new live source either hands one of these its descriptor or device, or
 implements the two functions for its own handle.
 
+**A pipe of the plugin's (`capture_pipe.h/cpp`).** A Wireshark extcap does
+not write to stdout but into a path it is given (`--fifo`). `CapturePipe`
+makes that path: on Unix a FIFO (`mkfifo`, 0600) in a directory of its own
+(`mkdtemp`, 0700) named as the other temporary directories
+(`tempDirTemplate()`), so that one a crash left behind is removed with
+them; the plugin opens the read end non-blocking and also holds a write end
+of its own, so that the FIFO does not read as ended before the writer has
+opened it. On Windows it is a named pipe `\\.\pipe\logsquirl-tcpdump-<pid>-<random>`
+(`CreateNamedPipeW`: inbound, one instance, `FILE_FLAG_FIRST_PIPE_INSTANCE`,
+`PIPE_REJECT_REMOTE_CLIENTS`), connected and read with overlapped I/O into
+a buffer of its own, so that a read waits in slices (and a pending read is
+cancelled with `CancelIoEx` before the buffer goes); the writer closing it
+(`ERROR_BROKEN_PIPE`) ends it. `PipeSource( command, stop, onLine )` makes
+the pipe, runs the `ProcessCommand` that `command( pipePath )` returns as a
+Process Source with `discardStdout`, and is the `StreamSource` over the
+pipe: each read waits on the pipe and then takes in the program's stderr
+(`ProcessSource::waitForEnd( 0 )`), the stream ends once the program has
+ended and the pipe is drained, a failed program's error is the Process
+Source's, and the destructor ends the program before it removes the pipe.
+`tests/extcap_source_test.cpp` writes into the pipe from a thread, on
+every OS (on Windows through `CreateFileW`, as an extcap does).
+
 **Waits.** A source is given a stop flag (`std::atomic_bool`); `read()`
 checks it before every wait, and no wait is longer than
 `StreamSource::kWaitSlice` (50 ms), so a read returns within that of a
@@ -325,6 +347,11 @@ read through a `DeviceSource`:
   argument, untouched (spaces, quotes, `$( )`, `;`). A custom command opts
   into the shell explicitly with `ProcessCommand::shell( commandLine )`
   (`/bin/sh -c`, or `cmd.exe /d /s /c` on Windows), named by its first word.
+- **Elsewhere.** A program whose capture comes another way (an extcap's
+  FIFO) is run with `ProcessCommand::discardStdout`: its stdout goes to the
+  null device and whoever reads the capture asks `waitForEnd( timeout )`
+  (it takes in stderr meanwhile), `failure()` and `endedOnPurpose()`
+  instead of reading the source (`PipeSource`).
 - **Thread.** The source starts the program when it is constructed and
   owns it on that thread, which needs no event loop: build it on the
   worker thread that converts the stream.
@@ -1291,10 +1318,10 @@ knows none of them. A kind answers:
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
-| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none |
+| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
-| `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. An extcap's FIFO overrides it |
+| `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
 
 A kind holds no state that changes, so its listings may run on a worker
@@ -1369,6 +1396,56 @@ a device's tcpdump is not ended with the local adb), so that quoting,
 root through `adb root` and su, binary-clean streams and the kill on Stop
 are tested end to end.
 
+The **Wireshark extcap** kind (`extcap_source.h/cpp`, id `extcap`) is
+`ExtcapSourceKind( ExtcapPlaces )`: the directories looked in, in order
+(`forThisComputer()`: `WIRESHARK_EXTCAP_DIR`, the personal directory, the
+global one of this OS, each followed by its `wireshark` subdirectory), and
+the OS (on Windows only `.exe`, `.bat` and `.cmd` count). `extcaps()` lists
+the executables (a name found twice is the first's), anew on each call;
+`availability()` is `extcapInstallHint()` without any. Its devices are
+`Listed`, the extcaps by file name: `listDevices()` asks each for
+`--extcap-interfaces` within the timeout in all (one that fails, or was not
+asked in time, is a target with a `problem`); `listInterfaces()` asks the
+chosen one; `config( device, interface, timeout )` asks for
+`--extcap-config` and `--extcap-dlts`. Every question is a `runListing()`.
+The protocol's sentences (`keyword {key=value}…`, `\}` escaped) are read
+by `parseExtcapSentences()`, bounded (`kMaxExtcapSentences`, lines of at
+most `kMaxExtcapLine`), into `parseExtcapInterfaces()`, `parseExtcapDlts()`
+and `parseExtcapConfig()`: `ExtcapArg{ number, call, display, type,
+default, range, required, validation, … values }` in the order of their
+numbers; a call that is no long option, or the protocol's own (`--fifo`,
+`--capture`, `--extcap-…`), is dropped. An argument's value is the option
+`extcapOptionName( interface, arg )`: the interface percent-encoded, `:`
+and the call, or `?` and the call for a boolflag (`"true"`/`"false"`),
+after `kSecretOptionMark` (`*`) for a password or a `{save=false}`
+argument. `extcapArguments( options, interface )` turns the interface's
+options into `--call=value` (one word, so that a value starting with `-` is
+not read as an option) and `--call` for a checked boolflag. `command()` is
+`<extcap> --capture --extcap-interface <if> [--extcap-capture-filter
+<filter>] <arguments>`; `makeSource()` adds `--fifo <pipe>` after the
+interface in a `PipeSource`. No `--extcap-control-in/out` is passed.
+
+The form of an interface's arguments is `ExtcapOptionsWidget`
+(`extcap_options.h/cpp`): on `setTarget()` (settled for
+`kSettleMs`) it runs `config()` on a thread pool of its own under a
+`ListingCancelScope` (cancelled when another interface is chosen or it
+goes; its destructor waits), and makes a field per argument: `QLineEdit`
+(string, password with `QLineEdit::Password`, numbers), `QCheckBox`
+(boolean, boolflag), `QComboBox` (selector; editable for editselector),
+radio buttons, a checkable `QListWidget` (multicheck, children indented
+under their parent), a path with Browse… (fileselect). Fields start with the
+option kept, else the default, and write through to the options, so that
+the capture passes every value shown; the interface's options it no longer
+takes are dropped, other interfaces' kept. `problem()` says the extcap is
+being asked, or names a required field left empty, a number that is none or
+out of `{range=}`, a value its `{validation=}` does not match, or a
+`{mustexist=true}` file that is not there. `tests/extcap_source_test.cpp`
+runs fake extcap scripts (`fakedump` answering from files and writing a
+synthetic pcap into the FIFO it is given, `brokendump` failing), so that
+discovery, every argument type, hostile values (passed as one word, no
+shell), a password kept out of `settings.ini`, Stop and a failing extcap
+are tested end to end.
+
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview
 (`preview`, `previewChars`), the stream and endpoint caps (`maxStreams`,
@@ -1416,8 +1493,10 @@ only. `loadLiveChoice()` and `saveLiveChoice()` keep the last
 string map, `LiveOptions`) under `live/options/<source>/<name>`, replacing
 those of its source only; `loadLiveOptions( configDir, source )` reads a
 source's, which the sidebar hands the form (`setSourceOptions()`) for every
-kind, so that each source keeps its own options. No source asks for or
-keeps a password.
+kind, so that each source keeps its own options. A secret option (its name
+starts with `kSecretOptionMark`, `*`: an extcap's password) is never
+written (`isSecretLiveOption()`): it lives in the form's options for the
+session only.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:

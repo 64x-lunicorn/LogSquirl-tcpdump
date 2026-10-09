@@ -230,8 +230,9 @@ the Command Palette), which shows the same fields in a dialog:
 
 The choices started last are remembered in the plugin's `settings.ini` and
 shown again after a restart, and so are each source's own options, for a
-source that has any. The plugin never asks for or stores a
-password. While the capture runs, the section shows what the capture
+source that has any. The plugin never stores a password: one a source's
+options ask for (an extcap's password argument) is kept in memory for the
+session only. While the capture runs, the section shows what the capture
 program writes to stderr (also in LogSquirl's log); if it fails, the
 section shows why, with what the source says to do about it.
 
@@ -308,6 +309,51 @@ a filter is always one argument of tcpdump and never shell syntax.
 tcpdump's stderr is kept in a file on the device and shown if the capture
 fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
 and removes its files.
+
+#### Wireshark extcap: sshdump, androiddump, ciscodump, udpdump, …
+
+The **Wireshark extcap** source makes every
+[extcap](https://www.wireshark.org/docs/wsdg_html_chunked/ChCaptureExtcap.html)
+you have a live source: the ones Wireshark ships (`sshdump`, `ciscodump`,
+`androiddump`, `udpdump`, `randpktdump`, `wifidump`, …) and any other,
+e.g. a vendor's. It looks for them, in this order, in
+
+- the directories in `WIRESHARK_EXTCAP_DIR` (separated as `PATH` is),
+- your personal extcap directory: `~/.local/lib/wireshark/extcap` or
+  `~/.config/wireshark/extcap`; `%APPDATA%\Wireshark\extcap` on Windows,
+- Wireshark's own: `/Applications/Wireshark.app/Contents/MacOS/extcap` on
+  macOS (also `~/Applications/…`, and Homebrew's `lib/wireshark/extcap`),
+  `/usr/lib/<arch>-linux-gnu/wireshark/extcap`, `/usr/lib/wireshark/extcap`,
+  `/usr/lib64/…` or `/usr/libexec/…` on Linux,
+  `Program Files\Wireshark\extcap` on Windows,
+
+each with its `wireshark` subdirectory, where Wireshark 4.2 and later keep
+theirs. Without any extcap, the source says where they come from.
+
+- **Extcap** is the device: each extcap found, asked for its interfaces
+  (`--extcap-interfaces`). One that fails is listed with its error and
+  cannot be chosen
+- **Interface**: the interfaces the chosen extcap reports
+- Its **arguments** (`--extcap-interface <interface> --extcap-config`)
+  are shown as a form below the snaplen: text, numbers (checked against
+  their range), check boxes, drop-down lists, radio buttons, lists of check
+  boxes and file paths, each with its default; a required one left empty
+  keeps Start disabled. The link type it captures (`--extcap-dlts`) is
+  shown above them. The values are remembered per interface in
+  `settings.ini`, except a **password** (or an argument the extcap says not
+  to save), which is kept for this session only and never written there
+
+It captures with `<extcap> --capture --extcap-interface <interface> --fifo
+<pipe> [--extcap-capture-filter <filter>] --<argument>=<value> …`, every
+value one argument, never through a shell. The extcap writes into a FIFO
+the plugin makes in its private temporary directory (readable by you
+alone), or a named pipe `\\.\pipe\logsquirl-tcpdump-…` on Windows; its
+stderr is shown as a capture program's, and **Stop** ends it with what it
+started. An extcap's toolbar controls (`--extcap-control-in`/`-out`) are
+not used: extcaps capture without them. Note that, as with Wireshark, a
+password argument is on the extcap's command line, which other users of
+the computer may see in its process list while it runs. The snaplen is not
+passed: an extcap has its own option for that, if any.
 
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:
