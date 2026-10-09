@@ -209,6 +209,41 @@ register the format with LogSquirl (#50), nor tell whether it is installed,
 and the shared CI cannot yet pack it into the release archive (#58);
 `cmake --install` puts it next to the library.
 
+#### Highlighter set and filter group (`presets/`)
+`tcpdump_highlighter.conf` and `tcpdump_filter.conf` are a LogSquirl
+Highlighter Set and Filter Group as its *Export* writes them and its
+*Import* reads them: QSettings INI files holding one
+`HighlighterSetCollection` or `PredefinedFiltersCollection` with one set
+(`groupexchange.cpp`, `highlighterset.cpp`, `predefinedfilters.cpp` in the
+host). The plugin API has no call to install either, so the user imports
+them (README, *Highlighters and filters*). Each set has a fixed id, so that
+importing a newer file offers *Replace*; keep it.
+
+Every pattern starts with `^` and reads the columns up to Protocol, as
+`regex_lab.cpp`'s patterns do, so that only a column or the start of Info
+decides: a word in a payload's text never does. Patterns use no capture
+groups (a highlighter with groups colours only what they take) and nothing
+Vectorscan, LogSquirl's default search engine, cannot compile (no
+lookaround or backreference), so that a filter is not left to the slower Qt
+engine. Highlighters have no names in the
+file; the topmost that matches colours the line.
+
+**Update the patterns when a column or an Info text they read changes**: a
+column added, moved or removed, a TCP flag or analysis marker renamed, a
+protocol label or a DNS, HTTP or ICMP description reworded.
+`tests/presets_test.cpp` reads both files as the host does, applies every
+pattern to every line of every corpus text (`tests/corpus/*.txt` and the
+local `tests/corpus/local/*.txt`) and checks that it matches exactly the
+lines its rule picks from the columns, and in the committed texts the
+packet numbers listed in the test; a new corpus text needs its list there.
+A new Wireshark analysis marker that is a problem goes into the *TCP
+problems* highlighter and the *TCP errors* filter (the test fails until it
+does); Window Update, Keep-Alive and Keep-Alive ACK stay out, as in
+Wireshark's "Bad TCP" rule. The files are edited by hand: a backslash in a
+pattern is written twice, and a pattern with a comma is quoted. `cmake
+--install` puts them next to the library; the shared CI cannot yet pack
+them into the release archive (#58).
+
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet

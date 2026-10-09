@@ -89,6 +89,9 @@ install(FILES   plugin.json               DESTINATION "${PLUGIN_INSTALL_DIR}")
 # The Log Format of the converted text, next to the library; LogSquirl reads
 # it only from its formats directory, where the user copies it (README).
 install(FILES   formats/tcpdump_log.json  DESTINATION "${PLUGIN_INSTALL_DIR}")
+# The highlighter set and filter group, for LogSquirl's Import (README).
+install(FILES   presets/tcpdump_highlighter.conf presets/tcpdump_filter.conf
+        DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # ── Tests (opt-in) ────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build unit tests" OFF)

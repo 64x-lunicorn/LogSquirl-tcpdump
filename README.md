@@ -98,7 +98,8 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    switching tabs switches it, and a tab that is not a converted capture
    shows none
 7. Use LogSquirl's built-in search, filters, and highlighters on the
-   packet data
+   packet data; the plugin's [highlighter set and filter
+   group](#highlighters-and-filters) colour and filter it as Wireshark does
 8. To follow a conversation, as Wireshark's *Follow TCP Stream* does, select
    one of its packet lines and click **Follow stream** in the sidebar, or
    choose **Plugins → tcpdump → Follow stream**. LogSquirl's Regex Lab opens
@@ -156,6 +157,51 @@ A converted capture then gets:
 
 The sidebar summary links here once per session, since the plugin cannot
 tell whether the format is installed.
+
+### Highlighters and filters
+
+Two files in the [`presets`](presets/) folder colour and filter the packet
+list much as Wireshark's default colouring rules and display filters do. Get
+them from this repository or the release's source code archive and import
+each once:
+
+- **Highlighter set** [`tcpdump_highlighter.conf`](presets/tcpdump_highlighter.conf):
+  **Highlighters → Configure highlighters…**, *Import*, **OK**, then switch
+  the set *tcpdump* on in the **Highlighters** menu
+- **Filter group** [`tcpdump_filter.conf`](presets/tcpdump_filter.conf):
+  **Tools → Predefined filters…**, *Import*, **OK**; the filters of the group
+  *tcpdump* are then listed in the Filters tab of the Filters Panel, where
+  checking one filters the view
+
+Importing a newer version of a file offers to replace the one imported
+before. The highlighters, the first that matches a line colouring it:
+
+| Highlighter   | Colours the lines of                                                                  | Colour       |
+|---------------|---------------------------------------------------------------------------------------|--------------|
+| TCP problems  | TCP analysis markers but Window Update and Keep-Alive (`[TCP Retransmission]`, `[TCP Dup ACK 7#1]`, `[TCP ZeroWindow]`, …) and a bogus TCP header length | orange |
+| TCP RST       | TCP segments with RST                                                                 | strong red   |
+| ICMP errors   | ICMP destination unreachable, source quench, redirect, time exceeded; ICMPv6 types 1–4 | orange      |
+| DNS NXDOMAIN  | DNS and mDNS responses for a name that does not exist                                 | red          |
+| HTTP 4xx/5xx  | HTTP responses with a client or server error status                                   | red          |
+| TCP SYN/FIN   | TCP segments with SYN or FIN: connections opened and closed                           | green        |
+| TLS           | Protocol TLS                                                                          | blue         |
+| ARP           | Protocol ARP                                                                          | grey         |
+
+The filters:
+
+| Filter          | Shows the lines of                                                       |
+|-----------------|--------------------------------------------------------------------------|
+| TCP handshakes  | TCP segments with SYN or FIN                                             |
+| TCP errors      | what the *TCP problems* and *TCP RST* highlighters colour                |
+| DNS             | Protocol DNS or mDNS                                                     |
+| HTTP            | HTTP requests and responses (Protocol HTTP…, Info naming a request line or status line) |
+| TLS             | Protocol TLS                                                             |
+| ICMP            | Protocol ICMP or ICMPv6                                                  |
+| ARP             | Protocol ARP                                                             |
+
+Each pattern reads the columns, so it never matches a word that only
+appears in Info's payload text: a Protocol is read from the Protocol
+column, TCP flags from the bracket right after the ports.
 
 ## Example Output
 

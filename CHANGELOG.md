@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Highlighter set and filter group.** `presets/tcpdump_highlighter.conf`
+  colours the packet list in the spirit of Wireshark's default colouring
+  rules: TCP analysis problems and a bogus TCP header orange, RST strong red,
+  ICMP errors orange, DNS NXDOMAIN and HTTP 4xx/5xx responses red, SYN and
+  FIN green, TLS blue, ARP grey. `presets/tcpdump_filter.conf` adds the
+  predefined filters *TCP handshakes*, *TCP errors*, *DNS*, *HTTP*, *TLS*,
+  *ICMP* and *ARP*. Both are imported once in LogSquirl (README,
+  *Highlighters and filters*); their patterns read the columns, so a word in
+  a payload's text never matches. The release archives do not carry them
+  yet (#58); `cmake --install` installs them next to the library.
 - **pcapng captures.** Files saved by Wireshark (its default format) or by
   macOS's `tcpdump -P` open like a pcap, in either byte order and with several
   sections. Each packet is dissected with the link type of the interface it
