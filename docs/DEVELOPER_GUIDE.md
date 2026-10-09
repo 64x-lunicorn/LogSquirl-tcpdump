@@ -1333,7 +1333,41 @@ The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
 downloads; no code path runs them, sudo, or anything that prompts. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
 capture or a program, a failure with a hint, devices on request) through
-`SidebarWidget::setLiveSources()`.
+`SidebarWidget::setLiveSources()`. The test runner sets
+`SidebarWidget::setDefaultLiveSources()` to an empty registry, so that no
+sidebar a test constructs offers the built-in kinds and runs a real
+`tcpdump -D` or `adb`.
+
+The **Android** kind (`adb_source.h/cpp`, id `adb`) is `AdbSourceKind(
+AdbPrograms )`: `PATH`'s directories, the SDK's `platform-tools` below
+`ANDROID_HOME`/`ANDROID_SDK_ROOT` and the usual install directories
+(`installed`), and the device's directory for its files (`deviceTempDir`,
+`/data/local/tmp`). Its devices are `Listed` (`parseAdbDevices()` of `adb
+devices -l`; a state other than `device` is a target's `problem`).
+`probe( serial, withInterfaces, timeout )` runs one `adb -s <serial> shell`
+script that prints `@uid=`, `@su=` (`su -c 'id -u'` with stdin `/dev/null`
+and, where the device has it, `timeout 5`), `@tcpdump=` and, after
+`@links`, `ip -o link` (`parseDeviceInterfaces()`), as an
+`AdbDeviceAccess{ root, su, tcpdump, interfaces }`; it never runs `adb
+root`. `listInterfaces()` lists `any` and the device's interfaces, with the
+root or tcpdump guidance as its error. `makeSource()` probes again on the
+capture's worker thread (throwing, as a failed capture, without root or
+tcpdump) and runs `captureCommand()`: `adb -s <serial> exec-out 'exec
+2>/dev/null; [su -c] <script>'`, the script running tcpdump in the
+background with its stderr and pid in `logsquirl-<tag>.err`/`.pid` and
+waiting for it. Every word in a device command line goes through
+`shellQuote()` (POSIX single quotes). The stream is a Process Source that,
+as it goes, kills tcpdump by its pid file on the device (through su when it
+runs as root) and removes its files, and that reads the `.err` file for
+the error of a capture that ended before any byte came.
+`explainFailure()` maps adb's and tcpdump's errors to
+`adbAuthorizeGuidance()`, `adbConnectGuidance()`, `adbRootGuidance()`,
+`adbTcpdumpGuidance()`. `tests/adb_source_test.cpp` uses a fake `adb`
+script whose "device" is this computer's `/bin/sh` with a `PATH` of fake
+`id`, `su`, `ip` and `tcpdump` (exec-out in a process group of its own, as
+a device's tcpdump is not ended with the local adb), so that quoting,
+root through `adb root` and su, binary-clean streams and the kill on Stop
+are tested end to end.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview

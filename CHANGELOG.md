@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Android live capture.** The **Android** source captures on a phone or
+  an emulator with the device's tcpdump through `adb` (found on `PATH`,
+  below `ANDROID_HOME`/`ANDROID_SDK_ROOT` or where the SDK is usually
+  installed). It lists the devices of `adb devices -l` (unauthorized,
+  offline or unpermitted ones with what to do) and the device's interfaces
+  (`ip -o link`, after `any`), and finds root: adbd running as root (an
+  emulator or a userdebug build after `adb root`, which the plugin never
+  runs) or a `su -c` that grants it without a prompt; without root or
+  tcpdump on the device it says what to do (`adb root`, Magisk, pushing a
+  static tcpdump to `/data/local/tmp`). It captures through `adb exec-out`,
+  binary-clean, the interface and filter single-quoted for the device's
+  shell so that no filter can inject a command; tcpdump's stderr is read
+  from the device when a capture fails, and **Stop** kills tcpdump on the
+  device too (#73)
 - **Local live capture.** The **Local** source captures on this
   computer's interfaces with Wireshark's `dumpcap` (preferred) or
   `tcpdump`, found on `PATH` or where their installers put them; without

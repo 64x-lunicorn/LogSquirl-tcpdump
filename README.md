@@ -271,6 +271,44 @@ your OS; run the command yourself, once:
   Administrators only" unchecked, so that LogSquirl need not run as
   administrator
 
+#### Android: a phone or an emulator, through adb
+
+The **Android** source captures on an Android device with the device's own
+`tcpdump`, through `adb`. It finds `adb` on `PATH`, in the SDK's
+`platform-tools` below `ANDROID_HOME` or `ANDROID_SDK_ROOT`, and where
+Android Studio and package managers put it (`~/Library/Android/sdk`,
+`~/Android/Sdk`, `%LOCALAPPDATA%\Android\Sdk`, `/opt/homebrew/bin`,
+`/usr/lib/android-sdk`); without it, the source says where to get the
+[Platform-Tools](https://developer.android.com/tools/releases/platform-tools).
+
+- **Devices** are those of `adb devices -l`, with their model. One that is
+  `unauthorized` (allow USB debugging in the prompt on the device),
+  `offline` (reconnect it, or `adb kill-server`) or without permissions
+  (Linux: a udev rule) is listed with what to do, and cannot be chosen
+- **Interfaces** are `any` and those of `ip -o link` on the device. Listing
+  them also asks the device whether it can capture, and says what to do if
+  it cannot
+- **Root**: capturing needs it. The source uses it when `adb` already runs
+  as root (an emulator image without Google Play, or a userdebug or eng
+  build, after you ran `adb root` yourself: LogSquirl never runs it), or
+  when `su -c` gives root without a prompt (a rooted device whose su
+  manager, e.g. Magisk, granted the Shell app). Otherwise it says that a
+  stock, unrooted device cannot capture this way
+- **tcpdump** is looked for on the device's `PATH`, in `/system/bin` and
+  `/system/xbin` (emulators and userdebug builds have it), and in
+  `/data/local/tmp`: on another device, push a static `tcpdump` built for
+  its CPU there (`adb push tcpdump /data/local/tmp/`, `adb shell chmod 755
+  /data/local/tmp/tcpdump`)
+
+It captures with `adb -s <serial> exec-out` (binary-clean: no terminal, no
+CR/LF translation) running `tcpdump -i <interface> -s <snaplen> -U -w -
+<filter>` on the device, through `su -c` where that is how root is had.
+The interface and the filter are single-quoted for the device's shell, so
+a filter is always one argument of tcpdump and never shell syntax.
+tcpdump's stderr is kept in a file on the device and shown if the capture
+fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
+and removes its files.
+
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:
 
