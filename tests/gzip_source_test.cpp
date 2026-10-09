@@ -94,6 +94,18 @@ private:
     MemorySource memory_;
 };
 
+/// A CountingSource that hands out at most one byte per read, as a slow
+/// pipe may.
+class TrickleSource : public CountingSource {
+public:
+    using CountingSource::CountingSource;
+
+    size_t read( uint8_t* dst, size_t n ) override
+    {
+        return CountingSource::read( dst, std::min<size_t>( n, 1 ) );
+    }
+};
+
 /// Everything @p source returns, read @p chunk bytes at a time.
 QByteArray readAll( ByteSource& source, size_t chunk )
 {
@@ -223,6 +235,37 @@ SCENARIO( "A gzip stream is decompressed on the fly", "[gzip]" )
             REQUIRE_FALSE( gzip.cutOff() );
         }
     }
+
+    GIVEN( "a stream followed by garbage that begins as a member does, but not all of its "
+           "magic and method" )
+    {
+        const auto garbage
+            = GENERATE( QByteArray( "\x1f" ), QByteArray( "\x1f\x8b" ), QByteArray( "\x1f junk" ),
+                        QByteArray( "\x1f\x8bjunk" ), QByteArray( "\x1f\x8b\x07junk" ) );
+        const auto compressed = gzipped( data ) + garbage;
+        CountingSource input( compressed );
+        GzipSource gzip( input );
+
+        THEN( "it is ignored too, not reported as corrupt" )
+        {
+            REQUIRE( readAll( gzip, 4096 ) == data );
+            REQUIRE_FALSE( gzip.cutOff() );
+            REQUIRE( gzip.error().empty() );
+        }
+    }
+
+    GIVEN( "members and trailing garbage from a source that hands out one byte at a time" )
+    {
+        const auto compressed = gzipped( data, 3 ) + QByteArray( "\x1f\x8bjunk" );
+        TrickleSource input( compressed );
+        GzipSource gzip( input );
+
+        THEN( "every member is read, the garbage ignored" )
+        {
+            REQUIRE( readAll( gzip, 65536 ) == data );
+            REQUIRE_FALSE( gzip.cutOff() );
+        }
+    }
 }
 
 SCENARIO( "A gzip stream that is cut off or corrupt ends there", "[gzip]" )
@@ -275,6 +318,58 @@ SCENARIO( "A gzip stream that is cut off or corrupt ends there", "[gzip]" )
             REQUIRE( readAll( gzip, 4096 ).isEmpty() );
             REQUIRE( gzip.cutOff() );
             REQUIRE_THAT( gzip.error(), Catch::Contains( "corrupt" ) );
+        }
+    }
+}
+
+SCENARIO( "Mangled gzip never breaks the source", "[gzip][fuzz]" )
+{
+    const auto data = sampleData( 20 * 1000 );
+    const auto compressed = gzipped( data, 2, 4096 );
+
+    GIVEN( "the stream cut at every length" )
+    {
+        THEN( "what is read is the data's beginning, and the stream is cut off unless it ends "
+              "after a whole member, or in the first two bytes of the next, which are not yet "
+              "one" )
+        {
+            const auto firstMember = gzipped( data.left( data.size() / 2 ), 1, 4096 ).size();
+            for ( qsizetype n = 0; n < compressed.size(); ++n ) {
+                CountingSource input( compressed.left( n ) );
+                GzipSource gzip( input );
+                const auto all = readAll( gzip, 4096 );
+                REQUIRE( data.startsWith( all ) );
+                INFO( n << " of " << compressed.size() << ", first member " << firstMember );
+                REQUIRE( gzip.cutOff() == ( n < firstMember || n > firstMember + 2 ) );
+            }
+        }
+    }
+
+    GIVEN( "the stream with random bytes changed, cut anywhere, read with access points kept" )
+    {
+        THEN( "it reads as the data's beginning, or is reported cut off" )
+        {
+            std::mt19937 random( 1952 );
+            for ( int round = 0; round < 400; ++round ) {
+                auto mutated = compressed;
+                const auto changes = 1 + random() % 4;
+                for ( unsigned c = 0; c < changes; ++c ) {
+                    mutated[ static_cast<qsizetype>( random() % mutated.size() ) ]
+                        = static_cast<char>( random() );
+                }
+                mutated.truncate( static_cast<qsizetype>( random() % ( mutated.size() + 1 ) ) );
+                CountingSource input( mutated );
+                GzipSource gzip( input );
+                gzip.keepAccessPoints( 1024 );
+                const auto all = readAll( gzip, 1 + random() % 8192 );
+                REQUIRE( all.size() <= 1032 * mutated.size() ); // deflate's ratio at most
+                if ( !gzip.cutOff() ) {
+                    REQUIRE( data.startsWith( all ) );
+                }
+                else {
+                    REQUIRE_FALSE( gzip.error().empty() );
+                }
+            }
         }
     }
 }

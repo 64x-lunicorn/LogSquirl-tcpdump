@@ -39,8 +39,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-
 /// Header lines of one message, and lines of one SDP body, read at most;
 /// a message with more header lines is malformed, an SDP body's further
 /// lines are not looked at.
@@ -239,20 +237,6 @@ std::optional<std::array<uint8_t, 4>> ipv4Address( Text t )
     return i == t.len ? std::optional( bytes ) : std::nullopt;
 }
 
-int hexDigit( uint8_t c )
-{
-    if ( isDigit( c ) ) {
-        return c - '0';
-    }
-    if ( c >= 'a' && c <= 'f' ) {
-        return c - 'a' + 10;
-    }
-    if ( c >= 'A' && c <= 'F' ) {
-        return c - 'A' + 10;
-    }
-    return -1;
-}
-
 /// An IPv6 address in any of RFC 4291's text forms, `::` and a dotted
 /// IPv4 tail among them.
 std::optional<std::array<uint8_t, 16>> ipv6Address( Text t )
@@ -361,6 +345,7 @@ struct Sdp {
     std::vector<std::string> media; ///< m= values, as shown
     size_t mediaCount = 0;
     std::vector<MediaEndpoint> endpoints;
+    std::string origin; ///< SipCall::origin
     bool malformed = false;
     bool cut = false;
 };
@@ -398,6 +383,20 @@ std::optional<Medium> mediaLine( Text value, const std::string& sessionIp )
     return medium;
 }
 
+/// The side an o= line's value names, "alice 2890844526 2890844526 IN IP4
+/// 192.0.2.10": all but the session's version, "alice 2890844526 IN IP4
+/// 192.0.2.10", at most kMaxSipCallIdBytes.
+std::string originOf( Text value )
+{
+    Text rest;
+    auto origin = word( value, rest ).str();  // the username
+    origin += ' ' + word( rest, rest ).str(); // the session's id
+    word( rest, rest );                       // its version
+    origin += ' ' + rest.str();
+    origin.resize( std::min( origin.size(), kMaxSipCallIdBytes ) );
+    return origin;
+}
+
 /// An SDP body (RFC 4566), @p complete if all of it was captured.
 Sdp describeSdp( Text body, bool complete )
 {
@@ -423,6 +422,9 @@ Sdp describeSdp( Text body, bool complete )
             continue; // a line of a medium past kMaxSdpMedia
         }
         switch ( line.data[ 0 ] ) {
+        case 'o':
+            sdp.origin = originOf( value );
+            break;
         case 'c':
             ( media.empty() ? sessionIp : media.back().ip ) = connectionAddress( value );
             break;
@@ -701,6 +703,7 @@ std::string messageText( const Message& m, SipCall& call )
             const auto sdp = describeSdp( m.body, !m.bodyCut );
             text += ", " + sdpText( sdp );
             call.media = sdp.endpoints;
+            call.origin = sdp.origin;
             if ( m.bodyCut && !sdp.cut ) {
                 text += " " + kEllipsis;
             }
@@ -739,47 +742,48 @@ std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
                        std::vector<SipCall>& calls )
 {
     const uint8_t* const end = payload + len;
-    const Text bytes{ payload, len };
-    auto start = startLineOf( bytes );
-    if ( !start ) {
-        return {};
-    }
-    std::vector<std::string> messages;
-    bool more = false;
-    const uint8_t* at = payload;
-    while ( start ) {
-        if ( messages.size() == kMaxSipMessages ) {
-            more = true;
-            break;
+    return nameMessages( len, kMaxSipMessages, "; ", [ & ]( size_t offset ) {
+        // Line ends before the first message are skipped as between them.
+        const uint8_t* at = skipLineEnds( payload + offset, end );
+        const Text bytes{ at, static_cast<size_t>( end - at ) };
+        const auto start = startLineOf( bytes );
+        if ( !start ) {
+            // None at all, or bytes after the messages that begin none.
+            return NamedMessage{ {}, 0, true, offset > 0 };
         }
-        const auto message
-            = readMessage( { at, static_cast<size_t>( end - at ) }, *start, overTcp );
+        const auto message = readMessage( bytes, *start, overTcp );
         SipCall call;
-        messages.push_back( messageText( message, call ) );
+        auto text = messageText( message, call );
         if ( call.ends || !call.media.empty() ) {
             calls.push_back( std::move( call ) );
         }
         if ( !overTcp || message.end == end || message.malformed || message.headersCut
              || message.bodyCut ) {
-            break;
+            return NamedMessage{ std::move( text ), 0, true };
         }
-        at = skipLineEnds( message.end, end );
-        if ( at == end ) {
-            break;
-        }
-        start = startLineOf( { at, static_cast<size_t>( end - at ) } );
-        more = !start;
+        // The line ends after it go with it.
+        const auto* next = skipLineEnds( message.end, end );
+        return NamedMessage{ std::move( text ),
+                             static_cast<size_t>( next - ( payload + offset ) ) };
+    } );
+}
+
+std::string detectSipKeepAlive( const uint8_t* payload, size_t len )
+{
+    if ( len == 4 && std::memcmp( payload, "\r\n\r\n", 4 ) == 0 ) {
+        return "Keep-alive (ping)";
     }
-    std::string text;
-    for ( const auto& m : messages ) {
-        text += ( text.empty() ? "" : "; " ) + m;
+    if ( len == 2 && std::memcmp( payload, "\r\n", 2 ) == 0 ) {
+        return "Keep-alive (pong)";
     }
-    return more ? text + "; " + kEllipsis : text;
+    return {};
 }
 
 std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len )
 {
-    const Text bytes{ payload, len };
+    // The keep-alives before a message go with it.
+    const auto* at = skipLineEnds( payload, payload + len );
+    const Text bytes{ at, static_cast<size_t>( payload + len - at ) };
     const auto start = startLineOf( bytes );
     if ( !start ) {
         return std::nullopt;

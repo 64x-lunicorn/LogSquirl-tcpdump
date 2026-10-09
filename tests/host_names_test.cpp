@@ -31,6 +31,7 @@
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_converter.h"
+#include "regex_lab.h"
 
 #include <QDir>
 #include <QFile>
@@ -84,10 +85,10 @@ Bytes name( const std::string& dotted )
     return out;
 }
 
-Bytes record( const std::string& owner, uint16_t type, const Bytes& data )
+Bytes record( const std::string& owner, uint16_t type, const Bytes& data, uint16_t ttl = 0x0E10 )
 {
-    return name( owner ) + be16( type ) + be16( 1 ) + Bytes{ 0, 0, 0x0E, 0x10 }
-           + be16( data.size() ) + data;
+    return name( owner ) + be16( type ) + be16( 1 ) + be16( 0 ) + be16( ttl ) + be16( data.size() )
+           + data;
 }
 
 Bytes ipv4( uint8_t a, uint8_t b, uint8_t c, uint8_t d )
@@ -247,6 +248,41 @@ SCENARIO( "DNS answers name the addresses they resolve", "[hostnames]" )
         }
     }
 
+    GIVEN( "an mDNS response whose addresses are additional records" )
+    {
+        constexpr uint16_t kSrv = 33;
+        const auto message
+            = be16( 0 ) + be16( kMdnsResponse ) + be16( 0 ) + be16( 1 ) + be16( 0 ) + be16( 2 )
+              + record( "_ipp._tcp.local", kPtr, name( "Printer._ipp._tcp.local" ) )
+              + record( "Printer._ipp._tcp.local", kSrv,
+                        be16( 0 ) + be16( 0 ) + be16( 631 ) + name( "printer.local" ) )
+              + record( "printer.local", kA, ipv4( 192, 0, 2, 30 ) );
+
+        THEN( "they name their addresses in mDNS, not in DNS, where they are unasked for" )
+        {
+            REQUIRE( dnsResolvedNames( message.data(), message.size(), true ).size() == 1 );
+            REQUIRE( dnsResolvedNames( message.data(), message.size(), true )[ 0 ].name
+                     == "printer.local" );
+            REQUIRE( resolved( message ).empty() );
+        }
+    }
+
+    GIVEN( "an mDNS goodbye: its records with TTL 0" )
+    {
+        const auto message = be16( 0 ) + be16( kMdnsResponse ) + be16( 0 ) + be16( 1 ) + be16( 0 )
+                             + be16( 1 ) + record( "printer.local", kA, ipv4( 192, 0, 2, 20 ), 0 )
+                             + record( "scanner.local", kA, ipv4( 192, 0, 2, 21 ), 0 );
+
+        THEN( "it names nothing in mDNS; a DNS answer of TTL 0 still names" )
+        {
+            REQUIRE( dnsResolvedNames( message.data(), message.size(), true ).empty() );
+            HostNames names;
+            names.learn( udpFrom( 5353 ), { message.data(), message.size() }, {} );
+            REQUIRE( names.size() == 0 );
+            REQUIRE( resolved( message ) == Names{ { "192.0.2.20", "printer.local" } } );
+        }
+    }
+
     GIVEN( "messages that are no answer to learn from" )
     {
         const auto answer = record( "example.com", kA, ipv4( 192, 0, 2, 1 ) );
@@ -322,6 +358,21 @@ SCENARIO( "Only host names stand in a column", "[hostnames]" )
         REQUIRE_FALSE( isHostName( "<Root>" ) );
         REQUIRE_FALSE( isHostName( "caf\xc3\xa9.example" ) );
         REQUIRE_FALSE( isHostName( std::string( kMaxHostName + 1, 'a' ) ) );
+    }
+}
+
+SCENARIO( "The Regex Lab matches the names isHostName() lets stand in a column", "[hostnames]" )
+{
+    THEN( "a character is in the name suffix pattern exactly when a host name may hold it" )
+    {
+        const QRegularExpression suffix( "^" + nameSuffixPattern() + "$" );
+        REQUIRE( suffix.isValid() );
+        for ( int c = 1; c < 256; ++c ) {
+            const std::string name = std::string( "a" ) + static_cast<char>( c );
+            const auto column = QString::fromLatin1( ( "(" + name + ")" ).c_str() );
+            INFO( "character " << c );
+            REQUIRE( isHostName( name ) == suffix.match( column ).hasMatch() );
+        }
     }
 }
 

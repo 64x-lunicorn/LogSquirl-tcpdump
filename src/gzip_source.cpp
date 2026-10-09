@@ -163,6 +163,29 @@ void GzipSource::keepPoint( int bits )
     keeping_->add( std::move( point ) );
 }
 
+/// At least @p n compressed bytes in zlib's input, fewer only where the
+/// input ends: their number.
+size_t GzipSource::peekInput( size_t n )
+{
+    auto& z = stream_->z;
+    if ( z.avail_in >= n ) {
+        return z.avail_in;
+    }
+    if ( z.avail_in > 0 ) {
+        std::memmove( in_.data(), z.next_in, z.avail_in );
+    }
+    z.next_in = in_.data();
+    while ( z.avail_in < n ) {
+        const auto got = input_.read( in_.data() + z.avail_in, in_.size() - z.avail_in );
+        if ( got == 0 ) {
+            break;
+        }
+        inputPos_ += got;
+        z.avail_in += static_cast<uInt>( got );
+    }
+    return z.avail_in;
+}
+
 bool GzipSource::produce()
 {
     auto& z = stream_->z;
@@ -184,8 +207,10 @@ bool GzipSource::produce()
         }
         if ( state_ == State::Between ) {
             // Another member, or the end.  Bytes that start no member after
-            // a complete one are ignored, as gzip ignores trailing garbage.
-            if ( !fillInput() || z.next_in[ 0 ] != kGzipMagic1 ) {
+            // a complete one, its magic and deflate's method, are ignored,
+            // as gzip ignores trailing garbage.
+            if ( peekInput( 3 ) < 3 || z.next_in[ 0 ] != kGzipMagic1
+                 || z.next_in[ 1 ] != kGzipMagic2 || z.next_in[ 2 ] != kDeflate ) {
                 end( {} );
                 return false;
             }

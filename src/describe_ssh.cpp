@@ -35,11 +35,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-const std::string kMalformed = " [Malformed Packet]";
-
-constexpr uint16_t kSshPort = 22;
-
 /// Longest identification string, CR LF included (RFC 4253, 4.2).
 constexpr size_t kMaxBannerBytes = 255;
 
@@ -84,8 +79,6 @@ std::string encryptedPacket( size_t len )
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────
-
-enum class Read { Ok, Cut, Malformed };
 
 /// A read of @p r that failed: the bytes were cut, or the message is
 /// malformed if all of them are there.
@@ -366,38 +359,35 @@ struct Packets {
 Packets readPackets( const uint8_t* p, size_t len )
 {
     Packets packets;
-    std::vector<std::string> names;
-    bool more = false;
-    size_t at = 0;
-    while ( at < len ) {
-        if ( names.size() == kMaxMessages ) {
-            more = true;
-            break;
-        }
-        const auto packet = readPacket( p + at, len - at );
-        names.push_back( packet.text );
+    size_t named = 0;
+    packets.text = nameMessages( len, kMaxMessages, ", ", [ & ]( size_t at ) {
+        auto packet = readPacket( p + at, len - at );
+        ++named;
         if ( packet.status == Read::Malformed || ( packet.coded && !packet.known ) ) {
             packets.plausible = false;
         }
         if ( packet.status == Read::Cut ) {
-            if ( names.size() == 1 && packet.code != kMsgKexInit ) {
+            if ( at == 0 && packet.code != kMsgKexInit ) {
                 packets.plausible = false;
             }
-            break;
+            return NamedMessage{ std::move( packet.text ), 0, true };
         }
         if ( packet.status != Read::Ok ) {
-            break;
+            return NamedMessage{ std::move( packet.text ), 0, true };
         }
-        at += packet.length; // whole, so within len
+        const auto end = at + packet.length; // whole, so within len
         if ( packet.code == kMsgNewKeys ) {
             packets.newKeys = true;
-            if ( at < len ) {
-                names.push_back( encryptedPacket( len - at ) );
+            if ( end < len ) {
+                // The encrypted rest is named as one more packet, past the
+                // last named only as "…".
+                packet.text
+                    += ", " + ( named == kMaxMessages ? kEllipsis : encryptedPacket( len - end ) );
             }
-            break;
+            return NamedMessage{ std::move( packet.text ), 0, true };
         }
-    }
-    packets.text = joinNames( std::move( names ), kMaxMessages, more );
+        return NamedMessage{ std::move( packet.text ), packet.length };
+    } );
     return packets;
 }
 
@@ -458,7 +448,7 @@ const char* labelOf( int version )
 } // namespace
 
 std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
-                                             uint16_t dstPort )
+                                             uint16_t dstPort, bool inSshStream )
 {
     if ( len == 0 ) {
         return std::nullopt;
@@ -481,14 +471,15 @@ std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len,
         return result;
     }
 
+    const bool onSshPort = srcPort == kSshPort || dstPort == kSshPort;
     const auto packets = readPackets( payload, len );
-    if ( packets.plausible ) {
+    if ( inSshStream || ( packets.plausible && onSshPort ) ) {
         result.label = "SSHv2";
         result.description += packets.text;
         result.streamCue = packets.newKeys ? StreamCue::SshNewKeys : StreamCue::None;
         return result;
     }
-    if ( srcPort == kSshPort || dstPort == kSshPort ) {
+    if ( onSshPort ) {
         // No packet of the unencrypted phase: one of a connection whose
         // key exchange the capture did not see, as far as the port tells.
         result.label = "SSH";
@@ -553,14 +544,22 @@ void describeSshInStream( PacketRecord& pkt, const Stream& stream )
         redescribe( pkt, "SSHv2", side + encryptedPacket( pkt.payloadLen ) );
         return;
     }
-    if ( pkt.protocolRecognised || pkt.payloadHeadLen == 0 ) {
+    if ( pkt.payloadHeadLen == 0
+         || ( pkt.protocolRecognised && pkt.protocol.rfind( "SSH", 0 ) == 0 ) ) {
         return;
     }
-    // Packets of the key exchange that did not read as SSH on their own:
-    // those in the payload's first kPayloadHeadBytes, what is cut or
-    // malformed said so.
+    // Packets of the key exchange that did not read as SSH on their own
+    // (off port 22): those in the payload's first kPayloadHeadBytes, what
+    // is cut or malformed said so; over another protocol's description
+    // only if they read as packets.
     const auto packets = readPackets( pkt.payloadHead.data(), pkt.payloadHeadLen );
+    if ( pkt.protocolRecognised && !packets.plausible ) {
+        return;
+    }
     redescribe( pkt, "SSHv2", side + packets.text );
+    if ( packets.newKeys ) {
+        pkt.streamCue = StreamCue::SshNewKeys;
+    }
 }
 
 void rememberSshInStream( const PacketRecord& pkt, const Stream& stream )

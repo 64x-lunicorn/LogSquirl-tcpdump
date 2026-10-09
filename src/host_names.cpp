@@ -24,10 +24,10 @@
 
 #include "host_names.h"
 
-#include "payload_describer.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace tcpdump {
 
@@ -37,6 +37,17 @@ constexpr uint16_t kDnsPort = 53;
 constexpr uint16_t kMdnsPort = 5353;
 
 } // namespace
+
+bool isHostName( const std::string& name )
+{
+    if ( name.empty() || name.size() > kMaxHostName || name.front() == '.' ) {
+        return false;
+    }
+    return std::all_of( name.begin(), name.end(), []( char c ) {
+        return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' )
+               || ( c != '\0' && std::strchr( kHostNamePunctuation, c ) != nullptr );
+    } );
+}
 
 HostNames::HostNames( size_t maxNames )
     : maxNames_( std::max<size_t>( maxNames, 1 ) )
@@ -48,7 +59,7 @@ void HostNames::learn( const PacketRecord& pkt, ByteView payload, ByteView tcpMe
     if ( pkt.transport == Transport::Udp
          && ( pkt.srcPort == kDnsPort || pkt.srcPort == kMdnsPort ) ) {
         if ( payload.data && payload.size > 0 ) {
-            learnMessage( payload.data, payload.size );
+            learnMessage( payload.data, payload.size, pkt.srcPort == kMdnsPort );
         }
         return;
     }
@@ -63,14 +74,14 @@ void HostNames::learn( const PacketRecord& pkt, ByteView payload, ByteView tcpMe
         if ( tcpMessages.size - at - 2 < length ) {
             break;
         }
-        learnMessage( tcpMessages.data + at + 2, length );
+        learnMessage( tcpMessages.data + at + 2, length, false );
         at += 2 + length;
     }
 }
 
-void HostNames::learnMessage( const uint8_t* message, size_t len )
+void HostNames::learnMessage( const uint8_t* message, size_t len, bool mdns )
 {
-    for ( const auto& [ address, name ] : dnsResolvedNames( message, len ) ) {
+    for ( const auto& [ address, name ] : dnsResolvedNames( message, len, mdns ) ) {
         add( address, name );
     }
 }

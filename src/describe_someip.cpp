@@ -29,7 +29,6 @@
 #include "someip.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -239,8 +238,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-
 /// The header: Message ID, Length, Request ID, Protocol and Interface
 /// Version, Message Type, Return Code.
 constexpr size_t kHeaderBytes = 16;
@@ -266,9 +263,9 @@ constexpr size_t kMaxSdOptionsNamed = 4;
 constexpr size_t kSdEntryBytes = 16;
 constexpr size_t kSdOptionHeaderBytes = 3;
 
-/// Over TCP, by the header alone, a message of more than this many bytes
-/// is taken for none: no SOME/IP message on a port not SOME/IP's is so
-/// long, and random bytes seldom pass for one.
+/// By the header alone (the heuristic, and the framer off SOME/IP's
+/// ports), a message of more than this many bytes is taken for none: no SOME/IP message on a port
+/// not SOME/IP's is so long, and random bytes seldom pass for one.
 constexpr uint32_t kMaxHeuristicLength = 1024 * 1024;
 
 /// The message types (PRS_SOMEIP_00055), as AUTOSAR names them; null for
@@ -348,14 +345,6 @@ std::string returnCodeName( uint8_t code )
         return "Service Error " + hexCode( code );
     }
     return "Return Code " + hexCode( code );
-}
-
-/// A 16-bit ID as "0x1234".
-std::string id16( uint16_t value )
-{
-    char buf[ 8 ];
-    std::snprintf( buf, sizeof( buf ), "0x%04X", value );
-    return buf;
 }
 
 /// @p id, and the name the table gives it in parentheses.
@@ -659,10 +648,7 @@ std::string sdText( FieldReader sd )
     auto text = names.empty() ? std::string( "No entries" )
                               : joinNames( std::move( names ), kMaxSdEntriesNamed, more );
     if ( !entriesWhole || ( !sd.complete() && !optionsRead ) ) {
-        if ( text.size() < kEllipsis.size()
-             || text.compare( text.size() - kEllipsis.size(), kEllipsis.size(), kEllipsis ) != 0 ) {
-            text += " " + kEllipsis;
-        }
+        markCut( text );
     }
     else if ( malformed ) {
         text += " [Malformed Packet]";
@@ -749,7 +735,8 @@ Message readMessage( const uint8_t* p, size_t len )
             m.text += " " + kEllipsis;
         }
     }
-    m.valid = whole && plausible( h ) && m.text.find( "[Malformed" ) == std::string::npos;
+    m.valid = whole && plausible( h ) && h.length <= kMaxHeuristicLength
+              && m.text.find( "[Malformed" ) == std::string::npos;
     m.last = !whole;
     return m;
 }
@@ -762,37 +749,26 @@ SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heurist
     if ( len == 0 ) {
         return result;
     }
-    std::vector<std::string> texts;
-    bool more = false;
-    size_t at = 0;
-    while ( at < len ) {
-        if ( texts.size() == kMaxMessages ) {
-            more = true;
-            if ( !heuristic ) {
+    if ( heuristic ) {
+        // Every message, named or not, whole and by the rules.
+        for ( size_t at = 0; at < len; ) {
+            const auto message = readMessage( payload + at, len - at );
+            if ( !message.valid ) {
+                return {};
+            }
+            if ( message.last ) {
                 break;
             }
+            at += message.length;
         }
-        const auto message = readMessage( payload + at, len - at );
-        if ( heuristic && !message.valid ) {
-            return {};
-        }
-        if ( texts.empty() ) {
+    }
+    result.text = nameMessages( len, kMaxMessages, "; ", [ & ]( size_t at ) {
+        auto message = readMessage( payload + at, len - at );
+        if ( at == 0 ) {
             result.sd = message.sd;
         }
-        if ( !more ) {
-            texts.push_back( message.text );
-        }
-        if ( message.last ) {
-            break;
-        }
-        at += message.length;
-    }
-    for ( const auto& text : texts ) {
-        result.text += ( result.text.empty() ? "" : "; " ) + text;
-    }
-    if ( more ) {
-        result.text += "; " + kEllipsis;
-    }
+        return NamedMessage{ std::move( message.text ), message.length, message.last };
+    } );
     return result;
 }
 

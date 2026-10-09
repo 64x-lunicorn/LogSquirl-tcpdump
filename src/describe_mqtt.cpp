@@ -48,11 +48,6 @@ constexpr size_t kMaxMqttPayloadBytes = 32;
 /// Most bytes of a Remaining Length or another variable byte integer.
 constexpr size_t kMaxMqttVarintBytes = 4;
 
-/// How a read went: the field is there, it lies beyond the captured bytes
-/// (the packet goes on in a later segment, or was cut at the snaplen), or
-/// it does not fit in the length its packet declares.
-enum class Read { Ok, Cut, Malformed };
-
 /**
  * The fields of an MQTT packet, or of a part of one: the length it
  * declares, and as many of its bytes as were captured.  A read beyond the
@@ -819,12 +814,8 @@ std::string packetText( const char* name, const Packet& packet, bool cut )
         text += " (" + joinNames( packet.details, packet.details.size() ) + ")";
     }
     text += packet.tail;
-    static const std::string kEllipsis = "\xe2\x80\xa6";
-    if ( cut
-         && ( text.size() < kEllipsis.size()
-              || text.compare( text.size() - kEllipsis.size(), kEllipsis.size(), kEllipsis )
-                     != 0 ) ) {
-        text += " " + kEllipsis;
+    if ( cut ) {
+        markCut( text );
     }
     return text;
 }
@@ -844,58 +835,50 @@ std::string describeMqttPackets( const uint8_t* p, size_t len, size_t wireLen )
     // length of its own.
     Fields segment( FieldReader( p, len ), SIZE_MAX );
     Session session;
-    std::vector<std::string> names;
-    bool more = len < wireLen;
-    while ( segment.captured() > 0 ) {
-        uint8_t first = 0;
-        uint32_t length = 0;
-        if ( names.size() == kMaxMqttPackets ) {
-            more = true;
-            break;
-        }
-        segment.u8( first );
-        const unsigned type = first >> 4;
-        const unsigned flags = first & 0x0F;
-        if ( type == 0 || !validFlags( type, flags ) ) {
-            if ( names.empty() ) {
-                return {};
+    bool none = false;
+    auto text = nameMessages(
+        len, kMaxMqttPackets, ", ",
+        [ & ]( size_t at ) {
+            const auto before = segment.captured();
+            uint8_t first = 0;
+            uint32_t length = 0;
+            segment.u8( first );
+            const unsigned type = first >> 4;
+            const unsigned flags = first & 0x0F;
+            if ( type == 0 || !validFlags( type, flags ) ) {
+                none = at == 0;
+                return NamedMessage{ "[Malformed Packet]", 0, true };
             }
-            names.emplace_back( "[Malformed Packet]" );
-            more = false;
-            break;
-        }
-        const char* name = kMqttPacketNames[ type ];
-        Fields body( FieldReader( nullptr, 0 ), 0 );
-        auto status = segment.varint( length );
-        if ( status == Read::Ok ) {
-            status = segment.take( length, body );
-        }
-        if ( status != Read::Ok ) {
-            // The fixed header is cut, or its length does not fit.
-            if ( names.empty() ) {
-                return {};
+            const char* name = kMqttPacketNames[ type ];
+            Fields body( FieldReader( nullptr, 0 ), 0 );
+            auto status = segment.varint( length );
+            if ( status == Read::Ok ) {
+                status = segment.take( length, body );
             }
-            names.push_back( status == Read::Cut ? std::string( name ) + " \xe2\x80\xa6"
-                                                 : std::string( "[Malformed Packet]" ) );
-            more = false;
-            break;
-        }
-        Packet packet;
-        status = describeBody( type, flags, body, session, packet );
-        if ( status == Read::Malformed ) {
-            if ( names.empty() && ( body.cut() || segment.captured() > 0 || len < wireLen ) ) {
-                return {};
+            if ( status != Read::Ok ) {
+                // The fixed header is cut, or its length does not fit.
+                none = at == 0;
+                return NamedMessage{ status == Read::Cut ? std::string( name ) + " " + kEllipsis
+                                                         : std::string( "[Malformed Packet]" ),
+                                     0, true };
             }
-            names.push_back( std::string( name ) + " [Malformed Packet]" );
-            continue;
-        }
-        names.push_back( packetText( name, packet, status == Read::Cut || body.cut() ) );
-        if ( status == Read::Cut || body.cut() ) {
-            more = false; // said by the packet's own ellipsis
-            break;
-        }
-    }
-    return joinNames( std::move( names ), kMaxMqttPackets, more );
+            Packet packet;
+            status = describeBody( type, flags, body, session, packet );
+            if ( status == Read::Malformed ) {
+                if ( at == 0 && ( body.cut() || segment.captured() > 0 || len < wireLen ) ) {
+                    none = true;
+                    return NamedMessage{ {}, 0, true };
+                }
+                return NamedMessage{ std::string( name ) + kMalformed,
+                                     before - segment.captured() };
+            }
+            const bool cut = status == Read::Cut || body.cut();
+            // A cut one says so by its own ellipsis.
+            return NamedMessage{ packetText( name, packet, cut ), before - segment.captured(),
+                                 cut };
+        },
+        len < wireLen );
+    return none ? std::string() : text;
 }
 
 } // namespace
@@ -931,6 +914,9 @@ std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len )
         const uint8_t digit = payload[ 1 + i ];
         remaining |= static_cast<size_t>( digit & 0x7F ) << ( 7 * i );
         if ( ( digit & 0x80 ) == 0 ) {
+            if ( i > 0 && digit == 0 ) {
+                return std::nullopt; // in more bytes than it needs: malformed, as the parser says
+            }
             return 2 + i + remaining;
         }
     }

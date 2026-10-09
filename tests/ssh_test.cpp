@@ -27,9 +27,11 @@
 
 #include <catch2/catch.hpp>
 
+#include "capture_reader.h"
 #include "payload_describer.h"
 #include "pcapbuilder.h"
 #include "stream_tracker.h"
+#include "tcp_reassembly.h"
 
 #include <random>
 #include <string>
@@ -140,27 +142,44 @@ std::string descriptionOf( const PacketRecord& pkt )
 }
 
 /// @p payloads sent between the client and @p port, true from the client,
-/// run through the Converter's steps but the TCP Reassembly.
+/// run through the Converter's steps, the TCP Reassembly only if
+/// @p reassemble.
 std::vector<PacketRecord> inStream( const std::vector<std::pair<bool, Bytes>>& payloads,
-                                    uint16_t port )
+                                    uint16_t port, bool reassemble = false )
 {
     std::vector<Bytes> frames;
+    uint32_t seq[ 2 ] = { 1000, 5000 }; // the client's, the server's
     for ( const auto& [ client, payload ] : payloads ) {
         Ipv4Options o;
         if ( !client ) {
             std::swap( o.src, o.dst );
         }
-        frames.push_back( eth( EthertypeIpv4, ipv4( IpProtoTcp,
-                                                    client ? tcp( kClientPort, port, payload )
-                                                           : tcp( port, kClientPort, payload ),
-                                                    o ) ) );
+        auto& next = seq[ client ? 0 : 1 ];
+        const auto ack = seq[ client ? 1 : 0 ];
+        frames.push_back( eth( EthertypeIpv4,
+                               ipv4( IpProtoTcp,
+                                     client ? tcp( kClientPort, port, payload, 5, 0x18, next, ack )
+                                            : tcp( port, kClientPort, payload, 5, 0x18, next, ack ),
+                                     o ) ) );
+        next += static_cast<uint32_t>( payload.size() );
     }
-    auto packets = parse( pcapOf( frames ) ).packets;
+    const auto file = pcapOf( frames );
+    MemorySource memory( file.data(), file.size() );
+    HeadSource head( memory );
+    const auto reader = makeCaptureReader( head );
+    REQUIRE( reader->open() );
     StreamTracker tracker;
-    for ( auto& pkt : packets ) {
+    TcpReassembly reassembly;
+    std::vector<PacketRecord> packets;
+    PacketRecord pkt;
+    while ( reader->next( pkt ) ) {
         const auto stream = tracker.track( pkt );
         describeInStream( pkt, stream );
+        if ( reassemble ) {
+            reassembly.apply( pkt, stream, reader->payloadOf( pkt ) );
+        }
         rememberInStream( pkt, stream );
+        packets.push_back( pkt );
     }
     return packets;
 }
@@ -274,7 +293,7 @@ SCENARIO( "The binary packets of the key exchange are described", "[ssh]" )
     {
         THEN( "the rest is an encrypted packet" )
         {
-            const auto described = fromClient( kNewKeys + Bytes( 52, 0xE7 ), 2222 );
+            const auto described = fromClient( kNewKeys + Bytes( 52, 0xE7 ) );
             REQUIRE( described.label == "SSHv2" );
             REQUIRE( described.description == "Client: New Keys, Encrypted packet (len=52)" );
             REQUIRE( described.streamCue == StreamCue::SshNewKeys );
@@ -346,7 +365,7 @@ SCENARIO( "A truncated or malformed SSH packet is described as such", "[ssh]" )
             REQUIRE( fromClient( prefix( message, 90 ) ).description
                      == "Client: Key Exchange Init kex=curve25519-sha256," + kEllipsis + " "
                             + kEllipsis );
-            REQUIRE( fromClient( prefix( message, 30 ), 2222 ).description
+            REQUIRE( fromClient( prefix( message, 30 ) ).description
                      == "Client: Key Exchange Init " + kEllipsis );
             REQUIRE( fromClient( kexInit() + prefix( kNewKeys, 3 ) ).description
                      == "Client: " + kKexInitText + ", Packet " + kEllipsis );
@@ -398,6 +417,20 @@ SCENARIO( "A truncated or malformed SSH packet is described as such", "[ssh]" )
                      == std::string::npos );
         }
     }
+
+    GIVEN( "packets of the key exchange without a banner, on another port" )
+    {
+        THEN( "they are not SSH, as any binary protocol may begin so; only a stream that "
+              "showed a banner reads them" )
+        {
+            for ( const auto& bytes :
+                  { kexInit(), prefix( kexInit(), 30 ), kNewKeys + Bytes( 52, 0xE7 ), ecdhInit(),
+                    Bytes{ 0x00, 0x00, 0x01, 0x2C, 0x06, 0x14, 0x01, 0x02 } } ) {
+                REQUIRE( fromClient( bytes, 2222 ).label.rfind( "SSH", 0 ) == std::string::npos );
+                REQUIRE( fromServer( bytes, 2222 ).label.rfind( "SSH", 0 ) == std::string::npos );
+            }
+        }
+    }
 }
 
 SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
@@ -418,7 +451,7 @@ SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
                 { false, Bytes( 52, 0x9E ) },
                 { true, prefix( ecdhReply(), 40 ) },
             },
-            2222 );
+            2222, true );
 
         THEN( "each direction is encrypted after its NEWKEYS" )
         {
@@ -461,6 +494,23 @@ SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
             REQUIRE( descriptionOf( packets[ 2 ] ) == "Client: Key Exchange Init " + kEllipsis );
             REQUIRE( descriptionOf( packets[ 3 ] )
                      == "Client: Invalid packet length 13 [Malformed Packet]" );
+        }
+    }
+
+    GIVEN( "a NEWKEYS on port 2222 that the stream reads after the banner, with "
+           "an encrypted packet behind it" )
+    {
+        const auto packets = inStream( { { true, banner() },
+                                         { true, kNewKeys + Bytes( 28, 0x9D ) },
+                                         { true, Bytes( 52, 0x9E ) } },
+                                       2222 );
+
+        THEN( "what follows it is encrypted" )
+        {
+            REQUIRE( packets[ 1 ].protocol == "SSHv2" );
+            REQUIRE( descriptionOf( packets[ 1 ] )
+                     == "Client: New Keys, Encrypted packet (len=28)" );
+            REQUIRE( descriptionOf( packets[ 2 ] ) == "Client: Encrypted packet (len=52)" );
         }
     }
 

@@ -60,12 +60,14 @@ namespace tcpdump {
  *   replaces the one whose last packet (or announcement) is the oldest;
  * - an endpoint without a packet for kIdleSeconds of capture time is no
  *   longer expected;
- * - a BYE ends its call's expectations, and an SDP body replaces those of
- *   its call at the addresses it announces anew (a re-INVITE).
+ * - a BYE ends its call's expectations, and an SDP body replaces those its
+ *   call's side announced before (a re-INVITE), the side by the body's o=
+ *   line (SipCall::origin): an answer keeps the offer's, also when both
+ *   ends' media are on one address.
  */
 class MediaExpectations {
 public:
-    /// Endpoints expected at most by default, some 100 KB of memory.
+    /// Endpoints expected at most by default, some 250 KB of memory.
     static constexpr size_t kMaxExpectations = 1024;
     /// Capture time after which an endpoint without a packet expires.
     static constexpr int64_t kIdleSeconds = 300;
@@ -93,12 +95,13 @@ private:
     struct Expectation {
         std::string ip;
         std::string callId;
+        std::string origin;   ///< The side of the call that announced it
         bool rtcp = false;    ///< An RTCP endpoint, not an RTP one
         int64_t lastSeen = 0; ///< Capture time of its last packet or announcement
     };
 
     void announce( const SipCall& call, int64_t now );
-    void expect( const std::string& ip, uint16_t port, bool rtcp, const std::string& callId,
+    void expect( const std::string& ip, uint16_t port, bool rtcp, const SipCall& call,
                  int64_t now );
     /// The fresh expectation of @p ip and @p port, or null; an expired one is forgotten.
     Expectation* find( const std::string& ip, uint16_t port, int64_t now );

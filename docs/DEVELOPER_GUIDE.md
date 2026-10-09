@@ -343,7 +343,8 @@ decompressed, and every offset (`ReaderCheckpoint::offset`,
 returns the bytes from there, so a capture of any size takes that much
 memory plus a 64 KiB input buffer. A file of several members (`cat a.gz
 b.gz`) reads as one capture; bytes after a complete member that start no
-other one are ignored, as `gzip -d` ignores trailing garbage. A stream that
+other one (its magic `1f 8b` and deflate's method 8, looked at across the
+input's chunks) are ignored, as `gzip -d` ignores trailing garbage. A stream that
 ends inside a member, or whose data zlib rejects (a bad block, a CRC or
 length that does not match), ends there: `cutOff()` and `error()` ("the
 gzip stream is cut off", "the gzip data is corrupt (…)"). The Converter
@@ -481,11 +482,15 @@ frame tells it), `describe_smb.cpp` (SMB2/3 and SMB1 in NetBIOS Session
 Service messages) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
-`hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
-of the detectors and in-stream passes the tables use.
+`hexBytes()`, `hexValue()`, `joinNames()`, `markCut()`, `kEllipsis`,
+`kMalformed`, …), the `Read` outcome of a parser's read, the
+`FieldReader`, `nameMessages()`, the one bounded walk every protocol that
+names several messages of a segment names them with (at most N, read
+one, stop after the last, advance, joined by `; ` or `, `, then `…`), and
+the declarations of the detectors and in-stream passes the tables use.
 - TCP: DNS on port 53, DoIP on port 13400, SMB (on ports 445 and 139, or
   by its protocol ID behind an NBSS header), SOME/IP on its ports, SSH (its
-  banner or key exchange on any port, anything on port 22), TLS, SIP (before HTTP, whose
+  banner on any port, its key exchange and anything else on port 22), TLS, SIP (before HTTP, whose
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
@@ -573,7 +578,7 @@ of the detectors and in-stream passes the tables use.
   that takes it anyway) is `[Malformed Packet]`, with `Protocol Version n`
   if that is what is wrong. Over TCP, `frameSomeIpMessage()` frames a
   message by its Length for the TCP Reassembly (by the header alone, up to
-  1 MiB, off SOME/IP's ports)
+  1 MiB, off SOME/IP's ports, the cap the heuristic keeps to too)
 - SOME/IP-SD (PRS_SOMEIPServiceDiscoveryProtocol): the entries, as
   Wireshark names them, `Find Service 0x1234`, `Offer Service 0x1234
   Instance 0x0001 v1.0 TTL=3`, `Stop Offer Service`, `Subscribe
@@ -679,9 +684,13 @@ of the detectors and in-stream passes the tables use.
   `FieldReader` within the captured bytes, a message whose fields
   overrun its payload is `[Malformed Packet]`, one cut short ends in ` …`.
   After a NEWKEYS the rest of the payload is `Encrypted packet (len=n)`.
-  Without a banner before them, packets are only taken for SSH if every
-  one is whole and of the transport layer (the last may be cut if it is a
-  KEXINIT or follows a whole one); on port 22 anything else is the guess
+  Without a banner before them, packets are only taken for SSH on port 22
+  (any binary protocol may begin as they do), and only if every one is
+  whole and of the transport layer (the last may be cut if it is a
+  KEXINIT or follows a whole one); elsewhere the stream tells them, after
+  its banner (`describeInStream()`, and the TCP Reassembly, which
+  describes their whole messages again with `detectSsh( …, inSshStream )`
+  as `MessageExtent::describedInStream`). On port 22 anything else is the guess
   `SSH`, `Client: Encrypted packet (len=n)` (a connection whose key
   exchange the capture did not see). The banner gives its stream
   `StreamCue::SshBanner`, a NEWKEYS `StreamCue::SshNewKeys`; see
@@ -703,7 +712,12 @@ of the detectors and in-stream passes the tables use.
   bytes after them are not read as frames; a frame whose header is cut ends
   in ` …`. `describeWebSocketFrames()` reads the captured bytes only;
   `frameWebSocketFrame()` frames a frame by its header (2 to 14 bytes) and
-  payload length for the TCP Reassembly
+  payload length for the TCP Reassembly. Frames that share a segment with
+  the 101 response are framed and described after it, `HTTP/1.1 101
+  Switching Protocols, Upgrade: websocket; WebSocket Text [FIN] len=5
+  "hello"`: the HTTP framer's `MessageExtent::upgradesTo` switches the
+  TCP Reassembly's walk to WebSocket from the message on, as the stream
+  learns of the upgrade only after the segment (`rememberInStream()`)
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
   code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
@@ -712,8 +726,11 @@ of the detectors and in-stream passes the tables use.
   a84b4c76e667…`, and an SDP body summarised by its media lines, `, SDP
   (audio 49170 RTP/AVP 0 8)`. The compact header names (`i`, `l`, `c`)
   count. Over TCP the messages of a segment follow each other by their
-  Content-Length (none: no body), line ends between them skipped, up to
-  four, joined by `; `, then `…`; over UDP a datagram is one message, its
+  Content-Length (none: no body), line ends before and between them
+  skipped (RFC 3261, 7.5; the keep-alives of RFC 5626), up to
+  four, joined by `; `, then `…`; a payload that is only a keep-alive, on
+  port 5060, is `Keep-alive (ping)` (a double CRLF) or `Keep-alive (pong)`
+  (one CRLF); over UDP a datagram is one message, its
   body the rest of it without a Content-Length. A message whose header
   section or body goes on in the next segment is reassembled
   (`frameSipMessage()`, see TCP Reassembly); one cut at the snaplen ends in
@@ -756,7 +773,10 @@ of the detectors and in-stream passes the tables use.
   that replacing the one longest without a packet; an endpoint without a
   packet for `kIdleSeconds` (300) of capture time is forgotten when next
   looked up; a BYE forgets its call's endpoints, and a new SDP body of a
-  call (a re-INVITE) those at the addresses it announces anew
+  call (a re-INVITE) those its side announced before, the side told by
+  the body's `o=` line without its version (`SipCall::origin`), so that
+  an answer never forgets the offer's ports, also when both ends' media
+  are on one address
 - DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
   and the transaction id, then the address and the client's MAC (an
   Ethernet `chaddr`) and the host name (option 12, cut like every field),
@@ -857,8 +877,10 @@ of the detectors and in-stream passes the tables use.
   as the stream's earlier packets left them: a direction past its NEWKEYS
   is `SSHv2`, `Client: Encrypted packet (len=n)`, n the segment's payload
   length, whatever the detectors made of it; before it, a segment no
-  detector recognised (cut, malformed, on a port other than 22) is read as
-  the binary packets in its first kPayloadHeadBytes
+  detector recognised (cut, malformed, on a port other than 22), or one
+  another detector took that reads as packets, is read as the binary
+  packets in its first kPayloadHeadBytes, a NEWKEYS among them giving it
+  `StreamCue::SshNewKeys`
 - WebSocket's upgrade is kept in `StreamState::protocols` too, bit
   `kWebSocket`, set by `rememberInStream()` from a 101 response's
   `StreamCue::WebSocketUpgrade` (the response may be reassembled). After
@@ -1093,7 +1115,8 @@ at the start of some bytes takes: a TLS record (5 + its length, at most
 message up to the end of the body its Content-Length gives (none without
 one, as over TCP it is mandatory), an HTTP/1.x header section up to its
 empty line (the body is not held: a segment of body begins no message and
-is described as it is), an MQTT control packet by its Remaining Length (port
+is described as it is), an MQTT control packet by its Remaining Length (in as
+few bytes as hold it, as the parser wants it; port
 1883 only: a framer sees no stream state, so MQTT behind a CONNECT on
 another port is not reassembled), a SOME/IP message by its Length (8 + its
 value; on SOME/IP's ports whatever the header says, elsewhere if the header
@@ -1298,13 +1321,16 @@ for byte the same as before.
   segment from port 53, the whole messages the TCP Reassembly completed in
   it, each behind its length. `dnsResolvedNames()` in `describe_dns.cpp`
   reads a standard query's response without an error code, its answer
-  section only, at most `kMaxResolvedNames` (32) records: an A or AAAA
+  section only (from port 5353 its additional section too, where mDNS
+  puts the A and AAAA records of a service it answers with a PTR and
+  SRV, and no record of TTL 0, mDNS's goodbye), at most
+  `kMaxResolvedNames` (32) records: an A or AAAA
   answer names its address with its owner followed back through the
   message's CNAME answers (at most 8 steps, names compared without case),
   so that the name is the one the client asked for; a PTR answer whose
   owner spells an IPv4 (`in-addr.arpa`) or IPv6 (`ip6.arpa`, 32 nibbles)
-  address names that address with its target. Authority and additional
-  records (glue, mDNS's additional A records) and TTLs are not read; DNS
+  address names that address with its target. Authority records, and in
+  DNS additional records (glue) and TTLs, are not read; DNS
   over TLS or HTTPS is not read, nor LLMNR. A response cut short gives
   the answers before the cut.
 - **Decisions**:
@@ -1325,9 +1351,13 @@ for byte the same as before.
     end.
   - *No validation*: names are shown as the responses give them; a
     spoofed or forged answer names an address as a true one does. Only a
-    name that could break a column is dropped: `isHostName()` allows 1 to
-    `kMaxHostName` (120) letters, digits, `-`, `_` and `.`, not starting
-    with `.` (`readDnsName()` cuts longer names, and escapes other bytes).
+    name that could break a column is dropped: `isHostName()`
+    (`host_names.h`, with `dnsResolvedNames()`) allows 1 to
+    `kMaxHostName` (120) letters, digits and `kHostNamePunctuation` (`_`,
+    `.`, `-`), not starting with `.` (`readDnsName()` cuts longer names,
+    and escapes other bytes); `nameSuffixPattern()` builds its character
+    class from the same constant, and a test checks every byte against
+    both.
   - *Bounded memory*: at most `ConversionOptions::maxHostNames`
     (`HostNames::kMaxNames`, 8,192) addresses keep a name, each at most
     about 300 bytes (address, name, hash and list nodes), about 2.5 MB in

@@ -470,6 +470,12 @@ SCENARIO( "SOME/IP is found on its port, configured ports, and by its header", "
         {
             REQUIRE( overUdp( message + Bytes{ 0 }, 50123 ).label != "SOME/IP" );
         }
+        THEN( "one longer than the framer takes by its header alone is none either" )
+        {
+            const auto huge = someIp( 0x1234, 0x0001, kRequest, Bytes( 1024 * 1024, 0 ) );
+            REQUIRE( overTcp( huge, 50123 ).label != "SOME/IP" );
+            REQUIRE( overTcp( huge ).label == "SOME/IP" );
+        }
     }
 
     GIVEN( "a request with a return code other than E_OK" )

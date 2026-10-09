@@ -789,6 +789,39 @@ SCENARIO( "A message split over segments is described once, where it completes",
         }
     }
 
+    GIVEN( "the server's 101 response with its first frames in the same segment, the last "
+           "cut and completed by the next" )
+    {
+        auto serverText = []( const std::string& message ) {
+            Bytes b{ 0x81, static_cast<uint8_t>( message.size() ) };
+            return b + text( message );
+        };
+        const auto response = text( "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                                    "Connection: Upgrade\r\n\r\n" );
+        const auto hello = serverText( "hello" );
+        const auto split = serverText( std::string( 100, 'a' ) );
+        const auto after = serverText( "bye" );
+        const auto bytes = response + hello + split + after;
+        const auto lines = converted(
+            handshake( 8080 ) + cut( kWebSocketRequest, {}, kClientIsn + 1, 8080 )
+            + fromServer( cut( bytes, { response.size() + hello.size() + 10 }, 0, 8080 ),
+                          kServerIsn + 1 ) );
+
+        THEN( "the frames after the response are framed and described, the cut one whole on "
+              "the next segment" )
+        {
+            REQUIRE( lines[ 4 ].protocol == "HTTP" );
+            REQUIRE( lines[ 4 ].description
+                     == "HTTP/1.1 101 Switching Protocols, Upgrade: websocket; "
+                        "WebSocket Text [FIN] len=5 \"hello\"" );
+            REQUIRE( lines[ 5 ].protocol == "WebSocket" );
+            REQUIRE( lines[ 5 ].description
+                     == "WebSocket Text [FIN] len=100 \"" + std::string( 40, 'a' )
+                            + "\"\xe2\x80\xa6, WebSocket Text [FIN] len=3 \"bye\""
+                            + reassembledFrom( 2 ) );
+        }
+    }
+
     GIVEN( "WebSocket frames on a stream without the upgrade" )
     {
         const auto frames = webSocketText( std::string( 100, 'a' ) );

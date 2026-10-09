@@ -34,11 +34,58 @@
 #include "pcap_parser.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <list>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace tcpdump {
+
+/// An address a DNS response resolved, and the name it resolved it from.
+struct ResolvedName {
+    std::string address; ///< As the Source and Destination columns write it.
+    std::string name;    ///< "www.example.com"
+};
+
+/**
+ * The names the DNS response of @p len bytes at @p message (a DNS or mDNS
+ * message, without the length DNS over TCP puts before it) gives addresses,
+ * in the order of its answers: an A or AAAA answer names its address with
+ * the name the client asked for, its owner followed back through the
+ * CNAME answers of the message ("www.example.com CNAME example.com,
+ * example.com A 93.184.216.34" names 93.184.216.34 www.example.com); a
+ * PTR answer for an in-addr.arpa or ip6.arpa name names the address that
+ * name spells.  Only the answer section is read, with @p mdns (a
+ * message of mDNS, whose responses put the addresses of a service in it)
+ * the additional section too, at most kMaxResolvedNames records in all,
+ * and only a standard query's response without an error; a record cut
+ * short ends the list.  An mDNS record with TTL 0, a goodbye, names
+ * nothing.  A name that is not a host name (isHostName()) names nothing.
+ * Nothing is validated beyond that: a response that claims a name gets
+ * it.  Defined in describe_dns.cpp, with the DNS parser it reads by.
+ */
+std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len, bool mdns = false );
+
+/// Answers of one DNS message dnsResolvedNames() reads at most.
+constexpr size_t kMaxResolvedNames = 32;
+
+/// Besides ASCII letters and digits, the characters a host name may hold
+/// (isHostName()), as the Regex Lab's patterns match a name behind an
+/// address (nameSuffixPattern(), regex_lab.h): in this order, '-' last, so
+/// that they stand in a regular expression's character class as they are.
+constexpr const char* kHostNamePunctuation = "_.-";
+
+/**
+ * Whether @p name can stand in a column as a host name: 1 to kMaxHostName
+ * ASCII letters, digits and kHostNamePunctuation, not starting with '.',
+ * so that it neither breaks a column into two nor reads as anything but a
+ * name.
+ */
+bool isHostName( const std::string& name );
+
+/// The longest host name kept, in bytes (RFC 1035 allows 253 characters).
+constexpr size_t kMaxHostName = 120;
 
 /**
  * The names the capture's DNS answers gave addresses, learned packet by
@@ -92,7 +139,8 @@ private:
         std::list<std::string>::iterator age; ///< Its place in order_.
     };
 
-    void learnMessage( const uint8_t* message, size_t len );
+    /// Learn the names of a DNS message, of mDNS's with @p mdns.
+    void learnMessage( const uint8_t* message, size_t len, bool mdns );
 
     size_t maxNames_;
     std::unordered_map<std::string, Entry> names_;

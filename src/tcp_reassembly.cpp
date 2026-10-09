@@ -59,10 +59,14 @@ struct Walk {
     /// The message that begins at end and goes on past the bytes; framer 0
     /// if there is none.
     MessageExtent incomplete;
+    /// A message upgraded the stream to another protocol, whose messages
+    /// the walk went on with (MessageExtent::upgradesTo).
+    bool upgraded = false;
 };
 
 /// Walk the messages of protocol @p framer in the @p len bytes at @p data,
-/// one after the other from the first.
+/// one after the other from the first; after one that upgrades the stream,
+/// those of the protocol it upgrades to.
 Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, const Stream& stream,
                    uint8_t framer )
 {
@@ -79,6 +83,10 @@ Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, con
             break;
         }
         walk.end += extent.length;
+        if ( extent.upgradesTo != 0 ) {
+            framer = extent.upgradesTo;
+            walk.upgraded = true;
+        }
     }
     return walk;
 }
@@ -313,7 +321,7 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
         const auto segments = walk.end == 0 ? 1 : entry.segments;
         const auto framer = entry.framer;
         const auto* label = entry.label;
-        skip( stream, label, entry.order.nextSeq(), walk.incomplete.length - rest );
+        skip( stream, walk.incomplete.label, entry.order.nextSeq(), walk.incomplete.length - rest );
         if ( walk.end > 0 ) {
             completed_.resize( walk.end );
         }
@@ -344,6 +352,8 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
         entry.held.assign( completed_.begin() + static_cast<std::ptrdiff_t>( walk.end ),
                            completed_.end() );
         entry.segments = 1;
+        entry.framer = walk.incomplete.framer; // another after an upgrade
+        entry.label = walk.incomplete.label;
         recharge( entry );
     }
     completed_.resize( walk.end );
@@ -364,7 +374,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     }
     const auto walk = walkMessages( payload.data, payload.size, pkt, stream, first.framer );
     if ( walk.incomplete.framer == 0 ) {
-        if ( ( first.describedInStream || after ) && walk.end > 0 ) {
+        if ( ( first.describedInStream || walk.upgraded || after ) && walk.end > 0 ) {
             // Whole messages the parser could not tell: described from all
             // the bytes, not only the first ones describeInStream() had.
             describeMessages( pkt, payload.data, walk.end, first.framer, first.label, 1 );
@@ -383,7 +393,8 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
             describeMessages( pkt, payload.data, payload.size, first.framer, first.label, 1 );
         }
         if ( announcedPast( walk.incomplete, rest, streamLimit_ ) ) {
-            skip( stream, first.label, pkt.tcpSeq + pkt.payloadLen, walk.incomplete.length - rest );
+            skip( stream, walk.incomplete.label, pkt.tcpSeq + pkt.payloadLen,
+                  walk.incomplete.length - rest );
         }
         mark( pkt, kReassemblyLimit );
         return {};
@@ -391,8 +402,8 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     auto& entry = entries_[ key ];
     entry.state = stream.state;
     entry.direction = stream.direction;
-    entry.framer = first.framer;
-    entry.label = first.label;
+    entry.framer = walk.incomplete.framer; // the first's, or another after an upgrade
+    entry.label = walk.incomplete.label;
     entry.order.reset( pkt.tcpSeq + pkt.payloadLen );
     entry.segments = 1;
     entry.held.reserve( std::max( rest, expected ) );

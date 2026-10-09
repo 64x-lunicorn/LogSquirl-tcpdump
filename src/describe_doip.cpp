@@ -34,9 +34,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-const std::string kMalformed = " [Malformed Packet]";
-
 /// The generic header: protocol version, inverse protocol version,
 /// payload type, payload length.
 constexpr size_t kHeaderBytes = 8;
@@ -355,14 +352,6 @@ bool hasSubFunction( uint8_t sid )
     default:
         return false;
     }
-}
-
-/// A 16-bit identifier as "0xF190".
-std::string id16( uint16_t value )
-{
-    char buf[ 8 ];
-    std::snprintf( buf, sizeof( buf ), "0x%04X", value );
-    return buf;
 }
 
 /// What follows the service ID of a request or positive response of
@@ -838,22 +827,12 @@ Message readMessage( const uint8_t* p, size_t len )
 
 std::string detectDoip( const uint8_t* payload, size_t len )
 {
-    std::string text;
-    size_t count = 0;
-    size_t at = 0;
-    while ( at < len ) {
-        if ( ++count > kMaxMessages ) {
-            text += "; " + kEllipsis;
-            break;
-        }
-        const auto message = readMessage( payload + at, len - at );
-        text += ( text.empty() ? "" : "; " ) + message.text;
-        if ( message.last ) {
-            break;
-        }
-        at += static_cast<size_t>( message.length ); // whole, so within len
-    }
-    return text;
+    return nameMessages( len, kMaxMessages, "; ", [ & ]( size_t at ) {
+        auto message = readMessage( payload + at, len - at );
+        // Whole unless last, so within len.
+        return NamedMessage{ std::move( message.text ), static_cast<size_t>( message.length ),
+                             message.last };
+    } );
 }
 
 std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len )

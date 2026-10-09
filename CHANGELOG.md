@@ -514,6 +514,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the snaplen inside it change nothing; if the segment where it ends is
   lost, the stream resynchronises on the next segment that begins a
   message, as before (#95).
+- **WebSocket frames in the segment of the 101 response.** A server's
+  `101 Switching Protocols` with `Upgrade: websocket` that shares its
+  segment with the first frames now switches the framing for the rest of
+  the segment: the frames are described after the response
+  (`HTTP/1.1 101 …; WebSocket Text [FIN] len=5 "hello"`), and one cut at
+  the segment's end is held and described whole where it completes,
+  where before its rest was read as new frames and the stream desynced
+  (#102).
+- **SSH without a banner only on port 22.** Binary packets of SSH's key
+  exchange with no banner before them were taken for SSH on any port,
+  ahead of TLS, SIP and HTTP, so a binary protocol whose messages begin
+  like one (`00 00 01 2C 06 14 …`) was labelled `SSHv2` for its whole
+  stream. They are now SSH on port 22 only; on another port a stream
+  reads them after its banner, as before, a NEWKEYS still encrypting the
+  direction (#104).
+- **RTP of both ends on one address.** An SDP answer no longer makes the
+  offer's RTP and RTCP ports unexpected when both ends announce media on
+  the same address (two phones on one host, a media relay): a new SDP body
+  replaces only what the same side of the call announced before, the side
+  told by the `o=` line, where before it replaced every endpoint of the
+  call on an address it named (#105).
+- **SIP keep-alives.** A SIP-over-TCP segment that begins with the CRLF
+  keep-alives of RFC 5626 before a message is described and reassembled
+  as that message, where before it was not SIP at all; a keep-alive alone
+  on port 5060 is `Keep-alive (ping)` (double CRLF) or `Keep-alive (pong)`
+  (#107).
+- **gzip trailing garbage.** Bytes after a gzip member that begin with
+  `0x1f` but are no member (no `1f 8b` magic and deflate method) are now
+  ignored as gzip ignores trailing garbage, where before the capture was
+  reported cut off as corrupt; the check looks across the input's chunks
+  (#108).
+- **Names from mDNS.** The names from the capture's DNS answers now read
+  an mDNS response's additional records too, where a responder puts the
+  addresses of the service it answers for, and no longer learn a name
+  from an mDNS goodbye (TTL 0) (#111).
+- **MQTT and SOME/IP framing as described.** The TCP Reassembly no longer
+  frames an MQTT packet whose Remaining Length takes more bytes than it
+  needs, which the describer calls malformed, and SOME/IP found by its
+  header alone is, like its framing, no longer longer than 1 MiB (#114).
 
 ## [0.3.0] — 2026-10-09
 

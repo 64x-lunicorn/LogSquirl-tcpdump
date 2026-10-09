@@ -562,6 +562,20 @@ SCENARIO( "Only what has the shape of MQTT is taken for it", "[mqtt]" )
             REQUIRE( toBroker( Bytes{ 0x30, 0x80, 0x80, 0x80, 0x80, 0x01 } ).guessed );
             REQUIRE( toBroker( Bytes{ 0xC0, 0x80, 0x00 } ).guessed );
         }
+        THEN( "nor is it framed as one for the TCP Reassembly" )
+        {
+            for ( const auto& bytes : { Bytes{ 0xC0, 0x80, 0x00 }, Bytes{ 0x30, 0x81, 0x00, 0x00 },
+                                        Bytes{ 0x30, 0x80, 0x80, 0x80, 0x80, 0x01 } } ) {
+                const auto extent
+                    = tcpMessageExtent( bytes.data(), bytes.size(), 50000, kMqttPort );
+                REQUIRE( ( extent.label == nullptr || std::string( extent.label ) != "MQTT" ) );
+            }
+            const auto minimal = Bytes{ 0xC0, 0x00 };
+            const auto extent
+                = tcpMessageExtent( minimal.data(), minimal.size(), 50000, kMqttPort );
+            REQUIRE( extent.complete() );
+            REQUIRE( std::string( extent.label ) == "MQTT" );
+        }
     }
 
     GIVEN( "a lone malformed packet that fills the segment" )

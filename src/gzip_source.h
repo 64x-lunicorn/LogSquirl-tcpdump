@@ -168,6 +168,7 @@ private:
 
     bool produce();
     bool fillInput();
+    size_t peekInput( size_t n );
     bool startOver();
     bool resumeAt( const GzipAccessPoint& point );
     bool discard( uint64_t n );

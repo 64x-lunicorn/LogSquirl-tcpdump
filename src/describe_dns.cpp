@@ -24,6 +24,7 @@
 
 #include "describe_common.h"
 
+#include "host_names.h"
 #include "payload_describer.h"
 
 #include <algorithm>
@@ -460,13 +461,6 @@ char asciiLower( char c )
     return c >= 'A' && c <= 'Z' ? static_cast<char>( c - 'A' + 'a' ) : c;
 }
 
-/// The value of the hex digit @p c, or -1.
-int hexDigit( char c )
-{
-    c = asciiLower( c );
-    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
-}
-
 /// The same DNS name, ASCII letters compared without case (RFC 4343).
 bool sameName( const std::string& a, const std::string& b )
 {
@@ -512,7 +506,7 @@ std::string reverseAddress( const std::string& name )
         }
         uint8_t bytes[ 16 ] = {};
         for ( size_t i = 0; i < 32; ++i ) {
-            const int nibble = hexDigit( labels[ 2 * i ] );
+            const int nibble = describer::hexDigit( static_cast<uint8_t>( labels[ 2 * i ] ) );
             if ( nibble < 0 || ( i < 31 && labels[ 2 * i + 1 ] != '.' ) ) {
                 return {};
             }
@@ -527,18 +521,7 @@ std::string reverseAddress( const std::string& name )
 
 } // namespace
 
-bool isHostName( const std::string& name )
-{
-    if ( name.empty() || name.size() > kMaxHostName || name.front() == '.' ) {
-        return false;
-    }
-    return std::all_of( name.begin(), name.end(), []( char c ) {
-        return describer::isAsciiAlpha( static_cast<uint8_t>( c ) ) || ( c >= '0' && c <= '9' )
-               || c == '-' || c == '_' || c == '.';
-    } );
-}
-
-std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len )
+std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len, bool mdns )
 {
     using namespace describer;
     const DnsMessage dns{ message, len };
@@ -547,8 +530,10 @@ std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len )
     uint16_t flags = 0;
     uint16_t questions = 0;
     uint16_t answers = 0;
+    uint16_t authorities = 0;
+    uint16_t additionals = 0;
     if ( !reader.u16( id ) || !reader.u16( flags ) || !reader.u16( questions )
-         || !reader.u16( answers ) || !reader.skip( 4 ) ) {
+         || !reader.u16( answers ) || !reader.u16( authorities ) || !reader.u16( additionals ) ) {
         return {};
     }
     // A response (QR) to a standard query, without an error.
@@ -574,17 +559,25 @@ std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len )
     };
     std::vector<Alias> aliases;
     std::vector<Answer> addresses;
-    for ( size_t i = 0; i < answers && i < kMaxResolvedNames; ++i ) {
+    // The answers, then in mDNS the authority records, skipped, and the
+    // additional ones.
+    const size_t records = mdns ? size_t{ answers } + authorities + additionals : size_t{ answers };
+    for ( size_t i = 0; i < records && i < kMaxResolvedNames; ++i ) {
         std::string owner;
         uint16_t type = 0;
+        uint32_t ttl = 0;
         uint16_t length = 0;
-        if ( !readDnsName( dns, reader, owner ) || !reader.u16( type ) || !reader.skip( 2 + 4 )
-             || !reader.u16( length ) ) {
+        if ( !readDnsName( dns, reader, owner ) || !reader.u16( type ) || !reader.skip( 2 )
+             || !reader.u32( ttl ) || !reader.u16( length ) ) {
             break;
         }
         auto data = reader.take( length );
         if ( !data.complete() ) {
             break;
+        }
+        const bool authority = i >= answers && i < size_t{ answers } + authorities;
+        if ( authority || ( mdns && ttl == 0 ) ) {
+            continue; // a record proposed in a probe, or a goodbye
         }
         std::string target;
         if ( type == 1 && length == 4 ) { // A
