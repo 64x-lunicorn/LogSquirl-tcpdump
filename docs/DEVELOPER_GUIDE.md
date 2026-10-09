@@ -1672,7 +1672,7 @@ knows none of them. A kind answers:
 | `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
 | `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
-| `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
+| `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a local shell's. Where a remote shell must read it (adb's device shell, the server's over ssh, which get one joined command line), every value is `shellQuote()`d for it, so that it is one argument there too: the Android and SSH kinds build their device and server scripts so, and a custom command says `{filter:sh}` |
 | `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
 
@@ -1875,9 +1875,13 @@ shell would, without running one (blanks; `'…'`; `"…"` with `\"` and `\\`;
 `|&;<>` (`shellOperator`), which is refused; then `{interface}`,
 `{filter}`, `{snaplen}` are replaced inside each word in one pass (a value
 holding a placeholder is not replaced again), a word that is `{filter}`
-alone dropped for an empty filter. With the shell, the line goes to
-`ProcessCommand::shell()`, each value `shellQuote()`d (Windows: in double
-quotes, a value with `"`, `%`, `!` or a trailing `\` refused). A command
+(or `{filter:sh}`) alone dropped for an empty filter. `{interface:sh}` and
+`{filter:sh}` put the value in `shellQuote()`d, for the remote shell that
+`adb shell`/`exec-out` and `ssh` join their arguments for (the examples use
+them). With the shell, the line goes to `ProcessCommand::shell()`, each
+value `shellQuote()`d (Windows: in double quotes, a value with `"`, `%`,
+`!` or a trailing `\` refused), a `{…:sh}` one quoted for the remote shell
+first. A command
 using `{interface}` needs one, not starting with `-`. The options widget
 (`commandSaved`, `commandLine`, `commandShell`, `commandShellWarning`,
 `commandName`, `commandSave`, `commandDelete`) writes the saved commands

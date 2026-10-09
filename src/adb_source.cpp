@@ -50,12 +50,6 @@ const QString kSuMark = QStringLiteral( "@su=" );
 const QString kTcpdumpMark = QStringLiteral( "@tcpdump=" );
 const QString kLinksMark = QStringLiteral( "@links" );
 
-bool runnable( const QString& path )
-{
-    const QFileInfo file( path );
-    return file.isFile() && file.isExecutable();
-}
-
 /// @p script run as root on the device: through su, if that is how root is had.
 QString asRoot( const QString& script, bool viaSu )
 {
@@ -395,16 +389,7 @@ QString AdbSourceKind::adb() const
 {
     const auto name
         = where_.os == CaptureOs::Windows ? QStringLiteral( "adb.exe" ) : QStringLiteral( "adb" );
-    for ( const auto& dir : where_.searchPath + where_.installed ) {
-        if ( dir.isEmpty() ) {
-            continue;
-        }
-        const auto path = QDir( dir ).filePath( name );
-        if ( runnable( path ) ) {
-            return path;
-        }
-    }
-    return {};
+    return findProgram( name, where_.searchPath + where_.installed );
 }
 
 AdbDeviceAccess AdbSourceKind::probe( const QString& serial, bool withInterfaces,

@@ -489,6 +489,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- The Custom command examples for adb and ssh put `{filter}` into the line
+  those programs hand the device's or server's shell, so a filter with `;`
+  or `$(…)` ran there. New placeholders `{interface:sh}` and `{filter:sh}`
+  are single-quoted for that remote shell, and the examples use them; the
+  README and DEVELOPER_GUIDE state where a remote shell reads the filter
+  and how it is quoted (#121).
 - Android live capture: a Stop in the moment between starting tcpdump on
   the device and writing its pid file orphaned tcpdump there. Stop now
   leaves a stop mark that the capture's script looks for after writing

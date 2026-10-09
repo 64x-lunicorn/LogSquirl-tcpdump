@@ -58,32 +58,48 @@ const QString kFilterPlaceholder = QStringLiteral( "{filter}" );
 /// The characters by which a shell would make a pipe, a list or a redirection.
 const QString kShellOperators = QStringLiteral( "|&;<>" );
 
+/// Whether @p text holds a control character other than a tab.
 bool hasControl( const QString& text )
 {
-    return std::any_of( text.begin(), text.end(), []( QChar c ) {
-        return c.category() == QChar::Other_Control && c != QLatin1Char( '\t' );
-    } );
+    return hasControlCharacter( text, true );
 }
 
 bool shellOn( const LiveOptions& options )
 {
-    return options.value( kCommandShellOption ) == QStringLiteral( "true" );
+    return liveOptionOn( options, kCommandShellOption, false );
+}
+
+/// The placeholders, {name} or {name:sh}.
+const QRegularExpression& placeholderPattern()
+{
+    static const QRegularExpression placeholder(
+        QStringLiteral( "\\{(interface|filter|snaplen)(:sh)?\\}" ) );
+    return placeholder;
+}
+
+/// Whether @p word is the filter's placeholder alone, left out when the
+/// filter is empty.
+bool isFilterAlone( const QString& word )
+{
+    return word == kFilterPlaceholder || word == kFilterPlaceholder.chopped( 1 ) + ":sh}";
 }
 
 /// @p text with each placeholder replaced by what @p value gives for its
 /// name, in one pass: a value holding a placeholder is not replaced again.
+/// A {name:sh} placeholder's value is single-quoted for a POSIX shell
+/// (shellQuote()) first: one word for the remote shell that adb shell or
+/// ssh hand their joined arguments to.
 QString replacePlaceholders( const QString& text,
                              const std::function<QString( const QString& )>& value )
 {
-    static const QRegularExpression placeholder(
-        QStringLiteral( "\\{(interface|filter|snaplen)\\}" ) );
     QString replaced;
     qsizetype done = 0;
-    auto matches = placeholder.globalMatch( text );
+    auto matches = placeholderPattern().globalMatch( text );
     while ( matches.hasNext() ) {
         const auto match = matches.next();
         replaced += text.mid( done, match.capturedStart() - done );
-        replaced += value( match.captured( 1 ) );
+        const auto plain = value( match.captured( 1 ) );
+        replaced += match.captured( 2 ).isEmpty() ? plain : shellQuote( plain );
         done = match.capturedEnd();
     }
     return replaced + text.mid( done );
@@ -135,12 +151,15 @@ public:
             "a shell splits it, without running one: '…' and \"…\" quote, \\ escapes; nothing "
             "is expanded, no pipe or redirection is made. {interface}, {filter} and {snaplen} "
             "are replaced inside an argument by the fields above; {filter} alone is left out "
-            "when the filter is empty" ) );
+            "when the filter is empty. adb shell, adb exec-out and ssh join their arguments "
+            "into a line for the device's or the server's shell: write {interface:sh} and "
+            "{filter:sh} there, which are quoted for that shell" ) );
         line_->setClearButtonEnabled( true );
         layout->addWidget( line_ );
 
         auto* hint = new QLabel( QStringLiteral(
-            "Placeholders: {interface}, {filter}, {snaplen}. The output must be pcap or "
+            "Placeholders: {interface}, {filter}, {snaplen}; {interface:sh} and {filter:sh} "
+            "quoted for a remote shell (after adb or ssh). The output must be pcap or "
             "pcapng on stdout (tcpdump -U -w -)." ) );
         hint->setWordWrap( true );
         layout->addWidget( hint );
@@ -225,8 +244,7 @@ public:
     LiveOptions options() const override
     {
         return { { kCommandLineOption, line_->text() },
-                 { kCommandShellOption,
-                   shell_->isChecked() ? QStringLiteral( "true" ) : QStringLiteral( "false" ) },
+                 { kCommandShellOption, liveOptionValue( shell_->isChecked() ) },
                  { kCommandNameOption, name_->text().trimmed() },
                  { kCommandSavedOption, savedCommandsOption( commands_ ) } };
     }
@@ -464,12 +482,15 @@ std::vector<SavedCommand> commandExamples()
     return {
         { QStringLiteral( "tcpdump on this computer" ),
           QStringLiteral( "tcpdump -i {interface} -U -w - {filter}" ), false },
+        // adb and ssh join their arguments into one line for the device's
+        // or the server's shell: the values are quoted for it ({…:sh}).
         { QStringLiteral( "tcpdump on an Android device (adb, root)" ),
-          QStringLiteral( "adb exec-out tcpdump -i {interface} -s {snaplen} -U -w - {filter}" ),
+          QStringLiteral(
+              "adb exec-out tcpdump -i {interface:sh} -s {snaplen} -U -w - {filter:sh}" ),
           false },
         { QStringLiteral( "tcpdump on a server (ssh)" ),
-          QStringLiteral( "ssh -o BatchMode=yes user@host tcpdump -i {interface} -s {snaplen} "
-                          "-U -w - {filter}" ),
+          QStringLiteral( "ssh -o BatchMode=yes user@host tcpdump -i {interface:sh} -s {snaplen} "
+                          "-U -w - {filter:sh}" ),
           false },
     };
 }
@@ -488,7 +509,8 @@ CustomCommand customCommand( const LiveChoice& choice )
         return built;
     }
     const auto& iface = choice.networkInterface;
-    if ( line.contains( kInterfacePlaceholder ) ) {
+    if ( line.contains( kInterfacePlaceholder )
+         || line.contains( kInterfacePlaceholder.chopped( 1 ) + ":sh}" ) ) {
         if ( iface.trimmed().isEmpty() ) {
             built.problem
                 = QStringLiteral( "Choose or type an interface: the command uses {interface}." );
@@ -508,19 +530,33 @@ CustomCommand customCommand( const LiveChoice& choice )
     const auto snaplen = QString::number( choice.snaplen );
 
     if ( shellOn( choice.options ) ) {
+        // Each value one word for the local shell; a {name:sh} one, quoted
+        // for the remote shell first, is one word for both.
         bool quotable = true;
-        const auto commandLine = replacePlaceholders( line, [ & ]( const QString& name ) {
+        QString commandLine;
+        qsizetype done = 0;
+        auto matches = placeholderPattern().globalMatch( line );
+        while ( matches.hasNext() ) {
+            const auto match = matches.next();
+            commandLine += line.mid( done, match.capturedStart() - done );
+            done = match.capturedEnd();
+            const auto name = match.captured( 1 );
             if ( name == QStringLiteral( "snaplen" ) ) {
-                return snaplen;
+                commandLine += snaplen;
+                continue;
             }
-            const auto& value = name == QStringLiteral( "interface" ) ? iface : choice.filter;
+            auto value = name == QStringLiteral( "interface" ) ? iface : choice.filter;
             if ( name == QStringLiteral( "filter" ) && value.isEmpty() ) {
-                return QString();
+                continue;
+            }
+            if ( !match.captured( 2 ).isEmpty() ) {
+                value = shellQuote( value );
             }
             const auto word = shellWord( value );
             quotable = quotable && word.has_value();
-            return word.value_or( QString() );
-        } );
+            commandLine += word.value_or( QString() );
+        }
+        commandLine += line.mid( done );
         if ( !quotable ) {
             built.problem = QStringLiteral(
                 "cmd.exe would read the interface or the filter even in quotes: without \"Run "
@@ -545,7 +581,7 @@ CustomCommand customCommand( const LiveChoice& choice )
     }
     QStringList words;
     for ( const auto& word : split.words ) {
-        if ( word == kFilterPlaceholder && choice.filter.isEmpty() ) {
+        if ( isFilterAlone( word ) && choice.filter.isEmpty() ) {
             continue;
         }
         words << replacePlaceholders( word, [ & ]( const QString& name ) {

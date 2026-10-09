@@ -452,8 +452,8 @@ a vendor tool, `nc -l 9999`, a capture on a router. Examples to start from
 
 ```
 tcpdump -i {interface} -U -w - {filter}
-adb exec-out tcpdump -i {interface} -s {snaplen} -U -w - {filter}
-ssh -o BatchMode=yes user@host tcpdump -i {interface} -s {snaplen} -U -w - {filter}
+adb exec-out tcpdump -i {interface:sh} -s {snaplen} -U -w - {filter:sh}
+ssh -o BatchMode=yes user@host tcpdump -i {interface:sh} -s {snaplen} -U -w - {filter:sh}
 ```
 
 The line is a program and its arguments, **split like a shell splits it,
@@ -467,12 +467,23 @@ in, so a filter with spaces or quotes is still one argument; `{filter}`
 alone is left out when the filter is empty. `{interface}` needs an
 interface (this computer's are suggested; type any).
 
+`adb shell`, `adb exec-out` and `ssh` do not pass their arguments on as
+they are: they join them with spaces into one line that **the device's or
+the server's shell** reads again, so a `{filter}` there would be shell
+syntax on the device or server (`;`, `$(…)` would run). After `adb` or
+`ssh` write **`{interface:sh}`** and **`{filter:sh}`**: their values are
+single-quoted for that POSIX shell (`'…'`, a `'` as `'\''`), so it reads
+each as one argument, as the examples do. `{filter:sh}` alone is left out
+for an empty filter, too.
+
 **Run through the shell** (off by default) hands the line to `/bin/sh -c`
 (Windows: `cmd.exe /c`) as it is, for pipes and redirections, e.g. `ssh
 router 'tcpdump -U -w - {filter}' | tee router.pcap`. Everything in the
 line then runs, as you. The placeholders are put in quoted as one word
 each (single quotes; on Windows double quotes, and an interface or filter
-with `"`, `%` or `!` is refused): write them outside of quotes.
+with `"`, `%` or `!` is refused): write them outside of quotes. A
+`{…:sh}` placeholder is quoted twice, for the remote shell and then for the
+local one.
 
 Commands can be **saved** under a name (**Save**; saving under an existing
 name replaces it), chosen again from the list, and **deleted**; they are

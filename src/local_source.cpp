@@ -35,29 +35,16 @@ namespace {
 
 const QString kWiresharkDownload = QStringLiteral( "https://www.wireshark.org/download.html" );
 
-/// The program at @p path, if it is one that can be run.
-bool runnable( const QString& path )
-{
-    const QFileInfo file( path );
-    return file.isFile() && file.isExecutable();
-}
-
 /// The program @p name on @p where's PATH, else at its install locations
 /// @p installed; empty if it is nowhere.
 QString find( const LocalPrograms& where, const QString& name, const QStringList& installed )
 {
     const auto fileName = where.os == CaptureOs::Windows ? name + QStringLiteral( ".exe" ) : name;
-    for ( const auto& dir : where.searchPath ) {
-        if ( dir.isEmpty() ) {
-            continue;
-        }
-        const auto path = QDir( dir ).filePath( fileName );
-        if ( runnable( path ) ) {
-            return path;
-        }
+    if ( auto found = findProgram( fileName, where.searchPath ); !found.isEmpty() ) {
+        return found;
     }
     for ( const auto& path : installed ) {
-        if ( runnable( path ) ) {
+        if ( isRunnableProgram( path ) ) {
             return path;
         }
     }

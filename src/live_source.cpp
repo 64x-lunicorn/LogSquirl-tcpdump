@@ -31,7 +31,9 @@
 #include "local_source.h"
 #include "ssh_source.h"
 
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
 
@@ -94,16 +96,53 @@ QString liveLimitsProblem( const LiveLimits& limits )
     return {};
 }
 
+bool isRunnableProgram( const QString& path )
+{
+    const QFileInfo file( path );
+    return !path.isEmpty() && file.isFile() && file.isExecutable();
+}
+
+QString findProgram( const QString& fileName, const QStringList& directories )
+{
+    for ( const auto& dir : directories ) {
+        if ( dir.isEmpty() ) {
+            continue;
+        }
+        const auto path = QDir( dir ).filePath( fileName );
+        if ( isRunnableProgram( path ) ) {
+            return path;
+        }
+    }
+    return {};
+}
+
+bool liveOptionOn( const LiveOptions& options, const QString& name, bool byDefault )
+{
+    const auto value = options.value( name );
+    if ( value.compare( QLatin1String( "true" ), Qt::CaseInsensitive ) == 0 ) {
+        return true;
+    }
+    if ( value.compare( QLatin1String( "false" ), Qt::CaseInsensitive ) == 0 ) {
+        return false;
+    }
+    return byDefault;
+}
+
+bool hasControlCharacter( const QString& text, bool tabAllowed )
+{
+    return std::any_of( text.begin(), text.end(), [ tabAllowed ]( QChar c ) {
+        return c.category() == QChar::Other_Control && !( tabAllowed && c == QLatin1Char( '\t' ) );
+    } );
+}
+
 QString captureFilterProblem( const QString& filter )
 {
     const auto trimmed = filter.trimmed();
     if ( trimmed.isEmpty() ) {
         return {};
     }
-    for ( const auto c : trimmed ) {
-        if ( c.category() == QChar::Other_Control ) {
-            return QStringLiteral( "A capture filter is one line, without control characters." );
-        }
+    if ( hasControlCharacter( trimmed ) ) {
+        return QStringLiteral( "A capture filter is one line, without control characters." );
     }
     if ( trimmed.startsWith( QLatin1Char( '-' ) ) ) {
         return QStringLiteral( "A capture filter cannot start with '-': the capture program "

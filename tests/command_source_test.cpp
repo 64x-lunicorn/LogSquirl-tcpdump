@@ -40,6 +40,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QTemporaryDir>
 
@@ -177,12 +178,72 @@ SCENARIO( "The examples are offered, with the placeholders", "[command_source]" 
         REQUIRE_FALSE( example.name.isEmpty() );
         REQUIRE_FALSE( example.shell );
         REQUIRE( example.line.contains( "-U -w -" ) );
-        REQUIRE( example.line.contains( "{filter}" ) );
+        REQUIRE( example.line.contains( "{filter" ) );
         REQUIRE( splitCommandLine( example.line ).error.isEmpty() );
     }
     REQUIRE( examples[ 0 ].line == "tcpdump -i {interface} -U -w - {filter}" );
     REQUIRE( examples[ 1 ].line.startsWith( "adb exec-out tcpdump " ) );
     REQUIRE( examples[ 2 ].line.startsWith( "ssh " ) );
+    // adb and ssh hand their joined arguments to a remote shell.
+    for ( const auto& remote : { examples[ 1 ], examples[ 2 ] } ) {
+        CAPTURE( remote.line );
+        REQUIRE( remote.line.contains( "{filter:sh}" ) );
+        REQUIRE( remote.line.contains( "{interface:sh}" ) );
+        REQUIRE_FALSE( remote.line.contains( "{filter}" ) );
+    }
+}
+
+SCENARIO( "A {…:sh} placeholder is quoted for the remote shell adb or ssh hand it to",
+          "[command_source]" )
+{
+    const QString filter = "host 10.0.0.1 and port 22 ; touch pwned $(id) 'x' \"y\"";
+    const QString iface = "wlan0'; reboot; '";
+
+    THEN( "without the local shell, the value is single-quoted inside its argument" )
+    {
+        const auto built = customCommand( commandChoice(
+            "ssh srv tcpdump -i {interface:sh} -w - {filter:sh}", false, iface, filter ) );
+        REQUIRE( built.problem.isEmpty() );
+        REQUIRE( built.command.arguments
+                 == QStringList{ "srv", "tcpdump", "-i", shellQuote( iface ), "-w", "-",
+                                 shellQuote( filter ) } );
+    }
+
+    THEN( "{filter:sh} alone is left out when the filter is empty" )
+    {
+        const auto built = customCommand(
+            commandChoice( "ssh srv tcpdump -i {interface:sh} -w - {filter:sh}", false, "eth0" ) );
+        REQUIRE( built.command.arguments
+                 == QStringList{ "srv", "tcpdump", "-i", "'eth0'", "-w", "-" } );
+    }
+
+#ifdef Q_OS_UNIX
+    THEN( "the remote shell reads each value as one argument, running nothing of it" )
+    {
+        const auto built = customCommand(
+            commandChoice( "x tcpdump -i {interface:sh} -w - {filter:sh}", false, iface, filter ) );
+        // What ssh or adb hand the remote shell: the arguments joined.
+        const auto remoteLine = built.command.arguments.join( ' ' );
+        QProcess shell;
+        shell.start( "/bin/sh", { "-c", "tcpdump() { for a; do printf '[%s]\\n' \"$a\"; done; }; "
+                                            + remoteLine } );
+        REQUIRE( shell.waitForFinished( 10000 ) );
+        REQUIRE( QString::fromUtf8( shell.readAllStandardOutput() )
+                 == "[-i]\n[" + iface + "]\n[-w]\n[-]\n[" + filter + "]\n" );
+    }
+
+    THEN( "through the local shell, it reaches the program quoted for the remote one" )
+    {
+        const auto built = customCommand(
+            commandChoice( "printf '%s\\n' {interface:sh} {filter:sh}", true, iface, filter ) );
+        REQUIRE( built.problem.isEmpty() );
+        QProcess shell;
+        shell.start( "/bin/sh", { "-c", built.command.program } );
+        REQUIRE( shell.waitForFinished( 10000 ) );
+        REQUIRE( QString::fromUtf8( shell.readAllStandardOutput() )
+                 == shellQuote( iface ) + "\n" + shellQuote( filter ) + "\n" );
+    }
+#endif
 }
 
 SCENARIO( "Saved commands are kept as an option", "[command_source]" )

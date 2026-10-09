@@ -34,7 +34,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
-#include <QStandardPaths>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -66,13 +65,7 @@ constexpr int kSshFailed = 255;
 /// Whether the option @p name of @p options is on; both are on by default.
 bool optionOn( const LiveOptions& options, const QString& name )
 {
-    return options.value( name ) != QStringLiteral( "false" );
-}
-
-bool hasControl( const QString& text )
-{
-    return std::any_of( text.begin(), text.end(),
-                        []( QChar c ) { return c.category() == QChar::Other_Control; } );
+    return liveOptionOn( options, name, true );
 }
 
 /// One interface of `tcpdump -D`: "1.eth0 [Up, Running]", "2.any
@@ -150,10 +143,8 @@ public:
     }
     LiveOptions options() const override
     {
-        const auto text
-            = []( bool on ) { return on ? QStringLiteral( "true" ) : QStringLiteral( "false" ); };
-        return { { kSshSudoOption, text( sudo_->isChecked() ) },
-                 { kSshExcludeOwnOption, text( excludeOwn_->isChecked() ) } };
+        return { { kSshSudoOption, liveOptionValue( sudo_->isChecked() ) },
+                 { kSshExcludeOwnOption, liveOptionValue( excludeOwn_->isChecked() ) } };
     }
 
 private:
@@ -172,7 +163,8 @@ SshDestination SshDestination::parse( const QString& device )
                                          "~/.ssh/config." );
         return parsed;
     }
-    if ( hasControl( text ) || text.contains( QRegularExpression( QStringLiteral( "\\s" ) ) ) ) {
+    if ( hasControlCharacter( text )
+         || text.contains( QRegularExpression( QStringLiteral( "\\s" ) ) ) ) {
         parsed.problem = QStringLiteral( "A host has no spaces: [user@]host[:port]." );
         return parsed;
     }
@@ -452,15 +444,15 @@ SshSourceKind::SshSourceKind( SshPrograms where )
 QString SshSourceKind::program() const
 {
     for ( const auto& path : where_.installed ) {
-        const QFileInfo file( path );
-        if ( file.isFile() && file.isExecutable() ) {
+        if ( isRunnableProgram( path ) ) {
             return path;
         }
     }
-    if ( where_.searchPath.isEmpty() ) {
-        return {};
-    }
-    return QStandardPaths::findExecutable( QStringLiteral( "ssh" ), where_.searchPath );
+#ifdef Q_OS_WIN
+    return findProgram( QStringLiteral( "ssh.exe" ), where_.searchPath );
+#else
+    return findProgram( QStringLiteral( "ssh" ), where_.searchPath );
+#endif
 }
 
 QStringList SshSourceKind::sshArguments( const SshDestination& device,
@@ -600,7 +592,7 @@ QString SshSourceKind::validate( const LiveChoice& choice ) const
     if ( const auto problem = SshDestination::parse( choice.device ).problem; !problem.isEmpty() ) {
         return problem;
     }
-    if ( hasControl( choice.networkInterface ) ) {
+    if ( hasControlCharacter( choice.networkInterface ) ) {
         return QStringLiteral( "An interface is one line, without control characters." );
     }
     return LiveSourceKind::validate( choice );
