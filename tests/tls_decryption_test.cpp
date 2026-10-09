@@ -613,10 +613,12 @@ SCENARIO( "HTTP/2 over TLS after a record that was lost or would not decrypt",
 
     GIVEN( "the record lost in the same segment as the next" )
     {
+        // Sealed one after the other: the order in which operands of + are
+        // evaluated is unspecified, and the sequence numbers go by it.
         const auto lost = session.seal( 0, 0x17, tail );
-        const auto info = session.feed( decryption, 0,
-                                        session.seal( 0, 0x17, h2Frame( 0x6, 0, 0, Bytes( 8 ) ) )
-                                            + lost + session.seal( 0, 0x17, request ) );
+        const auto ping = session.seal( 0, 0x17, h2Frame( 0x6, 0, 0, Bytes( 8 ) ) );
+        const auto next = session.seal( 0, 0x17, request );
+        const auto info = session.feed( decryption, 0, ping + lost + next );
 
         THEN( "the record after it is read from a frame's start" )
         {

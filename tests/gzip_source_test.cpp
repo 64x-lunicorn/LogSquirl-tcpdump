@@ -160,7 +160,7 @@ SCENARIO( "A gzip stream is told by its magic, also behind a text preamble", "[g
     WHEN( "binary data, or a bare magic in text, comes instead" )
     {
         const auto binary = QByteArray( "\x01\x02", 2 ) + stream;
-        const QByteArray bare( "text \x1f\x8b and more", 19 );
+        const QByteArray bare( "text \x1f\x8b and more" );
         THEN( "there is no gzip stream" )
         {
             REQUIRE_FALSE( findGzipStart( reinterpret_cast<const uint8_t*>( binary.constData() ),
