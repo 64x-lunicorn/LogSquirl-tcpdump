@@ -28,6 +28,8 @@
 
 #include "tls_crypto.h"
 
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,6 +39,30 @@ using namespace tcpdump::tls;
 namespace {
 
 using Bytes = std::vector<uint8_t>;
+
+/// The bytes of the buffer an allocator gave back last.
+std::vector<uint8_t> released;
+
+/// Hands out what std::allocator does, and keeps what is given back.
+template <typename T>
+struct Recording : std::allocator<T> {
+    using value_type = T;
+    template <typename U>
+    struct rebind {
+        using other = Recording<U>;
+    };
+    Recording() = default;
+    template <typename U>
+    Recording( const Recording<U>& ) noexcept
+    {
+    }
+    void deallocate( T* p, size_t n )
+    {
+        const auto* bytes = reinterpret_cast<const uint8_t*>( p );
+        released.assign( bytes, bytes + n * sizeof( T ) );
+        std::allocator<T>::deallocate( p, n );
+    }
+};
 
 Bytes fromHex( const std::string& hex )
 {
@@ -127,7 +153,7 @@ SCENARIO( "A TLS 1.3 record of RFC 8448 decrypts with its keys", "[tls][crypto]"
 
         WHEN( "it is opened with sequence number 0, the header as additional data" )
         {
-            std::vector<uint8_t> plain;
+            PlainBytes plain;
             const bool opened = cipher->open( iv.data(), { record.data(), 5 },
                                               { record.data() + 5, record.size() - 5 }, plain );
 
@@ -135,7 +161,7 @@ SCENARIO( "A TLS 1.3 record of RFC 8448 decrypts with its keys", "[tls][crypto]"
             {
                 REQUIRE( opened );
                 REQUIRE(
-                    plain
+                    Bytes( plain.begin(), plain.end() )
                     == fromHex(
                         "14000020a8ec436d677634ae525ac1fcebe11a039ec17694fac6e98527b642f2edd5ce61"
                         "16" ) );
@@ -146,7 +172,7 @@ SCENARIO( "A TLS 1.3 record of RFC 8448 decrypts with its keys", "[tls][crypto]"
         {
             auto broken = record;
             broken[ 20 ] ^= 1;
-            std::vector<uint8_t> plain;
+            PlainBytes plain;
 
             THEN( "it does not open" )
             {
@@ -219,6 +245,43 @@ SCENARIO( "SecretBytes wipe their bytes", "[tls][crypto]" )
             THEN( "nothing is left" )
             {
                 REQUIRE( s.empty() );
+            }
+        }
+    }
+}
+
+SCENARIO( "Plaintext buffers are wiped when they go", "[tls][crypto]" )
+{
+    GIVEN( "a buffer of plaintext with the wiping allocator" )
+    {
+        std::vector<uint8_t, WipingAllocator<uint8_t, Recording<uint8_t>>> plain( 16, 0xAB );
+        plain.resize( 8 ); // what lies past size() is plaintext too
+
+        WHEN( "it grows into a new buffer" )
+        {
+            released.clear();
+            plain.resize( 4096, 0xCD );
+
+            THEN( "the old one is given back wiped, all of it" )
+            {
+                REQUIRE( released.size() >= 16 );
+                REQUIRE( std::all_of( released.begin(), released.end(),
+                                      []( uint8_t b ) { return b == 0; } ) );
+            }
+        }
+
+        WHEN( "it goes" )
+        {
+            released.clear();
+            {
+                auto gone = std::move( plain );
+            }
+
+            THEN( "it is given back wiped" )
+            {
+                REQUIRE( released.size() >= 16 );
+                REQUIRE( std::all_of( released.begin(), released.end(),
+                                      []( uint8_t b ) { return b == 0; } ) );
             }
         }
     }

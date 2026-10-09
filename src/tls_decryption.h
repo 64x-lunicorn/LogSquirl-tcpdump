@@ -141,7 +141,7 @@ private:
     bool setTrafficSecret( Session& session, Direction& direction, tls::SecretBytes secret );
     /// Decrypt a protected record into @p plain and its content type.
     bool decrypt( Session& session, Direction& direction, uint8_t type, uint16_t version,
-                  ByteView fragment, std::vector<uint8_t>& plain, uint8_t& inner );
+                  ByteView fragment, tls::PlainBytes& plain, uint8_t& inner );
     /// TLS 1.3: what the decrypted handshake @p messages of direction @p d
     /// change: the keys after a Finished or a KeyUpdate, ALPN.  A message
     /// over more than one record is read once it is whole.
@@ -150,7 +150,7 @@ private:
     /// direction @p d carried, decrypted.
     /// The application data went missing where @p resyncs say.
     std::pair<const char*, std::string> application( Session& session, unsigned d,
-                                                     const std::vector<uint8_t>& data,
+                                                     const tls::PlainBytes& data,
                                                      const std::vector<size_t>& resyncs,
                                                      const PacketRecord& pkt );
     /// A record of direction @p direction, of @p type as the record

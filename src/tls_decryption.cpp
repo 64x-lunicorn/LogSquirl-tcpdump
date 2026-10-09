@@ -381,11 +381,11 @@ private:
 
     void reset()
     {
-        std::vector<uint8_t>().swap( held_ );
+        tls::PlainBytes().swap( held_ );
     }
 
-    std::vector<uint8_t> held_; ///< The message begun, its header first.
-    uint32_t skip_ = 0;         ///< Bytes of a long message still to pass over.
+    tls::PlainBytes held_; ///< The message begun, its header first.
+    uint32_t skip_ = 0;    ///< Bytes of a long message still to pass over.
 };
 
 } // namespace
@@ -640,7 +640,7 @@ bool TlsDecryption::ensureKeys( Session& session )
 }
 
 bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t type, uint16_t version,
-                             ByteView fragment, std::vector<uint8_t>& plain, uint8_t& inner )
+                             ByteView fragment, tls::PlainBytes& plain, uint8_t& inner )
 {
     const auto& suite = *session.suite;
     if ( suite.tls13 ) {
@@ -863,7 +863,7 @@ void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messa
 }
 
 std::pair<const char*, std::string> TlsDecryption::application( Session& session, unsigned d,
-                                                                const std::vector<uint8_t>& data,
+                                                                const tls::PlainBytes& data,
                                                                 const std::vector<size_t>& resyncs,
                                                                 const PacketRecord& pkt )
 {
@@ -923,10 +923,10 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
     const auto n = messages.bytes.size;
     const auto d = stream.direction;
     std::vector<std::string> parts;
-    std::vector<uint8_t> application;
+    tls::PlainBytes application;
     std::vector<size_t> resyncs; ///< Where in it application data went missing.
     size_t applicationPart = SIZE_MAX;
-    std::vector<uint8_t> plain;
+    tls::PlainBytes plain; // wiped when it goes or grows
     bool decrypted = false;
 
     for ( size_t at = 0; n - at >= kRecordHeaderBytes; ) {
@@ -1006,9 +1006,7 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
             parts.emplace_back( "Change Cipher Spec" );
             break;
         }
-        tls::wipe( plain.data(), plain.size() );
     }
-    tls::wipe( plain.data(), plain.capacity() );
     if ( !decrypted ) {
         return;
     }
@@ -1021,7 +1019,6 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
             label = described.first;
             parts[ applicationPart ] = std::move( described.second );
         }
-        tls::wipe( application.data(), application.capacity() );
     }
     auto description = std::string( kDecryptedMarker ) + kDescriptionSeparator + joinParts( parts );
     if ( messages.segments > 1 ) {
