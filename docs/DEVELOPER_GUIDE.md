@@ -175,8 +175,14 @@ from `info`: the TCP Analysis inserts its markers at the start of `info`,
 the Stream Labels and `describeInStream()` look for its first ` | `, and
 both must find the inner packet's description there. The Packet Formatter
 writes the names before `info` (`GRE | [TCP Retransmission] …`). The
-Capture Summary counts the outer addresses as endpoints too; its protocol
-breakdown counts the inner protocol. The Stream Tracker keys a tunnelled
+Capture Summary counts the outer addresses apart, as tunnel endpoints
+(`CaptureStats::tunnelEndpointPackets`, each packet once per address
+however many of its tunnels the address ends), not among the endpoints:
+those are the Source and Destination columns, whose summary links open a
+pattern over those columns, and no column of a line shows the outer
+addresses (Wireshark's do not either), so a link for them would match
+nothing. The sidebar lists them under *Tunnel endpoints*, as plain text.
+Its protocol breakdown counts the inner protocol. The Stream Tracker keys a tunnelled
 packet by its inner addresses and ports alone, as Wireshark's `tcp.stream`
 does: a conversation is one stream whichever tunnel, VNI or GRE key carries
 it, and also when part of it is seen outside the tunnel.
@@ -601,7 +607,8 @@ direction:
 analysis marker kind),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
-addresses, and those of further addresses as "other endpoints".
+addresses, endpoints and tunnel endpoints together, and those of further
+addresses as "other endpoints".
 
 Memory therefore grows with the conversations and addresses in a capture,
 not with its size, and both are capped, so a port scan or a busy NAT cannot
@@ -660,8 +667,12 @@ Every pattern starts with `^` and reads the columns up to Protocol, as
 decides: a word in a payload's text never does. They read every
 `LineLayout`: either time column is optional, as in `upToSourcePattern()`,
 and a pattern that reads the start of Info (TCP flags and markers, ICMP
-errors) takes the two MAC columns as optional before it; one that reads the
-payload's description takes Info up to its first ` | `. Patterns use no
+errors) takes the two MAC columns as optional before it, then the names of
+the tunnels a packet came through, each with its ` | ` (`VXLAN VNI 100 | `,
+`GRE key=0x0000002A | `, `IPv6-in-IPv4 | `, *Tunnels* above), so that it
+reads the inner packet's Info; one that reads the payload's description
+takes those too, then Info up to its next ` | `. **A new tunnel name** goes
+into those patterns and into `readLine()` in the test. Patterns use no
 capture groups (a highlighter with groups colours only what they take) and
 nothing Vectorscan, LogSquirl's default search engine, cannot compile (no
 lookaround, backreference or possessive quantifier), so that a filter is
@@ -813,7 +824,8 @@ TCP and UDP streams are numbered each from 0, and the Protocol column
 changes within a stream. The columns up to Source are those of
 `upToSourcePattern()`, which takes either time column as optional, and the
 ports are looked for anywhere in Info, after the MAC columns a `LineLayout`
-may put at its start; the rest of Info is not read, so a change there does
+may put at its start and the tunnels a tunnelled packet names first (its
+ports are the inner packet's, as its stream is); the rest of Info is not read, so a change there does
 not break the pattern. A
 line that is no packet line, one with stream `-` or `?`, no selection or a
 tab without a Log File give a notification with the reason instead.
@@ -833,7 +845,9 @@ link, with `QDesktopServices`. `endpointPattern()` and `protocolPattern()`
 require the columns before Info as `packetLineRegex()` reads them, through
 `upToSourcePattern()` and the Length after Protocol, so they match a whole
 Source, Destination or Protocol column and never Info in every
-`LineLayout`, and escape the name with `literalPattern()`. `openRegexLab()`, which Follow
+`LineLayout`, and escape the name with `literalPattern()`. Only the
+endpoints are links, not the tunnel endpoints: those appear in no column
+(see *Tunnels*). `openRegexLab()`, which Follow
 stream uses too, opens the Lab with Match case and logs the pattern, then
 the applied one or the cancel, under the feature's name ("Filter: …").
 `regex_lab_test.cpp` checks every endpoint and protocol of the summary of

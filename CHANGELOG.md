@@ -16,8 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outermost first: `VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240`,
   `GRE key=0x0000002A | 53053 → 53 Len=32 | Standard query …`,
   `IPv6-in-IPv4 | …`. Streams are keyed by the inner addresses and ports,
-  whichever tunnel carries them; the Capture Summary counts the tunnel
-  endpoints among its endpoints. At most 4 tunnels are unwrapped, a
+  whichever tunnel carries them; the Capture Summary lists the tunnel
+  endpoints apart, under *Tunnel endpoints* and without a filter link, as
+  no column shows their addresses. The highlighters and filters in
+  `presets/` read a tunnelled packet's Info past the tunnels (a SYN in
+  VXLAN is a *TCP SYN/FIN*), and Follow stream follows the inner
+  conversation. At most 4 tunnels are unwrapped, a
   deeper one is described as such (`IPv4-in-IPv4 not dissected: more than
   4 nested tunnels`). Before, such packets were shown as UDP to port 4789
   (`VXLAN`), `GRE`, `IPIP` or `6in4` between the tunnel endpoints. GRE

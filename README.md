@@ -126,8 +126,11 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    from its statistics, click it in the sidebar summary: the Regex Lab opens
    with a pattern that matches the lines with that address in the Source or
    Destination column, or that name in the Protocol column (not where either
-   only appears in Info). Apply it to filter the view. Needs LogSquirl ≥
-   26.11; on an older one the summary lists them as plain text
+   only appears in Info). Apply it to filter the view. The endpoints of
+   tunnels, listed apart under *Tunnel endpoints*, are no links: a
+   tunnelled packet's line shows the packet inside, so their addresses are
+   in no column. Needs LogSquirl ≥ 26.11; on an older one the summary lists
+   the endpoints and protocols as plain text
 10. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
@@ -254,8 +257,10 @@ The filters:
 Each pattern reads the columns, so it never matches a word that only
 appears in Info's payload text: a Protocol is read from the Protocol
 column, TCP flags from the bracket right after the ports, an HTTP status
-or a DNS response code from the description after the first ` | `. They
-match in every choice of [columns](#options).
+or a DNS response code from the description after the first ` | `. A
+tunnelled packet is matched by the packet inside: the tunnels Info names
+first (`VXLAN VNI 100 | `, `GRE | `, …) are skipped. They match in every
+choice of [columns](#options).
 
 ## Example Output
 

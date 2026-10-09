@@ -183,7 +183,7 @@ QString colouredBy( const std::vector<Rule>& highlighters, const QString& line )
 /// A packet line's columns, and what Info says of TCP.
 struct Line {
     QString protocol;
-    QString info;
+    QString info;        ///< after the tunnels it may start with: the inner packet's
     QStringList markers; ///< "TCP Retransmission", … at the start of Info
     QStringList flags;   ///< SYN, ACK, …, for a TCP segment
     QString afterFlags;  ///< Info after the flags' bracket
@@ -198,6 +198,13 @@ Line readLine( const QString& text )
     Line line;
     line.protocol = match.captured( "protocol" );
     line.info = match.captured( "body" );
+    // The tunnels the packet came through, as the Packet Formatter names
+    // them before its Info (pcap_parser.cpp: enterTunnel's callers)
+    static const QRegularExpression tunnel(
+        R"(^(VXLAN(?: VNI \d+)?|GRE(?: key=0x[\dA-F]+)?|IPv[46]-in-IPv[46]) \| )" );
+    for ( auto t = tunnel.match( line.info ); t.hasMatch(); t = tunnel.match( line.info ) ) {
+        line.info = line.info.mid( t.capturedLength() );
+    }
 
     auto rest = line.info;
     while ( rest.startsWith( "[TCP " ) && rest.contains( "] " ) ) {
@@ -411,6 +418,12 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TCP handshakes", { 1, 2, 10, 11, 13, 14 } },
               { "HTTP", { 4, 6 } }, // not the Continuation of the body
           } },
+        { "ppp.txt",
+          {
+              // LCP, PAP, IPCP and PPPoED are none of them
+              { "ICMP", { 15, 16, 25, 26 } },
+              { "DNS", { 27 } },
+          } },
         { "tcp-analysis.txt",
           {
               { "TCP problems", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20 } },
@@ -424,6 +437,22 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TLS",
                 { 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 24, 25 } }, // Continuations too
               { "TCP handshakes", { 1, 2, 12, 13, 21, 22 } },
+          } },
+        { "tunnels.txt",
+          {
+              // The packets inside the tunnels, as if they were not
+              { "TCP SYN/FIN", { 1, 2, 8, 11 } },
+              { "ARP", { 5 } },
+              { "TCP handshakes", { 1, 2, 8, 11 } },
+              { "DNS", { 7, 10, 13 } },
+              { "HTTP", { 4 } },
+              { "ICMP", { 6, 12, 14 } },
+          } },
+        { "wifi.txt",
+          {
+              // 802.11 frames and EAPOL are none of them
+              { "ARP", { 10, 11 } },
+              { "ICMP", { 14, 15 } },
           } },
     };
     return expected;
@@ -464,8 +493,10 @@ std::string describe( const Numbers& numbers )
     return "{" + text + "}";
 }
 
-/// A packet line as the plugin formats it, with @p protocol and @p info.
-QString packetLine( const char* protocol, const std::string& info, bool withPorts = true )
+/// A packet line as the plugin formats it, with @p protocol and @p info,
+/// carried through @p tunnels, outermost first.
+QString packetLine( const char* protocol, const std::string& info, bool withPorts = true,
+                    const std::vector<std::string>& tunnels = {} )
 {
     PacketRecord pkt;
     pkt.number = 7;
@@ -475,6 +506,9 @@ QString packetLine( const char* protocol, const std::string& info, bool withPort
     pkt.protocol = protocol;
     pkt.capturedLen = pkt.originalLen = 60;
     pkt.info = info;
+    for ( const auto& name : tunnels ) {
+        pkt.tunnels.push_back( { name, "192.0.2.1", "192.0.2.2" } );
+    }
     return QString::fromStdString(
         formatPacketLine( pkt, pkt.timestampSec, 0, withPorts ? 3 : kNoStream ) );
 }
@@ -790,6 +824,34 @@ SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[pr
           "TLS",
           { "TLS" } },
         { packetLine( "ARP", "192.168.1.1 is at 00:11:22:33:44:55", false ), "ARP", { "ARP" } },
+        { packetLine( "TCP", "443 " + kArrow + " 50100 [RST] Seq=1 Win=0", true,
+                      { "VXLAN VNI 100" } ),
+          "TCP RST",
+          { "TCP errors" } },
+        { packetLine( "HTTPS",
+                      "[TCP Retransmission] 50100 " + kArrow + " 443 [SYN] Seq=0 Win=64240", true,
+                      { "VXLAN VNI 100", "GRE key=0x0000002A" } ),
+          "TCP problems",
+          { "TCP handshakes", "TCP errors" } },
+        { packetLine( "HTTP",
+                      "80 " + kArrow
+                          + " 50000 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | HTTP/1.1 404 "
+                            "Not Found",
+                      true, { "GRE" } ),
+          "HTTP 4xx/5xx",
+          { "HTTP" } },
+        { packetLine( "DNS",
+                      "53 " + kArrow
+                          + " 40000 Len=40 | Standard query response 0x1a2b A nope.example "
+                            "[NXDOMAIN]",
+                      true, { "IPv6-in-IPv4" } ),
+          "DNS NXDOMAIN",
+          { "DNS" } },
+        { packetLine( "ICMP", "Time exceeded (TTL exceeded in transit)", false,
+                      { "IPv4-in-IPv6" } ),
+          "ICMP errors",
+          { "ICMP" } },
+        { packetLine( "GRE", "GRE, protocol type 0x88BE", false ), "", {} },
     };
 
     for ( const auto& c : cases ) {
