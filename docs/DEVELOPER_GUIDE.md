@@ -81,7 +81,8 @@ not rounded.
 The widths are a minimum: a value as wide as its column, or wider (packet
 1,000,000, `ETH(0x88CC)`), is still followed by a space, and an empty value
 (Source and Destination of a packet without addresses) is shown as `-`, so
-that a line always splits into its columns at runs of spaces.
+that a line always splits into its columns at runs of spaces. The Log
+Format relies on it.
 
 UTC Time is the packet's wall-clock time, written by `formatUtcTime()` as
 an ISO 8601 date and time in UTC ending in `Z`:
@@ -145,6 +146,30 @@ not with its size, and both are capped (at roughly 100 MB and 10 MB), so a
 port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
+#### The Log Format (`formats/tcpdump_log.json`)
+An lnav-compatible Log Format definition, as LogSquirl's built-in ones in
+its `Resources/formats`, that LogSquirl uses once the user has copied it
+into its formats directory (README, *Log Format*). Its one regex names the
+columns of a packet line with groups `number`, `stream`, `timestamp`,
+`time`, `source`, `destination`, `protocol`, `length` and `body`; LogSquirl
+compiles it with `QRegularExpression` and no options, and makes the named
+groups the table view's columns in pattern order (only `[A-Za-z_]\w*` names
+count). `timestamp` is read with `%Y-%m-%d %H:%M:%S.%f%z`, which gives the
+Δt column, *Go to timestamp*, time-range search limits and the Chart
+Panel's time axis. `length` is the only `integer` value, so the Chart
+Panel's *Numeric Fields* template offers bytes over time and nothing else;
+`number` and `time` are declared `string` for that reason.
+
+A change of the packet line's columns is a change of the format too:
+`tests/logformat_test.cpp` matches the regex against every line of every
+`tests/corpus/*.txt` (header excluded) and checks each field against the
+line's columns, split at runs of spaces, and reads every timestamp with a
+port of LogSquirl's `TimestampReader` rules
+(`src/logformat/src/timestampreader.cpp` in the host). The plugin cannot
+register the format with LogSquirl (#50), nor tell whether it is installed,
+and the shared CI cannot yet pack it into the release archive (#58);
+`cmake --install` puts it next to the library.
+
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through a `CaptureReader`, has the Stream
 Tracker give each packet its stream, formats the packet and appends its line to a new output file, reporting progress and checking a
@@ -174,6 +199,9 @@ Qt UI that provides:
   second, file size, the link-layer type names
   (comma-separated when there are several), and the number of packets cut
   at the snaplen when there are any
+- On the first converted capture after the plugin is loaded, a link to
+  README's *Log Format* section. The plugin cannot know whether LogSquirl
+  has the format, so the hint is static and shown once per load
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
@@ -234,5 +262,6 @@ the helpers in `tests/pcapbuilder.h`; the application protocols are tested
 through the Payload Describer with a payload alone. `tests/corpus` holds captures with the text they must
 convert to (`corpus_test.cpp`); run the tests with `TCPDUMP_UPDATE_CORPUS=1`
 to rewrite that text after an intended change of the output, and review the
-difference. Plugin and sidebar tests run against the `FakeHost` in
+difference. `logformat_test.cpp` checks that the Log Format reads every line
+of every corpus text, so a new capture in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in
 `tests/fakehost.h`.

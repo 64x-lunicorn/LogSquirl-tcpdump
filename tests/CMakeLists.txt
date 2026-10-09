@@ -24,6 +24,7 @@ add_executable(logsquirl_tcpdump_tests
     plugin_test.cpp
     sidebarwidget_test.cpp
     corpus_test.cpp
+    logformat_test.cpp
     packet_formatter_test.cpp
     payload_describer_test.cpp
     stream_tracker_test.cpp
@@ -62,10 +63,12 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
 )
 
-# Captures and their expected text, for corpus_test.cpp
+# Captures and their expected text, for corpus_test.cpp, and the Log Format
+# that reads that text, for logformat_test.cpp
 target_compile_definitions(logsquirl_tcpdump_tests
     PRIVATE
         TCPDUMP_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
+        TCPDUMP_FORMAT_FILE="${CMAKE_SOURCE_DIR}/formats/tcpdump_log.json"
 )
 
 # ── Register with CTest ──────────────────────────────────────────────────

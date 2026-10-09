@@ -78,6 +78,8 @@ cp build/liblogsquirl_tcpdump.dylib "$DEST/"
 cp plugin.json icon.png "$DEST/"
 ```
 
+and copy the [Log Format](#log-format) into LogSquirl's formats directory.
+
 After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins…*.
 
 ## Usage
@@ -94,6 +96,48 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    readable by you only, and removed when LogSquirl quits
 6. Use LogSquirl's built-in search, filters, and highlighters on the
    packet data
+7. With the [Log Format](#log-format) installed, switch to the table view
+   with the toolbar's table button
+
+### Log Format
+
+LogSquirl recognises the packet list as a log with fields once it has the
+plugin's Log Format definition, [`formats/tcpdump_log.json`](formats/tcpdump_log.json)
+(lnav-compatible, like LogSquirl's built-in formats). It is a one-time copy:
+
+1. Get `tcpdump_log.json` from the [`formats`](formats/) folder of this
+   repository, or of the release's source code archive
+2. In LogSquirl, open **Options → Log Formats**, click **Open Formats
+   Folder…** and copy the file there. The folder is
+
+   | Platform | Formats Directory |
+   |----------|-------------------|
+   | macOS    | `~/Library/Application Support/logsquirl/formats/` |
+   | Linux    | `~/.local/share/logsquirl/formats/` |
+   | Windows  | `%APPDATA%/logsquirl/formats/` |
+
+   (a portable LogSquirl uses the `formats` folder beside its executable)
+3. Turn on **Auto-detect log format (table view)** on the same tab and click
+   **OK**; formats are read again when the Options dialog is applied. A
+   capture opened before keeps its format: open it again
+
+A converted capture then gets:
+
+- **Table View**: one column per field — `number`, `stream`, `timestamp`
+  (the UTC Time), `time` (since the first packet), `source`,
+  `destination`, `protocol`, `length` and `body` (the Info column)
+- **Δt**: the time since the previous packet, right after the timestamp
+- **Go to timestamp** (`Ctrl+Shift+L`) and **Set search limits to time
+  range…**: the UTC Time is read with `%Y-%m-%d %H:%M:%S.%f%z`, at 6 or 9
+  decimals (LogSquirl keeps milliseconds); type times in UTC, as the
+  column shows them
+- **Chart Panel templates**: *Message Rate* is packets per second (or per
+  5 s, 10 s, minute), and *Numeric Fields* plots `length`, the bytes on
+  the wire, over time
+- **Export as CSV** from the table, one column per field
+
+The sidebar summary links here once per session, since the plugin cannot
+tell whether the format is installed.
 
 ## Example Output
 
