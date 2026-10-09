@@ -606,3 +606,47 @@ SCENARIO( "HTTP/2 over TLS after a record that was lost or would not decrypt",
         }
     }
 }
+
+SCENARIO( "TLS 1.3 handshake messages over more than one record", "[tls_decryption]" )
+{
+    Tls13Session session;
+    TlsDecryption decryption( session.lookup() );
+    session.feed( decryption, 0, session.clientHello() );
+
+    GIVEN( "a Certificate whose second record begins with what reads as a Finished" )
+    {
+        const auto ee = Tls13Session::handshakeMessage( 8, Bytes{ 0x00, 0x00 } );
+        auto certificate = Tls13Session::handshakeMessage( 11, Bytes( 200, 0x30 ) );
+        const size_t cut = ee.size() + 100;
+        const auto flight = ee + certificate;
+        // The second record: 14 00 00 00, a Finished of no bytes, if read
+        // as the start of a message.
+        auto second = Bytes( flight.begin() + static_cast<std::ptrdiff_t>( cut ), flight.end() );
+        second[ 0 ] = 0x14;
+        second[ 1 ] = second[ 2 ] = second[ 3 ] = 0x00;
+        session.feed(
+            decryption, 1,
+            session.serverHello()
+                + session.seal( 1, 0x16,
+                                Bytes( flight.begin(),
+                                       flight.begin() + static_cast<std::ptrdiff_t>( cut ) ) ) );
+        session.feed( decryption, 1, session.seal( 1, 0x16, second ) );
+        const auto finished = session.feed(
+            decryption, 1,
+            session.seal( 1, 0x16,
+                          Tls13Session::handshakeMessage( 15, Bytes( 20, 0x01 ) )
+                              + Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF1 ) ) ) );
+        session.finished( 1 );
+        const auto response = session.feed(
+            decryption, 1,
+            session.seal( 1, 0x17,
+                          Bytes( { 'H', 'T', 'T', 'P', '/', '1', '.', '1', ' ', '2', '0', '0', ' ',
+                                   'O', 'K', '\r', '\n', '\r', '\n' } ) ) );
+
+        THEN( "the keys change at the real Finished, and the records after it decrypt" )
+        {
+            REQUIRE( contains( finished, "TLS (decrypted) | Certificate Verify, Finished" ) );
+            REQUIRE( contains( response, "TLS (decrypted) | HTTP/1.1 200 OK" ) );
+        }
+    }
+}

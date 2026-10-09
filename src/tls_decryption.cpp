@@ -318,6 +318,76 @@ bool alpnIsH2( ByteView data )
            && std::memcmp( protocol.data, "h2", 2 ) == 0;
 }
 
+/**
+ * TLS 1.3: the handshake messages of a direction's decrypted records, put
+ * together across records.  A message is held until it is whole, up to
+ * kMaxMessageBytes; a longer one is passed over, by its type only.
+ */
+class HandshakeMessages {
+public:
+    /// Longest handshake message held: EncryptedExtensions, Finished and
+    /// KeyUpdate, which are read, are far shorter.
+    static constexpr uint32_t kMaxMessageBytes = 16 * 1024;
+
+    /// Call @p onMessage(type, body) for each message @p bytes complete;
+    /// the body of one passed over is empty.
+    template <typename OnMessage>
+    void add( ByteView bytes, OnMessage onMessage )
+    {
+        size_t at = 0;
+        while ( at < bytes.size ) {
+            if ( skip_ > 0 ) {
+                const auto n = std::min<size_t>( skip_, bytes.size - at );
+                skip_ -= static_cast<uint32_t>( n );
+                at += n;
+                continue;
+            }
+            if ( held_.size() < kHeaderBytes ) {
+                const auto n = std::min( kHeaderBytes - held_.size(), bytes.size - at );
+                held_.insert( held_.end(), bytes.data + at, bytes.data + at + n );
+                at += n;
+                if ( held_.size() < kHeaderBytes ) {
+                    break;
+                }
+            }
+            const uint32_t length = static_cast<uint32_t>( held_[ 1 ] ) << 16
+                                    | static_cast<uint32_t>( held_[ 2 ] ) << 8 | held_[ 3 ];
+            if ( length > kMaxMessageBytes ) {
+                onMessage( held_[ 0 ], ByteView{ held_.data(), 0 } );
+                skip_ = length;
+                reset();
+                continue;
+            }
+            const auto n
+                = std::min<size_t>( kHeaderBytes + length - held_.size(), bytes.size - at );
+            held_.insert( held_.end(), bytes.data + at, bytes.data + at + n );
+            at += n;
+            if ( held_.size() == kHeaderBytes + length ) {
+                onMessage( held_[ 0 ], ByteView{ held_.data() + kHeaderBytes, length } );
+                reset();
+            }
+        }
+    }
+
+    /// Records went missing: the next one begins a message.
+    void lost()
+    {
+        reset();
+        skip_ = 0;
+    }
+
+private:
+    static constexpr size_t kHeaderBytes = 4;
+
+    void reset()
+    {
+        std::vector<uint8_t>().swap( held_ );
+    }
+
+    std::vector<uint8_t> held_; ///< The message begun, its header first.
+    uint32_t skip_ = 0;         ///< Bytes of a long message still to pass over.
+};
+
 } // namespace
 
 // ── A session ────────────────────────────────────────────────────────────
@@ -342,6 +412,7 @@ struct TlsDecryption::Direction {
     /// Application data went missing since the last that was described:
     /// HTTP/2 is read from a frame's start again (Http2Direction::resync()).
     bool lost = false;
+    HandshakeMessages handshake; ///< TLS 1.3: the encrypted handshake.
     std::unique_ptr<Http2Direction> http2;
     size_t http2Charged = 0; ///< Counted in http2Memory_.
 };
@@ -735,6 +806,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
 
 void TlsDecryption::lost( Session& session, Direction& direction, uint8_t type )
 {
+    direction.handshake.lost();
     // TLS 1.3 hides a record's type: those after the handshake are taken
     // for application data.
     if ( session.suite->tls13 ? direction.application : type == kApplicationData ) {
@@ -747,7 +819,7 @@ void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messa
     auto& direction = session.dir[ d ];
     bool finished = false;
     bool keyUpdate = false;
-    forEachHandshakeMessage( messages, [ & ]( uint8_t type, ByteView body ) {
+    direction.handshake.add( messages, [ & ]( uint8_t type, ByteView body ) {
         if ( type == kFinished && !direction.application ) {
             finished = true;
         }

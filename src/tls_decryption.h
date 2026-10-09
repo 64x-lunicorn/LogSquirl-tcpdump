@@ -72,7 +72,9 @@ constexpr const char* kDecryptedMarker = "TLS (decrypted)";
  * header blocks no longer decoded (Http2Direction::resync()).
  *
  * Memory is bounded: a session keeps its randoms, its keys and sequence
- * numbers, no records; kMaxSessions are followed at most.  An HTTP/2
+ * numbers, no records, and of TLS 1.3 per direction an encrypted handshake
+ * message over more than one record until it is whole, up to 16 KiB;
+ * kMaxSessions are followed at most.  An HTTP/2
  * session keeps per direction what Http2Direction holds, all of them
  * together at most kHttp2MemoryLimit; one that would pass it names its
  * frames only.  The plaintext of a segment's records lives while the
@@ -141,7 +143,8 @@ private:
     bool decrypt( Session& session, Direction& direction, uint8_t type, uint16_t version,
                   ByteView fragment, std::vector<uint8_t>& plain, uint8_t& inner );
     /// TLS 1.3: what the decrypted handshake @p messages of direction @p d
-    /// change: the keys after a Finished or a KeyUpdate, ALPN.
+    /// change: the keys after a Finished or a KeyUpdate, ALPN.  A message
+    /// over more than one record is read once it is whole.
     void afterHandshake( Session& session, unsigned d, ByteView messages );
     /// The label and description of the application data a segment of
     /// direction @p d carried, decrypted.
