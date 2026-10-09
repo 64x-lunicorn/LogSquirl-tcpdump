@@ -118,7 +118,8 @@ private:
  * crashed breaks the stream off: error() names the program, the code and
  * its last lines on stderr, so that "permission denied" or "no such device"
  * reaches the user, and convertStream() ends Failed with it.  A program
- * ended by terminate() or terminateCaptureProcesses() did not fail.
+ * ended by terminate() or terminateCaptureProcesses() did not fail: the
+ * stream reads as stopped().
  */
 class ProcessSource : public StreamSource {
 public:
@@ -156,6 +157,9 @@ public:
 protected:
     std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override;
     bool available() override;
+    /// Whether the program was ended by terminate() or
+    /// terminateCaptureProcesses().
+    bool endedOnPurpose() const override;
 
 private:
     /// Why the program ended, if it failed: empty if it exited with 0 or

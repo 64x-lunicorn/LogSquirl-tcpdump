@@ -205,6 +205,19 @@ std::optional<ConversionResult> streamFailure( const ByteSource& input )
                        .arg( QString::fromStdString( stream->error() ) ) );
 }
 
+/// Stopped, if @p input is a stream that was stopped (rather than closed or
+/// broken off), for a stream whose header has not come.
+std::optional<ConversionResult> stoppedBeforeHeader( const ByteSource& input )
+{
+    const auto* stream = dynamic_cast<const StreamSource*>( &input );
+    if ( !stream || !stream->stopped() || !stream->error().empty() ) {
+        return std::nullopt;
+    }
+    ConversionResult result;
+    result.status = ConversionResult::Status::Stopped;
+    return result;
+}
+
 using Clock = std::chrono::steady_clock;
 
 /**
@@ -242,10 +255,10 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     const auto capture = makeCaptureReader( source ); // pcap or pcapng, by the first block
     CaptureReader& reader = *capture;                 // the rest sees the capture through the seam
     if ( !reader.open() ) {
-        // A stream stopped before its header came was not read, so it failed
-        // only if no one cancelled.
-        auto result
-            = streamFailure( input ).value_or( failed( QString::fromStdString( reader.error() ) ) );
+        // A stream stopped before its header came was not read: it did not
+        // fail, and a cancel request still wins.
+        auto result = stoppedBeforeHeader( input ).value_or(
+            streamFailure( input ).value_or( failed( QString::fromStdString( reader.error() ) ) ) );
         return applyCancelRequest( std::move( result ), cancel );
     }
 

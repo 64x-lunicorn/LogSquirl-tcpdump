@@ -106,7 +106,8 @@ signals:
     /// A line the capture program wrote to stderr.
     void stderrLine( const QString& line );
     /// The capture ended: Converted (stopped, or its stream closed), Failed
-    /// (keeping what was captured, if a packet came) or Cancelled.
+    /// (keeping what was captured, if a packet came), Cancelled, or Stopped
+    /// before its capture header had come (nothing was captured).
     void finished( const tcpdump::ConversionResult& result );
 
 private:

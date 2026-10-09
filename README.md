@@ -156,7 +156,8 @@ is converted while it runs:
 
 - Its tab opens, following the file, as soon as the first packet has come,
   and its packet list grows as packets arrive: lines appear within 100 ms.
-  A capture that ends without a packet opens no tab and says so
+  A capture that ends without a packet opens no tab and says so; one
+  stopped before anything was captured says that, as no error
 - The sidebar shows packets, bytes, packets/s and the elapsed time (a
   stream has no size, so there is no percentage), and the Capture Summary
   of the capture's tab updates about once a second

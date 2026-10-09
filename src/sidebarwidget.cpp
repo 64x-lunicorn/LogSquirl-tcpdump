@@ -418,6 +418,7 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
 
     switch ( result.status ) {
     case ConversionResult::Status::Cancelled:
+    case ConversionResult::Status::Stopped: // only a stream is stopped
         summaryLabel_->setText( "Cancelled." );
         hostLog( LOGSQUIRL_LOG_INFO, "Cancelled opening " + filePath );
         return;
@@ -619,6 +620,16 @@ void SidebarWidget::finishLiveCapture( const ConversionResult& result )
         summaryLabel_->setText( "Cancelled." );
         hostLog( LOGSQUIRL_LOG_INFO, "Cancelled capturing " + name );
         return;
+
+    case ConversionResult::Status::Stopped: {
+        // Stopped before the header came: nothing went wrong, and nothing
+        // was written, so there is nothing to open or remove.
+        const auto message
+            = QString( "The capture %1 was stopped before anything was captured." ).arg( name );
+        summaryLabel_->setText( message.toHtmlEscaped() );
+        hostLog( LOGSQUIRL_LOG_INFO, message );
+        return;
+    }
 
     case ConversionResult::Status::Failed:
         hostLog( LOGSQUIRL_LOG_ERROR, "Capture " + name + " failed: " + result.error );

@@ -142,23 +142,39 @@ bool gone( qint64 pid )
 }
 
 /// The child's pid that a line of stderr names ("child <pid>"), handed on
-/// on another thread.
+/// on another thread.  A fake program names it once it is ready: after it
+/// has written what the test needs, so that the test waits on that line, not
+/// on time.
 class Collected {
 public:
+    /// @param onChild  If set, called with the pid as it is named, on the
+    ///                 thread that reads the stream.
+    explicit Collected( std::function<void()> onChild = {} )
+        : onChild_( std::move( onChild ) )
+    {
+    }
+
     std::function<void( const QString& )> sink()
     {
         return [ this ]( const QString& line ) {
-            const std::lock_guard<std::mutex> lock( mutex_ );
-            if ( line.startsWith( "child " ) ) {
+            if ( !line.startsWith( "child " ) ) {
+                return;
+            }
+            {
+                const std::lock_guard<std::mutex> lock( mutex_ );
                 child_ = line.mid( 6 ).toLongLong();
+            }
+            if ( onChild_ ) {
+                onChild_();
             }
         };
     }
 
-    /// The child's pid, once it has been named; 0 after 3 s without.
+    /// The child's pid, once it has been named; 0 after 20 s without (a
+    /// deadline for a broken test only: a loaded machine gets there sooner).
     qint64 child()
     {
-        const auto until = Clock::now() + milliseconds( 3000 );
+        const auto until = Clock::now() + milliseconds( 20000 );
         while ( Clock::now() < until ) {
             {
                 const std::lock_guard<std::mutex> lock( mutex_ );
@@ -172,18 +188,10 @@ public:
     }
 
 private:
+    std::function<void()> onChild_;
     std::mutex mutex_;
     qint64 child_ = 0;
 };
-
-/// Sets @p flag after @p after.
-std::thread setLater( std::atomic_bool& flag, milliseconds after )
-{
-    return std::thread( [ &flag, after ] {
-        std::this_thread::sleep_for( after );
-        flag = true;
-    } );
-}
 
 } // namespace
 
@@ -342,8 +350,9 @@ SCENARIO( "Ending a capture program ends what it started", "[process_source]" )
     writeFile( dir.filePath( "header.pcap" ), pcapOf( {} ) );
     const auto args = QStringList{ dir.filePath( "header.pcap" ) };
 
-    GIVEN( "a program that starts a child and waits, having sent a pcap header" )
+    GIVEN( "a program that starts a child and waits, having sent a packet" )
     {
+        writeFile( dir.filePath( "packet.pcap" ), pcapOf( { somePackets().front() } ) );
         const auto program = fakeProgram( dir, "wrapper",
                                           "sleep 60 &\n"
                                           "echo \"child $!\" >&2\n"
@@ -351,27 +360,59 @@ SCENARIO( "Ending a capture program ends what it started", "[process_source]" )
                                           "wait" );
         Collected stderrLines;
         std::atomic_bool stop{ false };
-        ProcessSource source( { program, args }, &stop, stderrLines.sink() );
-        auto stopper = setLater( stop, milliseconds( 300 ) );
+        ProcessSource source( { program, { dir.filePath( "packet.pcap" ) } }, &stop,
+                              stderrLines.sink() );
+        // Stop once the packet is converted: the capture has begun.
+        LiveObserver live;
+        live.firstPacket = [ &stop ]( const QString&, const QString& ) { stop = true; };
         QTemporaryDir out;
-        const auto result = convertStream( source, "live", out.path() );
-        stopper.join();
-        const auto child = stderrLines.child();
-        REQUIRE( child != 0 );
+        const auto result = convertStream( source, "live", out.path(), nullptr, {}, live );
 
         WHEN( "the capture is stopped and the program terminated" )
         {
             const auto before = Clock::now();
             source.terminate();
             const auto took = Clock::now() - before;
+            const auto child = stderrLines.child(); // all of stderr is read by now
 
             THEN( "the capture is Converted, and the program and its child end on SIGTERM" )
             {
+                REQUIRE( stop );
                 REQUIRE( result.status == ConversionResult::Status::Converted );
-                REQUIRE( result.summary.packets == 0 );
+                REQUIRE( result.summary.packets == 1 );
                 REQUIRE( took < milliseconds( 1000 ) );
+                REQUIRE( child != 0 );
                 REQUIRE( gone( source.processId() ) );
                 REQUIRE( gone( child ) );
+            }
+        }
+    }
+
+    GIVEN( "a program that starts a child and waits, and has sent nothing" )
+    {
+        const auto program = fakeProgram( dir, "silent",
+                                          "sleep 60 &\n"
+                                          "echo \"child $!\" >&2\n"
+                                          "wait" );
+        std::atomic_bool stop{ false };
+        // Stop once the program has started its child: it is running.
+        Collected stderrLines( [ &stop ] { stop = true; } );
+        ProcessSource source( { program, {} }, &stop, stderrLines.sink() );
+        QTemporaryDir out;
+        const auto result = convertStream( source, "live", out.path() );
+
+        WHEN( "the capture is stopped and the program terminated" )
+        {
+            source.terminate();
+
+            THEN( "it was stopped before anything was captured, not failed, leaving nothing" )
+            {
+                REQUIRE( source.stopped() );
+                REQUIRE( result.status == ConversionResult::Status::Stopped );
+                REQUIRE( result.error.isEmpty() );
+                REQUIRE( QDir( out.path() ).isEmpty() );
+                REQUIRE( gone( source.processId() ) );
+                REQUIRE( gone( stderrLines.child() ) );
             }
         }
     }
@@ -417,46 +458,60 @@ SCENARIO( "Shutting the plugin down ends every capture program", "[process_sourc
 {
     QTemporaryDir dir;
     writeFile( dir.filePath( "header.pcap" ), pcapOf( {} ) );
+    // The child is named once the header is written (if there is one): it
+    // is in the pipe then, and is read even after the program has ended.
     const auto program = fakeProgram( dir, "wrapper",
                                       "sleep 60 &\n"
+                                      "[ -n \"$1\" ] && cat \"$1\"\n"
                                       "echo \"child $!\" >&2\n"
-                                      "cat \"$1\"\n"
                                       "wait" );
 
-    GIVEN( "a capture read on a worker thread, running in the plugin" )
-    {
-        FakeHost host;
-        REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-        Collected stderrLines;
-        std::atomic<qint64> pid{ 0 };
-        ConversionResult result;
-        QTemporaryDir out;
-        std::thread worker( [ & ] {
-            ProcessSource source( { program, { dir.filePath( "header.pcap" ) } }, nullptr,
-                                  stderrLines.sink() );
-            pid = source.processId();
-            result = convertStream( source, "live", out.path() );
-        } );
-        const auto child = stderrLines.child();
-        REQUIRE( child != 0 );
-
-        WHEN( "the plugin is shut down (LogSquirl quits or the plugin is disabled)" )
+    struct Case {
+        const char* given;
+        QStringList arguments;
+        ConversionResult::Status status;
+    };
+    for ( const auto& c :
+          { Case{ "a capture that has sent its header",
+                  { dir.filePath( "header.pcap" ) },
+                  ConversionResult::Status::Converted },
+            Case{
+                "a capture that has sent nothing yet", {}, ConversionResult::Status::Stopped } } ) {
+        GIVEN( std::string( c.given ) + ", read on a worker thread, running in the plugin" )
         {
-            logsquirl_plugin_shutdown();
-            worker.join();
+            FakeHost host;
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+            Collected stderrLines;
+            std::atomic<qint64> pid{ 0 };
+            ConversionResult result;
+            QTemporaryDir out;
+            std::thread worker( [ & ] {
+                ProcessSource source( { program, c.arguments }, nullptr, stderrLines.sink() );
+                pid = source.processId();
+                result = convertStream( source, "live", out.path() );
+            } );
+            const auto child = stderrLines.child();
+            REQUIRE( child != 0 );
 
-            THEN( "the program and its child are gone, and the capture ends without failing" )
+            WHEN( "the plugin is shut down (LogSquirl quits or the plugin is disabled)" )
             {
-                REQUIRE( gone( pid ) );
-                REQUIRE( gone( child ) );
-                REQUIRE( result.status == ConversionResult::Status::Converted );
+                logsquirl_plugin_shutdown();
+                worker.join();
+
+                THEN( "the program and its child are gone, and the capture ends without failing" )
+                {
+                    REQUIRE( gone( pid ) );
+                    REQUIRE( gone( child ) );
+                    REQUIRE( result.status == c.status );
+                    REQUIRE( result.error.isEmpty() );
+                }
             }
+            if ( worker.joinable() ) {
+                terminateCaptureProcesses();
+                worker.join();
+            }
+            logsquirl_plugin_shutdown();
         }
-        if ( worker.joinable() ) {
-            terminateCaptureProcesses();
-            worker.join();
-        }
-        logsquirl_plugin_shutdown();
     }
 }
 

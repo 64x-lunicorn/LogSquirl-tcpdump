@@ -330,7 +330,8 @@ read through a `DeviceSource`:
   `Cannot start <name>: …`, `<name> exited with code N:` or
   `<name> crashed (exit code N):` followed by its last stderr lines. A
   program ended on purpose (`terminate()`, `terminateCaptureProcesses()`)
-  did not fail.
+  did not fail: its stream reads as `stopped()`
+  (`StreamSource::endedOnPurpose()`).
 - **Ending it.** On Unix the program runs in a process group of its own
   (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
   group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
@@ -343,7 +344,8 @@ read through a `DeviceSource`:
   left. The destructor terminates.
 - **Stop.** The stop flag ends the stream, not the program: the
   conversion finalises (Converted), then the caller terminates the source,
-  or destroys it.
+  or destroys it. A Stop, or a shutdown, before the capture header has come
+  ends Stopped: nothing was captured, nothing went wrong.
 - **No orphans.** Every started source's group is enrolled in a registry;
   `terminateCaptureProcesses()` ends them all, from any thread, and
   `logsquirl_plugin_shutdown()` calls it after deleting the sidebar
@@ -352,7 +354,11 @@ read through a `DeviceSource`:
 The tests (`tests/process_source_test.cpp`) run fake capture programs,
 shell scripts that write a synthetic pcap to stdout and text to stderr,
 exit with an error, crash, start a child and ignore SIGTERM; they need a
-Unix shell, so on Windows only the stderr splitting is run.
+Unix shell, so on Windows only the stderr splitting is run. A test never
+waits on time for a fake program: it acts on what the program has
+signalled, the first packet converted (`LiveObserver::firstPacket`) or a
+`child <pid>` line on stderr written once the program is ready, so that the
+tests pass on a loaded machine and in parallel runs.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -958,7 +964,9 @@ output root that only the user can enter. The result is one of three
 outcomes and a `CaptureSummary`, whose link-layer types are those of the
 packets followed by any the capture declares without a packet of it (so a
 pcap with no packets still names its one): Converted (with the output path), Failed
-(with a message) or Cancelled. Failed is the only error mode: an unreadable
+(with a message) or Cancelled, and for a stream Stopped: stopped before its
+capture header came (`StreamSource::stopped()`), so nothing was captured and
+nothing is left, which is not a failure. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
 failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,

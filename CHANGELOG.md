@@ -144,6 +144,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wire: a PPPoE session frame inside is unwrapped to its IP packet, a
   discovery message named, where before they showed as `PPPoES` /
   `PPPoED` with `EtherType 0x8864` / `0x8863` (#67).
+- A live capture stopped before its capture header came (Stop pressed
+  early, or LogSquirl quitting while the capture program was still
+  starting) no longer fails with "not a capture": the sidebar says it was
+  stopped before anything was captured (`ConversionResult::Status::Stopped`).
+  The Process Source tests wait for the fake capture programs to signal
+  that they are ready instead of timing them, so they no longer fail on a
+  loaded machine (#94).
 
 ## [0.3.0] — 2026-10-09
 

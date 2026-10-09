@@ -74,11 +74,12 @@ public:
     size_t read( uint8_t* dst, size_t n ) final;
     bool ready() final;
 
-    /// Whether the stream ended because a stop was requested, not because
-    /// its writer closed it.
+    /// Whether the stream ended because a stop was requested, or its writer
+    /// was ended on purpose (endedOnPurpose()), not because the writer
+    /// closed it by itself.
     bool stopped() const
     {
-        return stopped_;
+        return stopped_ || ( ended_ && endedOnPurpose() );
     }
 
     /// Why the stream broke off; empty if it ended normally or was stopped.
@@ -95,6 +96,13 @@ protected:
 
     /// Whether data, or the end, can be read without waiting.
     virtual bool available() = 0;
+
+    /// Whether the writer was ended on purpose, not by a stop request of
+    /// this source: a capture program ended as the plugin shuts down.
+    virtual bool endedOnPurpose() const
+    {
+        return false;
+    }
 
     std::string error_;
 
