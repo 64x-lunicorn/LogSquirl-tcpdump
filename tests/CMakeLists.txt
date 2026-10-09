@@ -38,6 +38,7 @@ add_executable(logsquirl_tcpdump_tests
     streaming_test.cpp
     capture_source_test.cpp
     live_conversion_test.cpp
+    live_limits_test.cpp
     live_capture_test.cpp
     live_source_test.cpp
     local_source_test.cpp
@@ -138,6 +139,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/raw_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"

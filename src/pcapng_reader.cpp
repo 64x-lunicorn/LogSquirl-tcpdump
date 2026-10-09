@@ -427,6 +427,15 @@ bool PcapngReader::resume( const ReaderCheckpoint& checkpoint )
     return true;
 }
 
+void PcapngReader::relocateHeaders( const std::function<uint64_t( uint64_t )>& where )
+{
+    sectionHeader_.offset = where( sectionHeader_.offset );
+    for ( auto& iface : interfaces_ ) {
+        iface.block.offset = where( iface.block.offset );
+    }
+    sectionState_.reset(); // the next checkpoint keeps them as they are now
+}
+
 CaptureHeaders PcapngReader::headers() const
 {
     CaptureHeaders headers;

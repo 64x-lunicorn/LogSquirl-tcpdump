@@ -240,16 +240,18 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
     }
 
     // Replacing the capture with some of its packets would lose the others.
-    if ( QFileInfo( outputPath ).canonicalFilePath() == index->capturePath() ) {
-        return failed( QStringLiteral( "The packets cannot replace the capture they are "
-                                       "from: choose another file." ) );
+    const auto target = QFileInfo( outputPath ).canonicalFilePath();
+    for ( const auto& part : index->parts() ) {
+        if ( !target.isEmpty() && target == part.path ) {
+            return failed( QStringLiteral( "The packets cannot replace the capture they are "
+                                           "from: choose another file." ) );
+        }
     }
 
+    // The file the packets are copied from; one of several, by packet, for
+    // a capture split by a ring buffer.
     QFile capture;
     QString problem;
-    if ( !openRegularFile( index->capturePath(), capture, problem ) ) {
-        return failed( problem );
-    }
     // Written aside and renamed when complete: a failed or cancelled export
     // leaves nothing behind.
     QSaveFile output( outputPath );
@@ -276,6 +278,13 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
             output.cancelWriting();
             return failed(
                 QStringLiteral( "Packet %1: %2" ).arg( numbers[ i ] ).arg( cursor.error() ) );
+        }
+        if ( capture.fileName() != packet.file || !capture.isOpen() ) {
+            capture.close();
+            if ( !openRegularFile( packet.file, capture, problem ) ) {
+                output.cancelWriting();
+                return failed( problem );
+            }
         }
         const auto& headers = packet.headers;
         if ( headers.records.empty() ) {

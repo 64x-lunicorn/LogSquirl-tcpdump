@@ -32,7 +32,8 @@
  * The source is made on the worker thread by a SourceFactory, as a
  * ProcessSource must be (its QProcess belongs to the thread that reads it).
  * Stop ends the stream and finalises: the last lines are flushed, the raw
- * capture is closed, the summary is final.  Cancel also removes what was
+ * capture is closed, the summary is final.  A stop condition of its
+ * LiveLimits, reached, ends it the same way.  Cancel also removes what was
  * written.  The outcome is posted before the source is destroyed, so that a
  * capture program that takes its time to end (ProcessSource::terminate())
  * does not hold it up.
@@ -79,6 +80,23 @@ public:
     LiveCapture( const LiveCapture& ) = delete;
     LiveCapture& operator=( const LiveCapture& ) = delete;
 
+    /// Stop by itself, and split the raw capture, as @p limits say; before
+    /// start().  Any live source's capture can be limited.
+    void setLimits( const LiveLimits& limits )
+    {
+        limits_ = limits;
+    }
+    const LiveLimits& limits() const
+    {
+        return limits_;
+    }
+
+    /// Measure the limits' durations with @p clock (a test's); before start().
+    void setClock( LiveClock clock )
+    {
+        clock_ = std::move( clock );
+    }
+
     /// Start the capture; once only.
     void start();
     /// End the capture and keep what was captured: finished() follows.
@@ -118,6 +136,8 @@ private:
     QString outputRoot_;
     ConversionOptions options_;
     SourceFactory makeSource_;
+    LiveLimits limits_;
+    LiveClock clock_;
     bool running_ = false;
     bool started_ = false;
     /// Ends the stream (Stop and Cancel), and removes what was written (Cancel).

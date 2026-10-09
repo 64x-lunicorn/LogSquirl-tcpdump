@@ -184,6 +184,8 @@ bool StreamContentReader::open()
         first_ = extent->first;
         last_ = extent->last;
     }
+    // A ring buffer's packets of files deleted since are not there to read.
+    first_ = std::max( first_, index_->rotatedAway() + 1 );
     next_ = first_;
     opened_ = true;
     return true;

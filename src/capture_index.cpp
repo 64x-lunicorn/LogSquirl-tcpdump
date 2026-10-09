@@ -33,6 +33,17 @@
 
 namespace tcpdump {
 
+namespace {
+
+/// Why a packet of a ring buffer's file deleted since cannot be read.
+QString rotatedAwayText()
+{
+    return QStringLiteral( "Rotated away: the ring buffer has deleted the capture file it was "
+                           "in." );
+}
+
+} // namespace
+
 // ── CaptureIndex ─────────────────────────────────────────────────────────
 
 CaptureIndex::CaptureIndex( uint32_t interval )
@@ -74,13 +85,66 @@ std::optional<CaptureIndex::StreamExtent> CaptureIndex::streamExtent( Transport 
     return streams[ static_cast<size_t>( id ) ];
 }
 
+std::optional<uint64_t> CapturePart::fileOffset( uint64_t offset ) const
+{
+    if ( offset >= streamOffset ) {
+        return offset - streamOffset + headerLength;
+    }
+    for ( const auto& [ there, here ] : headerOffsets ) {
+        if ( there == offset ) {
+            return here;
+        }
+    }
+    return std::nullopt;
+}
+
 void CaptureIndex::setCaptureFile( const QString& path, Growth growth )
 {
-    const QFileInfo info( path );
-    path_ = info.canonicalFilePath();
-    size_ = info.size();
-    growth_ = growth;
-    modified_ = info.lastModified();
+    CapturePart part;
+    part.path = path;
+    setCaptureParts( { part }, growth );
+}
+
+void CaptureIndex::setCaptureParts( const std::vector<CapturePart>& parts, Growth growth )
+{
+    files_.clear();
+    for ( size_t i = 0; i < parts.size(); ++i ) {
+        const QFileInfo info( parts[ i ].path );
+        File file;
+        file.part = parts[ i ];
+        file.part.path = info.canonicalFilePath();
+        file.size = info.size();
+        file.growth = i + 1 == parts.size() ? growth : Growth::Fixed;
+        file.modified = info.lastModified();
+        files_.push_back( std::move( file ) );
+    }
+}
+
+std::vector<CapturePart> CaptureIndex::parts() const
+{
+    std::vector<CapturePart> parts;
+    for ( const auto& file : files_ ) {
+        parts.push_back( file.part );
+    }
+    return parts;
+}
+
+const CaptureIndex::File* CaptureIndex::fileOf( uint32_t number ) const
+{
+    if ( number <= rotatedAway() || number > packets_ ) {
+        return nullptr;
+    }
+    // The last file whose packets start before it.
+    const auto after = std::upper_bound(
+        files_.begin(), files_.end(), number,
+        []( uint32_t n, const File& file ) { return n <= file.part.packetsBefore; } );
+    return after == files_.begin() ? nullptr : &*std::prev( after );
+}
+
+const CapturePart* CaptureIndex::partOf( uint32_t number ) const
+{
+    const auto* file = fileOf( number );
+    return file ? &file->part : nullptr;
 }
 
 const ReaderCheckpoint* CaptureIndex::nearest( uint32_t number ) const
@@ -92,21 +156,48 @@ const ReaderCheckpoint* CaptureIndex::nearest( uint32_t number ) const
     return after == checkpoints_.begin() ? nullptr : &*std::prev( after );
 }
 
-QString CaptureIndex::fileProblem() const
+QString CaptureIndex::problemOf( const File& file )
 {
-    const QFileInfo info( path_ );
-    if ( path_.isEmpty() || !info.exists() ) {
-        return QStringLiteral( "The capture file %1 is gone." ).arg( path_ );
+    const QFileInfo info( file.part.path );
+    if ( file.part.path.isEmpty() || !info.exists() ) {
+        return QStringLiteral( "The capture file %1 is gone." ).arg( file.part.path );
     }
-    const bool changed = growth_ == Growth::Growing
-                             ? info.size() < size_
-                             : info.size() != size_ || info.lastModified() != modified_;
+    const bool changed = file.growth == Growth::Growing
+                             ? info.size() < file.size
+                             : info.size() != file.size || info.lastModified() != file.modified;
     if ( changed ) {
         return QStringLiteral( "The capture file %1 has changed since it was converted: "
                                "open it again to see its packets." )
             .arg( info.fileName() );
     }
     return {};
+}
+
+QString CaptureIndex::fileProblem() const
+{
+    if ( files_.empty() ) {
+        return QStringLiteral( "The capture file is gone." );
+    }
+    for ( const auto& file : files_ ) {
+        if ( auto problem = problemOf( file ); !problem.isEmpty() ) {
+            return problem;
+        }
+    }
+    return {};
+}
+
+QString CaptureIndex::fileProblem( uint32_t number ) const
+{
+    const auto* file = fileOf( number );
+    if ( !file ) {
+        return number <= rotatedAway() ? rotatedAwayText() : fileProblem();
+    }
+    // A ring buffer deletes its files but the one it writes: the packets of
+    // a file gone since the index was taken were rotated away.
+    if ( file != &files_.back() && !QFileInfo::exists( file->part.path ) ) {
+        return rotatedAwayText();
+    }
+    return problemOf( *file );
 }
 
 // ── CaptureCursor ────────────────────────────────────────────────────────
@@ -125,16 +216,17 @@ void CaptureCursor::close()
 {
     // The reader reads through the sources, the sources from the file.
     reader_.reset();
+    readerPath_.clear();
     headSource_.reset();
     fileSource_.reset();
     file_.close();
 }
 
-bool CaptureCursor::reopen( const ReaderCheckpoint* checkpoint )
+bool CaptureCursor::reopen( const CapturePart& part, const ReaderCheckpoint* checkpoint )
 {
     close();
     QString problem;
-    if ( !openRegularFile( index_->capturePath(), file_, problem ) ) {
+    if ( !openRegularFile( part.path, file_, problem ) ) {
         error_ = problem;
         return false;
     }
@@ -146,6 +238,14 @@ bool CaptureCursor::reopen( const ReaderCheckpoint* checkpoint )
         error_ = QStringLiteral( "The capture file can no longer be read as it was converted." );
         return false;
     }
+    if ( checkpoint ) {
+        // The checkpoint was taken as the capture was read: the headers it
+        // names lie elsewhere in a later file of it, copied ahead of its records.
+        reader_->relocateHeaders(
+            [ &part ]( uint64_t offset ) { return part.fileOffset( offset ).value_or( offset ); } );
+    }
+    readerPath_ = part.path;
+    readerPacketsBefore_ = part.packetsBefore;
     return true;
 }
 
@@ -160,25 +260,44 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
         error_ = QStringLiteral( "The capture has no packet %1." ).arg( number );
         return false;
     }
-    // Checked before every read: a file changed between two is not misread.
-    if ( const auto problem = index_->fileProblem(); !problem.isEmpty() ) {
+    // Checked before every read: a file changed between two is not misread;
+    // one a ring buffer deleted is said to be.
+    if ( const auto problem = index_->fileProblem( number ); !problem.isEmpty() ) {
         close();
         error_ = problem;
         return false;
     }
+    const auto* part = index_->partOf( number );
+    if ( !part ) {
+        error_ = QStringLiteral( "The capture has no packet %1." ).arg( number );
+        return false;
+    }
 
-    // Go on from where the cursor is, unless the packet lies behind it or a
-    // checkpoint lies between the two.
-    const auto* checkpoint = index_->nearest( number );
+    // The nearest checkpoint, if it lies after a packet of the packet's file
+    // (open() reads up to its first): there, the packets are counted from
+    // the file's first and the offsets are its own.
+    std::optional<ReaderCheckpoint> checkpoint;
+    if ( const auto* nearest = index_->nearest( number );
+         nearest && nearest->packetsBefore > part->packetsBefore
+         && nearest->offset >= part->streamOffset ) {
+        checkpoint = *nearest;
+        checkpoint->packetsBefore -= part->packetsBefore;
+        checkpoint->offset = *part->fileOffset( nearest->offset );
+    }
+
+    // Go on from where the cursor is, unless it reads another file, or the
+    // packet lies behind it or a checkpoint lies between the two.
+    const uint32_t local = number - part->packetsBefore;
     const uint32_t from = checkpoint ? checkpoint->packetsBefore : 0;
-    if ( !reader_ || reader_->packetsRead() >= number || reader_->packetsRead() < from ) {
-        if ( !reopen( checkpoint ) ) {
+    if ( !reader_ || readerPath_ != part->path || readerPacketsBefore_ != part->packetsBefore
+         || reader_->packetsRead() >= local || reader_->packetsRead() < from ) {
+        if ( !reopen( *part, checkpoint ? &*checkpoint : nullptr ) ) {
             return false;
         }
     }
 
     PacketRecord record;
-    while ( reader_->packetsRead() < number ) {
+    while ( reader_->packetsRead() < local ) {
         if ( !reader_->next( record ) ) {
             close();
             error_ = QStringLiteral( "The capture ends before packet %1: it has changed since "
@@ -187,12 +306,14 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
             return false;
         }
     }
+    record.number = number;
     packet.record = std::move( record );
     packet.bytes = reader_->packetBytes();
     packet.byteSwapped = reader_->byteSwapped();
     packet.recordOffset = reader_->recordOffset();
     packet.recordLength = reader_->recordLength();
     packet.headers = reader_->headers();
+    packet.file = part->path;
     return true;
 }
 
