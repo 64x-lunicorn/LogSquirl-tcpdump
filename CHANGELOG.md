@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery with its stage, `Active Discovery Offer (PADO)
   AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
   type` on every line, and PPPoE frames only their EtherType.
+- **Capture Source seam.** The Capture Reader reads a capture that is
+  still being written, from a pipe, a FIFO, a socket or a process's stdout
+  (`FdSource`, `DeviceSource`), as well as from a file: the format is
+  decided as soon as the header has come (a pcap's 24-byte global header,
+  a pcapng's section header and first interface), a wait for data ends
+  within 100 ms of Stop or Cancel, and the stream closing ends the capture,
+  a record cut off there reported as such. The live sources to come plug
+  into it; converting a file is unchanged.
 
 ### Fixed
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the

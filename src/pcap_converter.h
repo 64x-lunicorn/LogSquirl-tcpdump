@@ -144,6 +144,23 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
                               const ConversionOptions& options = {} );
 
 /**
+ * Convert the capture read from @p source, a stream that is still being
+ * written (capture_source.h), as convertPcap() converts a file: into
+ * <@p name>.log ("capture.log" without a name), packet by packet as the
+ * capture comes, until the stream ends.  A stream stopped or closed in the
+ * middle of a record ends Converted, with the record reported cut off; a
+ * stream that breaks off with a read error ends Failed.  There is no
+ * progress, as a stream's size is unknown.
+ *
+ * @param cancel  If set, checked between packets; stops the conversion.  The
+ *                source must be given it too, so that a wait for the next
+ *                packet ends with it.
+ */
+ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
+                                const std::atomic_bool* cancel = nullptr,
+                                const ConversionOptions& options = {} );
+
+/**
  * The rule that a cancel request wins, even over a conversion that had
  * just finished when the request came: if @p cancel is set, @p result
  * becomes Cancelled, whatever it was, and its output is removed.  Decided

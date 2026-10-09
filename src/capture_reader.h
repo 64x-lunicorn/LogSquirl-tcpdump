@@ -46,6 +46,11 @@ namespace tcpdump {
  * PcapReader for a pcap global header.  For a file that holds neither, a
  * reader whose open() fails and says why.  It is not open yet; @p source
  * must outlive it.
+ *
+ * Only the bytes the decision needs are looked at, as they come: on a
+ * stream that has sent its header and nothing more, the reader is chosen
+ * without waiting for more.  A source that ends before the bytes decide it
+ * holds no capture.
  */
 std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source );
 

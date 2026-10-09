@@ -277,16 +277,28 @@ constexpr size_t kMaxPreamble = 4096;
 /// Bytes of a packet that are dissected; the rest of a longer record is skipped.
 constexpr uint32_t kMaxDissectedBytes = 262144;
 
-/// Where a CaptureReader reads the capture from.
+/**
+ * Where a CaptureReader reads the capture from: a file, a buffer, or a
+ * stream that is still being written (capture_source.h).
+ */
 class ByteSource {
 public:
     virtual ~ByteSource() = default;
 
-    /// Read up to @p n bytes into @p dst; returns how many, 0 at the end or on error.
+    /// Read up to @p n bytes into @p dst; returns how many, 0 at the end or on
+    /// error.  A stream may return fewer than @p n while it is written, and
+    /// waits until at least one byte has come.
     virtual size_t read( uint8_t* dst, size_t n ) = 0;
 
     /// Skip @p n bytes; false if the source ends first.  Reads them by default.
     virtual bool skip( uint64_t n );
+
+    /// Whether a read would return without waiting for more to be written:
+    /// always for a source whose bytes are all there, a buffer or a file.
+    virtual bool ready()
+    {
+        return true;
+    }
 };
 
 /// A ByteSource over a buffer in memory.
@@ -322,11 +334,12 @@ public:
     HeadSource& operator=( const HeadSource& ) = delete;
 
     /// The next @p n bytes, or fewer at the end of the source, without
-    /// consuming them.
+    /// consuming them.  On a stream, waits until @p n bytes have come.
     const std::vector<uint8_t>& peek( size_t n );
 
     size_t read( uint8_t* dst, size_t n ) override;
     bool skip( uint64_t n ) override;
+    bool ready() override;
 
 private:
     ByteSource& source_;
@@ -339,8 +352,16 @@ enum class CaptureFormat : uint8_t {
     Pcapng,
 };
 
+/// What findCaptureStart() makes of the first bytes of a capture.
+enum class CaptureStart : uint8_t {
+    Found,    ///< The header was found: its offset and format are set.
+    NeedMore, ///< These bytes do not decide it: offset is how many would.
+    None,     ///< These bytes are no capture, whatever follows: error says why.
+};
+
 /**
- * Find where the capture starts in the first bytes of a file, and its format.
+ * Find where the capture starts in the first bytes of a file or stream, and
+ * its format.
  *
  * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
  * e.g. "tcpdump: listening on …", into the output ahead of the capture.
@@ -352,11 +373,19 @@ enum class CaptureFormat : uint8_t {
  * capture.  At offset 0 the magic decides, so that an unsupported version
  * is reported as such.
  *
- * @return The offset of the header, or @p size if there is none; @p error
- *         then says why.
+ * The bytes are looked at in order, and the answer is given as soon as
+ * they give it: a header is decided by its first 24 bytes (a pcap's global
+ * header, a pcapng section header's start), a byte that is neither text nor
+ * a header ends the search.  So a stream is decided once its header has
+ * come, whatever follows; until then the answer is NeedMore, with the
+ * number of bytes that decide the next step in @p offset.  At the end of
+ * the bytes NeedMore means None, with @p error set.
+ *
+ * @param offset  Where the header starts, when Found; the bytes needed, when
+ *                NeedMore.
  */
-size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
-                         std::string& error );
+CaptureStart findCaptureStart( const uint8_t* data, size_t size, size_t& offset,
+                               CaptureFormat& format, std::string& error );
 
 /**
  * Reads a capture one packet at a time, so that a capture of any size needs
@@ -425,6 +454,12 @@ protected:
 
     /// Skip @p n bytes, counted in bytesRead(); false if the source ends first.
     bool skip( uint64_t n );
+
+    /// Whether the source has more to read without waiting (ByteSource::ready()).
+    bool ready()
+    {
+        return source_.ready();
+    }
 
     const uint64_t start_; ///< Where the first header starts; skipped by open().
     std::string error_;

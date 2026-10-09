@@ -14,7 +14,9 @@ first block, which it looks at through a `HeadSource` without consuming it:
 `findCaptureStart()` finds a pcap global header or a pcapng section header,
 also behind a text preamble, and the reader it picks is handed where that
 header starts, so that the format is told once; a file that holds neither
-gets a reader whose `open()` fails and says why. The readers share reading
+gets a reader whose `open()` fails and says why. Only the bytes the
+decision needs are looked at (see *The Capture Source seam* below), so the
+same path reads a file and a stream that is still being written. The readers share reading
 and skipping, with the byte count for progress, in the `CaptureReader` base.
 
 `PcapReader` reads libpcap captures:
@@ -227,6 +229,62 @@ would read a large capture twice. Its `linkTypes()` are those of all
 interfaces declared so far, each once, so a pcapng without packets names
 its interfaces' link types in the summary, as an empty pcap names its
 header's.
+
+#### The Capture Source seam (`capture_source.h/cpp`)
+A capture need not be a file: a pipe, a FIFO, a socket or a capture
+program's stdout holds what has been written so far, and more comes later
+or never. Every live source (a local tcpdump or dumpcap, adb, ssh, an
+extcap, a custom command) is read through this seam, and only the source
+differs; everything from `makeCaptureReader()` on is the file's path.
+
+What a source provides is a `StreamSource`, a `ByteSource` whose `read()`
+waits until at least one byte has come and returns what has (possibly
+fewer than asked), and 0 once the stream has ended. A subclass implements
+two things: `readFor( dst, n, timeout )`, which waits at most `timeout`
+and returns the bytes read, 0 at the end (setting `error_` if it broke
+off), or -1 if nothing came in time; and `available()`, whether a read
+would not wait. Two exist:
+
+- `FdSource` reads an open file descriptor (pipe, FIFO, socket) with
+  `poll()`; the descriptor stays the caller's. Unix only.
+- `DeviceSource` reads a `QIODevice` that can wait (`waitForReadyRead()`):
+  a `QProcess`'s stdout, a `QLocalSocket` (a Windows named pipe), a
+  `QTcpSocket`, on the thread it belongs to; no event loop is needed. The
+  stream ends when the device has nothing left and stops waiting before the
+  timeout, as a finished process or a closed socket does.
+
+A new live source either hands one of these its descriptor or device, or
+implements the two functions for its own handle.
+
+**Waits.** A source is given a stop flag (`std::atomic_bool`); `read()`
+checks it before every wait, and no wait is longer than
+`StreamSource::kWaitSlice` (50 ms), so a read returns within that of a
+Stop or Cancel even when nothing is written. A stopped stream reads as
+ended (`stopped()` tells it from a closed one). The Converter's own cancel
+flag is checked between packets, so a conversion gives the same flag to
+the source.
+
+**Detection.** `findCaptureStart()` answers `Found`, `None` or `NeedMore`
+with the number of bytes that decide the next step, and
+`makeCaptureReader()` peeks exactly that many: a pcap is decided by its
+24-byte global header, a pcapng by the start of its section header, each
+byte of a text preamble by itself, and a byte that is neither text nor a
+header means "not a capture" at once. A stream that has sent its header
+and nothing more is thus decided without waiting. `PcapngReader::open()`
+then reads the section header and at least the first interface, and on
+past it only while `ByteSource::ready()` says blocks have come, so a
+capture with no traffic yet opens; a file is always ready and is read up to
+its first packet block as before.
+
+**The end.** The writer closing the stream (the process exited, the pipe
+was closed) or a stop ends the capture as the end of a file does: a record
+cut off there is `truncated()`. A stream that breaks off with a read error
+ends the conversion as Failed ("Cannot read the capture: …").
+
+`convertStream( source, name, outputRoot, cancel, options )` converts a
+stream as `convertPcap()` converts a file, into `<name>.log`, without
+progress, as a stream has no size. Regular files keep their own path:
+`convertPcap()` opens them as `FileSource` with size-based progress.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -705,7 +763,8 @@ lets the Payload Describer look at it again in its stream and the Stream
 Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
-cancel flag between packets. The file, `<name>.log`, is created with
+cancel flag between packets. `convertStream()` does the same for a capture
+read from a stream (*The Capture Source seam*), without progress. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three

@@ -25,6 +25,7 @@
 #include "pcap_converter.h"
 
 #include "capture_reader.h"
+#include "capture_source.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "stream_labels.h"
@@ -196,23 +197,38 @@ ConversionResult failed( const QString& error )
     return result;
 }
 
-/// The conversion itself; whatever it throws, convertPcap() turns into Failed.
-ConversionResult convertOrThrow( const QString& inputPath, const QString& outputRoot,
-                                 const std::atomic_bool* cancel,
+/// Why the stream @p input broke off, or nothing for a file or a stream
+/// that ended normally.
+std::optional<ConversionResult> streamFailure( const ByteSource& input )
+{
+    const auto* stream = dynamic_cast<const StreamSource*>( &input );
+    if ( !stream || stream->error().empty() ) {
+        return std::nullopt;
+    }
+    return failed( QStringLiteral( "Cannot read the capture: %1" )
+                       .arg( QString::fromStdString( stream->error() ) ) );
+}
+
+/**
+ * The conversion of the capture in @p input, named @p name; whatever it
+ * throws, the caller turns into Failed.  @p inputSize is the input's size
+ * for progress, 0 for a stream, whose size is unknown and which reports
+ * none.
+ */
+ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_t inputSize,
+                                 const QString& outputRoot, const std::atomic_bool* cancel,
                                  const std::function<void( int )>& progress,
                                  const ConversionOptions& options )
 {
-    QFile input;
-    QString inputError;
-    if ( !openRegularFile( inputPath, input, inputError ) ) {
-        return failed( inputError );
-    }
-    FileSource file( input );
-    HeadSource source( file );
+    HeadSource source( input );
     const auto capture = makeCaptureReader( source ); // pcap or pcapng, by the first block
     CaptureReader& reader = *capture;                 // the rest sees the capture through the seam
     if ( !reader.open() ) {
-        return failed( QString::fromStdString( reader.error() ) );
+        // A stream stopped before its header came was not read, so it failed
+        // only if no one cancelled.
+        auto result
+            = streamFailure( input ).value_or( failed( QString::fromStdString( reader.error() ) ) );
+        return applyCancelRequest( std::move( result ), cancel );
     }
 
     // The directory is removed with this object unless the conversion ends
@@ -222,7 +238,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         return failed( QStringLiteral( "Cannot create a temporary directory: %1" )
                            .arg( outputDir.errorString() ) );
     }
-    auto baseName = QFileInfo( inputPath ).completeBaseName();
+    auto baseName = name;
     if ( baseName.isEmpty() ) {
         baseName = QStringLiteral( "capture" );
     }
@@ -252,7 +268,6 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         return writeFailed();
     }
 
-    const auto inputSize = std::max<qint64>( input.size(), 1 );
     int lastPermille = -1;
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
@@ -270,14 +285,17 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }
-        if ( progress ) {
-            const auto permille = static_cast<int>( std::min<uint64_t>(
-                reader.bytesRead() * 1000 / static_cast<uint64_t>( inputSize ), 1000 ) );
+        if ( progress && inputSize > 0 ) {
+            const auto permille = static_cast<int>(
+                std::min<uint64_t>( reader.bytesRead() * 1000 / inputSize, 1000 ) );
             if ( permille != lastPermille ) {
                 lastPermille = permille;
                 progress( permille );
             }
         }
+    }
+    if ( auto broken = streamFailure( input ) ) {
+        return std::move( *broken );
     }
     if ( !output.flush() ) {
         return writeFailed();
@@ -292,15 +310,12 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     return applyCancelRequest( std::move( result ), cancel );
 }
 
-} // namespace
-
-ConversionResult convertPcap( const QString& inputPath, const QString& outputRoot,
-                              const std::atomic_bool* cancel,
-                              const std::function<void( int )>& progress,
-                              const ConversionOptions& options )
+/// @p convert's result, or Failed for whatever it throws.
+template <typename Convert>
+ConversionResult failedOnException( Convert&& convert )
 {
     try {
-        return convertOrThrow( inputPath, outputRoot, cancel, progress, options );
+        return convert();
     } catch ( const std::bad_alloc& ) {
         return failed( QStringLiteral( "Not enough memory to read the capture" ) );
     } catch ( const std::exception& e ) {
@@ -308,6 +323,33 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
     } catch ( ... ) {
         return failed( QStringLiteral( "Unknown error" ) );
     }
+}
+
+} // namespace
+
+ConversionResult convertPcap( const QString& inputPath, const QString& outputRoot,
+                              const std::atomic_bool* cancel,
+                              const std::function<void( int )>& progress,
+                              const ConversionOptions& options )
+{
+    return failedOnException( [ & ] {
+        QFile input;
+        QString inputError;
+        if ( !openRegularFile( inputPath, input, inputError ) ) {
+            return failed( inputError );
+        }
+        FileSource file( input );
+        const auto size = static_cast<uint64_t>( std::max<qint64>( input.size(), 1 ) );
+        return convertOrThrow( file, QFileInfo( inputPath ).completeBaseName(), size, outputRoot,
+                               cancel, progress, options );
+    } );
+}
+
+ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
+                                const std::atomic_bool* cancel, const ConversionOptions& options )
+{
+    return failedOnException(
+        [ & ] { return convertOrThrow( source, name, 0, outputRoot, cancel, {}, options ); } );
 }
 
 ConversionResult applyCancelRequest( ConversionResult result, const std::atomic_bool* cancel )

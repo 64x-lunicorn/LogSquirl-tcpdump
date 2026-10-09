@@ -29,6 +29,7 @@ add_executable(logsquirl_tcpdump_tests
     http_test.cpp
     quic_test.cpp
     streaming_test.cpp
+    capture_source_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
     follow_stream_test.cpp
@@ -72,6 +73,7 @@ target_sources(logsquirl_tcpdump_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_reader.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
         "${CMAKE_SOURCE_DIR}/src/icmp.cpp"
         "${CMAKE_SOURCE_DIR}/src/link_layers.cpp"
