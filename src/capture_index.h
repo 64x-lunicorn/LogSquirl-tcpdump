@@ -70,9 +70,16 @@ public:
     /// counted either way.
     void note( const CaptureReader& reader );
 
+    /// Whether the capture file may still grow behind the packets noted.
+    enum class Growth {
+        Fixed,   ///< A file converted whole: any change is a change.
+        Growing, ///< A live capture's raw file, still written: it may grow.
+    };
+
     /// Remember the capture file at @p path as it is now, the file the
-    /// checkpoints point into.
-    void setCaptureFile( const QString& path );
+    /// checkpoints point into.  A Growing file is read as it was converted
+    /// as long as it is not shorter than now.
+    void setCaptureFile( const QString& path, Growth growth = Growth::Fixed );
 
     /// The checkpoint to read packet @p number from: the last one before
     /// it, or null to read from the start of the capture.
@@ -110,6 +117,7 @@ private:
     std::vector<ReaderCheckpoint> checkpoints_;
     QString path_;
     qint64 size_ = -1;
+    Growth growth_ = Growth::Fixed;
     QDateTime modified_;
 };
 

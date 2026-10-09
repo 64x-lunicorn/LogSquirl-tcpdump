@@ -38,6 +38,8 @@ qt_standard_project_setup()
 add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/capture_reader.cpp
+    src/capture_source.cpp
+    src/process_source.cpp
     src/pcap_parser.cpp
     src/packet_layers.cpp
     src/icmp.cpp
@@ -66,6 +68,7 @@ add_library(logsquirl_tcpdump SHARED
     src/settings.cpp
     src/configdialog.cpp
     src/packet_panel.cpp
+    src/live_capture.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
     src/regex_lab.cpp

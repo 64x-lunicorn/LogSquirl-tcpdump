@@ -92,6 +92,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery with its stage, `Active Discovery Offer (PADO)
   AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
   type` on every line, and PPPoE frames only their EtherType.
+- **Capture Source seam.** The Capture Reader reads a capture that is
+  still being written, from a pipe, a FIFO, a socket or a process's stdout
+  (`FdSource`, `DeviceSource`), as well as from a file: the format is
+  decided as soon as the header has come (a pcap's 24-byte global header,
+  a pcapng's section header and first interface), a wait for data ends
+  within 100 ms of Stop or Cancel, and the stream closing ends the capture,
+  a record cut off there reported as such. The live sources to come plug
+  into it; converting a file is unchanged.
+- **Process Source.** A capture program (tcpdump, dumpcap, adb, ssh, an
+  extcap, a custom command) is run with its stdout as the capture stream
+  and its stderr kept apart, handed on line by line and the last lines
+  kept, so that "permission denied" or "no such device" can be shown. It
+  is started from an argument list, never through a shell, unless a custom
+  command opts into one. A program that cannot be started, exits with a
+  code other than 0 or crashes ends the capture with a message naming it,
+  the code and its last stderr lines. Ending it ends its whole process
+  group: SIGTERM, then SIGKILL after 2 s; on Windows it runs in a job
+  object that is terminated. Shutting the plugin down, as LogSquirl quits
+  or the plugin is disabled, ends every capture program still running.
+- **Live conversion.** A capture read from a stream is converted while it
+  runs: its packet lines are flushed before every wait for more and at
+  least every 100 ms, and its tab opens, following the file, as soon as
+  the header and the first packet line are in it (so LogSquirl recognises
+  the Log Format and shows the table view); a capture that ends without
+  packets opens no tab and says so. The sidebar shows packets, bytes,
+  packets/s and the elapsed time instead of a percentage, and the Capture
+  Summary of the capture's tab follows snapshots, at most one a second.
+  **Stop** ends the capture within a second and finalises it: the last
+  lines flushed, the summary final, the same as converting the saved
+  capture gives. The bytes read are kept unchanged next to the text, as
+  `<name>.pcap` or `<name>.pcapng`, and **Save capture…** in the sidebar
+  copies them out of the temporary directory, to convert again or open in
+  Wireshark. A source that fails (a capture program that exits with an
+  error) ends with its message and keeps what was captured. A live
+  capture's lines go through the same TCP reassembly and analysis as a
+  file's, and the Packet Panel shows its packets, read from the raw
+  capture, while it runs (up to the latest snapshot) and after.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section or a

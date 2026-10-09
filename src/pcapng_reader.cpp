@@ -330,9 +330,14 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
 
 /// Read blocks up to the next packet block, whose header is then pending.
 /// False at the end of the capture and for a block that cannot be read.
-bool PcapngReader::readBlocksUpToPacket()
+/// @p untilWaiting: once an interface is declared, stop (true, with no
+/// packet block pending) before a block that has not come yet.
+bool PcapngReader::readBlocksUpToPacket( bool untilWaiting )
 {
     for ( ;; ) {
+        if ( untilWaiting && !interfaces_.empty() && !ready() ) {
+            return true;
+        }
         BlockHeader block;
         if ( !readBlockHeader( block ) ) {
             return false;
@@ -373,7 +378,7 @@ bool PcapngReader::open()
     }
 
     open_ = true;
-    if ( !readBlocksUpToPacket() && !problem_.empty() ) {
+    if ( !readBlocksUpToPacket( true ) && !problem_.empty() ) {
         endBroken();
     }
     precisionAnnounced_ = true;

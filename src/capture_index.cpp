@@ -48,11 +48,12 @@ void CaptureIndex::note( const CaptureReader& reader )
     }
 }
 
-void CaptureIndex::setCaptureFile( const QString& path )
+void CaptureIndex::setCaptureFile( const QString& path, Growth growth )
 {
     const QFileInfo info( path );
     path_ = info.canonicalFilePath();
     size_ = info.size();
+    growth_ = growth;
     modified_ = info.lastModified();
 }
 
@@ -71,7 +72,10 @@ QString CaptureIndex::fileProblem() const
     if ( path_.isEmpty() || !info.exists() ) {
         return QStringLiteral( "The capture file %1 is gone." ).arg( path_ );
     }
-    if ( info.size() != size_ || info.lastModified() != modified_ ) {
+    const bool changed = growth_ == Growth::Growing
+                             ? info.size() < size_
+                             : info.size() != size_ || info.lastModified() != modified_;
+    if ( changed ) {
         return QStringLiteral( "The capture file %1 has changed since it was converted: "
                                "open it again to see its packets." )
             .arg( info.fileName() );

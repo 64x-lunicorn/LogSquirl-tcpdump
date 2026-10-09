@@ -31,6 +31,10 @@ add_executable(logsquirl_tcpdump_tests
     http_test.cpp
     quic_test.cpp
     streaming_test.cpp
+    capture_source_test.cpp
+    live_conversion_test.cpp
+    live_capture_test.cpp
+    process_source_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
     packet_panel_test.cpp
@@ -77,6 +81,8 @@ target_sources(logsquirl_tcpdump_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_reader.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/process_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_layers.cpp"
         "${CMAKE_SOURCE_DIR}/src/icmp.cpp"
@@ -105,6 +111,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"

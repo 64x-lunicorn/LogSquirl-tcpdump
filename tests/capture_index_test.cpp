@@ -245,6 +245,39 @@ SCENARIO( "A packet past the capture or of a changed file is reported", "[captur
         }
     }
 
+    GIVEN( "a live capture's file, still growing, set Growing" )
+    {
+        auto growing = std::make_shared<CaptureIndex>( *result.index );
+        growing->setCaptureFile( capture, CaptureIndex::Growth::Growing );
+        CaptureCursor live( growing );
+
+        WHEN( "more is written behind its packets" )
+        {
+            QFile file( capture );
+            REQUIRE( file.open( QIODevice::Append ) );
+            file.write( QByteArray( 16, '\0' ) );
+            file.close();
+
+            THEN( "its packets are still read" )
+            {
+                REQUIRE( live.read( 5, packet ) );
+                REQUIRE( packet.record.number == 5 );
+            }
+        }
+
+        WHEN( "it became shorter" )
+        {
+            QFile file( capture );
+            REQUIRE( file.resize( file.size() - 1 ) );
+
+            THEN( "no packet is read from it" )
+            {
+                REQUIRE_FALSE( live.read( 5, packet ) );
+                REQUIRE( live.error().contains( "has changed since it was converted" ) );
+            }
+        }
+    }
+
     GIVEN( "the capture file was removed" )
     {
         REQUIRE( QFile::remove( capture ) );

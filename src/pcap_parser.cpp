@@ -948,26 +948,32 @@ bool isPcapNgHeader( const uint8_t* p )
 
 // ── Format detection ─────────────────────────────────────────────────────
 
-size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
-                         std::string& error )
+CaptureStart findCaptureStart( const uint8_t* data, size_t size, size_t& offset,
+                               CaptureFormat& format, std::string& error )
 {
-    for ( size_t i = 0; i + 24 <= size && i <= kMaxPreamble; ++i ) {
+    error = "Not a valid pcap or pcapng file (no pcap magic found)";
+    for ( size_t i = 0; i <= kMaxPreamble; ++i ) {
+        if ( i + 24 > size ) {
+            offset = i + 24; // the header that may start here
+            return CaptureStart::NeedMore;
+        }
         uint32_t magic;
         std::memcpy( &magic, data + i, 4 );
         if ( ( i == 0 && isPcapMagic( magic ) ) || isPcapHeader( data + i ) ) {
             format = CaptureFormat::Pcap;
-            return i;
+            offset = i;
+            return CaptureStart::Found;
         }
         if ( ( i == 0 && magic == PcapNgMagic ) || isPcapNgHeader( data + i ) ) {
             format = CaptureFormat::Pcapng;
-            return i;
+            offset = i;
+            return CaptureStart::Found;
         }
         if ( !isPreambleText( data[ i ] ) ) {
             break; // binary data that is no capture header: no text preamble
         }
     }
-    error = "Not a valid pcap or pcapng file (no pcap magic found)";
-    return size;
+    return CaptureStart::None;
 }
 
 // ── Link-layer types ─────────────────────────────────────────────────────
@@ -1165,6 +1171,11 @@ size_t HeadSource::read( uint8_t* dst, size_t n )
     std::memcpy( dst, head_.data(), got );
     head_.erase( head_.begin(), head_.begin() + static_cast<std::ptrdiff_t>( got ) );
     return got;
+}
+
+bool HeadSource::ready()
+{
+    return !head_.empty() || source_.ready();
 }
 
 bool HeadSource::skip( uint64_t n )

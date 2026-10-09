@@ -55,6 +55,7 @@
 #include "plugin.h"
 #include "configdialog.h"
 #include "follow_stream.h"
+#include "process_source.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
@@ -300,6 +301,10 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         guarded( "shutdown", [] { delete tcpdump::g_state.sidebarWidget; } );
         st.sidebarWidget = nullptr;
     }
+
+    // No capture program may outlive the plugin: whatever runs still, also
+    // on a thread the widget did not wait for, ends with what it started.
+    guarded( "ending capture programs", [] { tcpdump::terminateCaptureProcesses(); } );
 
     // The tabs close with LogSquirl: remove the files of every instance of
     // the plugin in this process, also those of instances before a runtime

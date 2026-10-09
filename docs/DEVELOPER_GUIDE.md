@@ -14,7 +14,9 @@ first block, which it looks at through a `HeadSource` without consuming it:
 `findCaptureStart()` finds a pcap global header or a pcapng section header,
 also behind a text preamble, and the reader it picks is handed where that
 header starts, so that the format is told once; a file that holds neither
-gets a reader whose `open()` fails and says why. The readers share reading
+gets a reader whose `open()` fails and says why. Only the bytes the
+decision needs are looked at (see *The Capture Source seam* below), so the
+same path reads a file and a stream that is still being written. The readers share reading
 and skipping, with the byte count for progress, in the `CaptureReader` base.
 
 `PcapReader` reads libpcap captures:
@@ -241,6 +243,116 @@ each packet the reader also tells where its record lies (`recordOffset()`,
 all), its bytes as dissected (`packetBytes()`, at most
 `kMaxDissectedBytes`) and the byte order they were read in
 (`byteSwapped()`).
+
+#### The Capture Source seam (`capture_source.h/cpp`)
+A capture need not be a file: a pipe, a FIFO, a socket or a capture
+program's stdout holds what has been written so far, and more comes later
+or never. Every live source (a local tcpdump or dumpcap, adb, ssh, an
+extcap, a custom command) is read through this seam, and only the source
+differs; everything from `makeCaptureReader()` on is the file's path.
+
+What a source provides is a `StreamSource`, a `ByteSource` whose `read()`
+waits until at least one byte has come and returns what has (possibly
+fewer than asked), and 0 once the stream has ended. A subclass implements
+two things: `readFor( dst, n, timeout )`, which waits at most `timeout`
+and returns the bytes read, 0 at the end (setting `error_` if it broke
+off), or -1 if nothing came in time; and `available()`, whether a read
+would not wait. Two exist:
+
+- `FdSource` reads an open file descriptor (pipe, FIFO, socket) with
+  `poll()`; the descriptor stays the caller's. Unix only.
+- `DeviceSource` reads a `QIODevice` that can wait (`waitForReadyRead()`):
+  a `QProcess`'s stdout, a `QLocalSocket` (a Windows named pipe), a
+  `QTcpSocket`, on the thread it belongs to; no event loop is needed. The
+  stream ends when the device has nothing left and stops waiting before the
+  timeout, as a finished process or a closed socket does.
+
+A new live source either hands one of these its descriptor or device, or
+implements the two functions for its own handle.
+
+**Waits.** A source is given a stop flag (`std::atomic_bool`); `read()`
+checks it before every wait, and no wait is longer than
+`StreamSource::kWaitSlice` (50 ms), so a read returns within that of a
+Stop or Cancel even when nothing is written. A stopped stream reads as
+ended (`stopped()` tells it from a closed one). The Converter's own cancel
+flag is checked between packets, so a conversion gives the same flag to
+the source.
+
+**Detection.** `findCaptureStart()` answers `Found`, `None` or `NeedMore`
+with the number of bytes that decide the next step, and
+`makeCaptureReader()` peeks exactly that many: a pcap is decided by its
+24-byte global header, a pcapng by the start of its section header, each
+byte of a text preamble by itself, and a byte that is neither text nor a
+header means "not a capture" at once. A stream that has sent its header
+and nothing more is thus decided without waiting. `PcapngReader::open()`
+then reads the section header and at least the first interface, and on
+past it only while `ByteSource::ready()` says blocks have come, so a
+capture with no traffic yet opens; a file is always ready and is read up to
+its first packet block as before.
+
+**The end.** The writer closing the stream (the process exited, the pipe
+was closed) or a stop ends the capture as the end of a file does: a record
+cut off there is `truncated()`. A stream that breaks off with a read error
+ends the conversion as Failed ("Cannot read the capture: …").
+
+`convertStream( source, name, outputRoot, cancel, options )` converts a
+stream as `convertPcap()` converts a file, into `<name>.log`, without
+progress, as a stream has no size. Regular files keep their own path:
+`convertPcap()` opens them as `FileSource` with size-based progress.
+
+#### The Process Source (`process_source.h/cpp`)
+A capture program (tcpdump, dumpcap, adb, ssh, an extcap, a user's
+command) writes its capture to stdout and its complaints to stderr. A
+`ProcessSource` runs one, given as a `ProcessCommand` (program, argument
+list, optional display name), and is the `StreamSource` over its stdout,
+read through a `DeviceSource`:
+
+- **Separate channels.** The `QProcess` keeps stdout and stderr apart
+  (stdin is the null device): text after a pcap header would corrupt the
+  stream. stderr is drained after every wait slice and split by
+  `StderrLines` into lines (UTF-8, line ends dropped, blank lines skipped,
+  a line without end handed on at 4096 bytes), each handed to the source's
+  `onLine` callback on the reading thread, and the last
+  `StderrLines::kKept` (10) are kept. The callback runs on the worker
+  thread; whoever shows the lines in the log (`hostLog`) or the sidebar
+  posts them to the UI thread.
+- **No shell.** The program gets its arguments as a list, each one
+  argument, untouched (spaces, quotes, `$( )`, `;`). A custom command opts
+  into the shell explicitly with `ProcessCommand::shell( commandLine )`
+  (`/bin/sh -c`, or `cmd.exe /d /s /c` on Windows), named by its first word.
+- **Thread.** The source starts the program when it is constructed and
+  owns it on that thread, which needs no event loop: build it on the
+  worker thread that converts the stream.
+- **The end.** The stream ends when the program has exited (stdout closing
+  alone does not end it while the program runs) or on the stop flag. A
+  program that could not be started, exited with a code other than 0 or
+  crashed breaks the stream off, so `convertStream()` ends Failed with
+  `Cannot start <name>: …`, `<name> exited with code N:` or
+  `<name> crashed (exit code N):` followed by its last stderr lines. A
+  program ended on purpose (`terminate()`, `terminateCaptureProcesses()`)
+  did not fail.
+- **Ending it.** On Unix the program runs in a process group of its own
+  (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
+  group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
+  (2 s), and returns when the group is gone (a second more at most, for a
+  process of another user, as behind sudo, that cannot be killed). On
+  Windows the program is put in a job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` right after it starts (what it
+  starts later is in the job too), and `terminate()` terminates the job;
+  closing the job's last handle, even as LogSquirl crashes, kills what is
+  left. The destructor terminates.
+- **Stop.** The stop flag ends the stream, not the program: the
+  conversion finalises (Converted), then the caller terminates the source,
+  or destroys it.
+- **No orphans.** Every started source's group is enrolled in a registry;
+  `terminateCaptureProcesses()` ends them all, from any thread, and
+  `logsquirl_plugin_shutdown()` calls it after deleting the sidebar
+  widget, so no capture program outlives LogSquirl or a disabled plugin.
+
+The tests (`tests/process_source_test.cpp`) run fake capture programs,
+shell scripts that write a synthetic pcap to stdout and text to stderr,
+exit with an error, crash, start a child and ignore SIGTERM; they need a
+Unix shell, so on Windows only the stderr splitting is run.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -834,7 +946,12 @@ Reassembly describe a message that spans segments where it completes, and
 the Stream Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
-cancel flag between packets. The file, `<name>.log`, is created with
+cancel flag between packets, and notes each packet's place in a
+`CaptureIndex` (see *Packet Panel*). `convertStream()` does the same for a
+capture read from a stream (*The Capture Source seam*), without progress
+but live (see *Live conversion* below): both run one loop
+(`convertOrThrow()`), so every packet of a file and of a stream goes
+through the same steps. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three
@@ -847,6 +964,44 @@ failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
+
+#### Live conversion
+`convertStream()` converts live: a `LiveInput` between the stream and the
+reader writes every byte read, unchanged, to the raw capture next to the
+text (`<name>.pcap`, or `<name>.pcapng` when the reader is a
+`PcapngReader`; `ConversionResult::rawPath`); the bytes read before the
+output directory exists, the header the format is told by, are kept until
+it does. Before every read that would wait (`ByteSource::ready()` is
+false), it flushes the text and the raw file, so a line is readable as soon
+as the stream pauses; a stream that never pauses is flushed at least every
+`kLiveFlushInterval` (100 ms). A `LiveObserver` is told on the converting
+thread: `firstPacket( logPath, rawPath )` once, after the header and the
+first packet line are flushed (LogSquirl recognises a Log Format once, at
+the first load with lines, LogSquirl#794, so the tab must not open on the
+header alone), and `snapshot( LiveSnapshot )` with the first packet and
+then at most every `kLiveSnapshotInterval` (1 s): the summary so far
+(`summariseSoFar()`, from a copy of the statistics), the time since the
+start, the bytes read and a copy of the `CaptureIndex` so far, pointing
+into the raw file (flushed first) as `CaptureIndex::Growth::Growing`. The
+final result's index points into the closed raw file. So that a burst's last packets are not left out
+until the next packet, the wait before a read sleeps until the snapshot's
+turn while the stream stays idle (a stop turns `ready()` on). The stream
+stopping (Stop) ends Converted with the final summary, which equals that of
+converting the raw file (tested); Cancel removes both files. A stream that
+breaks off with an error after its first packet ends Failed with the
+message *and* `outputPath`, `rawPath` and the summary of what was captured;
+before a packet, it leaves nothing behind, as before.
+
+`LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
+own and posts what it is told to its own (the UI) thread as signals:
+`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
+`finished( ConversionResult )`. The source is made on the worker by a
+`SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
+ProcessCommand )` for a capture program), as a `ProcessSource` must be.
+`stop()` sets the source's stop flag, `cancel()` also the cancel flag. The
+outcome is posted before the source is destroyed, so a program that takes
+up to `kTerminateGrace` to end does not delay it; the destructor stops and
+waits for the worker.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`,
 the payload preview (`preview`, `previewChars`), the stream and endpoint
@@ -909,6 +1064,23 @@ Qt UI that provides:
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
 
+A live capture, `startLiveCapture( name, SourceFactory )`, runs in a
+`LiveCapture`. On `readyToOpen` the sidebar keeps the capture's entry under
+its text file and calls `open_file( path, follow = 1 )` on the UI thread
+(LogSquirl#796); snapshots replace the entry's summary through
+`updateSummary( textPath, summary )`, which redraws it if its tab is in
+front, and update a label with packets, bytes, packets/s (as of the
+snapshot) and the elapsed time (ticked by a 1 s timer) in place of the
+progress bar; the snapshot's index replaces the entry's, so the Packet
+Panel shows the packets captured so far. **Stop** calls `stopLiveCapture()`. At the end the final
+summary and index replace the last snapshot's; a capture without packets has its files
+removed and a notification; a failed one keeps its entry with the error
+shown above the summary. **Save capture…**, shown for a tab whose capture
+has a raw file, copies it where `setSaveChooser()`'s dialog says. stderr
+lines go to the host's log. Opening a file and a live capture exclude each
+other; the `LiveCapture` is kept until the next one starts, since its
+worker may still be ending the capture program.
+
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
 on the GUI thread: it prints the summary it is given and catches nothing
@@ -944,8 +1116,12 @@ export, conversation statistics):
   order, and its record's offset and length in the file. Before every read
   the file's size and modification time are compared with those at the
   conversion (`fileProblem()`): a changed or removed file is reported with
-  a message for the user, never misread. A live capture would keep adding
-  checkpoints and update the file's identity as it grows.
+  a message for the user, never misread. A live capture's raw file, still
+  being written, is set `Growing`: it may grow behind the packets noted, and
+  only a shorter file is a changed one; each snapshot brings an index with
+  the packets so far, and a packet line newer than the index the panel has
+  is reported as not there yet ("The capture has no packet N") until the
+  next snapshot.
 - **The layer description.** The dissectors describe the layers they read
   when the `PacketRecord`'s `layers` points at a `PacketLayers`: each
   header as a `PacketLayer` (name, offset, length) with its `LayerField`s
@@ -995,7 +1171,8 @@ through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
 open; the plugin notes `QCoreApplication::aboutToQuit` and removes the
-temporary files only in the first case. `logsquirl_plugin_configure()`,
+temporary files only in the first case. In both, it ends every capture program
+still running (`terminateCaptureProcesses()`, *The Process Source*). `logsquirl_plugin_configure()`,
 which LogSquirl calls for **Configure…** in Plugin Management with its main
 window as the parent, runs the `ConfigDialog` modally and saves the options
 when it is accepted; `hostConfigDir()` is the directory, empty without a

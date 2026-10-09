@@ -35,6 +35,7 @@
 #include <QString>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -91,6 +92,12 @@ struct CaptureSummary {
     /// Set when addresses past the endpoint cap went uncounted: the packets
     /// of all those addresses together.
     std::optional<uint64_t> otherEndpointPackets;
+
+    bool operator==( const CaptureSummary& other ) const;
+    bool operator!=( const CaptureSummary& other ) const
+    {
+        return !( *this == other );
+    }
 };
 
 /**
@@ -105,16 +112,55 @@ struct CaptureSummary {
 struct ConversionResult {
     enum class Status {
         Converted, ///< outputPath holds the capture's text.
-        Failed,    ///< See error; nothing is left behind.
+        /// See error.  Nothing is left behind, except for a live capture
+        /// that broke off after its first packet: outputPath, rawPath and
+        /// summary then hold what was captured (convertStream()).
+        Failed,
         Cancelled, ///< Nothing is left behind.
     };
 
     Status status = Status::Failed;
-    QString error;          ///< Why it failed, when Failed.
-    QString outputPath;     ///< The text file, when Converted; see convertPcap().
+    QString error;      ///< Why it failed, when Failed.
+    QString outputPath; ///< The text file, when Converted; see convertPcap().
+    /// The capture's bytes as they were read, next to the text file, for a
+    /// capture read from a stream (convertStream()); empty for a file.
+    QString rawPath;
     CaptureSummary summary; ///< What was converted, when Converted.
-    /// Where each packet of the text is in the capture file, when Converted.
+    /// Where each packet of the text is in the capture file, when Converted
+    /// (for a stream, in the raw capture), or when Failed keeping a capture.
     std::shared_ptr<CaptureIndex> index;
+};
+
+/// How often at least a live conversion makes its lines readable.
+constexpr std::chrono::milliseconds kLiveFlushInterval{ 100 };
+/// How often at most a live conversion hands out a LiveSnapshot.
+constexpr std::chrono::milliseconds kLiveSnapshotInterval{ 1000 };
+
+/// What a live conversion has converted so far, while it runs.
+struct LiveSnapshot {
+    CaptureSummary summary;              ///< As the final one, of the packets so far.
+    std::chrono::milliseconds elapsed{}; ///< Since the conversion started.
+    uint64_t rawBytes = 0;               ///< Bytes read from the stream so far.
+    /// Where the packets so far are in the raw capture, which keeps growing
+    /// (CaptureIndex::Growth::Growing), for the Packet Panel.
+    std::shared_ptr<const CaptureIndex> index;
+};
+
+/**
+ * What a live conversion tells while it runs (convertStream()).  Both are
+ * called on the thread that converts; either may be empty.
+ */
+struct LiveObserver {
+    /// The text file holds its header and the first packet line, so that a
+    /// viewer that recognises its format at the first load sees a packet
+    /// line: it can be opened now, following it.  Called once, with the
+    /// paths of the text file and the raw capture; never for a capture
+    /// without packets.
+    std::function<void( const QString& logPath, const QString& rawPath )> firstPacket;
+    /// A snapshot: with the first packet, then at most once every
+    /// kLiveSnapshotInterval while packets come.  The final summary is the
+    /// result's.
+    std::function<void( const LiveSnapshot& )> snapshot;
 };
 
 /// Bytes in a mebibyte, the unit of ConversionOptions::reassemblyMegabytes.
@@ -161,6 +207,35 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
                               const std::atomic_bool* cancel = nullptr,
                               const std::function<void( int )>& progress = {},
                               const ConversionOptions& options = {} );
+
+/**
+ * Convert the capture read from @p source, a stream that is still being
+ * written (capture_source.h), as convertPcap() converts a file: into
+ * <@p name>.log ("capture.log" without a name), packet by packet as the
+ * capture comes, until the stream ends.  A stream stopped or closed in the
+ * middle of a record ends Converted, with the record reported cut off.
+ *
+ * The conversion is live: every byte read is also written, unchanged, to
+ * the raw capture next to the text file, <name>.pcap or <name>.pcapng by
+ * its format (ConversionResult::rawPath), so that it can be saved, converted
+ * again or opened in Wireshark.  The lines written, and the raw bytes, are
+ * flushed before every wait for more of the stream and at least every
+ * kLiveFlushInterval.  @p live is told when the first packet line is there
+ * and gets snapshots of the summary; there is no progress, as a stream's
+ * size is unknown.
+ *
+ * A stream that breaks off with a read error (a capture program that
+ * failed) ends Failed; once a packet was converted, what was captured is
+ * kept: the text file, the raw capture and the summary of them.
+ *
+ * @param cancel  If set, checked between packets; stops the conversion and
+ *                removes what was written.  The source must be given it
+ *                too, so that a wait for the next packet ends with it.
+ */
+ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
+                                const std::atomic_bool* cancel = nullptr,
+                                const ConversionOptions& options = {},
+                                const LiveObserver& live = {} );
 
 /**
  * The rule that a cancel request wins, even over a conversion that had
