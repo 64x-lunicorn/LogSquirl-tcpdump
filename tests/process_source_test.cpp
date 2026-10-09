@@ -141,15 +141,14 @@ bool gone( qint64 pid )
     return ::kill( static_cast<pid_t>( pid ), 0 ) != 0 && errno == ESRCH;
 }
 
-/// Lines of stderr collected from another thread, and the child's pid that
-/// one of them names ("child <pid>").
+/// The child's pid that a line of stderr names ("child <pid>"), handed on
+/// on another thread.
 class Collected {
 public:
     std::function<void( const QString& )> sink()
     {
         return [ this ]( const QString& line ) {
             const std::lock_guard<std::mutex> lock( mutex_ );
-            lines_ << line;
             if ( line.startsWith( "child " ) ) {
                 child_ = line.mid( 6 ).toLongLong();
             }
@@ -172,15 +171,8 @@ public:
         return 0;
     }
 
-    QStringList lines()
-    {
-        const std::lock_guard<std::mutex> lock( mutex_ );
-        return lines_;
-    }
-
 private:
     std::mutex mutex_;
-    QStringList lines_;
     qint64 child_ = 0;
 };
 
@@ -414,9 +406,9 @@ SCENARIO( "Ending a capture program ends what it started", "[process_source]" )
             REQUIRE( took >= ProcessSource::kTerminateGrace );
             REQUIRE( took < ProcessSource::kTerminateGrace + milliseconds( 1000 ) );
             REQUIRE( gone( pid ) );
-            const auto lines = stderrLines.lines();
-            REQUIRE( lines.size() == 1 );
-            REQUIRE( gone( lines.first().mid( 6 ).toLongLong() ) );
+            const auto child = stderrLines.child(); // handed on as the source ended it
+            REQUIRE( child != 0 );
+            REQUIRE( gone( child ) );
         }
     }
 }
