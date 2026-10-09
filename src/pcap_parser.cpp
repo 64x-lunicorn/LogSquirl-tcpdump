@@ -86,22 +86,14 @@ std::string formatMac( const uint8_t* p )
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
+/// Separates the transport summary from the description of the payload.
+constexpr const char* kDescriptionSeparator = " | ";
+
 /// Append what the describer says about the payload to the transport summary.
 void appendDescription( std::ostringstream& oss, const PayloadDescription& described )
 {
-    if ( described.description.empty() ) {
-        return;
-    }
-    switch ( described.join ) {
-    case PayloadDescription::Join::Brackets:
-        oss << " [" << described.description << "]";
-        break;
-    case PayloadDescription::Join::Bar:
-        oss << " | " << described.description;
-        break;
-    case PayloadDescription::Join::Space:
-        oss << " " << described.description;
-        break;
+    if ( !described.description.empty() ) {
+        oss << kDescriptionSeparator << described.description;
     }
 }
 

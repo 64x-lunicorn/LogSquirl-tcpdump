@@ -42,18 +42,8 @@ enum class Transport { Tcp, Udp };
 
 /// What the describer knows about a payload.
 struct PayloadDescription {
-    /// How the transport parser joins the description to its summary.  The
-    /// detectors joined differently before the describer existed; this
-    /// keeps the text the same until one rule replaces the three.
-    enum class Join {
-        Brackets, ///< " [description]"
-        Bar,      ///< " | description"
-        Space,    ///< " description"
-    };
-
     std::string label;       ///< Protocol name ("TLS", "HTTP", …); empty: unknown.
     std::string description; ///< One line about the payload; empty: nothing to say.
-    Join join = Join::Bar;
 };
 
 /**

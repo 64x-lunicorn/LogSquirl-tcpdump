@@ -560,15 +560,12 @@ struct Payload {
 /// A detector: the description of the payload if it recognises it.
 using Detector = std::optional<PayloadDescription> ( * )( const Payload& );
 
-/// A description with the given label and text, joined as @p join.
-std::optional<PayloadDescription> described( const char* label, std::string description,
-                                             PayloadDescription::Join join
-                                             = PayloadDescription::Join::Bar )
+/// A description with the given label and text.
+std::optional<PayloadDescription> described( const char* label, std::string description )
 {
     PayloadDescription result;
     result.label = label;
     result.description = std::move( description );
-    result.join = join;
     return result;
 }
 
@@ -578,7 +575,7 @@ std::optional<PayloadDescription> tlsRecord( const Payload& p )
     if ( tls.empty() ) {
         return std::nullopt;
     }
-    return described( "TLS", std::move( tls ), PayloadDescription::Join::Brackets );
+    return described( "TLS", std::move( tls ) );
 }
 
 std::optional<PayloadDescription> httpMessage( const Payload& p )
@@ -641,8 +638,7 @@ std::optional<PayloadDescription> dnsMessage( const Payload& p )
     if ( !mdns && !onPort( p, 53 ) ) {
         return std::nullopt;
     }
-    return described( mdns ? "mDNS" : "DNS", detectDns( p.data, p.len ),
-                      PayloadDescription::Join::Space );
+    return described( mdns ? "mDNS" : "DNS", detectDns( p.data, p.len ) );
 }
 
 /// SSDP on port 1900: HTTP-shaped messages.
