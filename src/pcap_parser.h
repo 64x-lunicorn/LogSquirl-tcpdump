@@ -152,6 +152,8 @@ enum class StreamCue : uint8_t {
     QuicLongHeader, ///< A QUIC long header (or Version Negotiation packet).
     Http2Preface,   ///< The HTTP/2 connection preface.
     MqttConnect,    ///< An MQTT CONNECT packet.
+    SshBanner,      ///< An SSH-2 identification string.
+    SshNewKeys,     ///< SSH packets up to a NEWKEYS: the direction is encrypted after it.
 };
 
 /// A media stream an SDP body offers or answers (RFC 4566, RFC 3264): the

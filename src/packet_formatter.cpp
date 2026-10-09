@@ -275,6 +275,7 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
         const auto stream = tracker.track( pkt );
         analyseTcp( pkt, stream );
         describeInStream( pkt, stream );
+        rememberInStream( pkt, stream );
         labels.apply( pkt, stream );
         lines.push_back( formatter.format( pkt, stream.id ) );
     }

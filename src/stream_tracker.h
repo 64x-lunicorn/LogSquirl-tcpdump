@@ -98,10 +98,10 @@ struct TcpDirection {
  * the Payload Describer, the Stream Labels, …) keep their fields here, and
  * read and update them through the Stream the tracker hands out.  Every
  * byte added here is paid once per numbered stream, see kMaxStreams: 72
- * bytes today, the two TcpDirections taking most, and 2 bytes are left
+ * bytes today, the two TcpDirections taking most, and no byte is left
  * before the alignment adds 8.  A new
  * TCP connection on the same addresses and ports (see analyseTcp()) starts
- * from a fresh state, its HTTP/2 and MQTT flags and label with it.
+ * from a fresh state, its HTTP/2, MQTT and SSH flags and label with it.
  */
 struct StreamState {
     /// TCP only: each direction, indexed by Stream::direction.
@@ -119,6 +119,10 @@ struct StreamState {
     /// bit 4 << d, it let them go for lack of memory, which the direction's
     /// next segment says.
     uint8_t reassembly = 0;
+    /// TCP only: how far the stream's SSH connection is (describe_ssh.cpp):
+    /// bit 1, an SSH-2 banner was seen; bit 2 << d, direction d sent its
+    /// NEWKEYS, and what it sends after is encrypted.
+    uint8_t ssh = 0;
 };
 
 /// The stream a packet belongs to.

@@ -86,6 +86,11 @@ struct Payload {
     uint16_t srcPort;
     uint16_t dstPort;
     Transport transport;
+    /// For a framer: the stream the payload is of, if known.
+    const Stream* stream = nullptr;
+    /// For a framer: a message of its protocol came before the payload in
+    /// its direction of the stream.
+    bool continuing = false;
 };
 
 /// A detector: the description of the payload if it recognises it.
@@ -209,6 +214,13 @@ std::optional<PayloadDescription> someIpByHeader( const Payload& p )
     return describedIfAny( found.sd ? "SOME/IP-SD" : "SOME/IP", found.text );
 }
 
+/// SSH, by its banner or the binary packets of its key exchange on any
+/// port; on port 22 whatever the payload holds, as a guess.
+std::optional<PayloadDescription> sshMessages( const Payload& p )
+{
+    return detectSsh( p.data, p.len, p.srcPort, p.dstPort );
+}
+
 /// DoIP on port 13400, over UDP and TCP: named by the port, described if
 /// the payload begins with a DoIP header; a segment without payload (a
 /// SYN) stays TCP.
@@ -250,9 +262,9 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 
 /// The TCP detectors, in the order they are tried.
 constexpr Detector kTcpDetectors[]
-    = { dnsOverTcpMessage, doipMessages, someIpOnPort, tlsRecord,
-        sipMessages,       httpMessage,  http2Preface, mqttPackets,
-        someIpByHeader,    nmeaSentence, socksMessage, portHintAndPreview };
+    = { dnsOverTcpMessage, doipMessages, someIpOnPort,      sshMessages, tlsRecord,
+        sipMessages,       httpMessage,  http2Preface,      mqttPackets, someIpByHeader,
+        nmeaSentence,      socksMessage, portHintAndPreview };
 
 // ── Framing a TCP stream's messages ──────────────────────────────────────
 
@@ -281,6 +293,21 @@ std::optional<size_t> doipFrame( const Payload& p )
         return std::nullopt;
     }
     return frameDoipMessage( p.data, p.len );
+}
+
+/// SSH as far as its stream's phase lets it be framed: a banner always,
+/// binary packets once a banner was seen, or one came before in the
+/// direction, nothing after NEWKEYS.
+std::optional<size_t> sshFrame( const Payload& p )
+{
+    auto phase = SshPhase::Unknown;
+    if ( p.stream && p.stream->state ) {
+        phase = sshPhaseOf( *p.stream->state, p.stream->direction );
+    }
+    if ( phase == SshPhase::Unknown && p.continuing ) {
+        phase = SshPhase::Clear;
+    }
+    return frameSshMessage( p.data, p.len, phase );
 }
 
 std::optional<size_t> tlsFrame( const Payload& p )
@@ -316,9 +343,9 @@ std::optional<size_t> mqttFrame( const Payload& p )
 /// on its port aside, which frames by its header too); a
 /// protocol is numbered by its place, from 1 (MessageExtent::framer).
 constexpr Framer kTcpFramers[] = {
-    { "DNS", dnsOverTcpFrame }, { "DoIP", doipFrame }, { "TLS", tlsFrame },
-    { "SIP", sipFrame },        { "HTTP", httpFrame }, { "MQTT", mqttFrame },
-    { "SOME/IP", someIpFrame },
+    { "DNS", dnsOverTcpFrame }, { "DoIP", doipFrame },      { "SSHv2", sshFrame },
+    { "TLS", tlsFrame },        { "SIP", sipFrame },        { "HTTP", httpFrame },
+    { "MQTT", mqttFrame },      { "SOME/IP", someIpFrame },
 };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
@@ -437,14 +464,15 @@ void redescribe( PacketRecord& pkt, const char* label, const std::string& descri
 }
 
 MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
-                                uint8_t framer )
+                                uint8_t framer, const Stream* stream )
 {
-    const Payload p{ data, len, srcPort, dstPort, Transport::Tcp };
+    Payload p{ data, len, srcPort, dstPort, Transport::Tcp, stream };
     for ( size_t i = 0; i < std::size( kTcpFramers ); ++i ) {
         const auto number = static_cast<uint8_t>( i + 1 );
         if ( framer != 0 && framer != number ) {
             continue;
         }
+        p.continuing = framer == number;
         if ( const auto length = kTcpFramers[ i ].frame( p ) ) {
             MessageExtent extent;
             extent.framer = number;
@@ -468,7 +496,16 @@ void describeInStream( PacketRecord& pkt, const Stream& stream )
     else {
         describer::describeHttp2InStream( pkt, *stream.state );
         describer::describeMqttInStream( pkt, *stream.state );
+        describer::describeSshInStream( pkt, stream );
     }
+}
+
+void rememberInStream( const PacketRecord& pkt, const Stream& stream )
+{
+    if ( !stream.state || pkt.transport != Transport::Tcp ) {
+        return;
+    }
+    describer::rememberSshInStream( pkt, stream );
 }
 
 void limitPreview( PacketRecord& pkt, size_t maxChars )

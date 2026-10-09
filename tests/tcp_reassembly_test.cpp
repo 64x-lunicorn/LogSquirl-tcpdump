@@ -120,6 +120,7 @@ std::vector<Line> converted( const std::vector<Segment>& segments, TcpReassembly
         analyseTcp( pkt, stream );
         describeInStream( pkt, stream );
         const auto done = reassembly.apply( pkt, stream, reader->payloadOf( pkt ) );
+        rememberInStream( pkt, stream );
         labels.apply( pkt, stream );
         Line line{ pkt.protocol, pkt.info, {}, {}, done.segments, pkt.sipCalls.size() };
         const auto at = pkt.info.find( kDescriptionSeparator );
@@ -292,6 +293,44 @@ std::vector<Segment> handshake( uint16_t port = 443 )
     ack.flags = kAck;
     ack.serverPort = port;
     return { syn, synAck, ack };
+}
+
+/// An SSH binary packet of the unencrypted phase: message @p code and
+/// @p body, padded to a multiple of 8.
+Bytes sshPacket( uint8_t code, const Bytes& body )
+{
+    const size_t padding = 8 - ( 6 + body.size() ) % 8 + ( ( 6 + body.size() ) % 8 > 4 ? 8 : 0 );
+    Bytes b;
+    putBE32( b, static_cast<uint32_t>( 2 + body.size() + padding ) );
+    b.push_back( static_cast<uint8_t>( padding ) );
+    b.push_back( code );
+    b = b + body;
+    b.resize( b.size() + padding, 0 );
+    return b;
+}
+
+/// An SSH string of @p n bytes of @p fill.
+Bytes sshString( size_t n, uint8_t fill )
+{
+    Bytes b;
+    putBE32( b, static_cast<uint32_t>( n ) );
+    b.resize( b.size() + n, fill );
+    return b;
+}
+
+/// SSH_MSG_KEXINIT, its ten name-lists long ones, some 800 bytes.
+Bytes sshKexInit()
+{
+    Bytes body( 16, 0x5A );
+    for ( int i = 0; i < 10; ++i ) {
+        const std::string names = i < 8 ? "aes" + std::string( 70, 'x' ) + ",none" : "";
+        Bytes list;
+        putBE32( list, static_cast<uint32_t>( names.size() ) );
+        body = body + list + text( names );
+    }
+    body.push_back( 0 );
+    putBE32( body, 0 );
+    return sshPacket( 20, body );
 }
 
 std::vector<Segment> operator+( std::vector<Segment> a, const std::vector<Segment>& b )
@@ -541,6 +580,69 @@ SCENARIO( "A message split over segments is described once, where it completes",
                      == "Service 0x1234 Event 0x8001 Client 0x0010 Session 0x0001 NOTIFICATION, "
                         "600 bytes"
                             + reassembledFrom( 2 ) );
+        }
+    }
+
+    GIVEN( "an SSH KEXINIT split across 2 segments after the client's banner, on port 22 "
+           "and on another" )
+    {
+        const auto banner = text( "SSH-2.0-OpenSSH_9.6\r\n" );
+        for ( const uint16_t port : { uint16_t{ 22 }, uint16_t{ 2222 } } ) {
+            const auto lines = converted(
+                handshake( port )
+                + cut( banner + sshKexInit(), { banner.size(), 300 }, kClientIsn + 1, port ) );
+
+            THEN( "it is described whole on the second" )
+            {
+                REQUIRE( lines[ 3 ].description == "Client: Protocol (SSH-2.0-OpenSSH_9.6)" );
+                REQUIRE( lines[ 4 ].protocol == "SSHv2" );
+                REQUIRE( lines[ 4 ].description == kSegmentOfMessage );
+                REQUIRE( lines[ 5 ].protocol == "SSHv2" );
+                REQUIRE( lines[ 5 ].description
+                         == "Client: Key Exchange Init kex=aes" + std::string( 70, 'x' )
+                                + ",\xe2\x80\xa6 hostkey=aes" + std::string( 70, 'x' )
+                                + ",\xe2\x80\xa6 cipher=aes" + std::string( 70, 'x' )
+                                + ",\xe2\x80\xa6" + reassembledFrom( 2 ) );
+            }
+        }
+    }
+
+    GIVEN( "an SSH key exchange init and NEWKEYS split across 2 segments, then encrypted "
+           "packets" )
+    {
+        const auto banner = text( "SSH-2.0-OpenSSH_10.0\r\n" );
+        const auto init = sshPacket( 30, sshString( 1216, 0x11 ) ) + sshPacket( 21, {} );
+        const auto lines
+            = converted( handshake( 22 )
+                         + cut( banner + init + Bytes( 64, 0xE1 ) + Bytes( 96, 0xE2 ),
+                                { banner.size(), banner.size() + 700, banner.size() + init.size(),
+                                  banner.size() + init.size() + 64 },
+                                kClientIsn + 1, 22 ) );
+
+        THEN( "they are described whole on the second, the rest as encrypted" )
+        {
+            REQUIRE( lines[ 4 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 5 ].description
+                     == "Client: Elliptic Curve Diffie-Hellman Key Exchange Init, New Keys"
+                            + reassembledFrom( 2 ) );
+            REQUIRE( lines[ 6 ].protocol == "SSHv2" );
+            REQUIRE( lines[ 6 ].description == "Client: Encrypted packet (len=64)" );
+            REQUIRE( lines[ 7 ].description == "Client: Encrypted packet (len=96)" );
+        }
+    }
+
+    GIVEN( "an SSH connection on port 22 whose key exchange the capture did not see" )
+    {
+        Bytes encrypted;
+        putBE32( encrypted, 1020 ); // as a packet_length of the unencrypted phase would be
+        encrypted = encrypted + Bytes{ 6, 94 } + Bytes( 600, 0xC3 );
+        const auto lines
+            = converted( handshake( 22 ) + cut( encrypted, { 300 }, kClientIsn + 1, 22 ) );
+
+        THEN( "no segment is held, each is taken for an encrypted packet" )
+        {
+            REQUIRE( lines[ 3 ].description == "Client: Encrypted packet (len=300)" );
+            REQUIRE( lines[ 4 ].description == "Client: Encrypted packet (len=306)" );
         }
     }
 

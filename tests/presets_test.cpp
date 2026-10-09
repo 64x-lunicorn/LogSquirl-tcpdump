@@ -426,6 +426,11 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TCP SYN/FIN", { 10, 11, 33, 34 } },
               { "TCP handshakes", { 10, 11, 33, 34 } },
           } },
+        { "ssh.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 15, 16, 18, 19, 30, 31, 36, 37, 42, 43 } },
+              { "TCP handshakes", { 1, 2, 15, 16, 18, 19, 30, 31, 36, 37, 42, 43 } },
+          } },
         { "someip.txt",
           {
               { "TCP SYN/FIN", { 11, 12, 17, 18 } },

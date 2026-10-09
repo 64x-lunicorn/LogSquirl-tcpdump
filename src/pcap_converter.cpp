@@ -184,7 +184,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
-        media.apply( pkt ); // after the reassembly, which completes SDP bodies
+        rememberInStream( pkt, stream ); // after the reassembly, which completes NEWKEYS
+        media.apply( pkt );              // after the reassembly, which completes SDP bodies
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {

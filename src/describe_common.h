@@ -281,6 +281,11 @@ struct SomeIpDescription {
 SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
 /// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
 bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
+/// The SSH banner or binary packets of the unencrypted phase a TCP
+/// payload begins with, on any port, labelled "SSHv2" (describe_ssh.cpp);
+/// on port 22, any other payload as an encrypted packet, a guess.
+std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
+                                             uint16_t dstPort );
 /// The DoIP messages (ISO 13400-2) a payload begins with, every one of a
 /// datagram or segment, a diagnostic message with the UDS service it
 /// carries (describe_doip.cpp).
@@ -322,6 +327,27 @@ std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bo
 /// pattern of version and inverse version (describe_doip.cpp).
 std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
 
+/// How far one direction of an SSH connection is, as its stream's state
+/// says (StreamState::ssh).
+enum class SshPhase {
+    Unknown,   ///< No banner was seen: only a banner is framed.
+    Clear,     ///< Before NEWKEYS: binary packets, by their packet_length.
+    Encrypted, ///< After NEWKEYS: nothing to frame.
+};
+/// StreamState::ssh: an SSH-2 banner was seen on the stream.
+constexpr uint8_t kSshBannerSeen = 0x01;
+/// StreamState::ssh: direction @p direction sent its NEWKEYS.
+constexpr uint8_t sshEncryptedBit( unsigned direction )
+{
+    return static_cast<uint8_t>( 0x02u << direction );
+}
+/// The phase of @p direction of the stream @p state is of.
+SshPhase sshPhaseOf( const StreamState& state, unsigned direction );
+/// An SSH banner, to its line end; in the clear phase a binary packet, by
+/// its packet_length, and a NEWKEYS with all after it; in the encrypted
+/// phase, all the bytes (describe_ssh.cpp).
+std::optional<size_t> frameSshMessage( const uint8_t* payload, size_t len, SshPhase phase );
+
 // ── In the stream ────────────────────────────────────────────────────────
 
 /// A UDP packet in its stream: QUIC short headers after a long header
@@ -335,5 +361,14 @@ void describeHttp2InStream( PacketRecord& pkt, StreamState& state );
 /// A TCP segment in its stream: MQTT packets after a CONNECT on another
 /// port than MQTT's (describe_mqtt.cpp).
 void describeMqttInStream( PacketRecord& pkt, StreamState& state );
+
+/// A TCP segment in its stream: after NEWKEYS an encrypted packet, before
+/// it the packets no detector recognised, as the stream's SSH phase says
+/// (describe_ssh.cpp).
+void describeSshInStream( PacketRecord& pkt, const Stream& stream );
+
+/// After the TCP Reassembly: what a segment's SSH banner or NEWKEYS tells
+/// its stream's later segments (describe_ssh.cpp).
+void rememberSshInStream( const PacketRecord& pkt, const Stream& stream );
 
 } // namespace tcpdump::describer

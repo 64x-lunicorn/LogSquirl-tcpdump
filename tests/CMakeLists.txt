@@ -27,6 +27,7 @@ add_executable(logsquirl_tcpdump_tests
     mqtt_test.cpp
     someip_test.cpp
     doip_test.cpp
+    ssh_test.cpp
     sip_test.cpp
     tls_test.cpp
     dns_test.cpp
@@ -99,6 +100,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/describe_rtp.cpp"
         "${CMAKE_SOURCE_DIR}/src/describe_someip.cpp"
         "${CMAKE_SOURCE_DIR}/src/describe_doip.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_ssh.cpp"
         "${CMAKE_SOURCE_DIR}/src/media_expectations.cpp"
         "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"

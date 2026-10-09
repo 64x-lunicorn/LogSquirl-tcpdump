@@ -69,12 +69,13 @@ struct Walk {
 
 /// Walk the messages of protocol @p framer in the @p len bytes at @p data,
 /// one after the other from the first.
-Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, uint8_t framer )
+Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, const Stream& stream,
+                   uint8_t framer )
 {
     Walk walk;
     while ( walk.end < len ) {
-        const auto extent
-            = tcpMessageExtent( data + walk.end, len - walk.end, pkt.srcPort, pkt.dstPort, framer );
+        const auto extent = tcpMessageExtent( data + walk.end, len - walk.end, pkt.srcPort,
+                                              pkt.dstPort, framer, &stream );
         if ( extent.framer == 0 ) {
             walk.end = len; // the rest is none of the protocol's: described as it is
             break;
@@ -108,7 +109,8 @@ void describeMessages( PacketRecord& pkt, const uint8_t* data, size_t len, const
                        + std::to_string( segments ) + " segments]";
     }
     redescribe( pkt, described.label.empty() ? label : described.label.c_str(), description );
-    pkt.sipCalls = described.sipCalls; // what the messages' SDP bodies announce
+    pkt.sipCalls = described.sipCalls;   // what the messages' SDP bodies announce
+    pkt.streamCue = described.streamCue; // what they tell the stream's later packets
 }
 
 /// Describe @p pkt as a segment of a message of protocol @p label that
@@ -117,6 +119,7 @@ void describeSegment( PacketRecord& pkt, const char* label )
 {
     redescribe( pkt, label, kSegmentOfMessage );
     pkt.sipCalls.clear();
+    pkt.streamCue = StreamCue::None;
 }
 
 } // namespace
@@ -269,7 +272,8 @@ bool TcpReassembly::appendEarly( Entry& entry, Key key )
 ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Stream& stream,
                                                     Entry& entry )
 {
-    const auto walk = walkMessages( entry.held.data(), entry.held.size(), pkt, entry.framer );
+    const auto walk
+        = walkMessages( entry.held.data(), entry.held.size(), pkt, stream, entry.framer );
     if ( walk.end == 0 ) {
         describeSegment( pkt, entry.label );
         return {};
@@ -300,11 +304,12 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
 ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream& stream,
                                                  ByteView payload )
 {
-    const auto first = tcpMessageExtent( payload.data, payload.size, pkt.srcPort, pkt.dstPort );
+    const auto first
+        = tcpMessageExtent( payload.data, payload.size, pkt.srcPort, pkt.dstPort, 0, &stream );
     if ( first.framer == 0 ) {
         return {}; // no message the describer frames: described as it is
     }
-    const auto walk = walkMessages( payload.data, payload.size, pkt, first.framer );
+    const auto walk = walkMessages( payload.data, payload.size, pkt, stream, first.framer );
     if ( walk.incomplete.framer == 0 ) {
         return {}; // whole messages: the parser described them
     }

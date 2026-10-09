@@ -260,12 +260,14 @@ port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
 `describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`),
 `describe_someip.cpp` (SOME/IP and SOME/IP-SD, and the name table of
 `someip.h`), `describe_doip.cpp` (DoIP and the UDS messages of its
-diagnostic messages) and `describe_nmea.cpp`. They share the internal
+diagnostic messages), `describe_ssh.cpp` (SSH's banner and key exchange,
+and its phases in the stream) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, DoIP on port 13400, SOME/IP on its ports, TLS, SIP (before HTTP, whose
+- TCP: DNS on port 53, DoIP on port 13400, SOME/IP on its ports, SSH (its
+  banner or key exchange on any port, anything on port 22), TLS, SIP (before HTTP, whose
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
@@ -395,6 +397,40 @@ of the detectors and in-stream passes the tables use.
   message's captured bytes; a message cut at the snaplen or the segment
   ends in ` …`. Over TCP, `frameDoipMessage()` frames a message by its
   payload length for the TCP Reassembly
+- SSH (RFC 4253), on TCP: a payload that begins with an identification
+  string, `SSH-` and a protocol version, digits, a dot, digits, and a
+  dash, on any port, is `Client: Protocol (SSH-2.0-OpenSSH_9.6)` (the
+  line without its CR LF, cut as a field; a line that has not ended
+  yet `…`), labelled `SSHv2` for the versions 2.0 and 1.99, `SSHv1` for
+  another 1.x. The side is the server's on port 22, else on the lower
+  port. The binary packets of the unencrypted phase follow the banner or
+  stand alone, each named as Wireshark names its message, up to eight,
+  joined by `, `: `Key Exchange Init` with the first name of its key
+  exchange, host key and client-to-server cipher lists and `,…` when more
+  follow (`kex=curve25519-sha256,… hostkey=ssh-ed25519,…
+  cipher=chacha20-poly1305@openssh.com,…`; all ten name-lists are read
+  and must be printable US-ASCII without spaces), `New Keys`, `Elliptic
+  Curve Diffie-Hellman Key Exchange Init/Reply` for messages 30 and 31
+  (the hybrid and plain Diffie-Hellman methods share their layout and are
+  named so too; a stream keeps no record of the method), the
+  Diffie-Hellman group exchange's `Request (Old)` and `Group` told from
+  them by their layout, its `Request`, `Init` and `Reply`, `Disconnect`,
+  `Ignore`, `Debug`, `Service Request`, `Extension Information` and the
+  rest of the transport layer. A packet's packet_length must be 12 to
+  34,996 and a multiple of 8 less 4, its padding_length 4 or more and
+  within it, else `Invalid packet length n` or `Invalid padding length n
+  [Malformed Packet]`; every field of a message is read with a
+  `FieldReader` within the captured bytes, a message whose fields
+  overrun its payload is `[Malformed Packet]`, one cut short ends in ` …`.
+  After a NEWKEYS the rest of the payload is `Encrypted packet (len=n)`.
+  Without a banner before them, packets are only taken for SSH if every
+  one is whole and of the transport layer (the last may be cut if it is a
+  KEXINIT or follows a whole one); on port 22 anything else is the guess
+  `SSH`, `Client: Encrypted packet (len=n)` (a connection whose key
+  exchange the capture did not see). The banner gives its stream
+  `StreamCue::SshBanner`, a NEWKEYS `StreamCue::SshNewKeys`; see
+  `describeInStream()` and `rememberInStream()` for what the stream makes of
+  them, and the TCP Reassembly for how `frameSshMessage()` frames them
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
   code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
@@ -532,6 +568,19 @@ of the detectors and in-stream passes the tables use.
   that, not the label's text, is what `describeInStream()` goes by. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
+- SSH's phases are kept in `StreamState::ssh`, one byte: bit 1, an SSH-2
+  banner was seen; bit `2 << d`, direction d sent its NEWKEYS. A NEWKEYS
+  may complete a message the TCP Reassembly put together (a key exchange
+  reply too long for one segment), so the bits are set by
+  `rememberInStream()`, which the Converter runs after the reassembly, from
+  the packet's `StreamCue` as the reassembly left it (`describeMessages()`
+  takes the cue of the reassembled description, a segment of a message
+  has none). `describeInStream()`, before the reassembly, goes by the bits
+  as the stream's earlier packets left them: a direction past its NEWKEYS
+  is `SSHv2`, `Client: Encrypted packet (len=n)`, n the segment's payload
+  length, whatever the detectors made of it; before it, a segment no
+  detector recognised (cut, malformed, on a port other than 22) is read as
+  the binary packets in its first kPayloadHeadBytes
 - The port hint, the last entry of both tables, names the service of a
   well-known port from the name tables, the source port's before the
   destination port's, and previews the payload: printable ASCII, other
@@ -749,7 +798,15 @@ another port is not reassembled), a SOME/IP message by its Length (8 + its
 value; on SOME/IP's ports whatever the header says, elsewhere if the header
 keeps to the rules and the message is at most 1 MiB), a DoIP message by its
 payload length (8 + its value; port 13400 only, if the header keeps to the
-pattern of version and inverse version). A framer answers more
+pattern of version and inverse version), SSH as far as the stream's phase
+lets it (`tcpMessageExtent()` takes the `Stream`, `sshPhaseOf()` reads
+`StreamState::ssh`): a banner to its line end on any port, a binary packet
+by its packet_length (4 + its value) once a banner was seen or framed
+before it in the bytes, a NEWKEYS with all the bytes after it, and in a
+direction past its NEWKEYS all its bytes as one whole message, so that no
+other framer takes an encrypted packet for the start of one of its own;
+a stream on port 22 whose banner the capture did not see is not framed,
+as its packets may be encrypted ones whose length is in the clear. A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -1289,7 +1346,13 @@ power mode over UDP, routing activation and diagnostic messages over TCP
 with UDS sessions, identifiers, a negative response, a response pending, a
 TransferData over two segments, a diagnostic message NACK and an alive
 check, an inverse version that does not match and a payload length its type
-does not allow, by `tests/make_doip_corpus.py`. The link layers' tests,
+does not allow, by `tests/make_doip_corpus.py`; `ssh.pcap`, an OpenSSH
+connection on port 22 with its KEXINIT over two segments, the ECDH key
+exchange, NEWKEYS with and without an encrypted packet behind it and
+encrypted packets after, a connection on port 2222 told by its banner with
+the Diffie-Hellman group exchange, encrypted packets of a connection whose
+key exchange the capture lacks, and a packet_length and a padding_length
+the unencrypted phase does not allow, by `tests/make_ssh_corpus.py`. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

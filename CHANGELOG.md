@@ -11,8 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
   DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
   control packet on port 1883 (by its Remaining Length), a SOME/IP
-  message (by its Length) or a DoIP message on port 13400 (by its payload
-  length) that spans TCP segments is described once, on the
+  message (by its Length), a DoIP message on port 13400 (by its payload
+  length) or an SSH packet of the key exchange (by its packet_length,
+  only before the direction's NEWKEYS) that spans TCP segments is
+  described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
   example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
@@ -161,6 +163,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message that spans segments is reassembled by its payload length. A new
   synthetic capture, `tests/corpus/doip.pcap` (written by
   `tests/make_doip_corpus.py`), shows each case.
+- **SSH described: banners, the key exchange and encrypted packets.** SSH
+  is told by its banner on any TCP port, port 22 as a hint, labelled
+  `SSHv2` (`SSHv1` for an SSH 1.x banner), and described as Wireshark
+  describes it, per direction: `Client: Protocol (SSH-2.0-OpenSSH_9.6)`,
+  `Client: Key Exchange Init kex=curve25519-sha256,… hostkey=ssh-ed25519,…
+  cipher=chacha20-poly1305@openssh.com,…` (all ten name-lists read, the
+  key exchange, host key and cipher lists shown by their first name),
+  `Elliptic Curve Diffie-Hellman Key Exchange Init/Reply`, the
+  Diffie-Hellman group exchange, `New Keys`, and every packet a direction
+  sends after its NEWKEYS as `Encrypted packet (len=64)`; the stream
+  remembers each direction's phase. On port 22 a connection whose key
+  exchange the capture lacks is shown as `SSH` `Encrypted packet (len=n)`.
+  A packet_length or padding_length the unencrypted phase does not allow
+  is `[Malformed Packet]`, every field is read within the captured bytes,
+  a cut message ends in `…`, and a KEXINIT or key exchange reply that
+  spans segments is reassembled. A new synthetic capture,
+  `tests/corpus/ssh.pcap` (written by `tests/make_ssh_corpus.py`), shows
+  each case.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section, a
