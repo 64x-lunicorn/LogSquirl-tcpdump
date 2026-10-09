@@ -27,6 +27,7 @@
 
 #include "payload_describer.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,34 @@ PayloadDescription describe( Transport transport, const Bytes& payload, uint16_t
 {
     return describePayload( transport, payload.data(), payload.size(), srcPort, dstPort );
 }
+
+Bytes text( const std::string& s )
+{
+    return Bytes( s.begin(), s.end() );
+}
+
+Bytes operator+( Bytes a, const Bytes& b )
+{
+    a.insert( a.end(), b.begin(), b.end() );
+    return a;
+}
+
+bool contains( const std::string& haystack, const std::string& needle )
+{
+    return haystack.find( needle ) != std::string::npos;
+}
+
+bool isOneLine( const std::string& s )
+{
+    return std::none_of( s.begin(), s.end(), []( char c ) {
+        const auto byte = static_cast<uint8_t>( c );
+        return byte < 0x20 || byte == 0x7F;
+    } );
+}
+
+/// Ports no detector knows, so that only the preview applies.
+constexpr uint16_t kUnknownSrc = 49152;
+constexpr uint16_t kUnknownDst = 60001;
 
 } // namespace
 
@@ -81,6 +110,158 @@ SCENARIO( "The describer names a UDP payload from its bytes and ports alone", "[
             {
                 REQUIRE( described.label == "DNS" );
                 REQUIRE( described.description == "Query example.com" );
+            }
+        }
+    }
+}
+
+SCENARIO( "A payload nobody recognises is previewed as text", "[describer]" )
+{
+    GIVEN( "120 characters of printable text on unknown ports" )
+    {
+        const std::string line = "07-08 10:29:23.549  7182  7413 W HERE_CARLO: "
+                                 "[carlo] /workspace/coresdk/carlo/location_engine.cpp:42 "
+                                 "initializing module";
+
+        THEN( "the whole text is the description, with no label and no ellipsis" )
+        {
+            const auto described
+                = describe( Transport::Tcp, text( line ), kUnknownSrc, kUnknownDst );
+            REQUIRE( described.label.empty() );
+            REQUIRE( described.description == line );
+        }
+    }
+
+    GIVEN( "text with three binary bytes in the middle" )
+    {
+        const auto payload = text( "Hello" ) + Bytes{ 0x00, 0x01, 0x02 }
+                             + text( "World and more text here to be above threshold!" );
+
+        THEN( "the binary bytes show as dots between the text" )
+        {
+            const auto described = describe( Transport::Tcp, payload, kUnknownSrc, kUnknownDst );
+            REQUIRE( described.description
+                     == "Hello...World and more text here to be above threshold!" );
+        }
+    }
+
+    GIVEN( "three printable bytes followed by fifty binary ones" )
+    {
+        Bytes payload = text( "ABC" );
+        for ( int i = 0; i < 50; ++i ) {
+            payload.push_back( static_cast<uint8_t>( i ) );
+        }
+
+        THEN( "there is no preview: it would be dots only" )
+        {
+            REQUIRE(
+                describe( Transport::Tcp, payload, kUnknownSrc, kUnknownDst ).description.empty() );
+        }
+    }
+
+    GIVEN( "a mostly binary payload that starts like a request" )
+    {
+        const auto payload = text( "GET" ) + Bytes( 5000, 0x00 );
+
+        THEN( "it is neither HTTP nor previewed" )
+        {
+            const auto described = describe( Transport::Tcp, payload, kUnknownSrc, kUnknownDst );
+            REQUIRE( described.label.empty() );
+            REQUIRE( described.description.empty() );
+        }
+    }
+}
+
+SCENARIO( "Payload text is capped", "[describer]" )
+{
+    GIVEN( "1000 bytes of text" )
+    {
+        THEN( "the preview shows the first 200 characters and an ellipsis" )
+        {
+            const auto described = describe( Transport::Tcp, text( std::string( 1000, 'x' ) ),
+                                             kUnknownSrc, kUnknownDst );
+            REQUIRE( described.description == std::string( 200, 'x' ) + "\xe2\x80\xa6" );
+        }
+    }
+
+    GIVEN( "exactly 200 bytes of text" )
+    {
+        const std::string exact( 200, 'y' );
+
+        THEN( "the preview shows them all, without an ellipsis" )
+        {
+            REQUIRE( describe( Transport::Udp, text( exact ), kUnknownSrc, kUnknownDst ).description
+                     == exact );
+        }
+    }
+
+    GIVEN( "an HTTP request line of 300 bytes" )
+    {
+        const std::string line = "GET /" + std::string( 295, 'a' );
+
+        THEN( "the description is its first 120 bytes" )
+        {
+            const auto described
+                = describe( Transport::Tcp, text( line + "\r\n\r\n" ), kUnknownSrc, 80 );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE( described.description == line.substr( 0, 120 ) );
+        }
+    }
+}
+
+SCENARIO( "A description never breaks the one-line-per-packet format", "[describer]" )
+{
+    struct Case {
+        const char* name;
+        Transport transport;
+        Bytes payload;
+        uint16_t srcPort;
+        uint16_t dstPort;
+        std::string expectedLabel;
+        std::string expectedText;
+    };
+
+    Bytes dns{ 0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    dns = dns + Bytes{ 5, 'a', '\n', 'b', 0x1B, 'c', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1 };
+
+    const std::vector<Case> cases{
+        { "a DNS name with a newline and an escape character", Transport::Udp, dns, 40000, 53,
+          "DNS", "Query a\\x0Ab\\x1Bc.com" },
+        { "an HTTP request line with a control character", Transport::Tcp,
+          text( "GET /\x1b[2J HTTP/1.1\r\n\r\n" ), 40000, 80, "HTTP", "GET /\\x1B[2J HTTP/1.1" },
+        { "an SSDP response with a control character", Transport::Udp,
+          text( "HTTP/1.1 200\x07OK\r\nST: x\r\n" ), 1900, 40000, "SSDP", "HTTP/1.1 200\\x07OK" },
+        { "an NMEA sentence with a tab and a byte above 0x7F", Transport::Udp,
+          text( "$GPGGA,1\t2,\xff*47\r\n" ), 40000, 10110, "NMEA", "$GPGGA,1\\x092,\\xFF*47" },
+        { "a SOCKS5 password with a quote, a newline and a backslash",
+          Transport::Tcp,
+          { 0x01, 0x03, 'b', 'o', 'b', 0x04, 's', '"', 0x0A, '\\' },
+          50000,
+          1080,
+          "SOCKS",
+          R"(User: "bob", Pass: "s\"\x0A\\")" },
+        { "a SOCKS5 destination domain with a newline",
+          Transport::Tcp,
+          { 0x05, 0x01, 0x00, 0x03, 3, 'a', 0x0A, 'b', 0x01, 0xBB },
+          50000,
+          1080,
+          "SOCKS",
+          "Destination: a\\x0Ab:443" },
+        { "a payload of two lines of text", Transport::Tcp,
+          text( "first line of the payload\r\nsecond line of the payload\n" ), kUnknownSrc,
+          kUnknownDst, "", "first line of the payload..second line of the payload." },
+    };
+
+    for ( const auto& c : cases ) {
+        GIVEN( c.name )
+        {
+            const auto described = describe( c.transport, c.payload, c.srcPort, c.dstPort );
+
+            THEN( "the description is one line, with the control bytes escaped" )
+            {
+                REQUIRE( described.label == c.expectedLabel );
+                REQUIRE( isOneLine( described.description ) );
+                REQUIRE( contains( described.description, c.expectedText ) );
             }
         }
     }

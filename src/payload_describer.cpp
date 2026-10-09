@@ -679,6 +679,32 @@ std::pair<const Detector*, const Detector*> detectorsOf( const Detector ( &table
 
 } // namespace
 
+/// The description as one line: a control character a detector let
+/// through, a newline above all, is escaped as \xNN.  The detectors escape
+/// the payload text they quote, so this normally changes nothing; the
+/// guarantee that one packet is one line rests here, not on each of them.
+std::string oneLine( std::string description )
+{
+    auto isControl = []( char c ) {
+        const auto byte = static_cast<uint8_t>( c );
+        return byte < 0x20 || byte == 0x7F;
+    };
+    if ( std::none_of( description.begin(), description.end(), isControl ) ) {
+        return description;
+    }
+    std::string escaped;
+    escaped.reserve( description.size() + 8 );
+    for ( const char c : description ) {
+        if ( isControl( c ) ) {
+            escaped += "\\x" + hexCode( static_cast<uint8_t>( c ) ).substr( 2 );
+        }
+        else {
+            escaped += c;
+        }
+    }
+    return escaped;
+}
+
 // ── The describer ────────────────────────────────────────────────────────
 
 PayloadDescription describePayload( Transport transport, const uint8_t* payload, size_t len,
@@ -689,6 +715,7 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
         = transport == Transport::Tcp ? detectorsOf( kTcpDetectors ) : detectorsOf( kUdpDetectors );
     for ( auto detect = first; detect != last; ++detect ) {
         if ( auto result = ( *detect )( p ) ) {
+            result->description = oneLine( std::move( result->description ) );
             return *result;
         }
     }
