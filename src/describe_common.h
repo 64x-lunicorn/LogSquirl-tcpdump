@@ -295,6 +295,22 @@ bool isWebSocketUpgrade( const uint8_t* payload, size_t len );
 /// carries (describe_doip.cpp).
 std::string detectDoip( const uint8_t* payload, size_t len );
 
+/// SMB messages (describe_smb.cpp): their description and their label,
+/// "SMB2" (SMB2 and SMB 3), "SMB" (SMB1) or "NBSS", as the first names it.
+struct SmbDescription {
+    std::string text;
+    const char* label = nullptr;
+};
+/// The NetBIOS Session Service messages a TCP payload begins with, every
+/// one of a segment: the SMB2/3 commands in them as Wireshark names them,
+/// "Create Request File: dir\file.txt", compounded ones too, up to 8 in
+/// all, an encrypted or compressed SMB 3 message, an SMB1 command; empty
+/// if the payload does not begin with an NBSS message.
+SmbDescription detectSmb( const uint8_t* payload, size_t len );
+/// The payload begins with an NBSS session message holding SMB: a protocol
+/// ID of SMB1, SMB2 or an SMB 3 transform header (describe_smb.cpp).
+bool beginsWithSmb( const uint8_t* payload, size_t len );
+
 // ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
 
 /// The payload begins with an RTCP header: version 2, an RTCP packet type.
@@ -330,6 +346,9 @@ std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bo
 /// A DoIP message, by its payload length, if its header keeps to the
 /// pattern of version and inverse version (describe_doip.cpp).
 std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
+/// An NBSS message, by its length (describe_smb.cpp): on SMB's ports
+/// (445, 139) any NBSS message, elsewhere a session message that holds SMB.
+std::optional<size_t> frameSmbMessage( const uint8_t* payload, size_t len, bool onSmbPort );
 
 /// A WebSocket frame, by its payload length (describe_websocket.cpp): on
 /// an upgraded stream only, as nothing in its bytes tells it.

@@ -78,8 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control packet on port 1883 (by its Remaining Length), a SOME/IP
   message (by its Length), a DoIP message on port 13400 (by its payload
   length), an SSH packet of the key exchange (by its packet_length,
-  only before the direction's NEWKEYS) or a WebSocket frame (by its
-  payload length, on an upgraded stream) that spans TCP segments is
+  only before the direction's NEWKEYS), a WebSocket frame (by its
+  payload length, on an upgraded stream) or an SMB message on port 445 or
+  139 (by its NetBIOS Session Service length) that spans TCP segments is
   described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
@@ -323,6 +324,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same stream, not by port. A new synthetic capture,
   `tests/corpus/websocket.pcap` (written by
   `tests/make_websocket_corpus.py`), shows each case.
+- **SMB2/3 described.** SMB on TCP port 445 and over NetBIOS on 139 (and
+  on any port behind an NBSS header with an SMB protocol ID) is labelled
+  `SMB2` and every command of a segment, compounded ones too, up to eight,
+  is named as Wireshark names it, with its fields: `Negotiate Protocol
+  Request Dialects: 2.0.2, 2.1, 3.0, 3.0.2, 3.1.1`, `Negotiate Protocol
+  Response Dialect: 3.1.1`, `Session Setup Response, Error:
+  STATUS_MORE_PROCESSING_REQUIRED`, `Tree Connect Request Tree:
+  \\server\share`, `Create Request File: dir\file.txt`, `Read Request
+  Len:65536 Off:0`, `Write Request …`, `Ioctl Request
+  FSCTL_VALIDATE_NEGOTIATE_INFO`, `Find Request
+  SMB2_FIND_ID_BOTH_DIRECTORY_INFO Pattern: *`, `Close`, `Notify`,
+  `GetInfo` and the others; a failed response names its NT status
+  (`STATUS_ACCESS_DENIED`, `STATUS_OBJECT_NAME_NOT_FOUND`, …). Names are
+  decoded from UTF-16 and capped. An encrypted message is `Encrypted
+  SMB3`, a compressed one `Compressed SMB3, LZ77, Original size …`, SMB1
+  is labelled `SMB` with its command only, NBSS session setup on port 139
+  `NBSS`. Every length and offset is checked against the message and the
+  captured bytes; a wrong header size, a NextCommand or name beyond the
+  message is `[Malformed Packet]`, a cut message ends in `…`, and a
+  message that spans segments is reassembled. A new synthetic capture,
+  `tests/corpus/smb.pcap` (written by `tests/make_smb_corpus.py`), shows
+  each case.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section, a

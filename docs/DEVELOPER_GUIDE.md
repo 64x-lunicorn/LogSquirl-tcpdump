@@ -386,12 +386,14 @@ port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
 diagnostic messages), `describe_ssh.cpp` (SSH's banner and key exchange,
 and its phases in the stream), `describe_websocket.cpp` (WebSocket frames
 on a stream an HTTP upgrade made WebSocket; no detector, as nothing in a
-frame tells it) and `describe_nmea.cpp`. They share the internal
+frame tells it), `describe_smb.cpp` (SMB2/3 and SMB1 in NetBIOS Session
+Service messages) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, DoIP on port 13400, SOME/IP on its ports, SSH (its
+- TCP: DNS on port 53, DoIP on port 13400, SMB (on ports 445 and 139, or
+  by its protocol ID behind an NBSS header), SOME/IP on its ports, SSH (its
   banner or key exchange on any port, anything on port 22), TLS, SIP (before HTTP, whose
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
@@ -526,6 +528,40 @@ of the detectors and in-stream passes the tables use.
   message's captured bytes; a message cut at the snaplen or the segment
   ends in ` …`. Over TCP, `frameDoipMessage()` frames a message by its
   payload length for the TCP Reassembly
+- SMB (MS-SMB2), on TCP ports 445 and 139 (a segment without payload stays
+  TCP), elsewhere only a payload that begins with an NBSS session message
+  holding an SMB protocol ID (`beginsWithSmb()`): every NetBIOS Session
+  Service message of a segment (RFC 1002; direct TCP on 445 has the same
+  4-byte header, its length 24 bits), labelled by the first: `SMB2` (SMB2
+  and SMB 3, as Wireshark labels both), `SMB` (SMB1) or `NBSS` (`Session
+  request`, `Positive session response`, … on port 139). An SMB2 message
+  names every command, compounded ones by their NextCommand too, up to
+  eight in a segment, joined by `; `, then `…`: the command as Wireshark
+  names it (`Negotiate Protocol`, `Session Setup`, `Tree Connect`,
+  `Create`, `Read`, `Write`, `Ioctl`, `Find`, `Notify`, `GetInfo`, …,
+  `Unknown command 0xNNNN`), `Request` or `Response` by the header's
+  flag, then its fields: the dialects offered and the one picked
+  (`Dialects: 2.0.2, 2.1, 3.0, 3.0.2, 3.1.1`, `Dialect: 3.1.1`), `Tree:
+  \\server\share`, `File: dir\file.txt`, `Len:65536 Off:0` of a read or
+  write, the FSCTL of an ioctl, the information class and `Pattern:` of a
+  find, the information type and class of GetInfo and SetInfo. A response
+  with a status other than 0 shows `, Error: ` and its NT status name
+  (`STATUS_MORE_PROCESSING_REQUIRED`, `STATUS_ACCESS_DENIED`, a table of
+  the common ones; another is `Unknown (0xC0001234)`) instead of its
+  fields. Names are UTF-16LE, decoded to UTF-8 with at most kMaxFieldBytes
+  characters, then `…`; a backslash stays one, a control character or an
+  unpaired surrogate is escaped. An SMB 3 transform header is `Encrypted
+  SMB3`, a compression transform header `Compressed SMB3, LZ77, Original
+  size 4096`; SMB1 is named by its command only (`Negotiate Protocol
+  Request`). A header whose structure size is not 64, a NextCommand
+  shorter than a header or beyond the message, a name or dialect list
+  beyond its command is `[Malformed Packet]`, and nothing after it is
+  read; a message cut at the snaplen or the segment ends in ` …`. A
+  segment on SMB's ports that begins with no NBSS message is only
+  guessed SMB (or NBSS), without a preview. Over TCP, `frameSmbMessage()`
+  frames an NBSS message by its length for the TCP Reassembly; a message
+  larger than the reassembly's limit (a big read or write) is not
+  described (#95)
 - SSH (RFC 4253), on TCP: a payload that begins with an identification
   string, `SSH-` and a protocol version, digits, a dot, digits, and a
   dash, on any port, is `Client: Protocol (SSH-2.0-OpenSSH_9.6)` (the
@@ -972,7 +1008,9 @@ another port is not reassembled), a SOME/IP message by its Length (8 + its
 value; on SOME/IP's ports whatever the header says, elsewhere if the header
 keeps to the rules and the message is at most 1 MiB), a DoIP message by its
 payload length (8 + its value; port 13400 only, if the header keeps to the
-pattern of version and inverse version), SSH as far as the stream's phase
+pattern of version and inverse version), an NBSS message by its length (4
++ its value; on ports 445 and 139 any NBSS message, elsewhere a session
+message that holds an SMB protocol ID), SSH as far as the stream's phase
 lets it (`tcpMessageExtent()` takes the `Stream`, `sshPhaseOf()` reads
 `StreamState::protocols`): a banner to its line end on any port, a binary packet
 by its packet_length (4 + its value) once a banner was seen or framed
@@ -1850,7 +1888,15 @@ power mode over UDP, routing activation and diagnostic messages over TCP
 with UDS sessions, identifiers, a negative response, a response pending, a
 TransferData over two segments, a diagnostic message NACK and an alive
 check, an inverse version that does not match and a payload length its type
-does not allow, by `tests/make_doip_corpus.py`; `ssh.pcap`, an OpenSSH
+does not allow, by `tests/make_doip_corpus.py`; `smb.pcap`, an SMB
+connection on port 445 from an SMB1 negotiate and the SMB2 negotiation
+through a session setup in two rounds, tree connects (one refused),
+FSCTL_VALIDATE_NEGOTIATE_INFO, a compounded Create, GetInfo and Close,
+reads, writes, a directory listing, a pending notification, a read
+response over three segments, two messages in a segment, encrypted and
+compressed SMB 3 messages and logoff, a header of the wrong size and a
+NextCommand beyond its message, and SMB over NetBIOS on port 139 with its
+session request, by `tests/make_smb_corpus.py`; `ssh.pcap`, an OpenSSH
 connection on port 22 with its KEXINIT over two segments, the ECDH key
 exchange, NEWKEYS with and without an encrypted packet behind it and
 encrypted packets after, a connection on port 2222 told by its banner with

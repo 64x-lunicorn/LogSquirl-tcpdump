@@ -132,6 +132,15 @@ bool onPort( const Payload& p, uint16_t port )
 /// DoIP's port, UDP and TCP (ISO 13400-2); over TLS it is 3496.
 constexpr uint16_t kDoipPort = 13400;
 
+/// SMB directly over TCP, and NBSS, which carries it on port 139.
+constexpr uint16_t kSmbPort = 445;
+constexpr uint16_t kNbssPort = 139;
+
+bool onSmbPort( const Payload& p )
+{
+    return onPort( p, kSmbPort ) || onPort( p, kNbssPort );
+}
+
 /// DNS over TCP on port 53: described if the segment begins with a message.
 std::optional<PayloadDescription> dnsOverTcpMessage( const Payload& p )
 {
@@ -239,6 +248,28 @@ std::optional<PayloadDescription> doipMessages( const Payload& p )
     return describedOnPort( "DoIP", detectDoip( p.data, p.len ) );
 }
 
+/// SMB on ports 445 and 139: named by the port, described if the payload
+/// begins with an NBSS message; elsewhere a session message that holds
+/// SMB, by its protocol ID.  A segment without payload (a SYN) stays TCP.
+std::optional<PayloadDescription> smbMessages( const Payload& p )
+{
+    if ( p.len == 0 ) {
+        return std::nullopt;
+    }
+    if ( !onSmbPort( p ) ) {
+        if ( !beginsWithSmb( p.data, p.len ) ) {
+            return std::nullopt;
+        }
+        const auto found = detectSmb( p.data, p.len );
+        return describedIfAny( found.label, found.text );
+    }
+    const auto found = detectSmb( p.data, p.len );
+    if ( !found.label ) {
+        return describedOnPort( onPort( p, kSmbPort ) ? "SMB" : "NBSS", {} );
+    }
+    return describedOnPort( found.label, found.text );
+}
+
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
     return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
@@ -269,9 +300,9 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 
 /// The TCP detectors, in the order they are tried.
 constexpr Detector kTcpDetectors[]
-    = { dnsOverTcpMessage, doipMessages, someIpOnPort,      sshMessages, tlsRecord,
-        sipMessages,       httpMessage,  http2Preface,      mqttPackets, someIpByHeader,
-        nmeaSentence,      socksMessage, portHintAndPreview };
+    = { dnsOverTcpMessage, doipMessages, smbMessages,  someIpOnPort,      sshMessages,
+        tlsRecord,         sipMessages,  httpMessage,  http2Preface,      mqttPackets,
+        someIpByHeader,    nmeaSentence, socksMessage, portHintAndPreview };
 
 // ── Framing a TCP stream's messages ──────────────────────────────────────
 
@@ -314,6 +345,12 @@ std::optional<size_t> doipFrame( const Payload& p )
         return std::nullopt;
     }
     return frameDoipMessage( p.data, p.len );
+}
+
+/// SMB: any NBSS message on its ports, elsewhere one that holds SMB.
+std::optional<size_t> smbFrame( const Payload& p )
+{
+    return frameSmbMessage( p.data, p.len, onSmbPort( p ) );
 }
 
 /// SSH as far as its stream's phase lets it be framed: a banner always,
@@ -371,6 +408,7 @@ constexpr Framer kTcpFramers[] = {
     { "WebSocket", webSocketFrame, true },
     { "DNS", dnsOverTcpFrame },
     { "DoIP", doipFrame },
+    { "SMB2", smbFrame },
     { "SSHv2", sshFrame },
     { "TLS", tlsFrame },
     { "SIP", sipFrame },

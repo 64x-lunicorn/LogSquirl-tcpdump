@@ -754,6 +754,33 @@ SCENARIO( "A message split over segments is described once, where it completes",
         }
     }
 
+    GIVEN( "an SMB2 Write request split across 3 segments" )
+    {
+        Bytes smb{ 0xFE, 'S', 'M', 'B', 64, 0 };
+        smb.resize( 12, 0 );
+        smb = smb + Bytes{ 0x09, 0x00 }; // Write
+        smb.resize( 64, 0 );
+        smb = smb + Bytes{ 49, 0, 112, 0 };
+        putLE32( smb, 1000 ); // length
+        smb.resize( 64 + 48, 0 );
+        smb = smb + Bytes( 1000, 0x5A );
+        Bytes message{ 0x00, 0x00 };
+        putBE16( message, static_cast<uint16_t>( smb.size() ) );
+        message = message + smb;
+        const auto lines
+            = converted( handshake( 445 ) + cut( message, { 100, 700 }, kClientIsn + 1, 445 ) );
+
+        THEN( "it is described whole on the third" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "SMB2" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 5 ].protocol == "SMB2" );
+            REQUIRE( lines[ 5 ].description
+                     == "Write Request Len:1000 Off:0" + reassembledFrom( 3 ) );
+        }
+    }
+
     GIVEN( "whole records and the start of another in one segment" )
     {
         const auto first = tlsRecord( 0x17, Bytes( 100, 0xAA ) );
