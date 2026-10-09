@@ -318,6 +318,80 @@ SCENARIO( "Stopping a stream that sends nothing ends the wait within 100 ms", "[
     }
 }
 
+SCENARIO( "A stream stopped before its header came was stopped, not failed", "[capture_source]" )
+{
+    GIVEN( "a pipe that has sent nothing, and Stop already pressed" )
+    {
+        Pipe pipe;
+        std::atomic_bool stop{ true };
+        FdSource source( pipe.readEnd(), &stop );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+
+        THEN( "the conversion ends Stopped, without an error, leaving nothing" )
+        {
+            REQUIRE( source.stopped() );
+            REQUIRE( result.status == ConversionResult::Status::Stopped );
+            REQUIRE( result.error.isEmpty() );
+            REQUIRE( result.outputPath.isEmpty() );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+
+    GIVEN( "a pipe that has sent part of a pcap header, then Stop" )
+    {
+        Pipe pipe;
+        const auto header = pcapOf( {} );
+        pipe.write( Bytes( header.begin(), header.begin() + 10 ) );
+        std::atomic_bool stop{ false };
+        // Whether the bytes are read before the stop or not, the header is
+        // incomplete: the outcome is the same.
+        auto stopper = std::thread( [ &stop ] {
+            std::this_thread::sleep_for( milliseconds( 200 ) );
+            stop = true;
+        } );
+        FdSource source( pipe.readEnd(), &stop );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+        stopper.join();
+
+        THEN( "the conversion ends Stopped, leaving nothing" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Stopped );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+
+    GIVEN( "Stop and Cancel both pressed before the header came" )
+    {
+        Pipe pipe;
+        std::atomic_bool cancel{ true };
+        FdSource source( pipe.readEnd(), &cancel );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path(), &cancel );
+
+        THEN( "Cancel wins" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Cancelled );
+        }
+    }
+
+    GIVEN( "a pipe closed by its writer before any header" )
+    {
+        Pipe pipe;
+        pipe.closeWrite();
+        FdSource source( pipe.readEnd() );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+
+        THEN( "that is no capture: the conversion fails" )
+        {
+            REQUIRE_FALSE( source.stopped() );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+        }
+    }
+}
+
 SCENARIO( "The end of a stream ends its capture", "[capture_source]" )
 {
     const auto packets = somePackets();

@@ -232,6 +232,23 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
             }
         }
 
+        WHEN( "Stop is pressed before the header has come" )
+        {
+            stop->click();
+            REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+
+            THEN( "no tab is opened, it says it was stopped, not failed, and nothing is left" )
+            {
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( host.notifications.isEmpty() );
+                REQUIRE( summary->text().contains( "stopped before anything was captured" ) );
+                REQUIRE_FALSE( summary->text().contains( "Error" ) );
+                REQUIRE(
+                    host.logs.join( '\n' ).contains( "stopped before anything was captured" ) );
+                REQUIRE( QDir( root.path() ).isEmpty() );
+            }
+        }
+
         WHEN( "the stream closes after the header alone" )
         {
             pipe->write( header );

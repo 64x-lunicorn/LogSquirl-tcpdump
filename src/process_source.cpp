@@ -374,6 +374,11 @@ bool ProcessSource::available()
     return process_->bytesAvailable() > 0 || process_->state() == QProcess::NotRunning;
 }
 
+bool ProcessSource::endedOnPurpose() const
+{
+    return started_ && group_->ended;
+}
+
 QString ProcessSource::failure() const
 {
     if ( !started_ ) {

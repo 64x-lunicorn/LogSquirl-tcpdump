@@ -117,6 +117,10 @@ struct ConversionResult {
         /// summary then hold what was captured (convertStream()).
         Failed,
         Cancelled, ///< Nothing is left behind.
+        /// A stream stopped (Stop, or its capture program ended on purpose)
+        /// before its capture header had come: nothing was captured, and
+        /// nothing is left behind (convertStream()).  Not a failure.
+        Stopped,
     };
 
     Status status = Status::Failed;
@@ -226,7 +230,9 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
  *
  * A stream that breaks off with a read error (a capture program that
  * failed) ends Failed; once a packet was converted, what was captured is
- * kept: the text file, the raw capture and the summary of them.
+ * kept: the text file, the raw capture and the summary of them.  A stream
+ * stopped before its header had come (StreamSource::stopped()) ends
+ * Stopped, not Failed: nothing went wrong, nothing was captured.
  *
  * @param cancel  If set, checked between packets; stops the conversion and
  *                removes what was written.  The source must be given it
