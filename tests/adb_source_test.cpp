@@ -202,10 +202,12 @@ struct FakeAdb {
         REQUIRE( QDir( dir.path() ).mkpath( "tmp" ) );
         const auto perl = QStandardPaths::findExecutable( "perl" );
         REQUIRE_FALSE( perl.isEmpty() );
+        // A call's line is written at once: calls that run together (a
+        // listing while a capture starts) do not mix their lines.
         writeScript( path( "adb" ),
                      QString( "d='%1'\n"
-                              "for a in \"$@\"; do printf '[%s]' \"$a\"; done >>\"$d/adb.log\"\n"
-                              "echo >>\"$d/adb.log\"\n"
+                              "l=; for a in \"$@\"; do l=\"$l[$a]\"; done\n"
+                              "printf '%s\\n' \"$l\" >>\"$d/adb.log\"\n"
                               "if [ \"$1\" = -s ]; then\n"
                               "  if [ ! -f \"$d/serial-$2\" ]; then\n"
                               "    echo \"adb: device '$2' not found\" >&2; exit 1\n"
@@ -584,6 +586,7 @@ SCENARIO( "The Android source captures live through a fake adb", "[adb_source]" 
                 REQUIRE( run.contains( "run uid=0" ) );
                 REQUIRE( run.contains( "[-i]\n[wlan0]\n[-s]\n[4096]\n[-U]\n[-w]\n[-]\n"
                                        "[udp port 9999]\n" ) );
+                INFO( adb.adbLog().toStdString() );
                 REQUIRE( adb.captures().contains( "su -c" ) == viaSu );
             }
 

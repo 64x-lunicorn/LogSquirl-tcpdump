@@ -572,10 +572,12 @@ struct FakeExtcaps {
     {
         REQUIRE( dir.isValid() );
         REQUIRE( QDir( dir.path() ).mkpath( "extcap" ) );
+        // A call's line is written at once: calls that run together (a
+        // listing while a capture starts) do not mix their lines.
         writeScript( path( "extcap/fakedump" ),
                      QString( "d='%1'\n"
-                              "for a in \"$@\"; do printf '[%s]' \"$a\"; done >>\"$d/calls.log\"\n"
-                              "echo >>\"$d/calls.log\"\n"
+                              "l=; for a in \"$@\"; do l=\"$l[$a]\"; done\n"
+                              "printf '%s\\n' \"$l\" >>\"$d/calls.log\"\n"
                               "mode=; ifc=; fifo=\n"
                               "while [ $# -gt 0 ]; do\n"
                               "  case \"$1\" in\n"
