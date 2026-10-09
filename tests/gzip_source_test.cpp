@@ -335,7 +335,9 @@ SCENARIO( "Mangled gzip never breaks the source", "[gzip][fuzz]" )
         {
             const auto firstMember = gzipped( data.left( data.size() / 2 ), 1, 4096 ).size();
             for ( qsizetype n = 0; n < compressed.size(); ++n ) {
-                CountingSource input( compressed.left( n ) );
+                // Kept: the source reads the bytes in place, not a copy.
+                const auto cut = compressed.left( n );
+                CountingSource input( cut );
                 GzipSource gzip( input );
                 const auto all = readAll( gzip, 4096 );
                 REQUIRE( data.startsWith( all ) );
