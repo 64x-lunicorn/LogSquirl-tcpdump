@@ -25,8 +25,8 @@
 #pragma once
 
 #include "capture_stats.h"
-#include "packet_formatter.h"
 #include "pcap_parser.h"
+#include "stream_tracker.h"
 
 #include <QString>
 
@@ -95,7 +95,7 @@ struct ConversionResult {
 /// the caps to see them reached on a small capture.
 struct ConversionOptions {
     /// Conversations to number at most; later ones show stream "?".
-    size_t maxStreams = PacketFormatter::kMaxStreams;
+    size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
 };

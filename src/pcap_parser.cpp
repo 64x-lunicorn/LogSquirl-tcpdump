@@ -112,6 +112,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     wireLen = std::max( wireLen, remaining );
     if ( pkt.ipProtocol == IpProtoTcp && remaining >= 20 ) {
         pkt.protocol = "TCP";
+        pkt.transport = Transport::Tcp;
         pkt.srcPort = readBE16( data );
         pkt.dstPort = readBE16( data + 2 );
         pkt.tcpSeq = readBE32( data + 4 );
@@ -149,6 +150,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     }
     else if ( pkt.ipProtocol == IpProtoUdp && remaining >= 8 ) {
         pkt.protocol = "UDP";
+        pkt.transport = Transport::Udp;
         pkt.srcPort = readBE16( data );
         pkt.dstPort = readBE16( data + 2 );
         auto udpLen = readBE16( data + 4 );

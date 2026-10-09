@@ -25,6 +25,7 @@
 #include "pcap_converter.h"
 
 #include "packet_formatter.h"
+#include "stream_tracker.h"
 #include "tempdirs.h"
 
 #include <QDir>
@@ -77,7 +78,7 @@ private:
 };
 
 /// The summary of a converted capture, from what was collected on the way.
-CaptureSummary summarise( CaptureStats&& stats, const PacketFormatter& formatter,
+CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
                           const CaptureReader& reader, size_t maxStreams )
 {
     // The packets' link-layer types first, then any the capture declares
@@ -97,7 +98,7 @@ CaptureSummary summarise( CaptureStats&& stats, const PacketFormatter& formatter
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );
     summary.endsInsideRecord = reader.truncated();
-    if ( formatter.streamLimitReached() ) {
+    if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
     }
     if ( stats.endpointLimitReached() ) {
@@ -225,7 +226,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
 
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
-    PacketFormatter formatter( reader.precision(), options.maxStreams );
+    StreamTracker tracker( options.maxStreams );
+    PacketFormatter formatter( reader.precision() );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }
@@ -240,7 +242,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             return result;
         }
         stats.add( pkt );
-        if ( !writeLine( formatter.format( pkt ) ) ) {
+        const auto stream = tracker.track( pkt );
+        if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }
         if ( progress ) {
@@ -260,7 +263,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     ConversionResult result;
     result.status = ConversionResult::Status::Converted;
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
-    result.summary = summarise( std::move( stats ), formatter, reader, options.maxStreams );
+    result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
     outputDir.setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );
 }

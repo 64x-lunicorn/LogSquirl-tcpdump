@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **Only TCP and UDP have streams, numbered per transport.** TCP and UDP
+  conversations are numbered independently, each from 0, as Wireshark's
+  `tcp.stream` and `udp.stream` are; the Protocol column says which one a
+  number belongs to. Conversations are followed by a module of their own,
+  the Stream Tracker, which keeps a state slot per stream for later
+  analyses.
 - **Link type and time precision come with each packet.** Internally, every
   packet carries the link-layer type it was dissected with and the precision
   of its timestamp, read through one reader interface, so that a capture
@@ -24,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Hello` instead of `Len=9 [Client Hello]` for TLS, and `Len=29 | Query
   example.com` instead of `Len=29 Query example.com` for DNS. HTTP, NMEA,
   SOCKS and the payload previews already used it.
+
+### Fixed
+- **ICMP, ARP and IP fragments no longer get a stream.** As documented, they
+  show `-`: before, every packet with IP addresses was numbered, so ICMP and
+  a fragment between the same two hosts shared one "conversation", and ARP
+  got a number of its own.
 
 ## [0.2.0] — 2026-09-30
 

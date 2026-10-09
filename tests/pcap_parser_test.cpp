@@ -477,6 +477,7 @@ SCENARIO( "Parsing an ICMP Echo Request", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "ICMP" );
+                REQUIRE_FALSE( result.packets[ 0 ].transport );
                 REQUIRE( result.packets[ 0 ].info.find( "Echo request" ) != std::string::npos );
                 REQUIRE( result.packets[ 0 ].srcIp == "10.0.0.1" );
                 REQUIRE( result.packets[ 0 ].dstIp == "10.0.0.2" );

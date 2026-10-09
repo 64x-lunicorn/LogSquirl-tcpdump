@@ -138,8 +138,8 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
             {
                 auto result = parse( file );
                 PacketFormatter formatter( result.packets[ 0 ].precision );
-                formatter.format( result.packets[ 0 ] );
-                const auto line = formatter.format( result.packets[ 1 ] );
+                formatter.format( result.packets[ 0 ], kNoStream );
+                const auto line = formatter.format( result.packets[ 1 ], kNoStream );
                 REQUIRE( line.find( " 0.123456784 " ) != std::string::npos );
                 REQUIRE( formatter.header().find( "Time" ) != std::string::npos );
             }
@@ -157,8 +157,8 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
             REQUIRE( result.packets[ 1 ].precision == TimePrecision::Microseconds );
             REQUIRE( result.packets[ 1 ].timestampNsec == 250000000 );
             PacketFormatter formatter( TimePrecision::Microseconds );
-            formatter.format( result.packets[ 0 ] );
-            REQUIRE( formatter.format( result.packets[ 1 ] ).find( " 1.249995 " )
+            formatter.format( result.packets[ 0 ], kNoStream );
+            REQUIRE( formatter.format( result.packets[ 1 ], kNoStream ).find( " 1.249995 " )
                      != std::string::npos );
         }
     }
@@ -171,8 +171,8 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
         {
             auto result = parse( file );
             PacketFormatter formatter;
-            formatter.format( result.packets[ 0 ] );
-            REQUIRE( formatter.format( result.packets[ 1 ] ).find( " -0.600000 " )
+            formatter.format( result.packets[ 0 ], kNoStream );
+            REQUIRE( formatter.format( result.packets[ 1 ], kNoStream ).find( " -0.600000 " )
                      != std::string::npos );
         }
     }
@@ -321,6 +321,7 @@ SCENARIO( "IPv6 extension headers are walked to the transport layer", "[pcap_par
         THEN( "its UDP header is parsed" )
         {
             REQUIRE( pkt.protocol == "UDP" );
+            REQUIRE( pkt.transport == Transport::Udp );
             REQUIRE( pkt.srcPort == 1 );
         }
     }
@@ -333,6 +334,7 @@ SCENARIO( "IPv6 extension headers are walked to the transport layer", "[pcap_par
         THEN( "it is shown as a fragment, without ports" )
         {
             REQUIRE( pkt.protocol == "IPv6" );
+            REQUIRE_FALSE( pkt.transport );
             REQUIRE( pkt.srcPort == 0 );
             REQUIRE( pkt.info == "Fragment of IP protocol 17 (offset 1480, ID 0x0000CAFE)" );
         }
@@ -355,6 +357,7 @@ SCENARIO( "IPv4 fragments after the first are not parsed as TCP or UDP", "[pcap_
 
         THEN( "its TCP header is parsed" )
         {
+            REQUIRE( pkt.transport == Transport::Tcp );
             REQUIRE( pkt.srcPort == 40000 );
         }
     }
@@ -368,6 +371,7 @@ SCENARIO( "IPv4 fragments after the first are not parsed as TCP or UDP", "[pcap_
         THEN( "it is shown as a fragment, without ports" )
         {
             REQUIRE( pkt.protocol == "IPv4" );
+            REQUIRE_FALSE( pkt.transport );
             REQUIRE( pkt.srcPort == 0 );
             REQUIRE( pkt.srcIp == "192.168.1.1" );
             REQUIRE( pkt.info == "Fragment of IP protocol 6 (offset 1480, ID 0x1234)" );

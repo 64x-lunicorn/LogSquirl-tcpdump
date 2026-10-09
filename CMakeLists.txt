@@ -40,6 +40,7 @@ add_library(logsquirl_tcpdump SHARED
     src/pcap_parser.cpp
     src/payload_describer.cpp
     src/packet_formatter.cpp
+    src/stream_tracker.cpp
     src/capture_stats.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp

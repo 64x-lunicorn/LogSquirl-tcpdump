@@ -36,8 +36,11 @@
 
 #pragma once
 
+#include "payload_describer.h"
+
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -126,6 +129,10 @@ struct PacketRecord {
     uint8_t ipProtocol = 0;
     uint8_t ipTtl = 0;
 
+    /// TCP or UDP when the packet's header of it was read, and with it the
+    /// ports; unset for every other packet, an IP fragment after the first
+    /// and a transport header cut short among them.
+    std::optional<Transport> transport;
     uint16_t srcPort = 0;
     uint16_t dstPort = 0;
 

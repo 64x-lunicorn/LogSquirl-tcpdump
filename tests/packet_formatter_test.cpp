@@ -81,6 +81,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pkt1.timestampNsec = 0;
         pkt1.srcIp = "192.168.1.1";
         pkt1.dstIp = "10.0.0.1";
+        pkt1.transport = Transport::Tcp;
         pkt1.srcPort = 80;
         pkt1.dstPort = 443;
         pkt1.protocol = "TCP";
@@ -93,6 +94,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pkt2.timestampNsec = 500000000;
         pkt2.srcIp = "10.0.0.1";
         pkt2.dstIp = "192.168.1.1";
+        pkt2.transport = Transport::Tcp;
         pkt2.srcPort = 443;
         pkt2.dstPort = 80;
         pkt2.protocol = "TCP";
@@ -137,6 +139,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pktA1.timestampNsec = 0;
         pktA1.srcIp = "192.168.1.1";
         pktA1.dstIp = "10.0.0.1";
+        pktA1.transport = Transport::Tcp;
         pktA1.srcPort = 80;
         pktA1.dstPort = 443;
         pktA1.protocol = "TCP";
@@ -149,11 +152,12 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pktB1.timestampNsec = 100000000;
         pktB1.srcIp = "172.16.0.5";
         pktB1.dstIp = "8.8.8.8";
+        pktB1.transport = Transport::Tcp;
         pktB1.srcPort = 54321;
-        pktB1.dstPort = 53;
-        pktB1.protocol = "DNS";
+        pktB1.dstPort = 443;
+        pktB1.protocol = "TCP";
         pktB1.capturedLen = 74;
-        pktB1.info = "Query A example.com";
+        pktB1.info = "54321 > 443 [SYN]";
 
         PacketRecord pktA2;
         pktA2.number = 3;
@@ -161,6 +165,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pktA2.timestampNsec = 200000000;
         pktA2.srcIp = "10.0.0.1";
         pktA2.dstIp = "192.168.1.1";
+        pktA2.transport = Transport::Tcp;
         pktA2.srcPort = 443;
         pktA2.dstPort = 80;
         pktA2.protocol = "TCP";
@@ -222,6 +227,26 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         }
     }
 
+    GIVEN( "an ICMP packet between two hosts" )
+    {
+        PacketRecord icmp;
+        icmp.number = 1;
+        icmp.srcIp = "192.168.1.1";
+        icmp.dstIp = "10.0.0.1";
+        icmp.protocol = "ICMP";
+        icmp.info = "Echo request";
+
+        WHEN( "formatting" )
+        {
+            auto lines = formatAllPackets( { icmp } );
+
+            THEN( "it has no stream: only TCP and UDP have one" )
+            {
+                REQUIRE( lines[ 1 ].substr( 7, 8 ) == "-       " );
+            }
+        }
+    }
+
     GIVEN( "packets recorded to the nanosecond" )
     {
         PacketRecord first;
@@ -275,5 +300,28 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
                 REQUIRE( lines.size() == 1 );
             }
         }
+    }
+}
+
+SCENARIO( "The Packet Formatter shows the stream it is handed", "[packet_formatter]" )
+{
+    PacketFormatter formatter;
+    PacketRecord pkt;
+    pkt.transport = Transport::Udp;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+
+    auto streamColumn
+        = [ & ]( int streamId ) { return formatter.format( pkt, streamId ).substr( 7, 8 ); };
+
+    THEN( "a number is shown alone, without the transport" )
+    {
+        REQUIRE( streamColumn( 7 ) == "7       " );
+    }
+
+    THEN( "no stream is shown as -, an unnumbered one as ?" )
+    {
+        REQUIRE( streamColumn( kNoStream ) == "-       " );
+        REQUIRE( streamColumn( kUnnumbered ) == "?       " );
     }
 }

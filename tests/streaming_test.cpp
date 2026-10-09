@@ -603,7 +603,7 @@ SCENARIO( "Only regular files are converted", "[converter]" )
 }
 #endif
 
-SCENARIO( "Stream numbering and endpoint counts stop growing at their cap", "[capture_stats]" )
+SCENARIO( "Endpoint counts stop growing at their cap", "[capture_stats]" )
 {
     auto packetBetween = []( const std::string& src, uint16_t srcPort ) {
         PacketRecord pkt;
@@ -614,26 +614,6 @@ SCENARIO( "Stream numbering and endpoint counts stop growing at their cap", "[ca
         pkt.dstPort = 80;
         return pkt;
     };
-
-    GIVEN( "a formatter that numbers at most two streams" )
-    {
-        PacketFormatter formatter( TimePrecision::Microseconds, 2 );
-        auto streamOf = [ &formatter ]( const PacketRecord& pkt ) {
-            const auto line = formatter.format( pkt );
-            const auto column = line.substr( 7, 8 );
-            return column.substr( 0, column.find( ' ' ) );
-        };
-
-        THEN( "a third conversation is marked ?, while known ones keep their number" )
-        {
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 1 ) ) == "0" );
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 2 ) ) == "1" );
-            REQUIRE_FALSE( formatter.streamLimitReached() );
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 3 ) ) == "?" );
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 1 ) ) == "0" );
-            REQUIRE( formatter.streamLimitReached() );
-        }
-    }
 
     GIVEN( "statistics that keep at most three endpoints" )
     {

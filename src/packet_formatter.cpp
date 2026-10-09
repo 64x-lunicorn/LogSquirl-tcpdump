@@ -30,7 +30,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <iomanip>
-#include <map>
 #include <sstream>
 
 namespace tcpdump {
@@ -107,40 +106,14 @@ std::string PacketFormatter::header() const
     return hdr.str();
 }
 
-std::string PacketFormatter::format( const PacketRecord& pkt )
+std::string PacketFormatter::format( const PacketRecord& pkt, int streamId )
 {
     if ( !haveBase_ ) {
         haveBase_ = true;
         baseTimeSec_ = pkt.timestampSec;
         baseTimeNsec_ = pkt.timestampNsec;
     }
-    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId( pkt ), precision_ );
-}
-
-int PacketFormatter::streamId( const PacketRecord& pkt )
-{
-    // Packets sharing the same IP+port 4-tuple (in either direction) belong
-    // to the same conversation.
-    if ( pkt.srcIp.empty() && pkt.dstIp.empty() ) {
-        return kNoStream; // No IP layer (e.g. ARP) — no stream
-    }
-
-    // Build canonical key: sort endpoints so both directions match
-    auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
-    auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
-    std::string key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
-
-    const auto known = streams_.find( key );
-    if ( known != streams_.end() ) {
-        return known->second;
-    }
-    if ( streams_.size() >= maxStreams_ ) {
-        streamLimitReached_ = true;
-        return kUnnumbered;
-    }
-    const auto next = static_cast<int>( streams_.size() );
-    streams_.emplace( std::move( key ), next );
-    return next;
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_ );
 }
 
 std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
@@ -150,12 +123,13 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
         finest = std::max( finest, pkt.precision );
     }
     PacketFormatter formatter( finest );
+    StreamTracker tracker;
     std::vector<std::string> lines;
     lines.reserve( packets.size() + 1 );
     lines.push_back( formatter.header() );
 
     for ( const auto& pkt : packets ) {
-        lines.push_back( formatter.format( pkt ) );
+        lines.push_back( formatter.format( pkt, tracker.track( pkt ).id ) );
     }
     return lines;
 }

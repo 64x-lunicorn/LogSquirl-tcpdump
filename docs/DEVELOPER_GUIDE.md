@@ -32,7 +32,7 @@ It is the one `CaptureReader` so far (see *The reader seam* below):
 `parsePcap()` parses a whole buffer in memory, for tests.
 
 #### The reader seam
-Everything past the reader (Converter, Packet Formatter, `CaptureStats`)
+Everything past the reader (Converter, Stream Tracker, Packet Formatter, `CaptureStats`)
 sees a capture through `CaptureReader` only, never through a file header.
 Each `PacketRecord` carries the link-layer type it was dissected with
 (`linkType`) and the resolution its timestamp was recorded in
@@ -69,7 +69,7 @@ preview and its caps. A description is finalised as one line before it
 leaves the describer, so one packet is always one line whatever a detector
 forgot to escape.
 
-### 3. Packet Formatter (`packet_formatter.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, Time,
 Source, Destination, Protocol, Len, Info. Times are relative to the first
@@ -77,10 +77,27 @@ packet, with 6 decimals, or 9 when the capture announces nanosecond
 precision for any of its packets (`PacketFormatter` takes the reader's
 `precision()`; `formatAllPackets()` the finest of its packets).
 
-Stream IDs are computed from IP+port 4-tuples — both directions of a
-conversation share the same stream number. Non-TCP/UDP packets (ICMP,
-ARP) show `-` as stream. At most `PacketFormatter::kMaxStreams` (1,000,000)
-conversations are numbered; packets of later ones show `?`.
+The Formatter keeps no conversations: the Stream column shows the stream
+number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
+`kUnnumbered`.
+
+`StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Converter,
+follows the conversations of a capture. Only TCP and UDP packets have a
+stream: those the parser read a TCP or UDP header of (`PacketRecord::transport`
+is set) and that share addresses and ports, in either direction. TCP and
+UDP are numbered independently, each from 0, as Wireshark's `tcp.stream`
+and `udp.stream` are; the column shows the number alone, the Protocol
+column says which transport it belongs to. ICMP, ICMPv6, ARP, IP fragments
+after the first and every other packet without TCP/UDP ports show `-`. At
+most `StreamTracker::kMaxStreams` (1,000,000) conversations, both transports
+together, are numbered; packets of later ones show `?`.
+
+`track()` returns a `Stream`: the number and a pointer to the stream's
+`StreamState`, the same slot for every packet of the stream (null without
+a number). The slot is empty for now; modules that follow a conversation
+(relative sequence numbers, TCP analysis, …) add their fields to it and
+read and update them through that pointer. Every field added costs memory
+once per numbered stream.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet,
 and the link-layer types of the packets in the order they were first seen. It
@@ -93,8 +110,8 @@ port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
-`convertPcap()` reads a capture through a `CaptureReader`, formats each packet and
-appends its line to a new output file, reporting progress and checking a
+`convertPcap()` reads a capture through a `CaptureReader`, has the Stream
+Tracker give each packet its stream, formats the packet and appends its line to a new output file, reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
