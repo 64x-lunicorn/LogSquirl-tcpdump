@@ -1261,6 +1261,18 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
         html += "<br>";
     }
 
+    // TLS decryption, with a key log: what it decrypted, or why it could not
+    if ( summary.tlsSessionsDecrypted ) {
+        html += "<b>TLS decryption</b><br>";
+        if ( !summary.keyLogError.empty() ) {
+            html += QString( "<i>%1</i><br>" )
+                        .arg( QString::fromStdString( summary.keyLogError ).toHtmlEscaped() );
+        }
+        html += QString( "Sessions decrypted: %1<br><br>" )
+                    .arg( QLocale().toString(
+                        static_cast<qulonglong>( *summary.tlsSessionsDecrypted ) ) );
+    }
+
     // Top IPs
     html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
                 .arg( summary.otherEndpointPackets ? "more than " : "" )

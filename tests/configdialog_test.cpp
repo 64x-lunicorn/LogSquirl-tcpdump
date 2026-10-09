@@ -92,6 +92,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
         options.tcpTimestamps = true;
         options.someIpPorts = { 30501, 30502 };
         options.someIpNamesFile = QStringLiteral( "/data/someip-names.txt" );
+        options.keyLogPath = "/home/user/sslkeys.log";
         ConfigDialog dialog( options );
 
         THEN( "its controls show them" )
@@ -109,6 +110,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE( child<QLineEdit>( dialog, "someIpPorts" )->text() == "30501, 30502" );
             REQUIRE( child<QLineEdit>( dialog, "someIpNamesFile" )->text()
                      == "/data/someip-names.txt" );
+            REQUIRE( child<QLineEdit>( dialog, "keyLogPath" )->text() == "/home/user/sslkeys.log" );
             REQUIRE( dialog.options().layout.timeColumns == TimeColumns::AbsoluteOnly );
             REQUIRE( dialog.options().previewChars == 50 );
         }
@@ -132,6 +134,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             child<QCheckBox>( dialog, "tcpTimestamps" )->setChecked( false );
             child<QLineEdit>( dialog, "someIpPorts" )->setText( "40000 40001, nope" );
             child<QLineEdit>( dialog, "someIpNamesFile" )->setText( " /data/other.txt " );
+            child<QLineEdit>( dialog, "keyLogPath" )->setText( " /tmp/other.keys " );
 
             THEN( "the dialog's options are the new ones" )
             {
@@ -147,6 +150,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE_FALSE( edited.tcpTimestamps );
                 REQUIRE( edited.someIpPorts == std::vector<uint16_t>{ 40000, 40001 } );
                 REQUIRE( edited.someIpNamesFile == "/data/other.txt" );
+                REQUIRE( edited.keyLogPath == "/tmp/other.keys" );
             }
         }
 
@@ -170,6 +174,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( restored.tcpTimestamps == defaults.tcpTimestamps );
                 REQUIRE( restored.someIpPorts.empty() );
                 REQUIRE( restored.someIpNamesFile.isEmpty() );
+                REQUIRE( restored.keyLogPath.isEmpty() );
             }
         }
     }

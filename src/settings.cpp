@@ -45,6 +45,7 @@ constexpr const char* kReassemblyMegabytesKey = "conversion/reassemblyMegabytes"
 constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
 constexpr const char* kSomeIpPortsKey = "conversion/someIpPorts";
 constexpr const char* kSomeIpNamesFileKey = "conversion/someIpNamesFile";
+constexpr const char* kKeyLogPathKey = "conversion/tlsKeyLogFile";
 
 /// The keys of the live capture choice, in the [live] group.
 constexpr const char* kLiveSourceKey = "live/source";
@@ -129,6 +130,7 @@ ConversionOptions loadConversionOptions( const QString& configDir )
     options.someIpPorts = parseSomeIpPorts(
         file.value( kSomeIpPortsKey ).toStringList().join( QLatin1Char( ',' ) ).toStdString() );
     options.someIpNamesFile = file.value( kSomeIpNamesFileKey ).toString();
+    options.keyLogPath = file.value( kKeyLogPathKey ).toString();
     return options;
 }
 
@@ -157,6 +159,7 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     }
     file.setValue( kSomeIpPortsKey, ports.isEmpty() ? QVariant( QString() ) : QVariant( ports ) );
     file.setValue( kSomeIpNamesFileKey, options.someIpNamesFile );
+    file.setValue( kKeyLogPathKey, options.keyLogPath );
     file.sync();
     return file.status() == QSettings::NoError;
 }
