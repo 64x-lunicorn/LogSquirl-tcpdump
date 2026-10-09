@@ -454,7 +454,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     if ( !options.keyLogPath.isEmpty() ) {
         keyLog.emplace( options.keyLogPath );
         decryption.emplace(
-            [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog->find( clientRandom ); } );
+            [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog->find( clientRandom ); },
+            [ &keyLog ] { return keyLog->bytesRead(); } );
     }
     // The names DNS answers gave addresses, only when they are shown.
     std::optional<HostNames> names;

@@ -25,6 +25,7 @@
 #include "tls_key_log.h"
 
 #include <QFile>
+#include <QFileInfo>
 
 #include <algorithm>
 #include <cstring>
@@ -38,6 +39,8 @@ namespace {
 /// The longest secret a line may hold: a SHA-384 traffic secret, or a
 /// TLS 1.2 master secret, 48 bytes.
 constexpr size_t kMaxSecretBytes = 48;
+/// A TLS 1.3 traffic secret is as long as its hash: SHA-256's or SHA-384's.
+constexpr size_t kSha256Bytes = 32;
 
 int hexDigit( char c )
 {
@@ -128,8 +131,10 @@ size_t KeyLog::addLines( const char* text, size_t len )
             continue;
         }
         SecretBytes secret( secretHex.size() / 2 );
-        if ( secret.empty() || !fromHex( secretHex, secret.data(), secret.size() )
-             || ( label == "CLIENT_RANDOM" && secret.size() != kMaxSecretBytes ) ) {
+        const bool sized = label == "CLIENT_RANDOM"
+                               ? secret.size() == kMaxSecretBytes
+                               : secret.size() == kSha256Bytes || secret.size() == kMaxSecretBytes;
+        if ( !sized || !fromHex( secretHex, secret.data(), secret.size() ) ) {
             continue;
         }
         *slotOf( secrets_[ random ], label ) = std::move( secret );
@@ -150,43 +155,66 @@ const SessionSecrets* KeyLog::find( const uint8_t* clientRandom ) const
 
 KeyLogFile::KeyLogFile( const QString& path )
     : path_( path )
+    , lastRead_( std::chrono::steady_clock::now() )
 {
     read();
 }
 
 void KeyLogFile::read()
 {
-    lastRead_ = std::chrono::steady_clock::now();
     QFile file( path_ );
     if ( !file.open( QIODevice::ReadOnly ) ) {
         error_ = QStringLiteral( "Cannot read the TLS key log: %1" ).arg( file.errorString() );
         return;
     }
     error_.clear();
-    const auto size = std::min<int64_t>( file.size(), kMaxBytes );
+    fileSize_ = file.size();
+    const auto size = std::min<int64_t>( fileSize_, kMaxBytes );
     if ( size <= offset_ || !file.seek( offset_ ) ) {
         return;
     }
+    ++reads_;
     auto bytes = file.read( size - offset_ );
-    // The whole lines are read for good.  A last line without its line
-    // feed may still be being written: it is taken if it holds a secret,
-    // and read again, whole, with what comes after it.
+    // Only whole lines are read.  A last line without its line feed may
+    // still be being written, a secret cut short in it: it is read, whole,
+    // with what comes after it.
     const auto end = bytes.lastIndexOf( '\n' ) + 1;
-    keys_.addLines( bytes.constData(), static_cast<size_t>( bytes.size() ) );
+    keys_.addLines( bytes.constData(), static_cast<size_t>( end ) );
     offset_ += end;
     wipe( bytes.data(), static_cast<size_t>( bytes.size() ) );
 }
 
+int64_t KeyLogFile::bytesRead()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if ( now - lastRead_ >= kRereadInterval ) {
+        lastRead_ = now;
+        // Read again only what was added: a file that did not grow has
+        // nothing new.
+        if ( QFileInfo( path_ ).size() != fileSize_ ) {
+            read();
+        }
+    }
+    return offset_;
+}
+
 const SessionSecrets* KeyLogFile::find( const uint8_t* clientRandom )
 {
-    if ( const auto* secrets = keys_.find( clientRandom ) ) {
+    const auto* secrets = keys_.find( clientRandom );
+    if ( secrets && complete( *secrets ) ) {
         return secrets;
     }
-    if ( std::chrono::steady_clock::now() - lastRead_ < kRereadInterval ) {
-        return nullptr;
-    }
-    read();
+    // None yet, or a TLS 1.3 session's secrets that the browser writes one
+    // after another, some still to come.
+    bytesRead();
     return keys_.find( clientRandom );
+}
+
+bool KeyLogFile::complete( const SessionSecrets& secrets )
+{
+    return !secrets.masterSecret.empty()
+           || ( !secrets.clientHandshakeTraffic.empty() && !secrets.serverHandshakeTraffic.empty()
+                && !secrets.clientTraffic.empty() && !secrets.serverTraffic.empty() );
 }
 
 } // namespace tcpdump::tls

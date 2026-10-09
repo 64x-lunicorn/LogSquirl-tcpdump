@@ -632,7 +632,8 @@ sessions decrypted, or says why the key log could not be read.
 - **Records**, put together across segments by the TCP reassembly; a record
   the capture lost is passed over, and the next ones are still decrypted
 - **During a live capture** the key log is read again as the browser adds
-  to it (at most twice a second)
+  to it (at most twice a second); a last line is read once its line feed
+  is written
 - **Memory**: a session keeps its keys and sequence numbers, no data; at
   most 65,536 sessions are followed, and HTTP/2 header decoding takes at
   most 32 MB, all sessions together

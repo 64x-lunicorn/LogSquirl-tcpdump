@@ -1211,10 +1211,17 @@ it runs, and the text is the same as before.
 - **Key log** (`tls_key_log.h`): `KeyLog` holds the secrets of the NSS key
   log format by the ClientHello's random, `CLIENT_RANDOM` (the TLS 1.2
   master secret) and the four TLS 1.3 traffic secrets; other labels and
-  malformed lines are passed over. `KeyLogFile` reads the file (64 MiB at
-  most) when the conversion starts, and again for a session not in it, at
-  most every 500 ms, from where it stopped: a live capture's browser adds
-  to it. A last line without its line feed is taken but read again. The
+  malformed lines are passed over; a TLS 1.3 secret must be 32 or 48 bytes
+  long, a master secret 48. `KeyLogFile` reads the file (64 MiB at most)
+  when the conversion starts, and again for a session not in it, or one
+  with only some of its TLS 1.3 secrets (the browser writes them one by
+  one), at most every 500 ms and only when the file grew, from where it
+  stopped: a live capture's browser adds to it. A last line without its
+  line feed is not read until it has one, as it may be half written (a
+  48-byte secret cut short would pass for a 32-byte one); a key log
+  must end in a line feed. `TlsDecryption` looks for a session the key
+  log had no secrets for again only once `KeyLogFile::bytesRead()` grew,
+  not on each of its records. The
   secrets live in `tls::SecretBytes`, which wipe themselves
   (`mbedtls_platform_zeroize`); the bytes read are wiped too. Nothing logs
   or shows a secret; `error()` says only why the file could not be read.

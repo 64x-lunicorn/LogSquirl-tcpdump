@@ -428,7 +428,10 @@ struct TlsDecryption::Session {
     bool keyed = false;          ///< Keys were set up from the key log.
     bool http2 = false;          ///< The application data is HTTP/2.
     bool decrypted = false;      ///< A record was decrypted.
-    uint8_t fins = 0;            ///< Bit 1 << d: direction d sent its FIN.
+    /// The key log's bytes read when it had no secrets for the session;
+    /// -1 if it was not looked for in vain.
+    int64_t missedAt = -1;
+    uint8_t fins = 0; ///< Bit 1 << d: direction d sent its FIN.
     Direction dir[ 2 ];
 };
 
@@ -448,8 +451,9 @@ bool tls13Keys( const Suite& suite, const tls::SecretBytes& secret,
 
 } // namespace
 
-TlsDecryption::TlsDecryption( Lookup lookup )
+TlsDecryption::TlsDecryption( Lookup lookup, KeyLogBytes keyLogBytes )
     : lookup_( std::move( lookup ) )
+    , keyLogBytes_( std::move( keyLogBytes ) )
 {
 }
 
@@ -585,8 +589,12 @@ bool TlsDecryption::ensureKeys( Session& session )
     if ( !session.serverHello || !lookup_ ) {
         return false;
     }
+    if ( keyLogBytes_ && session.missedAt >= 0 && keyLogBytes_() == session.missedAt ) {
+        return false; // nothing was added to the key log since
+    }
     const auto* secrets = lookup_( session.clientRandom.data() );
     if ( secrets == nullptr ) {
+        session.missedAt = keyLogBytes_ ? keyLogBytes_() : -1;
         return false;
     }
     const auto& suite = *session.suite;

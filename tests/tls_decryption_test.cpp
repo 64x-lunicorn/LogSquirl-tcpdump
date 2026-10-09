@@ -650,3 +650,43 @@ SCENARIO( "TLS 1.3 handshake messages over more than one record", "[tls_decrypti
         }
     }
 }
+
+SCENARIO( "A session the key log has no secrets for is looked for once it grew",
+          "[tls_decryption]" )
+{
+    Tls13Session session;
+    int asked = 0;
+    int64_t keyLogBytes = 100;
+    TlsDecryption decryption(
+        [ &asked ]( const uint8_t* ) -> const tls::SessionSecrets* {
+            ++asked;
+            return nullptr;
+        },
+        [ &keyLogBytes ] { return keyLogBytes; } );
+    session.feed( decryption, 0, session.clientHello() );
+    session.feed( decryption, 1, session.serverHello() );
+
+    GIVEN( "records of the session while the key log stays as it is" )
+    {
+        for ( int i = 0; i < 5; ++i ) {
+            session.feed( decryption, 1, session.seal( 1, 0x16, Bytes( 30, 0x01 ) ) );
+        }
+
+        THEN( "it is looked for once" )
+        {
+            REQUIRE( asked == 1 );
+        }
+
+        WHEN( "the key log grows" )
+        {
+            keyLogBytes = 200;
+            session.feed( decryption, 1, session.seal( 1, 0x16, Bytes( 30, 0x01 ) ) );
+            session.feed( decryption, 1, session.seal( 1, 0x16, Bytes( 30, 0x01 ) ) );
+
+            THEN( "it is looked for again, once" )
+            {
+                REQUIRE( asked == 2 );
+            }
+        }
+    }
+}

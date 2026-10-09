@@ -85,6 +85,9 @@ public:
     /// The secrets of the session whose ClientHello has the random at
     /// the pointer, tls::kRandomBytes of it; null if there are none.
     using Lookup = std::function<const tls::SessionSecrets*( const uint8_t* clientRandom )>;
+    /// How much of the key log has been read (tls::KeyLogFile::bytesRead()):
+    /// a session it had no secrets for is looked for again once it grew.
+    using KeyLogBytes = std::function<int64_t()>;
 
     /// TLS sessions followed at most; later ones are not decrypted.
     static constexpr size_t kMaxSessions = 65536;
@@ -95,7 +98,9 @@ public:
     /// Bytes the HTTP/2 sessions hold at most, all together.
     static constexpr size_t kHttp2MemoryLimit = 32 * 1024 * 1024;
 
-    explicit TlsDecryption( Lookup lookup );
+    /// Without @p keyLogBytes a session without secrets is looked for on
+    /// each of its records.
+    explicit TlsDecryption( Lookup lookup, KeyLogBytes keyLogBytes = {} );
     ~TlsDecryption();
     TlsDecryption( const TlsDecryption& ) = delete;
     TlsDecryption& operator=( const TlsDecryption& ) = delete;
@@ -159,6 +164,7 @@ private:
     void erase( int streamId );
 
     Lookup lookup_;
+    KeyLogBytes keyLogBytes_;
     std::unordered_map<int, std::unique_ptr<Session>> sessions_;
     size_t sessionsDecrypted_ = 0;
     size_t http2Memory_ = 0;
