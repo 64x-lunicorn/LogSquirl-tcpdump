@@ -25,17 +25,33 @@ Pure C++ (no Qt dependency). `PcapReader` reads libpcap captures from a
   fragments after the first are not parsed as TCP/UDP
 - Dissects transport layer (TCP, UDP, ICMP, ICMPv6); a TCP header shorter
   than 20 bytes is flagged and yields no payload
-- Detects application protocols: TLS, HTTP, DNS, NMEA 0183, SOCKS4/5 (only
-  messages of the exact shape, in the right direction, on proxy ports)
-- Falls back to port-based protocol hints (SSH, FTP, ADB, etc.)
-- Generates payload previews: printable ASCII, other bytes as dots, at most
-  200 characters; predominantly binary payloads get none
-- Escapes bytes outside printable ASCII as `\xNN` in text taken from the
-  payload, so one packet is always one line
+- Hands a TCP or UDP payload with its ports to the Payload Describer, and
+  appends the description it gets back to the transport summary after ` | `
 
 `parsePcap()` parses a whole buffer in memory, for tests.
 
-### 2. Packet Formatter (`packet_formatter.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 2. Payload Describer (`payload_describer.h/cpp`)
+Pure C++. `describePayload()` takes the captured payload bytes, the two
+ports and the transport, and returns a protocol label and a one-line
+description, or no match. It is the only module that knows which
+application protocols exist on which transport and in which order they are
+tried: each transport has a table of detectors, all of the same shape
+(payload in, description out if recognised), and the first match wins.
+- TCP: TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in
+  the right direction, on proxy ports), then the port hint
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, then NMEA and the port hint
+- The port hint, the last entry of both tables, names well-known ports
+  (SSH, FTP, ADB, etc.) and previews the payload: printable ASCII, other
+  bytes as dots, at most 200 characters; predominantly binary payloads get
+  none
+
+Everything that turns payload bytes into text lives here: escaping bytes
+outside printable ASCII as `\xNN`, the first-line cut (120 bytes), the
+preview and its caps. A description is finalised as one line before it
+leaves the describer, so one packet is always one line whatever a detector
+forgot to escape.
+
+### 3. Packet Formatter (`packet_formatter.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, Time,
 Source, Destination, Protocol, Len, Info. Times are relative to the first
@@ -55,12 +71,12 @@ not with its size, and both are capped (at roughly 100 MB and 10 MB), so a
 port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
-### 3. Converter (`pcap_converter.h/cpp`)
+### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture with `PcapReader`, formats each packet and
 appends its line to a new output file (created with `NewOnly`, owner-only
 permissions), reporting progress and checking a cancel flag between packets.
 
-### 4. Sidebar Widget (`sidebarwidget.h/cpp`)
+### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:
 - "Open pcap…" button triggering a QFileDialog
 - A progress bar and Cancel button while a capture is converted
@@ -92,12 +108,25 @@ temporary files only in the first case.
 
 ## Adding Protocol Support
 
-To add a new protocol:
-1. Add constants to `pcap_parser.h`
-2. Add a parse function in `pcap_parser.cpp` (called from `parseTransport`
-   or the appropriate layer)
-3. Set `pkt.protocol` and `pkt.info`
-4. Add test cases in `tests/pcap_parser_test.cpp`
+An application protocol is one detector function plus one table entry in
+`payload_describer.cpp`:
+1. Write the detector with the common shape,
+   `std::optional<PayloadDescription> name( const Payload& )`: look at the
+   payload bytes and ports, return the label and a description if the
+   payload is yours, `std::nullopt` otherwise. Use `escapeBytes()` or
+   `firstLine()` for any text taken from the payload.
+2. Add it to `kTcpDetectors` or `kUdpDetectors`, for the transport it runs
+   on, at the place in the order where it belongs: an entry earlier in the
+   table wins over a later one, so a detector that recognises its payload
+   by content goes before the port-based ones that could claim it.
+3. Test it against the describer in `tests/payload_describer_test.cpp`:
+   feed `describePayload()` the payload and ports and check the label and
+   description. No frame is needed; the layers below are tested on their
+   own. A precedence case (a payload two detectors could claim) is a test
+   of the table order, and belongs there too.
+
+A new link or network layer, in contrast, is parsed in `pcap_parser.cpp`
+and tested with the frame builders in `tests/pcapbuilder.h`.
 
 ## Testing
 
@@ -107,8 +136,9 @@ cmake --build build
 cd build && ctest --output-on-failure
 ```
 
-Most tests build synthetic packets with the helpers in
-`tests/pcapbuilder.h`. `tests/corpus` holds captures with the text they must
+The link, network and transport layer tests build synthetic packets with
+the helpers in `tests/pcapbuilder.h`; the application protocols are tested
+through the Payload Describer with a payload alone. `tests/corpus` holds captures with the text they must
 convert to (`corpus_test.cpp`); run the tests with `TCPDUMP_UPDATE_CORPUS=1`
 to rewrite that text after an intended change of the output, and review the
 difference. Plugin and sidebar tests run against the `FakeHost` in

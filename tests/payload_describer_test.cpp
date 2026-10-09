@@ -92,6 +92,128 @@ SCENARIO( "The describer names a TCP payload from its bytes and ports alone", "[
             }
         }
     }
+
+    GIVEN( "a TLS handshake record carrying a Client Hello" )
+    {
+        const Bytes record{ 0x16, 0x03, 0x03, 0x00, 0x05, 0x01 };
+
+        THEN( "the label is TLS and the description names the message" )
+        {
+            const auto described = describe( Transport::Tcp, record, 49152, 443 );
+            REQUIRE( described.label == "TLS" );
+            REQUIRE( described.description == "Client Hello" );
+        }
+    }
+
+    GIVEN( "a TLS application data record" )
+    {
+        const Bytes record{ 0x17, 0x03, 0x03, 0x00, 0x10, 0xAB, 0xCD };
+
+        THEN( "it is labelled TLS whatever the ports" )
+        {
+            const auto described = describe( Transport::Tcp, record, kUnknownSrc, kUnknownDst );
+            REQUIRE( described.label == "TLS" );
+            REQUIRE( described.description == "Application Data" );
+        }
+    }
+
+    GIVEN( "an HTTP GET request" )
+    {
+        const auto request = text( "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n" );
+
+        THEN( "the label is HTTP and the description is the request line" )
+        {
+            const auto described = describe( Transport::Tcp, request, 53248, 80 );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE( described.description == "GET /index.html HTTP/1.1" );
+        }
+    }
+
+    GIVEN( "an HTTP response" )
+    {
+        const auto response = text( "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n" );
+
+        THEN( "the description is the status line" )
+        {
+            const auto described = describe( Transport::Tcp, response, 80, 53248 );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE( described.description == "HTTP/1.1 404 Not Found" );
+        }
+    }
+
+    GIVEN( "an NMEA sentence on unknown ports" )
+    {
+        const auto sentence = text( "$GAGSV,2,2,08,21,41,270,11*76\r\n" );
+
+        THEN( "the label is NMEA and the description is the sentence" )
+        {
+            const auto described = describe( Transport::Tcp, sentence, kUnknownSrc, kUnknownDst );
+            REQUIRE( described.label == "NMEA" );
+            REQUIRE( described.description == "$GAGSV,2,2,08,21,41,270,11*76" );
+        }
+    }
+
+    GIVEN( "a TCP segment without payload to the SSH port" )
+    {
+        THEN( "the port names the protocol, and there is nothing to describe" )
+        {
+            const auto described = describe( Transport::Tcp, {}, 49152, 22 );
+            REQUIRE( described.label == "SSH" );
+            REQUIRE( described.description.empty() );
+        }
+    }
+}
+
+SCENARIO( "The detectors are tried in a fixed order", "[describer]" )
+{
+    GIVEN( "an ADB frame on port 5555 that starts with $WRTE, as an NMEA sentence would" )
+    {
+        // No comma after the five letters: not NMEA.  Enough text follows
+        // for a preview.
+        const auto frame
+            = Bytes{ '$', 'W', 'R', 'T', 'E', 'J', 0x00, 0x02, 0x00, 0x80, 0x01, 0x00, 0x00, 0x00 }
+              + text( "07-08 10:29:23.549  7182  7413 W TAG: some log message here" );
+
+        THEN( "NMEA does not claim it, and the port hint names ADB" )
+        {
+            const auto described = describe( Transport::Tcp, frame, 5555, 60217 );
+            REQUIRE( described.label == "ADB" );
+            REQUIRE( described.description.rfind( "$WRTEJ", 0 ) == 0 );
+        }
+    }
+
+    GIVEN( "an HTTP CONNECT request sent to a proxy port" )
+    {
+        const auto request = text( "CONNECT example.com:443 HTTP/1.1\r\n\r\n" );
+
+        THEN( "HTTP comes before SOCKS and wins" )
+        {
+            const auto described = describe( Transport::Tcp, request, 50000, 3128 );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE( described.description == "CONNECT example.com:443 HTTP/1.1" );
+        }
+    }
+
+    GIVEN( "a payload on a proxy port that is neither HTTP nor a SOCKS message" )
+    {
+        THEN( "the port hint names SOCKS, with the payload previewed" )
+        {
+            const auto described = describe( Transport::Tcp, text( "hello proxy" ), 50000, 1080 );
+            REQUIRE( described.label == "SOCKS" );
+            REQUIRE( described.description == "hello proxy" );
+        }
+    }
+
+    GIVEN( "a DNS-shaped payload on the NMEA-free NTP port" )
+    {
+        THEN( "the UDP port entries come before the content detectors" )
+        {
+            const auto described
+                = describe( Transport::Udp, text( "$GPGGA,1,2,3*47\r\n" ), 40000, 123 );
+            REQUIRE( described.label == "NTP" );
+            REQUIRE( described.description.empty() );
+        }
+    }
 }
 
 SCENARIO( "The describer names a UDP payload from its bytes and ports alone", "[describer]" )

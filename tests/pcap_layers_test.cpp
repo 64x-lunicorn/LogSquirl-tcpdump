@@ -27,7 +27,6 @@
 #include "packet_formatter.h"
 #include "pcapbuilder.h"
 
-
 using namespace tcpdump;
 using namespace tcpdump_test;
 
