@@ -511,7 +511,10 @@ of the detectors and in-stream passes the tables use.
   for SETTINGS, PING and GOAWAY, the fixed length of PING, RST_STREAM,
   PRIORITY and WINDOW_UPDATE, no more than the default maximum frame size
   of 16384 bytes, the reserved bit unset), or the bytes are taken for no
-  frames. HPACK header blocks are not decoded; HTTP/2 over TLS is TLS
+  frames. Cleartext HTTP/2's HPACK header blocks are not decoded here: a
+  segment's frames are named only. HTTP/2 over TLS is TLS, unless a key log
+  decrypts it: then `Http2Direction` follows each direction's bytes whole
+  and decodes the header blocks (see *TLS Decryption*).
 - TLS: every record of a segment and every handshake message of a record
   is named, in order, up to four, then `…`; a ClientHello adds its server
   name, the highest version it offers (`supported_versions`, GREASE aside,
