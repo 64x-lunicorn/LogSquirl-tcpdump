@@ -44,7 +44,7 @@ namespace tcpdump {
  * What the Converter knows about a converted capture, in the shape the
  * sidebar shows it: the counts and breakdowns, and what was cut.
  *
- * "What was cut" is three facts, each standing on its own with the number
+ * "What was cut" is four facts, each standing on its own with the number
  * that applies, so that the sidebar prints what it is told.
  */
 struct CaptureSummary {
@@ -59,6 +59,9 @@ struct CaptureSummary {
     /// Packets per IP address, for every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
 
+    /// Packets captured shorter than on the wire, cut at the snaplen; their
+    /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
+    uint64_t cutPackets = 0;
     /// The capture ends in the middle of a record, which is not shown.
     bool endsInsideRecord = false;
     /// Set when conversations past the stream cap went unnumbered and show

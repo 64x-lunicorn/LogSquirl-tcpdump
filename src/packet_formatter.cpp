@@ -23,6 +23,9 @@
  *
  * Output example:
  *   1    0.000000     192.168.1.100   10.0.0.1        TCP       60   443 → 54321 [SYN] Seq=0
+ *
+ * Length is the packet's length on the wire; a packet cut at the snaplen
+ * ends its Info with "[cut to N bytes]", N the bytes captured.
  */
 
 #include "packet_formatter.h"
@@ -85,8 +88,14 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     oss << std::setw( 40 ) << ( pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp );
     oss << std::setw( 40 ) << ( pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp );
     oss << std::setw( 10 ) << pkt.protocol;
-    oss << std::setw( 7 ) << pkt.capturedLen;
+    // The length on the wire, as Wireshark's Length column; a packet cut at
+    // the snaplen says in Info how much of it was captured, so that a reader
+    // knows why its description stops short.
+    oss << std::setw( 7 ) << pkt.originalLen;
     oss << pkt.info;
+    if ( pkt.capturedLen < pkt.originalLen ) {
+        oss << ( pkt.info.empty() ? "" : " " ) << "[cut to " << pkt.capturedLen << " bytes]";
+    }
 
     return oss.str();
 }
@@ -101,7 +110,7 @@ std::string PacketFormatter::header() const
     hdr << std::setw( 40 ) << "Source";
     hdr << std::setw( 40 ) << "Destination";
     hdr << std::setw( 10 ) << "Protocol";
-    hdr << std::setw( 7 ) << "Len";
+    hdr << std::setw( 7 ) << "Length";
     hdr << "Info";
     return hdr.str();
 }

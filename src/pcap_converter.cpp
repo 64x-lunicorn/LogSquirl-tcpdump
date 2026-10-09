@@ -90,6 +90,7 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     CaptureSummary summary;
     summary.packets = stats.packets;
     summary.bytes = stats.bytes;
+    summary.cutPackets = stats.cutPackets;
     summary.durationSeconds = stats.durationSeconds();
     for ( const auto linkType : stats.linkTypes ) {
         summary.linkTypeNames.push_back( linkTypeName( linkType ) );

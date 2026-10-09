@@ -186,6 +186,7 @@ struct Record {
     uint32_t tsSec = 1000;
     uint32_t tsFrac = 0;  ///< Microseconds, or nanoseconds in a nanosecond file.
     int64_t inclLen = -1; ///< -1: the size of data.
+    int64_t origLen = -1; ///< The length on the wire; -1: the size of data.
 };
 
 struct FileOptions {
@@ -218,7 +219,8 @@ inline Bytes pcapFile( const std::vector<Record>& records, const FileOptions& o 
         put32( b, r.tsFrac );
         put32( b, r.inclLen >= 0 ? static_cast<uint32_t>( r.inclLen )
                                  : static_cast<uint32_t>( r.data.size() ) );
-        put32( b, static_cast<uint32_t>( r.data.size() ) );
+        put32( b, r.origLen >= 0 ? static_cast<uint32_t>( r.origLen )
+                                 : static_cast<uint32_t>( r.data.size() ) );
         b.insert( b.end(), r.data.begin(), r.data.end() );
     }
     return b;

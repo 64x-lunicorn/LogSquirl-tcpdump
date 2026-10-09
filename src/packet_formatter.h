@@ -24,8 +24,12 @@
  * Each packet is rendered as a single-line summary suitable for display
  * in LogSquirl's log viewer.  The format mimics Wireshark's packet list:
  *
- *   No.  Time         Source          Destination     Protocol  Len  Info
- *   1    0.000000     192.168.1.1     10.0.0.1        TCP       60   443 → 54321 [SYN] Seq=0
+ *   No.  Time         Source          Destination     Protocol  Length  Info
+ *   1    0.000000     192.168.1.1     10.0.0.1        TCP       60      443 → 54321 [SYN] Seq=0
+ *
+ * Length is the length on the wire (PacketRecord::originalLen).  A packet
+ * captured shorter than that, cut at the snaplen, ends its Info with
+ * "[cut to N bytes]", N the bytes captured.
  */
 
 #pragma once

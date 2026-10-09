@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **The Length column shows the length on the wire.** The column, headed
+  `Length` instead of `Len`, shows how long the packet was on the wire, as
+  Wireshark's Length column does, instead of how many bytes were captured:
+  a capture taken with a snaplen no longer looks like it carried small
+  packets. A packet captured shorter than on the wire ends its Info with
+  `[cut to 96 bytes]`, naming the bytes captured, so it is clear why its
+  description stops short; the sidebar summary counts these cut packets.
+  `Len=` in Info remains the TCP or UDP payload length.
 - **Only TCP and UDP have streams, numbered per transport.** TCP and UDP
   conversations are numbered independently, each from 0, as Wireshark's
   `tcp.stream` and `udp.stream` are; the Protocol column says which one a

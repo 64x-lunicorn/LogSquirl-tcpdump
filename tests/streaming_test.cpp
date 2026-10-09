@@ -203,6 +203,60 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
     }
 }
 
+SCENARIO( "Packets captured shorter than on the wire are counted as cut", "[capture_stats]" )
+{
+    CaptureStats stats;
+    PacketRecord pkt;
+    pkt.capturedLen = 96;
+    pkt.originalLen = 1514;
+    stats.add( pkt );
+    pkt.capturedLen = 60;
+    pkt.originalLen = 60;
+    stats.add( pkt );
+    pkt.capturedLen = 54;
+    pkt.originalLen = 66;
+    stats.add( pkt );
+
+    REQUIRE( stats.packets == 3 );
+    REQUIRE( stats.cutPackets == 2 );
+}
+
+SCENARIO( "The summary counts the packets cut at the snaplen", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a capture whose second packet was cut to 50 of its bytes" )
+    {
+        auto cut = eth( EthertypeIpv4,
+                        ipv4( IpProtoUdp, udp( 40000, 2222, text( std::string( 200, 'a' ) ) ) ) );
+        const auto wireLen = static_cast<int64_t>( cut.size() );
+        cut.resize( 50 );
+        std::vector<Record> records{ { udpPacket( 1111 ) }, { cut }, { udpPacket( 1111 ) } };
+        records[ 1 ].origLen = wireLen;
+        const auto input = writeFile( dir, "cut.pcap", pcapFile( records ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "one packet is counted as cut, and its line says how many bytes were "
+                  "captured" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.packets == 3 );
+                REQUIRE( result.summary.cutPackets == 1 );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( lines.size() == 4 );
+                REQUIRE( lines[ 2 ].endsWith( " [cut to 50 bytes]" ) );
+                REQUIRE_FALSE( lines[ 1 ].contains( "[cut to" ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "A capture is converted to a text file packet by packet", "[converter]" )
 {
     QTemporaryDir dir;
@@ -242,6 +296,7 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
                 REQUIRE( result.summary.protocolPackets.at( "UDP" ) == 3 );
                 REQUIRE( result.summary.endpointPackets.at( "192.168.1.1" ) == 3 );
                 REQUIRE_FALSE( result.summary.endsInsideRecord );
+                REQUIRE( result.summary.cutPackets == 0 );
                 REQUIRE_FALSE( result.summary.streamCap );
                 REQUIRE_FALSE( result.summary.otherEndpointPackets );
             }

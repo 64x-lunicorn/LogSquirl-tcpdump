@@ -72,10 +72,16 @@ forgot to escape.
 ### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, Time,
-Source, Destination, Protocol, Len, Info. Times are relative to the first
+Source, Destination, Protocol, Length, Info. Times are relative to the first
 packet, with 6 decimals, or 9 when the capture announces nanosecond
 precision for any of its packets (`PacketFormatter` takes the reader's
 `precision()`; `formatAllPackets()` the finest of its packets).
+
+Length is the packet's length on the wire (`originalLen`), as Wireshark's
+Length column is; `Len=` in Info is the TCP or UDP payload length. A packet
+captured shorter than on the wire (`capturedLen < originalLen`, cut at the
+snaplen) ends its Info with `[cut to N bytes]`, N the bytes captured, so a
+reader knows why its description stops short.
 
 The Formatter keeps no conversations: the Stream column shows the stream
 number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
@@ -99,7 +105,8 @@ a number). The slot is empty for now; modules that follow a conversation
 read and update them through that pointer. Every field added costs memory
 once per numbered stream.
 
-`CaptureStats` collects the sidebar summary's counts packet by packet,
+`CaptureStats` collects the sidebar summary's counts packet by packet
+(among them the packets cut at the snaplen),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
@@ -135,7 +142,8 @@ Qt UI that provides:
 - A progress bar and Cancel button while a capture is converted
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints, packets per second, file size, the link-layer type names
-  (comma-separated when there are several)
+  (comma-separated when there are several), and the number of packets cut
+  at the snaplen when there are any
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome

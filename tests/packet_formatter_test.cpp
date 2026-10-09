@@ -325,3 +325,67 @@ SCENARIO( "The Packet Formatter shows the stream it is handed", "[packet_formatt
         REQUIRE( streamColumn( kUnnumbered ) == "?       " );
     }
 }
+
+SCENARIO( "The Length column shows the length on the wire", "[packet_formatter]" )
+{
+    PacketFormatter formatter;
+    PacketRecord pkt;
+    pkt.number = 1;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+    pkt.protocol = "TCP";
+    pkt.info = "40000 \xe2\x86\x92 443 [ACK] Seq=1 Ack=1 Win=512 Len=1460";
+
+    // The Length column starts after No., Stream, Time, Source, Destination
+    // and Protocol, and is 7 characters wide.
+    const size_t lengthColumn = 7 + 8 + 15 + 40 + 40 + 10;
+    auto lengthOf = [ & ]( const std::string& line ) {
+        auto sub = line.substr( lengthColumn, 7 );
+        return sub.substr( 0, sub.find( ' ' ) );
+    };
+
+    THEN( "the column is headed Length" )
+    {
+        REQUIRE( lengthOf( formatter.header() ) == "Length" );
+        REQUIRE( formatter.header().substr( lengthColumn + 7 ) == "Info" );
+    }
+
+    GIVEN( "a packet captured whole" )
+    {
+        pkt.capturedLen = 1514;
+        pkt.originalLen = 1514;
+        const auto line = formatter.format( pkt, 0 );
+
+        THEN( "the column shows its length, and Info carries no cut marker" )
+        {
+            REQUIRE( lengthOf( line ) == "1514" );
+            REQUIRE( line.substr( lengthColumn + 7 ) == pkt.info );
+        }
+    }
+
+    GIVEN( "a packet cut at a snaplen of 96 bytes" )
+    {
+        pkt.capturedLen = 96;
+        pkt.originalLen = 1514;
+        const auto line = formatter.format( pkt, 0 );
+
+        THEN( "the column shows the length on the wire, and Info names the bytes captured" )
+        {
+            REQUIRE( lengthOf( line ) == "1514" );
+            REQUIRE( line.substr( lengthColumn + 7 ) == pkt.info + " [cut to 96 bytes]" );
+        }
+    }
+
+    GIVEN( "a cut packet without an Info text" )
+    {
+        pkt.capturedLen = 0;
+        pkt.originalLen = 60;
+        pkt.info.clear();
+        const auto line = formatter.format( pkt, kNoStream );
+
+        THEN( "Info holds the cut marker alone" )
+        {
+            REQUIRE( line.substr( lengthColumn + 7 ) == "[cut to 0 bytes]" );
+        }
+    }
+}

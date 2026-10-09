@@ -42,6 +42,9 @@ void CaptureStats::add( const PacketRecord& pkt )
 
     ++packets;
     bytes += pkt.capturedLen;
+    if ( pkt.capturedLen < pkt.originalLen ) {
+        ++cutPackets;
+    }
     addLinkType( pkt.linkType );
     ++protocolPackets[ pkt.protocol ];
     protocolBytes[ pkt.protocol ] += pkt.capturedLen;
