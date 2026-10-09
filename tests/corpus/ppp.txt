@@ -1,0 +1,28 @@
+No.    Stream  UTC Time                     Time           Source                                  Destination                             Protocol  Length Info
+1      -       2025-10-09 08:53:20.001500Z  0.000000       02:00:5e:00:00:10                       ff:ff:ff:ff:ff:ff                       PPPoED    60     Active Discovery Initiation (PADI)
+2      -       2025-10-09 08:53:20.003000Z  0.001500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       PPPoED    60     Active Discovery Offer (PADO) AC-Name='corpus-ac'
+3      -       2025-10-09 08:53:20.004500Z  0.003000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       PPPoED    60     Active Discovery Request (PADR)
+4      -       2025-10-09 08:53:20.006000Z  0.004500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       PPPoED    60     Active Discovery Session-confirmation (PADS)
+5      -       2025-10-09 08:53:20.007500Z  0.006000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       LCP       60     Configuration Request
+6      -       2025-10-09 08:53:20.009000Z  0.007500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       LCP       60     Configuration Request
+7      -       2025-10-09 08:53:20.010500Z  0.009000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       LCP       60     Configuration Ack
+8      -       2025-10-09 08:53:20.012000Z  0.010500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       LCP       60     Configuration Ack
+9      -       2025-10-09 08:53:20.013500Z  0.012000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       PAP       60     Authenticate-Request
+10     -       2025-10-09 08:53:20.015000Z  0.013500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       PAP       60     Authenticate-Ack
+11     -       2025-10-09 08:53:20.016500Z  0.015000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       IPCP      60     Configuration Request
+12     -       2025-10-09 08:53:20.018000Z  0.016500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       IPCP      60     Configuration Nak
+13     -       2025-10-09 08:53:20.019500Z  0.018000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       IPCP      60     Configuration Request
+14     -       2025-10-09 08:53:20.021000Z  0.019500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       IPCP      60     Configuration Ack
+15     -       2025-10-09 08:53:20.022500Z  0.021000       203.0.113.77                            203.0.113.1                             ICMP      68     Echo (ping) request id=0x0077, seq=1
+16     -       2025-10-09 08:53:20.024000Z  0.022500       203.0.113.1                             203.0.113.77                            ICMP      68     Echo (ping) reply id=0x0077, seq=1
+17     -       2025-10-09 08:53:20.025500Z  0.024000       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       LCP       60     Echo Request
+18     -       2025-10-09 08:53:20.027000Z  0.025500       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       LCP       60     Echo Reply
+19     -       2025-10-09 08:53:20.028500Z  0.027000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       LCP       60     Termination Request
+20     -       2025-10-09 08:53:20.030000Z  0.028500       02:00:5e:00:00:ac                       02:00:5e:00:00:10                       LCP       60     Termination Ack
+21     -       2025-10-09 08:53:20.031500Z  0.030000       02:00:5e:00:00:10                       02:00:5e:00:00:ac                       PPPoED    60     Active Discovery Terminate (PADT)
+22     -       2025-10-09 08:53:20.033000Z  0.031500       -                                       -                                       LCP       14     Configuration Request
+23     -       2025-10-09 08:53:20.034500Z  0.033000       -                                       -                                       LCP       14     Configuration Ack
+24     -       2025-10-09 08:53:20.036000Z  0.034500       -                                       -                                       IPv6CP    18     Configuration Request
+25     -       2025-10-09 08:53:20.037500Z  0.036000       fe80::200:5eff:fe00:1                   ff02::1                                 ICMPv6    52     Echo (ping) request id=0x0099, seq=1
+26     -       2025-10-09 08:53:20.039000Z  0.037500       198.51.100.1                            198.51.100.2                            ICMP      50     Echo (ping) request id=0x0099, seq=1
+27     0       2025-10-09 08:53:20.040500Z  0.039000       198.51.100.9                            198.51.100.53                           DNS       61     53053 → 53 Len=29 | Standard query 0x3c3c A example.net

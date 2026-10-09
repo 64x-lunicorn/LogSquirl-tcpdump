@@ -70,12 +70,18 @@ struct PcapGlobalHeader {
 
 // ── Link-layer types (subset of libpcap DLT_ constants) ─────────────────
 
-constexpr uint32_t DltNull = 0;        ///< BSD loopback
-constexpr uint32_t DltEthernet = 1;    ///< Ethernet
-constexpr uint32_t DltRaw = 101;       ///< Raw IP (no link-layer header)
-constexpr uint32_t DltLoop = 108;      ///< OpenBSD loopback (family in network byte order)
-constexpr uint32_t DltLinuxSll = 113;  ///< Linux cooked capture v1
-constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
+constexpr uint32_t DltNull = 0;             ///< BSD loopback
+constexpr uint32_t DltEthernet = 1;         ///< Ethernet
+constexpr uint32_t DltPpp = 9;              ///< PPP, with or without HDLC-like framing
+constexpr uint32_t DltPppSerial = 50;       ///< PPP in HDLC-like framing, or Cisco HDLC
+constexpr uint32_t DltPppEther = 51;        ///< PPPoE, without the Ethernet header
+constexpr uint32_t DltRaw = 101;            ///< Raw IP (no link-layer header)
+constexpr uint32_t DltCiscoHdlc = 104;      ///< Cisco HDLC
+constexpr uint32_t DltIeee80211 = 105;      ///< IEEE 802.11 wireless LAN
+constexpr uint32_t DltLoop = 108;           ///< OpenBSD loopback (family in network byte order)
+constexpr uint32_t DltLinuxSll = 113;       ///< Linux cooked capture v1
+constexpr uint32_t DltIeee80211Radio = 127; ///< IEEE 802.11 behind a Radiotap header
+constexpr uint32_t DltLinuxSll2 = 276;      ///< Linux cooked capture v2
 
 /// The display name of a link-layer type ("Ethernet", "Linux SLL2", …), or
 /// its number for one this parser does not know.
@@ -98,6 +104,8 @@ constexpr uint16_t EthertypeArp = 0x0806;
 constexpr uint16_t EthertypeVlan = 0x8100;       ///< 802.1Q customer tag
 constexpr uint16_t EthertypeQinQ = 0x88A8;       ///< 802.1ad service tag
 constexpr uint16_t EthertypeQinQLegacy = 0x9100; ///< Pre-standard QinQ tag
+constexpr uint16_t EthertypePppoeDiscovery = 0x8863;
+constexpr uint16_t EthertypePppoeSession = 0x8864;
 
 constexpr uint8_t IpProtoIcmp = 1;
 constexpr uint8_t IpProtoTcp = 6;
