@@ -289,6 +289,32 @@ SCENARIO( "A protocol a detector recognised sticks to the stream", "[stream_labe
     }
 }
 
+SCENARIO( "A label by port alone does not stick", "[stream_labels]" )
+{
+    GIVEN( "a UDP stream on the NTP port whose first datagram is no NTP packet, then one that is" )
+    {
+        // Version 4, client mode, then the rest of the 48-byte header.
+        Bytes ntp( 48, 0 );
+        ntp[ 0 ] = 0x23;
+        const auto packets = labelled( {
+            datagram( 123, text( "hello" ) ),
+            datagram( 123, ntp ),
+        } );
+
+        THEN( "the first is NTP by its port, a guess that does not stick" )
+        {
+            REQUIRE( packets[ 0 ].protocol == "NTP" );
+            REQUIRE_FALSE( packets[ 0 ].protocolRecognised );
+        }
+        THEN( "the second is NTP by its content" )
+        {
+            REQUIRE( packets[ 1 ].protocol == "NTP" );
+            REQUIRE( packets[ 1 ].protocolRecognised );
+            REQUIRE( descriptionOf( packets[ 1 ] ).rfind( "NTP Version 4, client", 0 ) == 0 );
+        }
+    }
+}
+
 SCENARIO( "What the Payload Describer recognises in a stream sticks too", "[stream_labels]" )
 {
     GIVEN( "an HTTP/2 connection on a port without a hint: the preface, a frame, then a "

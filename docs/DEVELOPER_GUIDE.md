@@ -190,7 +190,9 @@ tried: each transport has a table of detectors, all of the same shape
   private messages (modes 6 and 7) show their version and mode alone. A
   packet of another version, or shorter than the 48-byte header, is `NTP`
   by its port alone. DNS, mDNS, SSDP, NTP, DHCP and DHCPv6 are named by
-  their ports, not guessed: the label sticks to the stream
+  their ports before any other detector is tried; a payload that parses is
+  recognised and its label sticks to the stream, one that does not is only
+  the port's guess (`PayloadDescription::guessed`), which does not
 - DNS: described like Wireshark, `Standard query response 0x1a2b A
   www.example.com CNAME example.com A 93.184.216.34`: the operation, the
   transaction id, the first question's type and name, a response code

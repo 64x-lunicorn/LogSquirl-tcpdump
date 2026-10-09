@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A port alone no longer makes a UDP label stick.** A datagram on the
+  DNS, mDNS, SSDP, NTP, DHCP or DHCPv6 port whose payload does not parse
+  as that protocol is still named by the port, but as a guess: like every
+  port hint, its label no longer sticks to the stream.
 - **Port 8443 is `HTTPS-Alt`.** The port hint named TCP 8443 `HTTP-Alt`,
   like 8080, although it is the usual alternative HTTPS port (IANA's
   `pcsync-https`): the handshake of a TLS connection to 8443, before its

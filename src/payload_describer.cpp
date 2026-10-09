@@ -2095,6 +2095,16 @@ std::optional<PayloadDescription> describedIfAny( const char* label, std::string
     return described( label, std::move( description ) );
 }
 
+/// A description with the label a port names: recognised if the payload
+/// parsed (@p description is not empty), else only the port's guess, which
+/// does not stick to the stream.
+std::optional<PayloadDescription> describedOnPort( const char* label, std::string description )
+{
+    auto result = described( label, std::move( description ) );
+    result->guessed = result->description.empty();
+    return result;
+}
+
 bool onPort( const Payload& p, uint16_t port )
 {
     return p.srcPort == port || p.dstPort == port;
@@ -2170,7 +2180,7 @@ std::optional<PayloadDescription> dnsMessage( const Payload& p )
     if ( !mdns && !onPort( p, 53 ) ) {
         return std::nullopt;
     }
-    return described( mdns ? "mDNS" : "DNS", detectDns( p.data, p.len ) );
+    return describedOnPort( mdns ? "mDNS" : "DNS", detectDns( p.data, p.len ) );
 }
 
 /// SSDP on port 1900: HTTP-shaped messages.
@@ -2179,7 +2189,7 @@ std::optional<PayloadDescription> ssdpMessage( const Payload& p )
     if ( !onPort( p, 1900 ) ) {
         return std::nullopt;
     }
-    return described( "SSDP", detectHttp( p.data, p.len ) );
+    return describedOnPort( "SSDP", detectHttp( p.data, p.len ) );
 }
 
 /// NTP on port 123: named by the port, described if it is an NTP packet.
@@ -2188,7 +2198,7 @@ std::optional<PayloadDescription> ntpPacket( const Payload& p )
     if ( !onPort( p, 123 ) ) {
         return std::nullopt;
     }
-    return described( "NTP", detectNtp( p.data, p.len ) );
+    return describedOnPort( "NTP", detectNtp( p.data, p.len ) );
 }
 
 /// DHCP on ports 67 and 68: named by the port, described if it is a BOOTP
@@ -2198,7 +2208,7 @@ std::optional<PayloadDescription> dhcpPacket( const Payload& p )
     if ( !onPort( p, 67 ) && !onPort( p, 68 ) ) {
         return std::nullopt;
     }
-    return described( "DHCP", detectDhcp( p.data, p.len ) );
+    return describedOnPort( "DHCP", detectDhcp( p.data, p.len ) );
 }
 
 /// DHCPv6 on ports 546 and 547: named by the port, described if the
@@ -2208,7 +2218,7 @@ std::optional<PayloadDescription> dhcpv6Packet( const Payload& p )
     if ( !onPort( p, 546 ) && !onPort( p, 547 ) ) {
         return std::nullopt;
     }
-    return described( "DHCPv6", detectDhcpv6( p.data, p.len ) );
+    return describedOnPort( "DHCPv6", detectDhcpv6( p.data, p.len ) );
 }
 
 /// The UDP detectors, in the order they are tried: ports first, then content.

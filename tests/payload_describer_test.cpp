@@ -475,6 +475,23 @@ SCENARIO( "The describer tells a recognised label from a port's guess", "[descri
         }
     }
 
+    GIVEN( "a UDP payload that does not parse, on a port its detector names" )
+    {
+        // Too short for any of them: DHCPv6 has no magic, so that four bytes
+        // are a message (of an unknown type, maybe) to it.
+        const auto garbage = text( "hi" );
+
+        THEN( "the port's label is a guess, for every port-named detector" )
+        {
+            for ( const uint16_t port : { 53, 5353, 1900, 123, 67, 68, 546, 547 } ) {
+                CAPTURE( port );
+                const auto described = describe( Transport::Udp, garbage, kUnknownSrc, port );
+                REQUIRE_FALSE( described.label.empty() );
+                REQUIRE( described.guessed );
+            }
+        }
+    }
+
     GIVEN( "a payload no detector recognises, on ports without a hint" )
     {
         THEN( "there is no label to guess" )
