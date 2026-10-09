@@ -22,7 +22,8 @@
  * @brief Regression tests converting the captures in tests/corpus.
  *
  * Each <name>.pcap or <name>.pcapng with a <name>.txt beside it must
- * convert to exactly that text.  The captures cover the link layers, byte orders, timestamp
+ * convert to exactly that text, and so must a gzip-compressed
+ * <name>.pcap.gz or <name>.pcapng.gz.  The captures cover the link layers, byte orders, timestamp
  * precisions and protocols the parser handles, including malformed and
  * cut-off records.  After an intended change of the output, run the tests
  * with TCPDUMP_UPDATE_CORPUS=1 to rewrite the .txt files, and review the
@@ -38,6 +39,7 @@
  * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py,
  * ssh.pcap by tests/make_ssh_corpus.py, websocket.pcap by
  * tests/make_websocket_corpus.py, smb.pcap by tests/make_smb_corpus.py,
+ * interfaces.pcapng.gz by tests/make_gzip_corpus.py,
  * tls-decrypt.pcap and the key log beside it, tls-decrypt.keys, by
  * tests/make_tls_decrypt_corpus.py: a capture with a <name>.keys beside it
  * is converted with that key log.
@@ -49,6 +51,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "capture_file.h"
 #include "pcap_converter.h"
 
 #include <QDir>
@@ -69,7 +72,7 @@ QString corpusDir()
 // if there is one.
 QFileInfoList corpusCaptures()
 {
-    const QStringList patterns{ "*.pcap", "*.pcapng" };
+    const QStringList patterns{ "*.pcap", "*.pcapng", "*.pcap.gz", "*.pcapng.gz" };
     auto captures = QDir( corpusDir() ).entryInfoList( patterns, QDir::Files, QDir::Name );
     const QDir local( corpusDir() + QStringLiteral( "/local" ) );
     if ( local.exists() ) {
@@ -96,13 +99,13 @@ SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
     const bool update = qEnvironmentVariableIsSet( "TCPDUMP_UPDATE_CORPUS" );
 
     for ( const auto& capture : corpusCaptures() ) {
-        const auto name = capture.completeBaseName();
+        const auto name = captureBaseName( capture.filePath() );
         const auto expectedPath = capture.dir().filePath( name + ".txt" );
         if ( name.startsWith( "malformed-" ) || ( !QFile::exists( expectedPath ) && !update ) ) {
             continue;
         }
 
-        GIVEN( "the capture " + name.toStdString() )
+        GIVEN( "the capture " + capture.fileName().toStdString() )
         {
             // A key log beside the capture decrypts its TLS sessions.
             ConversionOptions options;
@@ -112,6 +115,7 @@ SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
             }
             const auto result = convertPcap( capture.filePath(), out.path(), nullptr, {}, options );
             REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.compressionProblem.empty() );
             const auto outPath = result.outputPath;
 
             if ( update ) {

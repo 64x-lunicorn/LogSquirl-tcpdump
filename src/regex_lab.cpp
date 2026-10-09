@@ -75,12 +75,31 @@ QString literalPattern( const QString& text )
     return escaped;
 }
 
+QString nameSuffixPattern()
+{
+    // As the Packet Formatter writes it: the characters isHostName()
+    // allows, in parentheses.
+    return QStringLiteral( R"((?:\([A-Za-z0-9_.-]+\))?)" );
+}
+
+QString addressPattern( const QString& address )
+{
+    return literalPattern( address ) + nameSuffixPattern();
+}
+
+QString columnAddress( const QString& column )
+{
+    static const QRegularExpression named( QStringLiteral( R"(^(\S+?)\([A-Za-z0-9_.-]+\)$)" ) );
+    const auto match = named.match( column );
+    return match.hasMatch() ? match.captured( 1 ) : column;
+}
+
 QString endpointPattern( const QString& address )
 {
     // Source, then Destination; the Protocol and Length columns after them
     // pin the two in place.
     return QString( R"(%1(?:%2 +\S+|\S+ +%2) +\S+ +\d+ )" )
-        .arg( upToSourcePattern(), literalPattern( address ) );
+        .arg( upToSourcePattern(), addressPattern( address ) );
 }
 
 QString protocolPattern( const QString& protocol )

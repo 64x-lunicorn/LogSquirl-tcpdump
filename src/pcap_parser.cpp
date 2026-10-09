@@ -908,18 +908,17 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
     }
 }
 
+bool isPreambleText( uint8_t c )
+{
+    return ( c >= 0x20 && c < 0x7F ) || c == '\t' || c == '\r' || c == '\n';
+}
+
 namespace {
 
 bool isPcapMagic( uint32_t magic )
 {
     return magic == PcapMagicLE || magic == PcapMagicBE || magic == PcapNsMagicLE
            || magic == PcapNsMagicBE;
-}
-
-/// A byte of the text tcpdump writes to stderr.
-bool isPreambleText( uint8_t c )
-{
-    return ( c >= 0x20 && c < 0x7F ) || c == '\t' || c == '\r' || c == '\n';
 }
 
 /// Whether the 24 bytes at @p p hold a pcap global header this parser reads:
@@ -953,6 +952,12 @@ CaptureStart findCaptureStart( const uint8_t* data, size_t size, size_t& offset,
                                CaptureFormat& format, std::string& error )
 {
     error = "Not a valid pcap or pcapng file (no pcap magic found)";
+    if ( size >= 2 && data[ 0 ] == 0x1f && data[ 1 ] == 0x8b ) {
+        // A capture file's gzip stream is decompressed before (gzip_source.h).
+        error = "gzip-compressed data: only a gzip-compressed capture file is decompressed, "
+                "not a stream";
+        return CaptureStart::None;
+    }
     for ( size_t i = 0; i <= kMaxPreamble; ++i ) {
         if ( i + 24 > size ) {
             offset = i + 24; // the header that may start here
@@ -1143,6 +1148,16 @@ bool MemorySource::skip( uint64_t n )
         return false;
     }
     pos_ += static_cast<size_t>( n );
+    return true;
+}
+
+bool MemorySource::seek( uint64_t offset )
+{
+    if ( offset > size_ ) {
+        pos_ = size_;
+        return false;
+    }
+    pos_ = static_cast<size_t>( offset );
     return true;
 }
 

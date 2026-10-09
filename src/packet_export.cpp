@@ -54,10 +54,11 @@ const QRegularExpression& rangeRegex()
     return regex;
 }
 
-/// Copies records from the capture file to the export.
+/// Copies records from the capture to the export.
 class RecordCopier {
 public:
-    RecordCopier( QFile& from, QSaveFile& to )
+    /// @param from  The capture, decompressed if need be (CaptureFile).
+    RecordCopier( ByteSource& from, QSaveFile& to )
         : from_( from )
         , to_( to )
     {
@@ -66,16 +67,18 @@ public:
     /// Copy @p span; a pcapng section header with its section length unknown.
     bool copy( const RecordSpan& span, bool sectionHeader = false )
     {
-        if ( !from_.seek( static_cast<qint64>( span.offset ) ) ) {
-            return fail( QStringLiteral( "The capture file cannot be read: %1" )
-                             .arg( from_.errorString() ) );
+        // The spans come in ascending order: in a gzip-compressed capture
+        // a seek decompresses on from the last one.
+        if ( !from_.seek( span.offset ) ) {
+            return fail( QStringLiteral( "The capture file ends before a record: it has "
+                                         "changed since it was converted." ) );
         }
         uint64_t left = span.length;
         bool first = true;
         while ( left > 0 ) {
             const auto chunk = static_cast<qint64>( std::min<uint64_t>( left, kCopyChunk ) );
             buffer_.resize( chunk );
-            if ( from_.read( buffer_.data(), chunk ) != chunk ) {
+            if ( !readFully( chunk ) ) {
                 return fail( QStringLiteral( "The capture file ends inside a record: it has "
                                              "changed since it was converted." ) );
             }
@@ -99,13 +102,28 @@ public:
     }
 
 private:
+    /// Read @p n bytes into the buffer; false if the capture ends first.
+    bool readFully( qint64 n )
+    {
+        auto* data = reinterpret_cast<uint8_t*>( buffer_.data() );
+        qint64 got = 0;
+        while ( got < n ) {
+            const auto more = from_.read( data + got, static_cast<size_t>( n - got ) );
+            if ( more == 0 ) {
+                return false;
+            }
+            got += static_cast<qint64>( more );
+        }
+        return true;
+    }
+
     bool fail( const QString& error )
     {
         error_ = error;
         return false;
     }
 
-    QFile& from_;
+    ByteSource& from_;
     QSaveFile& to_;
     QByteArray buffer_;
     QString error_;
@@ -209,17 +227,17 @@ QString formatPacketRanges( const std::vector<uint32_t>& numbers )
 
 CaptureFormat captureFormatOf( const QString& path )
 {
-    QFile file;
+    CaptureFile file;
     QString problem;
     CaptureFormat format = CaptureFormat::Pcap;
-    if ( !openRegularFile( path, file, problem ) ) {
+    if ( !file.open( path, problem ) ) {
         return format;
     }
-    const auto head = file.read( static_cast<qint64>( kMaxPreamble + 24 ) );
+    HeadSource head( file.source() );
+    const auto& bytes = head.peek( kMaxPreamble + 24 );
     std::string error;
     size_t offset = 0;
-    findCaptureStart( reinterpret_cast<const uint8_t*>( head.constData() ),
-                      static_cast<size_t>( head.size() ), offset, format, error );
+    findCaptureStart( bytes.data(), bytes.size(), offset, format, error );
     return format;
 }
 
@@ -245,9 +263,9 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
                                        "from: choose another file." ) );
     }
 
-    QFile capture;
+    CaptureFile capture;
     QString problem;
-    if ( !openRegularFile( index->capturePath(), capture, problem ) ) {
+    if ( !capture.open( index->capturePath(), problem, index->gzipAccessPoints() ) ) {
         return failed( problem );
     }
     // Written aside and renamed when complete: a failed or cancelled export
@@ -260,7 +278,7 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
 
     ExportResult result;
     CaptureCursor cursor( index );
-    RecordCopier copier( capture, output );
+    RecordCopier copier( capture.source(), output );
     CapturedPacket packet;
     bool headerWritten = false;
     uint64_t section = 0;   ///< The pcapng section written last, by where it starts.

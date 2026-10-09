@@ -52,9 +52,25 @@ QString upToSourcePattern( const QString& stream = QStringLiteral( R"(\S+)" ) );
 /// digit or ':' is escaped.
 QString literalPattern( const QString& text );
 
+/// The pattern of what may follow an address in its Source or Destination
+/// column: the name a DNS answer gave it, in parentheses, when the column
+/// shows host names (LineLayout::hostNames), or nothing.
+QString nameSuffixPattern();
+
+/// The pattern of a Source or Destination column that holds @p address:
+/// the address, literally, and the name a DNS answer gave it, if the
+/// column shows one ("93.184.216.34(example.com)", LineLayout::hostNames),
+/// so that the lines before and after the name was learned match alike.
+QString addressPattern( const QString& address );
+
+/// The address of a Source or Destination @p column, without the name
+/// host names add behind it; the column itself without one.
+QString columnAddress( const QString& column );
+
 /// The pattern that matches the packet lines whose Source or Destination is
-/// @p address, as the summary lists it; an address inside Info does not
-/// count, nor one that @p address only starts or ends.
+/// @p address, as the summary lists it, with or without its name; an
+/// address inside Info does not count, nor one that @p address only starts
+/// or ends.
 QString endpointPattern( const QString& address );
 
 /// The pattern that matches the packet lines whose Protocol is @p protocol,

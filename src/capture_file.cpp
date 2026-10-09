@@ -24,7 +24,11 @@
 
 #include "capture_file.h"
 
+#include "gzip_source.h"
+
 #include <QFileInfo>
+
+#include <algorithm>
 
 #ifdef Q_OS_UNIX
 #include <cerrno>
@@ -50,6 +54,83 @@ bool FileSource::skip( uint64_t n )
         return false;
     }
     return file_.seek( static_cast<qint64>( target ) );
+}
+
+bool FileSource::seek( uint64_t offset )
+{
+    if ( offset > static_cast<uint64_t>( file_.size() ) ) {
+        file_.seek( file_.size() );
+        return false;
+    }
+    return file_.seek( static_cast<qint64>( offset ) );
+}
+
+// ── CaptureFile ──────────────────────────────────────────────────────────
+
+CaptureFile::CaptureFile() = default;
+
+CaptureFile::~CaptureFile()
+{
+    // The decompression reads from the file source, which reads the file.
+    gzip_.reset();
+    fileSource_.reset();
+}
+
+bool CaptureFile::open( const QString& path, QString& error,
+                        std::shared_ptr<const GzipAccessPoints> points )
+{
+    gzip_.reset();
+    fileSource_.reset();
+    file_.close();
+    if ( !openRegularFile( path, file_, error ) ) {
+        return false;
+    }
+    fileSource_ = std::make_unique<FileSource>( file_ );
+
+    // A gzip stream is told by its first bytes, as a capture is.
+    const auto head = file_.read( static_cast<qint64>( kMaxPreamble + 4 ) );
+    size_t start = 0;
+    const bool compressed = findGzipStart( reinterpret_cast<const uint8_t*>( head.constData() ),
+                                           static_cast<size_t>( head.size() ), start );
+    if ( !fileSource_->seek( compressed ? start : 0 ) ) {
+        error = QStringLiteral( "Cannot read the file: %1" ).arg( file_.errorString() );
+        return false;
+    }
+    if ( compressed ) {
+        gzip_ = std::make_unique<GzipSource>( *fileSource_, start );
+        if ( points ) {
+            gzip_->useAccessPoints( std::move( points ) );
+        }
+    }
+    return true;
+}
+
+ByteSource& CaptureFile::source()
+{
+    return gzip_ ? static_cast<ByteSource&>( *gzip_ ) : *fileSource_;
+}
+
+uint64_t CaptureFile::consumed() const
+{
+    return gzip_ ? gzip_->compressedRead() : static_cast<uint64_t>( file_.pos() );
+}
+
+uint64_t CaptureFile::size() const
+{
+    return static_cast<uint64_t>( std::max<qint64>( file_.size(), 0 ) );
+}
+
+QString captureBaseName( const QString& path )
+{
+    const QFileInfo info( path );
+    auto name = info.completeBaseName();
+    if ( info.suffix().compare( QLatin1String( "gz" ), Qt::CaseInsensitive ) == 0 ) {
+        const auto inner = QFileInfo( name ).completeBaseName();
+        if ( !inner.isEmpty() ) {
+            name = inner;
+        }
+    }
+    return name;
 }
 
 namespace {

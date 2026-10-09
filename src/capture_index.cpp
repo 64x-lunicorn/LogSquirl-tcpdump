@@ -126,20 +126,20 @@ void CaptureCursor::close()
     // The reader reads through the sources, the sources from the file.
     reader_.reset();
     headSource_.reset();
-    fileSource_.reset();
-    file_.close();
+    file_.reset();
 }
 
 bool CaptureCursor::reopen( const ReaderCheckpoint* checkpoint )
 {
     close();
     QString problem;
-    if ( !openRegularFile( index_->capturePath(), file_, problem ) ) {
+    file_ = std::make_unique<CaptureFile>();
+    if ( !file_->open( index_->capturePath(), problem, index_->gzipAccessPoints() ) ) {
+        file_.reset();
         error_ = problem;
         return false;
     }
-    fileSource_ = std::make_unique<FileSource>( file_ );
-    headSource_ = std::make_unique<HeadSource>( *fileSource_ );
+    headSource_ = std::make_unique<HeadSource>( file_->source() );
     reader_ = makeCaptureReader( *headSource_ );
     if ( !reader_->open() || ( checkpoint && !reader_->resume( *checkpoint ) ) ) {
         close();

@@ -62,7 +62,8 @@ std::set<int> matched( const QString& pattern, const QStringList& lines )
     return numbers;
 }
 
-/// The lines with @p value in one of @p columns, by their number.
+/// The lines with @p value in one of @p columns, by their number; in Source
+/// and Destination also with the name host names put behind it.
 std::set<int> withColumn( const QStringList& lines, const QStringList& columns,
                           const QString& value )
 {
@@ -70,7 +71,10 @@ std::set<int> withColumn( const QStringList& lines, const QStringList& columns,
     for ( int i = 0; i < lines.size(); ++i ) {
         const auto match = packetLineRegex().match( lines[ i ] );
         for ( const auto& column : columns ) {
-            if ( match.hasMatch() && match.captured( column ) == value ) {
+            const auto text = match.captured( column );
+            const bool named
+                = column != "protocol" && text.startsWith( value + "(" ) && text.endsWith( ")" );
+            if ( match.hasMatch() && ( text == value || named ) ) {
                 numbers.insert( i + 1 );
             }
         }
@@ -117,6 +121,20 @@ SCENARIO( "The summary's filters match the lines of an endpoint or a protocol", 
             REQUIRE( matched( endpointPattern( "fe80::1" ), lines ) == std::set<int>{ 6, 8 } );
             REQUIRE( matched( endpointPattern( "fe80::10" ), lines ) == std::set<int>{ 6, 7 } );
             REQUIRE( matched( endpointPattern( "ff02::1" ), lines ) == std::set<int>{ 7 } );
+        }
+
+        THEN( "an address matches its lines with the name a DNS answer gave it, too" )
+        {
+            const QStringList named{
+                packetLine( "10.0.0.1(host.example)", "10.0.0.2", "TCP", "50000 " ),
+                packetLine( "10.0.0.2", "10.0.0.1(host.example)", "TCP", "80 " ),
+                packetLine( "10.0.0.11(other.example)", "10.0.0.2", "UDP", "53 " ),
+                packetLine( "fe80::1(router.local)", "fe80::10", "ICMPv6", "Type=135" ),
+            };
+            REQUIRE( matched( endpointPattern( "10.0.0.1" ), named ) == std::set<int>{ 1, 2 } );
+            REQUIRE( matched( endpointPattern( "10.0.0.2" ), named ) == std::set<int>{ 1, 2, 3 } );
+            REQUIRE( matched( endpointPattern( "fe80::1" ), named ) == std::set<int>{ 4 } );
+            REQUIRE( matched( endpointPattern( "fe80::10" ), named ) == std::set<int>{ 4 } );
         }
 
         THEN( "a protocol matches the lines of its Protocol column only" )
@@ -170,6 +188,29 @@ SCENARIO( "The summary's filters match the lines of an endpoint or a protocol", 
                 }
             }
         }
+    }
+}
+
+SCENARIO( "A column's address is read without the name behind it", "[regexlab]" )
+{
+    THEN( "a name in parentheses is left out, anything else is kept as it is" )
+    {
+        REQUIRE( columnAddress( "93.184.216.34(www.example.com)" ) == "93.184.216.34" );
+        REQUIRE( columnAddress( "2001:db8::1(example.com)" ) == "2001:db8::1" );
+        REQUIRE( columnAddress( "93.184.216.34" ) == "93.184.216.34" );
+        REQUIRE( columnAddress( "00:11:22:33:44:55" ) == "00:11:22:33:44:55" );
+        REQUIRE( columnAddress( "-" ) == "-" );
+        REQUIRE( columnAddress( "10.0.0.1(not a name)" ) == "10.0.0.1(not a name)" );
+    }
+
+    THEN( "an address pattern matches the address with and without its name only" )
+    {
+        const QRegularExpression column( "^" + addressPattern( "10.0.0.1" ) + "$" );
+        REQUIRE( column.match( "10.0.0.1" ).hasMatch() );
+        REQUIRE( column.match( "10.0.0.1(host.example)" ).hasMatch() );
+        REQUIRE_FALSE( column.match( "10.0.0.10" ).hasMatch() );
+        REQUIRE_FALSE( column.match( "10.0.0.10(host.example)" ).hasMatch() );
+        REQUIRE_FALSE( column.match( "10x0x0x1" ).hasMatch() );
     }
 }
 

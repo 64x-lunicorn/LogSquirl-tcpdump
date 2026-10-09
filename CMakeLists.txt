@@ -34,6 +34,49 @@ add_compile_definitions(LOGSQUIRL_PLUGIN_VERSION="${PROJECT_VERSION}")
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Widgets)
 qt_standard_project_setup()
 
+# ── zlib, for gzip-compressed captures ────────────────────────────────────
+# Fetched as the release tarball, pinned by its SHA-256, and built here as a
+# static library of the files the plugin needs (zlib's own CMakeLists would
+# add a shared library, examples and install rules).  Qt does not offer gzip
+# streaming publicly (qUncompress() takes a whole zlib-format buffer), and a
+# system zlib is not there on every CI platform (Windows).  Z_PREFIX renames
+# its symbols to z_*, and they are hidden, so that it cannot clash with the
+# zlib Qt or the host loads.  Licence: NOTICE.
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW) # extracted files get the extraction time
+endif()
+FetchContent_Declare(tcpdump_zlib
+    URL      https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+    URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+    # No CMakeLists.txt there: the sources are fetched, not added as a project.
+    SOURCE_SUBDIR not-a-cmake-project
+)
+FetchContent_MakeAvailable(tcpdump_zlib)
+
+add_library(tcpdump_zlib STATIC
+    "${tcpdump_zlib_SOURCE_DIR}/adler32.c"
+    "${tcpdump_zlib_SOURCE_DIR}/crc32.c"
+    "${tcpdump_zlib_SOURCE_DIR}/deflate.c"    # the tests write gzip files
+    "${tcpdump_zlib_SOURCE_DIR}/inffast.c"
+    "${tcpdump_zlib_SOURCE_DIR}/inflate.c"
+    "${tcpdump_zlib_SOURCE_DIR}/inftrees.c"
+    "${tcpdump_zlib_SOURCE_DIR}/trees.c"
+    "${tcpdump_zlib_SOURCE_DIR}/zutil.c"
+)
+target_include_directories(tcpdump_zlib SYSTEM PUBLIC "${tcpdump_zlib_SOURCE_DIR}")
+target_compile_definitions(tcpdump_zlib PUBLIC Z_PREFIX)
+set_target_properties(tcpdump_zlib PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_definitions(tcpdump_zlib PRIVATE _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE)
+    target_compile_options(tcpdump_zlib PRIVATE /W0)
+else()
+    target_compile_options(tcpdump_zlib PRIVATE -w)
+endif()
+
 # ── Mbed TLS ──────────────────────────────────────────────────────────────
 # The cryptography of the TLS Decryption (tls_crypto.cpp): AES-GCM, AES-CBC,
 # ChaCha20-Poly1305, HMAC and HKDF of Mbed TLS (Apache-2.0 or
@@ -41,10 +84,6 @@ qt_standard_project_setup()
 # and built here as a static library with only those
 # (third_party/mbedtls_config.h).  Its symbols stay hidden in the plugin,
 # and its warnings do not fail the build.
-include(FetchContent)
-if(POLICY CMP0135)
-    cmake_policy(SET CMP0135 NEW) # extracted files get the time of extraction
-endif()
 set(MBEDTLS_URL
     https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2)
 set(MBEDTLS_SHA256 a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6)
@@ -116,9 +155,11 @@ add_library(logsquirl_tcpdump SHARED
     src/tls_crypto.cpp
     src/tls_key_log.cpp
     src/tls_decryption.cpp
+    src/host_names.cpp
     src/capture_stats.cpp
     src/conversations.cpp
     src/capture_file.cpp
+    src/gzip_source.cpp
     src/capture_index.cpp
     src/packet_export.cpp
     src/pcap_converter.cpp
@@ -168,6 +209,7 @@ target_link_libraries(logsquirl_tcpdump
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        tcpdump_zlib
         mbedcrypto
 )
 

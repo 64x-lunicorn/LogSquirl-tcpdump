@@ -22,6 +22,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     packet_layers_test.cpp
     capture_index_test.cpp
+    gzip_source_test.cpp
     packet_export_test.cpp
     link_layers_test.cpp
     socks_test.cpp
@@ -34,6 +35,7 @@ add_executable(logsquirl_tcpdump_tests
     sip_test.cpp
     tls_test.cpp
     dns_test.cpp
+    host_names_test.cpp
     icmp_test.cpp
     dhcp_ntp_test.cpp
     http_test.cpp
@@ -93,6 +95,7 @@ target_link_libraries(logsquirl_tcpdump_tests
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        tcpdump_zlib
         mbedcrypto
 )
 
@@ -137,9 +140,11 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/tls_crypto.cpp"
         "${CMAKE_SOURCE_DIR}/src/tls_key_log.cpp"
         "${CMAKE_SOURCE_DIR}/src/tls_decryption.cpp"
+        "${CMAKE_SOURCE_DIR}/src/host_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
+        "${CMAKE_SOURCE_DIR}/src/gzip_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"

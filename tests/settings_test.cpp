@@ -40,11 +40,12 @@ namespace tcpdump {
 bool operator==( const ConversionOptions& a, const ConversionOptions& b )
 {
     return a.layout.timeColumns == b.layout.timeColumns
-           && a.layout.macColumns == b.layout.macColumns && a.preview == b.preview
-           && a.previewChars == b.previewChars && a.maxStreams == b.maxStreams
-           && a.maxEndpoints == b.maxEndpoints && a.reassemblyMegabytes == b.reassemblyMegabytes
-           && a.tcpTimestamps == b.tcpTimestamps && a.someIpPorts == b.someIpPorts
-           && a.someIpNamesFile == b.someIpNamesFile && a.keyLogPath == b.keyLogPath;
+           && a.layout.macColumns == b.layout.macColumns && a.layout.hostNames == b.layout.hostNames
+           && a.preview == b.preview && a.previewChars == b.previewChars
+           && a.maxStreams == b.maxStreams && a.maxEndpoints == b.maxEndpoints
+           && a.reassemblyMegabytes == b.reassemblyMegabytes && a.tcpTimestamps == b.tcpTimestamps
+           && a.someIpPorts == b.someIpPorts && a.someIpNamesFile == b.someIpNamesFile
+           && a.keyLogPath == b.keyLogPath;
 }
 
 } // namespace tcpdump
@@ -74,7 +75,7 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
     GIVEN( "options other than the defaults" )
     {
         ConversionOptions options;
-        options.layout = { TimeColumns::RelativeOnly, true };
+        options.layout = { TimeColumns::RelativeOnly, true, true };
         options.preview = false;
         options.previewChars = 64;
         options.maxStreams = 5000;

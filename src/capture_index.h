@@ -37,6 +37,12 @@
  *
  * The capture file is told by its path, size and modification time when it
  * was converted: a file changed since is reported, not misread.
+ *
+ * Offsets are those in the capture as its reader reads it: for a
+ * gzip-compressed file, in the decompressed capture.  Such a file's index
+ * keeps the access points its GzipSource kept, so that a packet is reached
+ * by decompressing at most GzipSource::kAccessSpan bytes, not the whole
+ * file before it.
  */
 
 #pragma once
@@ -54,7 +60,8 @@
 
 namespace tcpdump {
 
-class FileSource;
+class CaptureFile;
+class GzipAccessPoints;
 class HeadSource;
 
 /**
@@ -101,6 +108,18 @@ public:
     /// as long as it is not shorter than now.
     void setCaptureFile( const QString& path, Growth growth = Growth::Fixed );
 
+    /// The access points of a gzip-compressed capture file, which offsets in
+    /// it are read with; null for an uncompressed one.
+    void setGzipAccessPoints( std::shared_ptr<const GzipAccessPoints> points )
+    {
+        gzipPoints_ = std::move( points );
+    }
+
+    const std::shared_ptr<const GzipAccessPoints>& gzipAccessPoints() const
+    {
+        return gzipPoints_;
+    }
+
     /// The checkpoint to read packet @p number from: the last one before
     /// it, or null to read from the start of the capture.
     const ReaderCheckpoint* nearest( uint32_t number ) const;
@@ -142,6 +161,7 @@ private:
     qint64 size_ = -1;
     Growth growth_ = Growth::Fixed;
     QDateTime modified_;
+    std::shared_ptr<const GzipAccessPoints> gzipPoints_;
 };
 
 /// A packet read back from its capture.
@@ -164,7 +184,8 @@ struct CapturedPacket {
  * from the nearest checkpoint of its CaptureIndex.  Reading packets in
  * ascending order goes on from where the last one ended, so that a sorted
  * set is read in one pass from front to back.  Holds the file open between
- * reads; one cursor serves one thread.
+ * reads; one cursor serves one thread.  A gzip-compressed file is read
+ * decompressed, from the access point before the checkpoint.
  */
 class CaptureCursor {
 public:
@@ -189,8 +210,7 @@ private:
     void close();
 
     std::shared_ptr<const CaptureIndex> index_;
-    QFile file_;
-    std::unique_ptr<FileSource> fileSource_;
+    std::unique_ptr<CaptureFile> file_;
     std::unique_ptr<HeadSource> headSource_;
     std::unique_ptr<CaptureReader> reader_;
     QString error_;

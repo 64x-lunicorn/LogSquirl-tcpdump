@@ -27,7 +27,8 @@
  * order, so that the capture is read once from front to back.  Each
  * packet's record is copied from the capture file byte for byte, its
  * timestamp, lengths and bytes as they are; nothing is written from what
- * was dissected.
+ * was dissected.  A gzip-compressed capture's records are copied
+ * decompressed: the export is an uncompressed pcap or pcapng.
  *
  * A pcap's packets go to a pcap with the capture's global header, so that
  * link-layer type, snaplen and timestamp precision stay the same.  A

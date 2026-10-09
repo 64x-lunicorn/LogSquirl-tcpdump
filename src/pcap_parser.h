@@ -366,6 +366,10 @@ void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len );
 /// Longest text preamble (e.g. tcpdump's stderr) searched for the pcap magic.
 constexpr size_t kMaxPreamble = 4096;
 
+/// Whether @p c is a byte of the text tcpdump writes to stderr, which may
+/// come ahead of a capture (findCaptureStart()).
+bool isPreambleText( uint8_t c );
+
 /// Bytes of a packet that are dissected; the rest of a longer record is skipped.
 constexpr uint32_t kMaxDissectedBytes = 262144;
 
@@ -391,6 +395,14 @@ public:
     /// Skip @p n bytes; false if the source ends first.  Reads them by default.
     virtual bool skip( uint64_t n );
 
+    /// Go to @p offset from the start of the source, for a source that can:
+    /// a buffer, a file.  False for a stream, which cannot go back, and for
+    /// an offset past the end.
+    virtual bool seek( uint64_t /* offset */ )
+    {
+        return false;
+    }
+
     /// Whether a read would return without waiting for more to be written:
     /// always for a source whose bytes are all there, a buffer or a file.
     virtual bool ready()
@@ -410,6 +422,7 @@ public:
 
     size_t read( uint8_t* dst, size_t n ) override;
     bool skip( uint64_t n ) override;
+    bool seek( uint64_t offset ) override;
 
 private:
     const uint8_t* data_;
