@@ -61,10 +61,14 @@ struct CaptureStats {
     /// were first seen.  A capture holds few, so a list is searched.
     std::vector<uint32_t> linkTypes;
 
-    /// Earliest and latest packet time, in nanoseconds since the epoch.
-    /// Packets need not be in time order, e.g. in a merged capture.
-    int64_t firstTimeNs = 0;
-    int64_t lastTimeNs = 0;
+    /// Earliest and latest packet time, in seconds since the epoch and the
+    /// nanoseconds of that second: kept apart, as a pcapng's times may lie
+    /// further apart than an int64_t of nanoseconds reaches.  Packets need
+    /// not be in time order, e.g. in a merged capture.
+    int64_t firstTimeSec = 0;
+    uint32_t firstTimeNsec = 0;
+    int64_t lastTimeSec = 0;
+    uint32_t lastTimeNsec = 0;
 
     /// Count @p pkt in, with the link-layer type it was dissected with.
     void add( const PacketRecord& pkt );

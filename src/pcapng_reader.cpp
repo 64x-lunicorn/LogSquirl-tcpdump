@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace tcpdump {
 
@@ -333,7 +334,10 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
     else {
         fractionNs = ( ( fraction >> ( unit.exponent - 34 ) ) * 1000000000 ) >> 34;
     }
-    pkt.timestampSec = static_cast<uint32_t>( timestamp / perSecond );
+    // Only a unit of whole seconds counts past what int64_t seconds hold,
+    // some 292 billion years on: such a time is kept at the last one it holds.
+    pkt.timestampSec = static_cast<int64_t>( std::min<uint64_t>(
+        timestamp / perSecond, static_cast<uint64_t>( std::numeric_limits<int64_t>::max() ) ) );
     pkt.timestampNsec = static_cast<uint32_t>( fractionNs );
     pkt.capturedLen = capturedLen;
     pkt.originalLen = originalLen;

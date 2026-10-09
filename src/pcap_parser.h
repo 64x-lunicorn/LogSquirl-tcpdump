@@ -109,8 +109,10 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 
 /// Represents a single parsed network packet.
 struct PacketRecord {
-    uint32_t number = 0;        ///< 1-based packet index
-    uint32_t timestampSec = 0;  ///< Seconds since epoch
+    uint32_t number = 0; ///< 1-based packet index
+    /// Seconds since the epoch: 64 bits, as a pcapng timestamp counts past
+    /// 2106, where 32 bits of seconds end.
+    int64_t timestampSec = 0;
     uint32_t timestampNsec = 0; ///< Fraction of the second, in nanoseconds
     uint32_t capturedLen = 0;   ///< Bytes captured
     uint32_t originalLen = 0;   ///< Original packet length on the wire

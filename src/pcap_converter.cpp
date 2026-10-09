@@ -93,13 +93,10 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     summary.cutPackets = stats.cutPackets;
     summary.durationSeconds = stats.durationSeconds();
     if ( stats.packets > 0 ) {
-        // Packet times are never before 1970, so the division needs no floor
-        const auto utc = [ &reader ]( int64_t timeNs ) {
-            return formatUtcTime( timeNs / 1000000000, static_cast<uint32_t>( timeNs % 1000000000 ),
-                                  reader.precision() );
-        };
-        summary.firstTimeUtc = utc( stats.firstTimeNs );
-        summary.lastTimeUtc = utc( stats.lastTimeNs );
+        summary.firstTimeUtc
+            = formatUtcTime( stats.firstTimeSec, stats.firstTimeNsec, reader.precision() );
+        summary.lastTimeUtc
+            = formatUtcTime( stats.lastTimeSec, stats.lastTimeNsec, reader.precision() );
     }
     for ( const auto linkType : stats.linkTypes ) {
         summary.linkTypeNames.push_back( linkTypeName( linkType ) );

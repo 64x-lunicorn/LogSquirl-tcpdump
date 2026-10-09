@@ -73,15 +73,27 @@ CivilDate civilFromDays( int64_t days )
     return { year, month, day };
 }
 
-/// @p deltaNs as seconds with 9 or 6 decimals, computed in integers so that
-/// neither precision nor range is lost.
-std::string formatRelativeTime( int64_t deltaNs, TimePrecision precision )
+/// @p deltaSec seconds and @p deltaNsec nanoseconds (each of either sign,
+/// |deltaNsec| below a second) as seconds with 9 or 6 decimals, computed in
+/// integers so that neither precision nor range is lost: two times centuries
+/// apart differ by more nanoseconds than an int64_t holds.
+std::string formatRelativeTime( int64_t deltaSec, int64_t deltaNsec, TimePrecision precision )
 {
-    const bool negative = deltaNs < 0;
-    const auto magnitude
-        = negative ? 0 - static_cast<uint64_t>( deltaNs ) : static_cast<uint64_t>( deltaNs );
-    const auto seconds = static_cast<unsigned long long>( magnitude / 1000000000 );
-    const auto fraction = magnitude % 1000000000;
+    // Give both parts the same sign
+    if ( deltaSec > 0 && deltaNsec < 0 ) {
+        --deltaSec;
+        deltaNsec += 1000000000;
+    }
+    else if ( deltaSec < 0 && deltaNsec > 0 ) {
+        ++deltaSec;
+        deltaNsec -= 1000000000;
+    }
+    const bool negative = deltaSec < 0 || deltaNsec < 0;
+    const auto magnitude = []( int64_t value ) {
+        return value < 0 ? 0 - static_cast<uint64_t>( value ) : static_cast<uint64_t>( value );
+    };
+    const auto seconds = static_cast<unsigned long long>( magnitude( deltaSec ) );
+    const auto fraction = magnitude( deltaNsec );
     char buf[ 40 ];
     if ( precision == TimePrecision::Nanoseconds ) {
         std::snprintf( buf, sizeof( buf ), "%s%llu.%09llu", negative ? "-" : "", seconds,
@@ -140,12 +152,14 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
     return buf;
 }
 
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
+std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
                               int streamId, TimePrecision precision )
 {
-    // Time relative to the first packet; negative for an earlier packet
-    const int64_t deltaNs = ( static_cast<int64_t>( pkt.timestampSec ) - baseTimeSec ) * 1000000000
-                            + ( static_cast<int64_t>( pkt.timestampNsec ) - baseTimeNsec );
+    // Time relative to the first packet; negative for an earlier packet.
+    // Packet times are never before 1970, so the seconds' difference fits.
+    const int64_t deltaSec = pkt.timestampSec - baseTimeSec;
+    const int64_t deltaNsec
+        = static_cast<int64_t>( pkt.timestampNsec ) - static_cast<int64_t>( baseTimeNsec );
 
     const std::string streamStr = streamId >= 0             ? std::to_string( streamId )
                                   : streamId == kUnnumbered ? "?"
@@ -159,7 +173,8 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     // first packet, whose relative time is negative
     writeColumn( oss, formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision ),
                  utcTimeWidth( precision ) );
-    writeColumn( oss, formatRelativeTime( deltaNs, precision ), timeWidth( precision ) );
+    writeColumn( oss, formatRelativeTime( deltaSec, deltaNsec, precision ),
+                 timeWidth( precision ) );
     writeColumn( oss, pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp, 40 );
     writeColumn( oss, pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp, 40 );
     writeColumn( oss, pkt.protocol, 10 );

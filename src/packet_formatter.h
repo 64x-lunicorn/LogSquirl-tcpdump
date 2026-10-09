@@ -79,7 +79,7 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
  *                      the nanosecond or to the microsecond.
  * @return Formatted line.
  */
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
+std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
                               int streamId, TimePrecision precision = TimePrecision::Microseconds );
 
 /**
@@ -109,7 +109,7 @@ public:
 private:
     TimePrecision precision_;
     bool haveBase_ = false;
-    uint32_t baseTimeSec_ = 0;
+    int64_t baseTimeSec_ = 0;
     uint32_t baseTimeNsec_ = 0;
 };
 

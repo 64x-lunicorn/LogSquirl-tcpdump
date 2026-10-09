@@ -527,7 +527,7 @@ SCENARIO( "The Log Format reads the UTC Time at 6 and 9 decimals", "[logformat]"
         {
             PacketRecord pkt;
             pkt.number = 1;
-            pkt.timestampSec = static_cast<uint32_t>( seconds );
+            pkt.timestampSec = seconds;
             pkt.timestampNsec = nanoseconds;
             pkt.srcIp = "192.168.1.1";
             pkt.dstIp = "10.0.0.1";

@@ -174,6 +174,43 @@ SCENARIO( "if_tsresol gives an interface's timestamp unit", "[pcapng]" )
     }
 }
 
+SCENARIO( "A pcapng time past 2106 keeps its date", "[pcapng]" )
+{
+    // A 64-bit timestamp in seconds: the second and third packets lie beyond
+    // 32 bits of seconds, the third centuries after the first.
+    GIVEN( "an interface counting in seconds, with packets in 1970, 2106 and 2286" )
+    {
+        const auto file = le.shb() + le.idb( DltEthernet, 0 ) + le.epb( 0, 1000, udpFrame( 1 ) )
+                          + le.epb( 0, ( 1ULL << 32 ) + 5, udpFrame( 2 ) )
+                          + le.epb( 0, 10000000000ULL, udpFrame( 3 ) );
+
+        THEN( "each packet has its seconds in full" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 3 );
+            REQUIRE( result.packets[ 1 ].timestampSec == 4294967301LL );
+            REQUIRE( result.packets[ 2 ].timestampSec == 10000000000LL );
+        }
+
+        THEN( "the UTC Time, the relative Time and the Capture Summary show the real dates" )
+        {
+            QTemporaryDir dir;
+            REQUIRE( dir.isValid() );
+            const auto result = convertPcap( writeFile( dir, "future.pcapng", file ), dir.path() );
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            const auto lines = readLines( result.outputPath );
+            REQUIRE( lines.size() == 4 );
+            REQUIRE( lines[ 2 ].contains( "2106-02-07 06:28:21.000000Z" ) );
+            REQUIRE( lines[ 3 ].contains( "2286-11-20 17:46:40.000000Z" ) );
+            REQUIRE( timeOf( lines[ 2 ] ) == "4294966301.000000" );
+            REQUIRE( timeOf( lines[ 3 ] ) == "9999999000.000000" );
+            REQUIRE( result.summary.firstTimeUtc == "1970-01-01 00:16:40.000000Z" );
+            REQUIRE( result.summary.lastTimeUtc == "2286-11-20 17:46:40.000000Z" );
+            REQUIRE( result.summary.durationSeconds == Approx( 9999999000.0 ) );
+        }
+    }
+}
+
 SCENARIO( "Each packet is dissected with its own interface's link type", "[pcapng]" )
 {
     GIVEN( "an Ethernet and a Raw IP interface, with a packet on each" )

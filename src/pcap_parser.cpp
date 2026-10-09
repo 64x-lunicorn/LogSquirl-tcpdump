@@ -786,7 +786,7 @@ bool PcapReader::next( PacketRecord& pkt )
     // more is carried into the seconds.
     const uint64_t fractionNs
         = header_.nanoseconds ? tsFraction : static_cast<uint64_t>( tsFraction ) * 1000;
-    pkt.timestampSec = tsSec + static_cast<uint32_t>( fractionNs / 1000000000 );
+    pkt.timestampSec = static_cast<int64_t>( tsSec + fractionNs / 1000000000 );
     pkt.timestampNsec = static_cast<uint32_t>( fractionNs % 1000000000 );
     pkt.capturedLen = inclLen;
     pkt.originalLen = origLen;
