@@ -545,6 +545,19 @@ SCENARIO( "The capture format is detected from the first block", "[pcapng]" )
             REQUIRE( result.ok );
             REQUIRE( result.packets.size() == 1 );
         }
+
+        THEN( "the factory hands the reader the start behind the preamble, counted as read" )
+        {
+            MemorySource memory( file.data(), file.size() );
+            HeadSource source( memory );
+            auto reader = makeCaptureReader( source );
+            REQUIRE( dynamic_cast<PcapngReader*>( reader.get() ) != nullptr );
+            REQUIRE( reader->open() );
+            PacketRecord pkt;
+            REQUIRE( reader->next( pkt ) );
+            REQUIRE_FALSE( reader->next( pkt ) );
+            REQUIRE( reader->bytesRead() == file.size() );
+        }
     }
 
     GIVEN( "a section header block with an unknown byte-order magic" )
@@ -581,6 +594,7 @@ SCENARIO( "The capture format is detected from the first block", "[pcapng]" )
             MemorySource memory( file.data(), file.size() );
             HeadSource source( memory );
             auto reader = makeCaptureReader( source );
+            REQUIRE( dynamic_cast<PcapReader*>( reader.get() ) != nullptr );
             REQUIRE( reader->open() );
             PacketRecord pkt;
             REQUIRE( reader->next( pkt ) );

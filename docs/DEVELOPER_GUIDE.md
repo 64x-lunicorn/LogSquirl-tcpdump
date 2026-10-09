@@ -10,15 +10,18 @@ reads a capture from a `ByteSource` one record at a time, so the capture is
 never held in memory. `makeCaptureReader()` picks the reader from the first
 block, which it looks at through a `HeadSource` without consuming it:
 `findCaptureStart()` finds a pcap global header or a pcapng section header,
-also behind a text preamble, and the rest is left to the reader it picks.
+also behind a text preamble, and the reader it picks is handed where that
+header starts, so that the format is told once; a file that holds neither
+gets a reader whose `open()` fails and says why. The readers share reading
+and skipping, with the byte count for progress, in the `CaptureReader` base.
 
 `PcapReader` reads libpcap captures:
 - Detects byte order and timestamp precision from the magic number
   (`0xa1b2c3d4` µs, `0xa1b23c4d` ns, either byte order)
-- Finds the header behind a text preamble (e.g. `adb exec-out tcpdump`
-  stderr): past offset 0 only if everything before it is text and the header
-  is valid (magic, version 2.0–2.4), so a stray magic in binary data is not
-  taken for a capture
+- Reads the header behind a text preamble (e.g. `adb exec-out tcpdump`
+  stderr), which `findCaptureStart()` accepts past offset 0 only if
+  everything before it is text and the header is valid (magic, version
+  2.0–2.4), so a stray magic in binary data is not taken for a capture
 - Parses the 24-byte global header, then 16-byte record headers + data;
   only the first 256 KiB of a record are dissected, the rest is skipped
 - Reports a capture cut off inside a record (`truncated()`)

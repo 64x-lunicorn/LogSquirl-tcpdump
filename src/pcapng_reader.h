@@ -69,13 +69,15 @@ public:
     /// capture as unreadable, so that the interface table stays small.
     static constexpr size_t kMaxInterfaces = 65536;
 
-    explicit PcapngReader( ByteSource& source )
-        : CaptureReader( source )
+    /// @param start  Where the first section header starts, as
+    ///               findCaptureStart() found it for a pcapng.
+    explicit PcapngReader( ByteSource& source, uint64_t start = 0 )
+        : CaptureReader( source, start )
     {
     }
 
-    /// Read the first section header, after an optional text preamble, and
-    /// the blocks up to the first packet block.
+    /// Read the first section header and the blocks up to the first packet
+    /// block.
     bool open() override;
 
     bool next( PacketRecord& pkt ) override;

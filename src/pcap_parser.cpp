@@ -42,6 +42,9 @@ namespace tcpdump {
 
 namespace {
 
+/// Why a file shorter than a pcap global header is no capture.
+constexpr const char* kTooSmall = "File too small to be a valid pcap (< 24 bytes)";
+
 // ── Byte-order helpers ───────────────────────────────────────────────────
 
 /// Read a int32 in the file's byte order.
@@ -700,25 +703,11 @@ bool CaptureReader::skip( uint64_t n )
 
 bool PcapReader::open()
 {
-    // Look at what may hold a text preamble and the global header.
-    const auto& head = source_.peek( kMaxPreamble + 24 );
-    const auto filled = head.size();
-    if ( filled < 24 ) {
-        error_ = "File too small to be a valid pcap (< 24 bytes)";
+    uint8_t data[ 24 ];
+    if ( !skip( start_ ) || read( data, sizeof( data ) ) < sizeof( data ) ) {
+        error_ = kTooSmall;
         return false;
     }
-
-    // Find the header — may be past a text preamble from tcpdump stderr
-    CaptureFormat format = CaptureFormat::Pcap;
-    const size_t headerOffset = findCaptureStart( head.data(), filled, format, error_ );
-    if ( headerOffset == filled ) {
-        return false;
-    }
-    if ( format != CaptureFormat::Pcap ) {
-        error_ = "Not a pcap file but a pcapng one";
-        return false;
-    }
-    const uint8_t* data = head.data() + headerOffset;
 
     uint32_t magic;
     std::memcpy( &magic, data, 4 );
@@ -738,7 +727,6 @@ bool PcapReader::open()
         return false;
     }
 
-    skip( headerOffset + 24 );
     open_ = true;
     headerRead_ = true;
     return true;
@@ -800,16 +788,57 @@ bool PcapReader::next( PacketRecord& pkt )
 
 // ── Choosing the reader ──────────────────────────────────────────────────
 
+namespace {
+
+/// The reader for a file that holds no capture: open() says why.
+class NoCaptureReader : public CaptureReader {
+public:
+    NoCaptureReader( ByteSource& source, std::string error )
+        : CaptureReader( source, 0 )
+    {
+        error_ = std::move( error );
+    }
+
+    bool open() override
+    {
+        return false;
+    }
+
+    bool next( PacketRecord& ) override
+    {
+        return false;
+    }
+
+    TimePrecision precision() const override
+    {
+        return TimePrecision::Microseconds;
+    }
+
+    std::vector<uint32_t> linkTypes() const override
+    {
+        return {};
+    }
+};
+
+} // anonymous namespace
+
 std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source )
 {
+    // Look at what may hold a text preamble and the first header.
     const auto& head = source.peek( kMaxPreamble + 24 );
+    if ( head.size() < 24 ) {
+        return std::make_unique<NoCaptureReader>( source, kTooSmall );
+    }
     CaptureFormat format = CaptureFormat::Pcap;
     std::string error;
-    findCaptureStart( head.data(), head.size(), format, error );
-    if ( format == CaptureFormat::Pcapng ) {
-        return std::make_unique<PcapngReader>( source );
+    const auto start = findCaptureStart( head.data(), head.size(), format, error );
+    if ( start == head.size() ) {
+        return std::make_unique<NoCaptureReader>( source, error );
     }
-    return std::make_unique<PcapReader>( source );
+    if ( format == CaptureFormat::Pcapng ) {
+        return std::make_unique<PcapngReader>( source, start );
+    }
+    return std::make_unique<PcapReader>( source, start );
 }
 
 // ── Whole-buffer convenience ─────────────────────────────────────────────

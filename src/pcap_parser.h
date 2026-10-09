@@ -271,6 +271,10 @@ size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format
  * interface).  What the capture announces as a whole, the finest precision
  * for the time column and the link-layer types it declares, is known after
  * open().
+ *
+ * A reader is handed where its format's first header starts, behind any
+ * text preamble: the format is told from the first bytes once, by
+ * makeCaptureReader(), and not again by the reader.
  */
 class CaptureReader {
 public:
@@ -310,8 +314,10 @@ public:
     }
 
 protected:
-    explicit CaptureReader( ByteSource& source )
-        : source_( source )
+    /// @param start  Where the capture's first header starts in @p source.
+    CaptureReader( ByteSource& source, uint64_t start )
+        : start_( start )
+        , source_( source )
     {
     }
 
@@ -322,11 +328,12 @@ protected:
     /// Skip @p n bytes, counted in bytesRead(); false if the source ends first.
     bool skip( uint64_t n );
 
-    HeadSource source_; ///< Its start is searched for the capture's first header.
+    const uint64_t start_; ///< Where the first header starts; skipped by open().
     std::string error_;
     bool truncated_ = false;
 
 private:
+    ByteSource& source_;
     uint64_t bytesRead_ = 0;
 };
 
@@ -336,12 +343,14 @@ private:
  */
 class PcapReader : public CaptureReader {
 public:
-    explicit PcapReader( ByteSource& source )
-        : CaptureReader( source )
+    /// @param start  Where the global header starts, as findCaptureStart()
+    ///               found it for a pcap.
+    explicit PcapReader( ByteSource& source, uint64_t start = 0 )
+        : CaptureReader( source, start )
     {
     }
 
-    /// Read the global header, after an optional text preamble.
+    /// Read the global header.
     bool open() override;
 
     bool next( PacketRecord& pkt ) override;
@@ -370,10 +379,11 @@ private:
 };
 
 /**
- * The reader for the capture in @p source, chosen by its first block: a
- * PcapngReader for a pcapng section header, a PcapReader otherwise, which
- * also says what is wrong with a file that is neither.  It is not open yet;
- * @p source must outlive it.
+ * The reader for the capture in @p source, chosen by its first block as
+ * findCaptureStart() finds it: a PcapngReader for a pcapng section header, a
+ * PcapReader for a pcap global header.  For a file that holds neither, a
+ * reader whose open() fails and says why.  It is not open yet; @p source
+ * must outlive it.
  */
 std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source );
 

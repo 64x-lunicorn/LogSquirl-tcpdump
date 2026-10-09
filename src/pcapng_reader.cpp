@@ -356,17 +356,7 @@ bool PcapngReader::readBlocksUpToPacket()
 
 bool PcapngReader::open()
 {
-    const auto& head = source_.peek( kMaxPreamble + 24 );
-    CaptureFormat format = CaptureFormat::Pcap;
-    const auto offset = findCaptureStart( head.data(), head.size(), format, error_ );
-    if ( offset == head.size() ) {
-        return false;
-    }
-    if ( format != CaptureFormat::Pcapng ) {
-        error_ = "Not a pcapng file but a pcap one";
-        return false;
-    }
-    skip( offset );
+    skip( start_ );
 
     // The first block is the first section's header; a capture that cannot
     // be read that far is no capture.
