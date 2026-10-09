@@ -29,11 +29,6 @@ namespace tcpdump {
 
 namespace {
 
-/// The columns of a packet line up to Source, as packetLineRegex() reads
-/// them: No., Stream, UTC Time (a date and a time), Time.  Each pattern
-/// requires the columns in place, so that it never matches inside Info.
-const char* const kUpToSource = R"(^\d+ +\S+ +\S+ \S+ +\S+ +)";
-
 /// What the user did with the Lab: logged, for the record.
 void regexLabClosed( void* user_data, int result, const char* pattern, int /* flags */ )
 {
@@ -58,6 +53,16 @@ const QRegularExpression& packetLineRegex()
     return regex;
 }
 
+QString upToSourcePattern( const QString& stream )
+{
+    // Either time column may be left out (LineLayout).  The columns cannot
+    // slip when one is: an address never reads as a time, and a Protocol is
+    // never all digits, as the Length is that each pattern requires after it.
+    return QString( R"(^\d+ +%1 +(?:[+-]?\d{4,}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+Z +)?)"
+                    R"((?:-?\d+\.\d+ +)?)" )
+        .arg( stream );
+}
+
 QString literalPattern( const QString& text )
 {
     QString escaped;
@@ -75,14 +80,14 @@ QString endpointPattern( const QString& address )
     // Source, then Destination; the Protocol and Length columns after them
     // pin the two in place.
     return QString( R"(%1(?:%2 +\S+|\S+ +%2) +\S+ +\d+ )" )
-        .arg( kUpToSource, literalPattern( address ) );
+        .arg( upToSourcePattern(), literalPattern( address ) );
 }
 
 QString protocolPattern( const QString& protocol )
 {
     // An empty protocol shows as "-", as any empty column does.
     return QString( R"(%1\S+ +\S+ +%2 +\d+ )" )
-        .arg( kUpToSource, literalPattern( protocol.isEmpty() ? "-" : protocol ) );
+        .arg( upToSourcePattern(), literalPattern( protocol.isEmpty() ? "-" : protocol ) );
 }
 
 void openRegexLab( const char* feature, const QString& pattern )

@@ -25,6 +25,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "corpus_layouts.h"
 #include "fakehost.h"
 #include "pcap_converter.h"
 #include "regex_lab.h"
@@ -39,7 +40,7 @@
 #include <set>
 
 using namespace tcpdump;
-using tcpdump_test::FakeHost;
+using namespace tcpdump_test;
 
 namespace {
 
@@ -126,45 +127,46 @@ SCENARIO( "The summary's filters match the lines of an endpoint or a protocol", 
         }
     }
 
-    const QDir dir( QStringLiteral( TCPDUMP_CORPUS_DIR ) );
-    const auto captures = dir.entryList( { "*.pcap", "*.pcapng" }, QDir::Files, QDir::Name );
     QTemporaryDir out;
     REQUIRE( out.isValid() );
 
-    for ( const auto& capture : captures ) {
-        if ( !QFile::exists( dir.filePath( QFileInfo( capture ).completeBaseName() + ".txt" ) ) ) {
-            continue;
-        }
-        GIVEN( "the corpus capture " + capture.toStdString() + ", converted" )
-        {
-            const auto result = convertPcap( dir.filePath( capture ), out.path() );
-            REQUIRE( result.status == ConversionResult::Status::Converted );
-            QFile text( result.outputPath );
-            REQUIRE( text.open( QIODevice::ReadOnly ) );
-            auto lines = QString::fromUtf8( text.readAll() ).split( '\n', Qt::SkipEmptyParts );
-            const auto& summary = result.summary;
-            REQUIRE_FALSE( summary.endpointPackets.empty() );
-
-            THEN( "each endpoint of its summary matches the lines with it as Source or "
-                  "Destination" )
+    for ( const auto& capture : committedCaptures() ) {
+        for ( const auto& layout : allLineLayouts() ) {
+            GIVEN( "the corpus capture " + QFileInfo( capture ).fileName().toStdString()
+                   + ", converted with " + describeLayout( layout ) )
             {
-                for ( const auto& [ address, count ] : summary.endpointPackets ) {
-                    const auto name = QString::fromStdString( address );
-                    INFO( name.toStdString() );
-                    const auto expected = withColumn( lines, { "source", "destination" }, name );
-                    REQUIRE( expected.size() > 0 );
-                    REQUIRE( matched( endpointPattern( name ), lines ) == expected );
+                ConversionOptions options;
+                options.layout = layout;
+                const auto result = convertPcap( capture, out.path(), nullptr, {}, options );
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                QFile text( result.outputPath );
+                REQUIRE( text.open( QIODevice::ReadOnly ) );
+                auto lines = QString::fromUtf8( text.readAll() ).split( '\n', Qt::SkipEmptyParts );
+                const auto& summary = result.summary;
+                REQUIRE_FALSE( summary.endpointPackets.empty() );
+
+                THEN( "each endpoint of its summary matches the lines with it as Source or "
+                      "Destination" )
+                {
+                    for ( const auto& [ address, count ] : summary.endpointPackets ) {
+                        const auto name = QString::fromStdString( address );
+                        INFO( name.toStdString() );
+                        const auto expected
+                            = withColumn( lines, { "source", "destination" }, name );
+                        REQUIRE( expected.size() > 0 );
+                        REQUIRE( matched( endpointPattern( name ), lines ) == expected );
+                    }
                 }
-            }
 
-            THEN( "each protocol of its summary matches its packets' lines" )
-            {
-                for ( const auto& [ protocol, count ] : summary.protocolPackets ) {
-                    const auto name = QString::fromStdString( protocol );
-                    INFO( name.toStdString() );
-                    const auto numbers = matched( protocolPattern( name ), lines );
-                    REQUIRE( numbers == withColumn( lines, { "protocol" }, name ) );
-                    REQUIRE( numbers.size() == count );
+                THEN( "each protocol of its summary matches its packets' lines" )
+                {
+                    for ( const auto& [ protocol, count ] : summary.protocolPackets ) {
+                        const auto name = QString::fromStdString( protocol );
+                        INFO( name.toStdString() );
+                        const auto numbers = matched( protocolPattern( name ), lines );
+                        REQUIRE( numbers == withColumn( lines, { "protocol" }, name ) );
+                        REQUIRE( numbers.size() == count );
+                    }
                 }
             }
         }

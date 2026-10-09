@@ -25,6 +25,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "corpus_layouts.h"
 #include "fakehost.h"
 #include "follow_stream.h"
 #include "plugin.h"
@@ -32,9 +33,11 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QStringList>
+#include <QTemporaryDir>
 
 #include <set>
 
@@ -156,6 +159,34 @@ SCENARIO( "Follow stream matches exactly the lines of a packet's stream", "[foll
                 for ( const auto number : numbers ) {
                     REQUIRE( packet( lines, number ).section( ' ', 1, 1, QString::SectionSkipEmpty )
                              == stream );
+                }
+            }
+        }
+    }
+
+    GIVEN( "the corpus captures converted in every Line Layout" )
+    {
+        QTemporaryDir out;
+        REQUIRE( out.isValid() );
+        for ( const auto& capture : tcpdump_test::committedCaptures() ) {
+            const auto layouts = tcpdump_test::allLineLayouts();
+            const auto standard
+                = tcpdump_test::convertedLines( capture, layouts.front(), out.path() );
+            for ( const auto& layout : layouts ) {
+                const auto lines = tcpdump_test::convertedLines( capture, layout, out.path() );
+                REQUIRE( lines.size() == standard.size() );
+                for ( qsizetype i = 0; i < lines.size(); ++i ) {
+                    INFO( QFileInfo( capture ).fileName().toStdString()
+                          << ", " << tcpdump_test::describeLayout( layout ) << ": "
+                          << lines[ i ].toStdString() );
+                    const auto follow = followStreamPattern( lines[ i ] );
+                    const auto expected = followStreamPattern( standard[ i ] );
+                    REQUIRE( follow.reason == expected.reason );
+                    if ( !follow.pattern.isEmpty() ) {
+                        // The same packets as in the default layout
+                        REQUIRE( matched( follow.pattern, lines )
+                                 == matched( expected.pattern, standard ) );
+                    }
                 }
             }
         }

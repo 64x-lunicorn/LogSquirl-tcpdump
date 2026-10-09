@@ -42,7 +42,7 @@ namespace {
 const QString kArrow = QString::fromUtf8( " \xe2\x86\x92 " );
 
 /// The ports at the start of a TCP or UDP packet's Info, "50000 → 80", which
-/// markers in brackets may precede.
+/// markers in brackets and the MAC columns may precede.
 const QRegularExpression& portsRegex()
 {
     static const QRegularExpression regex(
@@ -98,12 +98,14 @@ FollowStream followStreamPattern( const QString& packetLine )
     // Number and stream, then whatever time columns there are up to the
     // addresses; the Protocol column differs between the packets of one
     // stream, so it is skipped with the Length.
-    auto pattern
-        = QString( R"(^\d+ +%1 +.+? %2 +\S+ +\d+ +)" )
-              .arg( stream, eitherWay( literalPattern( match.captured( "source" ) ),
-                                       literalPattern( match.captured( "destination" ) ), " +" ) );
+    auto pattern = QString( R"(%1%2 +\S+ +\d+ +)" )
+                       .arg( upToSourcePattern( stream ),
+                             eitherWay( literalPattern( match.captured( "source" ) ),
+                                        literalPattern( match.captured( "destination" ) ), " +" ) );
     // The ports tell a TCP from a UDP stream of the same number between the
     // same hosts; a line without them still has the stream and addresses.
+    // They are looked for anywhere in Info, after the MAC columns a Line
+    // Layout may put at its start and the analysis markers.
     const auto ports = portsRegex().match( match.captured( "body" ) );
     if ( ports.hasMatch() ) {
         pattern += QString( R"(.*?(?<!\d)%1(?!\d))" )

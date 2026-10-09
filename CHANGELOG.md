@@ -198,7 +198,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Regex Lab with a pattern matching that TCP or UDP conversation's lines:
   its stream number, addresses and ports, in either direction. Applied, it
   filters the view to the conversation. No selection, a packet without a
-  stream or a line of another log give a notification saying why. Offered
+  stream or a line of another log give a notification saying why. The
+  pattern reads the lines in every choice of time and MAC columns. Offered
   on LogSquirl 26.11 and later only.
 - **Endpoints and protocols as filters.** In the sidebar's Capture Summary,
   each endpoint address and protocol name is a link: a click opens
@@ -206,7 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the Source or Destination column, or that protocol in the Protocol
   column, ready to apply, as Wireshark's *Apply as Filter*. Addresses are
   matched literally (dots, IPv6 colons) and whole, so `192.168.1.1` does not
-  find `192.168.1.100`, nor an address only mentioned in Info. On a
+  find `192.168.1.100`, nor an address only mentioned in Info, in every
+  choice of time and MAC columns. On a
   LogSquirl older than 26.11 the summary stays plain text.
 
 ### Changed

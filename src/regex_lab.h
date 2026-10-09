@@ -40,6 +40,13 @@ namespace tcpdump {
 /// logformat_test.cpp checks.
 const QRegularExpression& packetLineRegex();
 
+/// The pattern of a packet line's columns up to Source, in any Line Layout:
+/// No., Stream as @p stream, a pattern, and the time columns there are.
+/// Each pattern starts with it, so that it reads the columns in place and
+/// never matches inside Info.  The MAC columns come after Length, so that
+/// the columns up to Length stay where they are.
+QString upToSourcePattern( const QString& stream = QStringLiteral( R"(\S+)" ) );
+
 /// @p text as a pattern that matches it literally: '.' in an IPv4 address,
 /// the parentheses of ETH(0x88CC) and any other character but a letter, a
 /// digit or ':' is escaped.

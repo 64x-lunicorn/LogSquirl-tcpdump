@@ -680,12 +680,17 @@ The pattern requires the line's stream number, its two addresses and the
 two ports at the start of a TCP or UDP Info (markers in brackets may come
 first), each pair in either order. The Stream column alone is not enough:
 TCP and UDP streams are numbered each from 0, and the Protocol column
-changes within a stream. Time columns are skipped with a lazy `.+?` and the
-rest of Info is not read, so a change there does not break the pattern. A
+changes within a stream. The columns up to Source are those of
+`upToSourcePattern()`, which takes either time column as optional, and the
+ports are looked for anywhere in Info, after the MAC columns a `LineLayout`
+may put at its start; the rest of Info is not read, so a change there does
+not break the pattern. A
 line that is no packet line, one with stream `-` or `?`, no selection or a
 tab without a Log File give a notification with the reason instead.
-`follow_stream_test.cpp` checks the pattern against every corpus line and
-drives the menu entry and the button through the `FakeHost`.
+`follow_stream_test.cpp` checks the pattern against every corpus line,
+checks that it finds the same packets in the corpus converted in every
+`LineLayout`, and drives the menu entry and the button through the
+`FakeHost`.
 
 #### Summary filters (`regex_lab.h/cpp`)
 `summaryHtml()` with `filterLinks`, which `showSummaryFor()` passes as
@@ -695,13 +700,15 @@ link, the name percent-encoded. The label opens no link itself: its
 `linkActivated` goes to `SidebarWidget::openLink()`, which opens a filter
 link's pattern with `openRegexLab()` and any other link, such as the README
 link, with `QDesktopServices`. `endpointPattern()` and `protocolPattern()`
-require the columns before Info as `packetLineRegex()` reads them, so they
-match a whole Source, Destination or Protocol column and never Info, and
-escape the name with `literalPattern()`. `openRegexLab()`, which Follow
+require the columns before Info as `packetLineRegex()` reads them, through
+`upToSourcePattern()` and the Length after Protocol, so they match a whole
+Source, Destination or Protocol column and never Info in every
+`LineLayout`, and escape the name with `literalPattern()`. `openRegexLab()`, which Follow
 stream uses too, opens the Lab with Match case and logs the pattern, then
 the applied one or the cancel, under the feature's name ("Filter: …").
 `regex_lab_test.cpp` checks every endpoint and protocol of the summary of
-each corpus capture against the columns of its lines;
+each corpus capture, converted in every `LineLayout`, against the columns of
+its lines;
 `sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
 
 #### The plugin API header
