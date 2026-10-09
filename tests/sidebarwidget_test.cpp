@@ -146,6 +146,37 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
     }
 }
 
+SCENARIO( "the sidebar shows why the output could not be written", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar whose temporary root does not exist" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.filePath( "no-such-root" ) );
+        const auto capture = writeCapture( dir, "small.pcap", captureOf( 1 ) );
+
+        WHEN( "a capture is opened" )
+        {
+            widget.openPcapFile( capture );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "the error names the temporary directory, and no tab is opened" )
+            {
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE(
+                    host.notifications.first().contains( "Cannot create a temporary directory" ) );
+                REQUIRE( child<QLabel>( widget, "summary" )
+                             ->text()
+                             .contains( "Error: Cannot create a temporary directory" ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
 {
     QTemporaryDir dir;
@@ -285,15 +316,15 @@ SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
 {
     GIVEN( "a capture whose file name, protocol and endpoint contain markup" )
     {
-        tcpdump::ConversionResult result;
-        tcpdump::PacketRecord pkt;
-        pkt.protocol = "<i>P</i>";
-        pkt.srcIp = "<img src=x>";
-        result.stats.add( pkt );
+        tcpdump::CaptureSummary summary;
+        summary.packets = 1;
+        summary.protocolPackets[ "<i>P</i>" ] = 1;
+        summary.protocolBytes[ "<i>P</i>" ] = 60;
+        summary.endpointPackets[ "<img src=x>" ] = 1;
 
         WHEN( "the summary is built" )
         {
-            const auto html = tcpdump::summaryHtml( "<b>a&b</b>.pcap", 100, result );
+            const auto html = tcpdump::summaryHtml( "<b>a&b</b>.pcap", 100, summary );
 
             THEN( "each is escaped" )
             {
@@ -305,37 +336,78 @@ SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
             }
         }
     }
+}
 
-    GIVEN( "a capture that was cut off" )
+SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
+{
+    GIVEN( "a capture with ten endpoints" )
     {
-        tcpdump::ConversionResult result;
-        result.truncated = true;
+        tcpdump::CaptureSummary summary;
+        summary.packets = 55;
+        for ( int i = 1; i <= 10; ++i ) {
+            summary.endpointPackets[ "10.0.0." + std::to_string( i ) ] = static_cast<uint64_t>( i );
+        }
 
-        THEN( "the summary says so" )
+        THEN( "the eight busiest are listed, busiest first, and all are counted" )
         {
-            REQUIRE( tcpdump::summaryHtml( "cut.pcap", 100, result ).contains( "cut off" ) );
+            const auto html = tcpdump::summaryHtml( "ten.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>Endpoints</b> (10 unique)" ) );
+            REQUIRE( html.contains( "10.0.0.10: 10 pkts" ) );
+            REQUIRE( html.contains( "10.0.0.3: 3 pkts" ) );
+            REQUIRE_FALSE( html.contains( "10.0.0.2: 2 pkts" ) );
+            REQUIRE( html.indexOf( "10.0.0.10:" ) < html.indexOf( "10.0.0.9:" ) );
         }
     }
 }
 
-SCENARIO( "the summary says when a cap was hit", "[sidebar]" )
+SCENARIO( "the summary says what was cut", "[sidebar]" )
 {
-    GIVEN( "a capture with more streams and endpoints than are tracked" )
+    GIVEN( "a capture that was cut off" )
     {
-        tcpdump::ConversionResult result;
-        result.stats.maxEndpoints = 1;
-        tcpdump::PacketRecord pkt;
-        pkt.protocol = "UDP";
-        pkt.srcIp = "10.0.0.1";
-        pkt.dstIp = "10.0.0.2";
-        result.stats.add( pkt );
-        result.streamLimitReached = true;
+        tcpdump::CaptureSummary summary;
+        summary.endsInsideRecord = true;
 
-        THEN( "both are noted" )
+        THEN( "the summary says so" )
         {
-            const auto html = tcpdump::summaryHtml( "many.pcap", 100, result );
-            REQUIRE( html.contains( "Other endpoints: 1 pkts" ) );
+            REQUIRE( tcpdump::summaryHtml( "cut.pcap", 100, summary ).contains( "cut off" ) );
+        }
+    }
+
+    GIVEN( "a capture with more conversations than were numbered" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.streamCap = 5;
+
+        THEN( "the summary names the cap and the ? stream" )
+        {
+            const auto html = tcpdump::summaryHtml( "many.pcap", 100, summary );
+            REQUIRE( html.contains( "More than 5 conversations" ) );
             REQUIRE( html.contains( "stream ?" ) );
+        }
+    }
+
+    GIVEN( "a capture with more addresses than were counted" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.endpointPackets[ "10.0.0.1" ] = 3;
+        summary.otherEndpointPackets = 7;
+
+        THEN( "the summary counts the rest as other endpoints" )
+        {
+            const auto html = tcpdump::summaryHtml( "many.pcap", 100, summary );
+            REQUIRE( html.contains( "(more than 1 unique)" ) );
+            REQUIRE( html.contains( "Other endpoints: 7 pkts" ) );
+        }
+    }
+
+    GIVEN( "a capture with nothing cut" )
+    {
+        THEN( "none of the three messages shows" )
+        {
+            const auto html = tcpdump::summaryHtml( "whole.pcap", 100, tcpdump::CaptureSummary() );
+            REQUIRE_FALSE( html.contains( "cut off" ) );
+            REQUIRE_FALSE( html.contains( "stream ?" ) );
+            REQUIRE_FALSE( html.contains( "Other endpoints" ) );
         }
     }
 }

@@ -75,9 +75,9 @@ SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
 
         GIVEN( "the capture " + name.toStdString() )
         {
-            const auto outPath = out.filePath( name + ".log" );
-            const auto result = convertPcap( dir.filePath( capture ), outPath );
+            const auto result = convertPcap( dir.filePath( capture ), out.path() );
             REQUIRE( result.status == ConversionResult::Status::Converted );
+            const auto outPath = result.outputPath;
 
             if ( update ) {
                 QFile expected( expectedPath );
@@ -111,13 +111,12 @@ SCENARIO( "Malformed captures are read to their end", "[corpus]" )
     for ( const auto& capture : captures ) {
         GIVEN( "the capture " + capture.toStdString() )
         {
-            const auto result
-                = convertPcap( dir.filePath( capture ), out.filePath( capture + ".log" ) );
+            const auto result = convertPcap( dir.filePath( capture ), out.path() );
 
             THEN( "it converts, as far as its records go" )
             {
                 REQUIRE( result.status == ConversionResult::Status::Converted );
-                REQUIRE( ( result.stats.packets > 0 || result.truncated ) );
+                REQUIRE( ( result.summary.packets > 0 || result.summary.endsInsideRecord ) );
             }
         }
     }

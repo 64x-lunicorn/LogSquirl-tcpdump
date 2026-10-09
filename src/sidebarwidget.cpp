@@ -30,27 +30,21 @@
  */
 
 #include "sidebarwidget.h"
-#include "packet_formatter.h"
 #include "pcap_converter.h"
 #include "plugin.h"
 #include "tempdirs.h"
 
-#include <QDir>
-#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFutureWatcher>
 #include <QLocale>
 #include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
-#include <QTemporaryDir>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <exception>
 #include <map>
-#include <new>
 #include <vector>
 
 namespace tcpdump {
@@ -115,9 +109,10 @@ SidebarWidget::~SidebarWidget()
     }
     pool_.waitForDone();
 
-    // A running conversion's file never reached a tab.
-    if ( !runningDir_.isEmpty() ) {
-        QDir( runningDir_ ).removeRecursively();
+    // A conversion that finished before the cancel reached it wrote a file
+    // no tab will show: the cancel wins, and the file goes.
+    if ( watcher_ && watcher_->future().resultCount() > 0 ) {
+        applyCancelRequest( watcher_->result(), cancelRunning_.get() );
     }
 }
 
@@ -164,76 +159,41 @@ void SidebarWidget::openPcapFile( const QString& filePath )
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
 
-    // Write to a new file in a new directory that only the user can enter,
-    // so that no other user can read the capture's text or plant a file or
-    // link in its place, and no earlier tab's file is overwritten.  It is
-    // kept for its tab until LogSquirl quits.
-    QTemporaryDir tempDir( tempDirTemplate( tempRoot_ ) );
-    if ( !tempDir.isValid() ) {
-        ConversionResult result;
-        result.error = "Cannot create a temporary directory: " + tempDir.errorString();
-        finishConversion( filePath, {}, std::move( result ) );
-        return;
-    }
-    tempDir.setAutoRemove( false );
-    const auto outDir = tempDir.path();
-    auto baseName = QFileInfo( filePath ).completeBaseName();
-    if ( baseName.isEmpty() ) {
-        baseName = "capture";
-    }
-    const auto outPath = tempDir.filePath( baseName + ".log" );
-
     auto cancelled = std::make_shared<std::atomic_bool>( false );
     cancelRunning_ = cancelled;
-    runningDir_ = outDir;
     setConverting( true );
     summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
                                 .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
 
     // The watcher lives on this thread, so its signals are delivered here.
-    auto* watcher = new QFutureWatcher<ConversionResult>( this );
-    connect( watcher, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
+    watcher_ = new QFutureWatcher<ConversionResult>( this );
+    connect( watcher_, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
              &QProgressBar::setValue );
-    connect( watcher, &QFutureWatcher<ConversionResult>::finished, this,
-             [ this, watcher, cancelled, filePath, outDir, outPath ] {
-                 watcher->deleteLater();
+    connect( watcher_, &QFutureWatcher<ConversionResult>::finished, this,
+             [ this, cancelled, filePath ] {
                  ConversionResult result;
-                 if ( watcher->future().resultCount() > 0 ) {
-                     result = watcher->result();
+                 if ( watcher_->future().resultCount() > 0 ) {
+                     result = watcher_->result();
                  }
                  else {
                      result.error = "The conversion ended without a result";
                  }
-                 // Cancel wins even over a conversion that had just finished.
-                 if ( cancelled->load() ) {
-                     result.status = ConversionResult::Status::Cancelled;
-                 }
-                 if ( result.status != ConversionResult::Status::Converted ) {
-                     QDir( outDir ).removeRecursively();
-                 }
-                 finishConversion( filePath, outPath, std::move( result ) );
+                 finishConversion( filePath,
+                                   applyCancelRequest( std::move( result ), cancelled.get() ) );
              } );
 
-    watcher->setFuture( QtConcurrent::run( &pool_, [ filePath, outPath, cancelled ](
-                                                       QPromise<ConversionResult>& promise ) {
-        promise.setProgressRange( 0, 1000 );
-        ConversionResult result;
-        try {
-            result = convertPcap( filePath, outPath, cancelled.get(), [ &promise ]( int permille ) {
-                promise.setProgressValue( permille );
-            } );
-        } catch ( const std::bad_alloc& ) {
-            result = ConversionResult();
-            result.error = "Not enough memory to read the capture";
-        } catch ( const std::exception& e ) {
-            result = ConversionResult();
-            result.error = QString::fromUtf8( e.what() );
-        } catch ( ... ) {
-            result = ConversionResult();
-            result.error = "Unknown error";
-        }
-        promise.addResult( std::move( result ) );
-    } ) );
+    // The Converter writes into a new private directory below the temporary
+    // root, kept for its tab until LogSquirl quits, and reports every
+    // failure as a result: nothing is caught here.
+    const auto tempRoot = tempRoot_;
+    watcher_->setFuture( QtConcurrent::run(
+        &pool_, [ filePath, tempRoot, cancelled ]( QPromise<ConversionResult>& promise ) {
+            promise.setProgressRange( 0, 1000 );
+            promise.addResult(
+                convertPcap( filePath, tempRoot, cancelled.get(), [ &promise ]( int permille ) {
+                    promise.setProgressValue( permille );
+                } ) );
+        } ) );
 }
 
 void SidebarWidget::cancel()
@@ -256,11 +216,11 @@ void SidebarWidget::setConverting( bool converting )
     progressBar_->setValue( 0 );
 }
 
-void SidebarWidget::finishConversion( const QString& filePath, const QString& outPath,
-                                      ConversionResult result )
+void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
 {
     cancelRunning_.reset();
-    runningDir_.clear();
+    watcher_->deleteLater();
+    watcher_ = nullptr;
     setConverting( false );
 
     switch ( result.status ) {
@@ -283,14 +243,14 @@ void SidebarWidget::finishConversion( const QString& filePath, const QString& ou
 
     // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
+        g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
     }
 
-    summaryLabel_->setText(
-        summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(), result ) );
+    summaryLabel_->setText( summaryHtml( QFileInfo( filePath ).fileName(),
+                                         QFileInfo( filePath ).size(), result.summary ) );
 
     hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 packets from %2" ).arg( result.stats.packets ).arg( filePath ) );
+             QString( "Opened %1 packets from %2" ).arg( result.summary.packets ).arg( filePath ) );
 }
 
 namespace {
@@ -319,41 +279,14 @@ byCount( const std::map<std::string, uint64_t>& counts )
 
 } // namespace
 
-QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionResult& result )
+QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary )
 {
-    const auto& stats = result.stats;
-    const double duration = stats.durationSeconds();
-
-    // Link type name
-    QString linkName;
-    switch ( result.header.network ) {
-    case 0:
-        linkName = "BSD Loopback";
-        break;
-    case 1:
-        linkName = "Ethernet";
-        break;
-    case 101:
-        linkName = "Raw IP";
-        break;
-    case 108:
-        linkName = "OpenBSD Loopback";
-        break;
-    case 113:
-        linkName = "Linux SLL";
-        break;
-    case 276:
-        linkName = "Linux SLL2";
-        break;
-    default:
-        linkName = QString::number( result.header.network );
-        break;
-    }
+    const double duration = summary.durationSeconds;
 
     // Packets per second
     QString ppsStr = "-";
     if ( duration > 0.0 ) {
-        auto pps = static_cast<double>( stats.packets ) / duration;
+        auto pps = static_cast<double>( summary.packets ) / duration;
         ppsStr = QString::number( pps, 'f', 0 );
     }
 
@@ -366,22 +299,23 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
     // General stats
     html += QString( "<b>Overview</b><br>" );
     html += QString( "Packets: <b>%1</b><br>" )
-                .arg( QLocale().toString( static_cast<qulonglong>( stats.packets ) ) );
+                .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
-    html += QString( "Link type: %1<br>" ).arg( linkName );
-    if ( result.truncated ) {
+    html += QString( "Link type: %1<br>" )
+                .arg( QString::fromStdString( summary.linkTypeName ).toHtmlEscaped() );
+    if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }
     html += "<br>";
 
     // Protocol breakdown
     html += "<b>Protocols</b><br>";
-    for ( const auto& [ proto, count ] : byCount( stats.protocolPackets ) ) {
-        const auto bytes = stats.protocolBytes.at( proto );
+    for ( const auto& [ proto, count ] : byCount( summary.protocolPackets ) ) {
+        const auto bytes = summary.protocolBytes.at( proto );
         const auto pct
-            = static_cast<double>( count ) / static_cast<double>( stats.packets ) * 100.0;
+            = static_cast<double>( count ) / static_cast<double>( summary.packets ) * 100.0;
         html += QString( "%1: %2 (%3%, %4)<br>" )
                     .arg( QString::fromStdString( proto ).toHtmlEscaped() )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
@@ -392,10 +326,10 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
 
     // Top IPs
     html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
-                .arg( stats.endpointLimitReached() ? "more than " : "" )
-                .arg( stats.endpointPackets.size() );
+                .arg( summary.otherEndpointPackets ? "more than " : "" )
+                .arg( summary.endpointPackets.size() );
     int shown = 0;
-    for ( const auto& [ ip, count ] : byCount( stats.endpointPackets ) ) {
+    for ( const auto& [ ip, count ] : byCount( summary.endpointPackets ) ) {
         if ( shown >= 8 )
             break;
         html += QString( "%1: %2 pkts<br>" )
@@ -403,16 +337,15 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }
-    if ( stats.endpointLimitReached() ) {
+    if ( summary.otherEndpointPackets ) {
         html += QString( "Other endpoints: %1 pkts<br>" )
                     .arg( QLocale().toString(
-                        static_cast<qulonglong>( stats.otherEndpointPackets ) ) );
+                        static_cast<qulonglong>( *summary.otherEndpointPackets ) ) );
     }
-    if ( result.streamLimitReached ) {
+    if ( summary.streamCap ) {
         html += QString( "<br><i>More than %1 conversations: later ones show stream ? in the "
                          "log.</i><br>" )
-                    .arg( QLocale().toString(
-                        static_cast<qulonglong>( PacketFormatter::kMaxStreams ) ) );
+                    .arg( QLocale().toString( static_cast<qulonglong>( *summary.streamCap ) ) );
     }
 
     return html;

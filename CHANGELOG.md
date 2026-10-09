@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **One separator in the Info column.** The description of a payload follows
+  the transport summary after ` | `, whatever the protocol: `Len=9 | Client
+  Hello` instead of `Len=9 [Client Hello]` for TLS, and `Len=29 | Query
+  example.com` instead of `Len=29 Query example.com` for DNS. HTTP, NMEA,
+  SOCKS and the payload previews already used it.
+
 ## [0.2.0] — 2026-09-30
 
 ### Added
