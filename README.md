@@ -341,16 +341,26 @@ lists on the server. Every ssh runs as
 ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p <port>] -- <user@host> <remote command>
 ```
 
-with nothing on stdin: **only your keys and the SSH agent are used**. ssh
-never asks for a password, a passphrase or whether to trust a host key, and
-the plugin never asks for or stores one. The remote command is a command
-line for the server's login shell (a POSIX shell: sh, bash, dash, zsh,
-ksh), the interface and the capture filter in single quotes, so nothing in
-them is run:
+so **only your keys and the SSH agent are used**: ssh never asks for a
+password, a passphrase or whether to trust a host key, and the plugin never
+asks for or stores one. The remote command runs `/bin/sh` on the server,
+whatever your login shell is (it only has to read one single-quoted word,
+as sh, bash, dash, zsh, ksh, csh and tcsh do; fish reads a `\` inside
+single quotes, so a filter with a backslash needs a POSIX login shell). The
+script `/bin/sh` runs has the interface and the capture filter in single
+quotes, so nothing in them is run:
 
 ```
-exec sudo -n tcpdump -i '<interface>' -s <snaplen> -U -w - '(<filter>) and not (host '"<client>"' and tcp port '"<SSH port>"')'
+exec /bin/sh -c '… [sudo -n] tcpdump -i <interface> -s <snaplen> -U -w - "(<filter>) and not (host <client> and tcp port <SSH port>)" & <watchdog> …'
 ```
+
+**Stop** ends tcpdump on the server too, also when it runs as root: ssh's
+stdin is a pipe the plugin holds open while the capture runs, and a
+watchdog in the script ends tcpdump once it closes, as Stop ends ssh or the
+connection drops (without a terminal the server sends no hangup, and
+tcpdump alone would notice only at its next packet). If LogSquirl itself
+is killed, the connection closes and the watchdog ends tcpdump all the
+same.
 
 Two options below the fields:
 

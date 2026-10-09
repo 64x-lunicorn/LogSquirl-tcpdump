@@ -489,6 +489,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- SSH live capture: **Stop** left tcpdump running on the server, as root
+  behind sudo, until its next packet (ssh without a terminal gets no
+  hangup). The remote command is now a `/bin/sh` script with a watchdog
+  that ends tcpdump once ssh's stdin, held open by the plugin, closes
+  (#110).
 - **Security:** on Windows an extcap that is a batch file (`.bat`,
   `.cmd`) ran through `cmd.exe` with the capture filter, the interface and
   its arguments' values unescaped, so a `&` or `%…%` in them could run a

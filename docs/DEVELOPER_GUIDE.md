@@ -1760,14 +1760,22 @@ refuses what ssh could misread (a leading `-`, spaces, a bad port);
 `listDevices()` suggests `sshConfigHosts()`, the `Host` entries without
 `*`, `?` or `!`, described by their HostName, User and Port.
 `sshArguments()` is always `-T -o BatchMode=yes -o ConnectTimeout=10 [-p
-port] -- <destination> <remote command>`, so ssh never prompts (stdin is
-the null device too). `listInterfaces()` runs `tcpdump -D` remotely;
-`command()` runs `sshRemoteCaptureCommand( choice )`, a POSIX command line
-built with `shellQuote()` (single quotes, `'` as `'\''`): `exec [sudo -n]
-tcpdump -i '<if>' -s N -U -w - '<filter>'`, the filter extended, unless
-the option `excludeOwnConnection` is `false`, by `and not (host
-'"${SSH_CLIENT%% *}"' and tcp port '"${SSH_CLIENT##* }"')`, which the
-server's shell expands inside one argument. The options (`kSshSudoOption`
+port] -- <destination> <remote command>`, so ssh never prompts (a
+listing's stdin is the null device too). `listInterfaces()` runs `tcpdump
+-D` remotely; `command()` runs `sshRemoteCaptureCommand( choice )`, `exec
+/bin/sh -c '<sshRemoteCaptureScript( choice )>'`, so that the POSIX shell
+runs the script whatever the login shell is. The script is built with
+`shellQuote()` (single quotes, `'` as `'\''`): `[sudo -n] tcpdump -i '<if>'
+-s N -U -w - '<filter>'` in the background, the filter extended, unless the
+option `excludeOwnConnection` is `false`, by `and not (host '"$1"' and tcp
+port '"$3"')` after `set -- $SSH_CLIENT`, which the shell expands inside
+one argument. A watchdog in the background reads the script's stdin (kept
+as fd 3) until it closes and then kills tcpdump (sudo relays the signal);
+the script waits for tcpdump, ends the watchdog and exits with tcpdump's
+status. The command has `ProcessCommand::stdinPipe` set: ssh's stdin is a
+pipe the plugin never writes to and `ProcessSource::terminate()` closes
+before it ends ssh, so Stop (or a dropped connection, or LogSquirl killed)
+ends the remote tcpdump, which sshd, without a pty, would not signal. The options (`kSshSudoOption`
 `sudo`, `kSshExcludeOwnOption`, both `true` unless set to `false`) are two
 checkboxes, `sshSudo` and `sshExcludeOwn`. `explainSshFailure()` maps ssh's,
 sudo's and tcpdump's stderr (unknown or changed host key, refused keys,
@@ -1776,7 +1784,9 @@ unreachable host) to what to do; listings add it to their error,
 `explainFailure()` to a failed capture's. Tests run a fake `ssh` that logs
 its argv, insists on `BatchMode=yes` and runs the remote command with
 `/bin/sh`, `$SSH_CLIENT` set and fake `sudo` and `tcpdump` alone on `PATH`,
-also with hostile interfaces and filters.
+also with hostile interfaces and filters; a `detached` one runs it in a
+process group of its own with ssh's stdin, as a server would, for Stop to
+be seen ending the remote tcpdump.
 
 The **Wireshark extcap** kind (`extcap_source.h/cpp`, id `extcap`) is
 `ExtcapSourceKind( ExtcapPlaces )`: the directories looked in, in order

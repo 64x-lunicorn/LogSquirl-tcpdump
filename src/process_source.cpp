@@ -504,6 +504,11 @@ QStringList ProcessSource::lastStderrLines() const
 void ProcessSource::terminate()
 {
     if ( started_ ) {
+        // A remote command that ends with its stdin (ssh's watchdog) ends
+        // first, before ssh is.
+        if ( process_->state() != QProcess::NotRunning ) {
+            process_->closeWriteChannel();
+        }
         endProcessGroup( *group_, process_.get(), kTerminateGrace );
         drainStderr();
     }

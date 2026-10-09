@@ -283,43 +283,58 @@ std::vector<LiveTarget> sshConfigHosts( const QString& configText )
     return hosts;
 }
 
-QString sshRemoteCaptureCommand( const LiveChoice& choice )
+QString sshRemoteCaptureScript( const LiveChoice& choice )
 {
     const bool excludeOwn = optionOn( choice.options, kSshExcludeOwnOption );
     QString filter;
     if ( excludeOwn ) {
-        // $SSH_CLIENT is "<client address> <client port> <server port>": the
-        // server's shell puts its first and last word between the quoted
-        // parts, as one argument.
+        // $SSH_CLIENT is "<client address> <client port> <server port>",
+        // split into $1 $2 $3 below: the shell puts the first and the last
+        // between the quoted parts, as one argument.
         const auto own = choice.filter.isEmpty()
                              ? QStringLiteral( "not (host " )
                              : QStringLiteral( "(%1) and not (host " ).arg( choice.filter );
-        filter = shellQuote( own ) + QStringLiteral( "\"${SSH_CLIENT%% *}\"" )
-                 + shellQuote( QStringLiteral( " and tcp port " ) )
-                 + QStringLiteral( "\"${SSH_CLIENT##* }\"" ) + shellQuote( QStringLiteral( ")" ) );
+        filter = shellQuote( own ) + QStringLiteral( "\"$1\"" )
+                 + shellQuote( QStringLiteral( " and tcp port " ) ) + QStringLiteral( "\"$3\"" )
+                 + shellQuote( QStringLiteral( ")" ) );
     }
     else if ( !choice.filter.isEmpty() ) {
         filter = shellQuote( choice.filter );
     }
 
-    QString line;
+    QString script;
     if ( excludeOwn ) {
-        line = QStringLiteral( "[ -n \"$SSH_CLIENT\" ] || { echo 'SSH_CLIENT is not set on the "
-                               "server, so the SSH connection cannot be excluded' >&2; exit 2; "
-                               "}; " );
+        script = QStringLiteral( "[ -n \"$SSH_CLIENT\" ] || { echo 'SSH_CLIENT is not set on the "
+                                 "server, so the SSH connection cannot be excluded' >&2; exit 2; "
+                                 "}; set -- $SSH_CLIENT; " );
     }
-    line += QStringLiteral( "exec " );
+    // tcpdump in the background, so that a watchdog can end it once stdin,
+    // which ssh holds open while it runs, closes: as Stop ends ssh, or the
+    // connection drops.  Without a terminal sshd sends no SIGHUP, and
+    // tcpdump would only notice at its next packet.
+    script += QStringLiteral( "exec 3<&0; " );
     if ( optionOn( choice.options, kSshSudoOption ) ) {
-        line += QStringLiteral( "sudo -n " );
+        script += QStringLiteral( "sudo -n " );
     }
     // -U: each packet written as it comes, not when a buffer is full.
-    line += QStringLiteral( "tcpdump -i %1 -s %2 -U -w -" )
-                .arg( shellQuote( choice.networkInterface ) )
-                .arg( choice.snaplen );
+    script += QStringLiteral( "tcpdump -i %1 -s %2 -U -w -" )
+                  .arg( shellQuote( choice.networkInterface ) )
+                  .arg( choice.snaplen );
     if ( !filter.isEmpty() ) {
-        line += QLatin1Char( ' ' ) + filter;
+        script += QLatin1Char( ' ' ) + filter;
     }
-    return line;
+    script += QStringLiteral( " 3<&- & pid=$!; "
+                              "{ while IFS= read -r _; do :; done <&3; kill $pid; } "
+                              ">/dev/null 2>&1 & watchdog=$!; exec 3<&-; "
+                              "wait $pid; status=$?; kill $watchdog 2>/dev/null; exit $status" );
+    return script;
+}
+
+QString sshRemoteCaptureCommand( const LiveChoice& choice )
+{
+    // Run by the POSIX shell whatever the login shell is, which only reads
+    // one single-quoted word.
+    return QStringLiteral( "exec /bin/sh -c " ) + shellQuote( sshRemoteCaptureScript( choice ) );
 }
 
 QString explainSshFailure( const QString& error )
@@ -549,10 +564,13 @@ LiveOptionsWidget* SshSourceKind::makeOptionsWidget() const
 ProcessCommand SshSourceKind::command( const LiveChoice& choice ) const
 {
     const auto ssh = program();
-    return { ssh.isEmpty() ? QStringLiteral( "ssh" ) : ssh,
-             sshArguments( SshDestination::parse( choice.device ),
-                           sshRemoteCaptureCommand( choice ) ),
-             QStringLiteral( "ssh" ) };
+    ProcessCommand command{ ssh.isEmpty() ? QStringLiteral( "ssh" ) : ssh,
+                            sshArguments( SshDestination::parse( choice.device ),
+                                          sshRemoteCaptureCommand( choice ) ),
+                            QStringLiteral( "ssh" ) };
+    // Held open while ssh runs, for the remote watchdog; never written to.
+    command.stdinPipe = true;
+    return command;
 }
 
 QString SshSourceKind::explainFailure( const QString& error ) const
