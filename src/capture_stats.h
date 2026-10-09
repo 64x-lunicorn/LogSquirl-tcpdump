@@ -43,7 +43,8 @@ namespace tcpdump {
  * not be kept in memory.
  */
 struct CaptureStats {
-    /// Addresses counted by default: some 10 MB of memory at most.
+    /// Addresses counted by default: some 10 MB of memory at most.  The
+    /// options may raise it tenfold (kMaxEndpointCap, some 100 MB) or lower it.
     static constexpr size_t kMaxEndpoints = 100000;
 
     uint64_t packets = 0;

@@ -210,8 +210,14 @@ tried: each transport has a table of detectors, all of the same shape
 - QUIC: by its bytes, not its port. A datagram is QUIC if it begins with a
   long header (header form and fixed bit set) of a version the describer
   knows: v1, v2 (RFC 9369, whose packet types are numbered differently) or
-  draft-22 to draft-34 (`0xff0000xx`; older drafts had another header), or
-  with a Version Negotiation packet (version 0) that lists one of them. It
+  draft-22 to draft-34 (`0xff0000xx`), or with a Version Negotiation
+  packet (version 0) that lists one of them, and with no other version.
+  Only the version tells a long header from any UDP datagram whose first
+  byte has its two top bits set, so an unknown one is not taken for QUIC;
+  and only these versions have the header the describer reads: drafts
+  before 22 packed both connection ID lengths into one byte, Google's QUIC
+  (`Q0xx`) has headers of its own, and a version not yet known may number
+  its packet types differently, as v2 did. It
   is described from its public header, `Initial, Version 1,
   DCID=8394c8f03e515708, SCID=0a0b0c0d`: the packets coalesced in the
   datagram, in order, up to four, then `…`, a short header among them as
@@ -483,9 +489,13 @@ counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
 
 Memory therefore grows with the conversations and addresses in a capture,
-not with its size, and both are capped (at roughly 150 MB and 10 MB), so a
-port scan or a busy NAT cannot exhaust it. The summary says when a cap was
-hit.
+not with its size, and both are capped, so a port scan or a busy NAT cannot
+exhaust it. By default the caps are 1,000,000 streams and 100,000
+addresses, roughly 150 MB and 10 MB; the options (`settings.h`,
+*Advanced* in the dialog) let the user raise each up to tenfold
+(`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
+addresses, roughly 1.5 GB and 100 MB) or lower it to 1. The summary says
+when a cap was hit.
 
 #### The Log Format (`formats/tcpdump_log.json`)
 An lnav-compatible Log Format definition, as LogSquirl's built-in ones in
