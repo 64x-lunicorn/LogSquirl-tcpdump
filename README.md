@@ -131,7 +131,20 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    tunnelled packet's line shows the packet inside, so their addresses are
    in no column. Needs LogSquirl ≥ 26.11; on an older one the summary lists
    the endpoints and protocols as plain text
-10. With the [Log Format](#log-format) installed, switch to the table view
+10. To look into a packet, as Wireshark's lower panes do, select its line:
+   the **Packet** panel below the sidebar summary shows its layers as a
+   tree (Frame, Ethernet, IP, TCP/UDP/ICMP, tunnels, the application
+   protocol the payload was recognised as) with every field named, and its
+   bytes as a hex and ASCII dump; selecting a layer or field highlights its
+   bytes. The panel follows the selection while the tcpdump tab is in view
+   (it asks LogSquirl at most every 250 ms, and not at all while hidden),
+   and **Plugins → tcpdump → Packet details** shows the selected line's
+   packet at once. The packet is read again from the capture file, found
+   by the line's No.: the plugin keeps a file position every 10,000 packets
+   while converting, so no packet is kept in memory. A capture file that
+   was changed, moved or removed after it was opened is reported, not
+   misread; open it again. Needs LogSquirl ≥ 26.11
+11. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Options
@@ -336,6 +349,10 @@ graph TD
     J --> E
     J --> K[host API: open_file]
     K --> L[LogSquirl main viewer]
+    E -->|every 10,000 packets| X[CaptureIndex: checkpoint]
+    L -->|selected line's No.| P[Packet Panel]
+    X --> P
+    P -->|re-read from the nearest checkpoint| D
 ```
 
 ## License

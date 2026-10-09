@@ -39,6 +39,7 @@ add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/capture_reader.cpp
     src/pcap_parser.cpp
+    src/packet_layers.cpp
     src/icmp.cpp
     src/link_layers.cpp
     src/pcapng_reader.cpp
@@ -58,10 +59,13 @@ add_library(logsquirl_tcpdump SHARED
     src/tcp_analysis.cpp
     src/tcp_reassembly.cpp
     src/capture_stats.cpp
+    src/capture_file.cpp
+    src/capture_index.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/settings.cpp
     src/configdialog.cpp
+    src/packet_panel.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
     src/regex_lab.cpp

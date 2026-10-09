@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an RST; a segment of whole messages costs nothing. A new synthetic
   capture, `tests/corpus/reassembly.pcap` (written by
   `tests/make_reassembly_corpus.py`), shows each case.
+- **Packet Panel.** Below the sidebar summary, the packet of the selected
+  line is shown as Wireshark's lower panes show it: a layer tree with
+  named fields (Frame, Ethernet, VLAN tags, the cooked captures, 802.11
+  and Radiotap, PPP, PPPoE, Cisco HDLC, IPv4, IPv6 and its extension
+  headers, ARP, TCP, UDP, ICMP, GRE, VXLAN and the application protocol
+  the payload was recognised as) and a hex/ASCII dump in which the bytes
+  of the selected layer or field are highlighted. It follows the
+  selection while the sidebar tab is in view, asking LogSquirl at most
+  every 250 ms and not while hidden; **Plugins → tcpdump → Packet
+  details** reads it at once. A packet is found by its line's No. and read
+  again from the capture file from the nearest of the checkpoints the
+  Converter now keeps every 10,000 packets, in pcap and pcapng alike, so
+  no packet is held in memory. A capture file changed since it was
+  opened is reported, not misread. Needs LogSquirl ≥ 26.11.
 - **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
   without checksum, key and sequence number, carrying IPv4, IPv6 or an
   Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by

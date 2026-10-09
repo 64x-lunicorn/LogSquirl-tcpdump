@@ -38,8 +38,10 @@
  *      the host capabilities the size tells, create a SidebarWidget,
  *      register it as a sidebar tab, add Plugins > tcpdump >
  *      Open pcap… to the menu (and Follow stream, on a host with the
- *      Regex Lab and the selected lines), and register for the host's active-file
- *      notifications, so the sidebar shows the summary of the tab in front.
+ *      Regex Lab and the selected lines; Packet details on a host with the
+ *      selected lines), and register for the host's active-file
+ *      notifications, so the sidebar shows the summary and the Packet Panel
+ *      the packets of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
@@ -162,6 +164,16 @@ static void followStreamFromMenu( void* /* user_data */ )
     guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
 }
 
+/// Plugins > tcpdump > Packet details: the selected line's packet in the panel.
+static void packetDetailsFromMenu( void* /* user_data */ )
+{
+    guarded( "showing the packet details", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->showPacketDetails();
+        }
+    } );
+}
+
 /// The host brought another tab to the front: show its capture's summary.
 static void onActiveFileChanged( void* /* user_data */, const char* filePath )
 {
@@ -217,6 +229,12 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
                                    nullptr );
+        // The Packet Panel reads the selected line: only a host that tells
+        // it gets the entry.
+        if ( tcpdump::g_state.hostCapabilities.selectedLogLines ) {
+            api->register_menu_action( handle, "tcpdump", "Packet details", &packetDetailsFromMenu,
+                                       nullptr );
+        }
         // Only a host that has the Regex Lab and tells the selected lines
         // can follow a stream.
         if ( tcpdump::g_state.hostCapabilities.regexLab

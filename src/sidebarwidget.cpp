@@ -37,12 +37,14 @@
  * packets that carried a tunnelled one show in no column, so no pattern
  * could pick their lines.
  *
- * It keeps each converted capture's summary under the path of its .log file
- * and shows the one of the tab in front, as the host reports tab switches.
+ * It keeps each converted capture's summary and CaptureIndex under the path
+ * of its .log file and shows the one of the tab in front, as the host
+ * reports tab switches; its Packet Panel shows the packets of that capture.
  */
 
 #include "sidebarwidget.h"
 #include "follow_stream.h"
+#include "packet_panel.h"
 #include "pcap_converter.h"
 #include "plugin.h"
 #include "regex_lab.h"
@@ -186,8 +188,10 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     connect( summaryLabel_, &QLabel::linkActivated, this, &SidebarWidget::openLink );
     layout->addWidget( summaryLabel_ );
 
-    // Push everything up
-    layout->addStretch();
+    // The packet of the selected line, below; it takes the room left.
+    packetPanel_ = new PacketPanel;
+    packetPanel_->setObjectName( "packetPanel" );
+    layout->addWidget( packetPanel_, 1 );
 
     setConverting( false );
 }
@@ -306,6 +310,29 @@ void SidebarWidget::cancel()
     summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
 }
 
+void SidebarWidget::showPacketDetails()
+{
+    packetPanel_->refresh();
+    if ( packetPanel_->isVisible() ) {
+        return;
+    }
+    // The sidebar tab is not in front: say what it would show.
+    if ( packetPanel_->shownPacket() == 0 ) {
+        hostNotify( "Packet details: " + packetPanel_->statusText() );
+        return;
+    }
+    QStringList names;
+    for ( const auto& layer : packetPanel_->layers() ) {
+        names << QString::fromStdString( layer.name );
+    }
+    if ( !names.isEmpty() ) {
+        names.removeFirst(); // the frame
+    }
+    hostNotify( QString( "Packet %1: %2. Open the tcpdump sidebar tab for its fields and bytes." )
+                    .arg( packetPanel_->shownPacket() )
+                    .arg( names.join( " / " ) ) );
+}
+
 void SidebarWidget::openLink( const QString& link )
 {
     try {
@@ -364,6 +391,7 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
     capture.fileName = QFileInfo( filePath ).fileName();
     capture.fileSize = QFileInfo( filePath ).size();
     capture.summary = std::move( result.summary );
+    capture.index = std::move( result.index );
     capture.withFormatHint = !formatHintShown_;
     formatHintShown_ = true;
     const auto packets = capture.summary.packets;
@@ -384,11 +412,13 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
 
 void SidebarWidget::showSummaryFor( const QString& filePath )
 {
+    const auto found = converted_.find( fileKey( filePath ) );
+    packetPanel_->setCapture( found == converted_.end() ? nullptr : found->second.index );
+
     // The capture being read is shown in a tab of its own when it is done.
     if ( converting_ ) {
         return;
     }
-    const auto found = converted_.find( fileKey( filePath ) );
     if ( found == converted_.end() ) {
         summaryLabel_->setText( kNoCaptureText );
         return;

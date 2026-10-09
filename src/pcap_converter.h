@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "capture_index.h"
 #include "capture_stats.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
@@ -37,6 +38,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -107,6 +109,8 @@ struct ConversionResult {
     QString error;          ///< Why it failed, when Failed.
     QString outputPath;     ///< The text file, when Converted; see convertPcap().
     CaptureSummary summary; ///< What was converted, when Converted.
+    /// Where each packet of the text is in the capture file, when Converted.
+    std::shared_ptr<CaptureIndex> index;
 };
 
 /// Bytes in a mebibyte, the unit of ConversionOptions::reassemblyMegabytes.
@@ -128,6 +132,8 @@ struct ConversionOptions {
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
     /// Mebibytes the TCP Reassembly holds at most, of all streams together.
     size_t reassemblyMegabytes = TcpReassembly::kDefaultMemoryLimit / kMegabyte;
+    /// Packets between two checkpoints of the CaptureIndex.
+    uint32_t checkpointInterval = CaptureIndex::kCheckpointInterval;
 };
 
 /**
