@@ -176,7 +176,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without reading past the header. The new option *Show TCP timestamps
   (TSval, TSecr) on every segment* (off by default) shows the timestamps
   on the other segments too. The ACK that completes a handshake shows its
-  initial round-trip time, from the SYN, `[iRTT=0.012345]`, and the
+  initial round-trip time, from the SYN, `[iRTT=0.012345]`, also in the
+  Packet Panel's TCP layer, and the
   summary the median of all handshakes captured whole (exact up to 4,096
   handshakes, within 0.8 % beyond, in 32 KB of memory however long the
   capture). A segment that

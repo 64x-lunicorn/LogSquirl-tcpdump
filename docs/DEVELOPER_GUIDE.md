@@ -1414,7 +1414,10 @@ in seconds with 6 decimals, or 9 at nanosecond precision, and
 `analyseTcp()` returns it with the markers (`TcpAnalysis`). Wireshark shows
 `tcp.analysis.initial_rtt` in the packet's details only, and on the first
 pure ACK in either direction even without a SYN-ACK; here it is in Info,
-and a stream whose handshake was not captured whole has none. Each stream
+and a stream whose handshake was not captured whole has none. The Packet
+Panel, which reads a packet back alone, without its stream, takes it from
+the selected line's `[iRTT=…]` into the TCP layer (`iRTT: 0.012345
+seconds`). Each stream
 shows it once: a SYN sent after the handshake does not arm it again, a new
 connection on the same ports does. The Converter collects the times in
 `CaptureStats::initialRtts`, a `RunningMedian`, for the summary's median:

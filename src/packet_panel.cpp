@@ -36,6 +36,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTextCursor>
@@ -366,6 +367,11 @@ void PacketPanel::showSelection( const QString& selection )
     }
     const auto stream = match.captured( "stream" );
     shownStream_ = stream == "-" ? kNoStream : stream == "?" ? kUnnumbered : stream.toInt();
+    // The TCP Analysis tells the handshake's iRTT on the line of the ACK
+    // that completes it; the packet read back alone has no stream to know it.
+    static const QRegularExpression irtt( QStringLiteral( "\\[iRTT=([0-9.]+)\\]" ) );
+    const auto irttMatch = irtt.match( line );
+    selectedIrtt_ = irttMatch.hasMatch() ? irttMatch.captured( 1 ).toStdString() : std::string();
     showPacket( number );
 }
 
@@ -465,6 +471,13 @@ void PacketPanel::showRead( const PacketRead& read )
     const auto& packet = read.packet;
     const auto number = read.number;
     layers_ = read.layers;
+    if ( !selectedIrtt_.empty() ) {
+        for ( auto& layer : layers_ ) {
+            if ( layer.name == "Transmission Control Protocol" ) {
+                layer.fields.push_back( { "iRTT", selectedIrtt_ + " seconds", 0, 0 } );
+            }
+        }
+    }
     shownPacket_ = number;
     shownBytes_ = packet.bytes.size();
     followButton_->setEnabled( shownStream_ != kNoStream );

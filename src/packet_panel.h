@@ -59,6 +59,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -198,6 +199,9 @@ private:
     bool haveLast_ = false;
 
     uint32_t selectedPacket_ = 0; ///< The packet of the selected line, read or not.
+    /// The iRTT the selected line tells, "0.012345" (the TCP Analysis's
+    /// [iRTT=…]); empty without one.
+    std::string selectedIrtt_;
     uint32_t shownPacket_ = 0;
     /// The Stream column of the shown packet's line: its number, or
     /// kNoStream ("-") or kUnnumbered ("?").

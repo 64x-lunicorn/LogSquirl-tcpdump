@@ -299,6 +299,60 @@ SCENARIO( "The Packet Panel reads a packet off the UI thread", "[packet_panel]" 
     }
 }
 
+SCENARIO( "The Packet Panel's TCP layer shows the handshake's iRTT", "[packet_panel]" )
+{
+    GIVEN( "the synthetic reassembly capture, its handshakes timed" )
+    {
+        LoadedCapture loaded( kReassembly );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+
+        WHEN( "the ACK that completes a handshake is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 3 ] };
+            REQUIRE( loaded.lines[ 3 ].contains( "[iRTT=0.003000]" ) );
+            panel->refresh();
+
+            THEN( "its TCP layer has the iRTT" )
+            {
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+                const auto& layers = panel->layers();
+                const auto tcp = std::find_if( layers.begin(), layers.end(), []( const auto& l ) {
+                    return l.name == "Transmission Control Protocol";
+                } );
+                REQUIRE( tcp != layers.end() );
+                REQUIRE( tcp->fields.back().name == "iRTT" );
+                REQUIRE( tcp->fields.back().value == "0.003000 seconds" );
+                auto* tree = panel->findChild<QTreeWidget*>( "packetLayers" );
+                bool shown = false;
+                for ( int i = 0; i < tree->topLevelItemCount(); ++i ) {
+                    auto* item = tree->topLevelItem( i );
+                    for ( int j = 0; j < item->childCount(); ++j ) {
+                        shown = shown || item->child( j )->text( 0 ) == "iRTT: 0.003000 seconds";
+                    }
+                }
+                REQUIRE( shown );
+            }
+        }
+
+        WHEN( "a packet without one is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 1 ] };
+            panel->refresh();
+
+            THEN( "its TCP layer has none" )
+            {
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 1; } ) );
+                for ( const auto& layer : panel->layers() ) {
+                    for ( const auto& field : layer.fields ) {
+                        REQUIRE( field.name != "iRTT" );
+                    }
+                }
+            }
+        }
+    }
+}
+
 SCENARIO( "The Packet Panel polls the selection only while it is visible", "[packet_panel]" )
 {
     GIVEN( "a converted capture in the tab in front and a selected line" )

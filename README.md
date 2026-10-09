@@ -144,11 +144,12 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    tree (Frame, Ethernet, IP, TCP/UDP/ICMP, tunnels, the application
    protocol the payload was recognised as) with every field named, and its
    bytes as a hex and ASCII dump; selecting a layer or field highlights its
-   bytes. The panel follows the selection while the tcpdump tab is in view
+   bytes. The ACK that completes a TCP handshake has the handshake's
+   `iRTT` in its TCP layer. The panel follows the selection while the tcpdump tab is in view
    (it asks LogSquirl at most every 250 ms, and not at all while hidden),
    and **Plugins → tcpdump → Packet details** shows the selected line's
    packet at once. The packet is read again from the capture file, found
-   by the line's No.: the plugin keeps a file position every 10,000 packets
+   by the line's No., off LogSquirl's UI thread ("Reading packet N…"): the plugin keeps a file position every 10,000 packets
    while converting, so no packet is kept in memory. A capture file that
    was changed, moved or removed after it was opened is reported, not
    misread; open it again. Needs LogSquirl ≥ 26.11
