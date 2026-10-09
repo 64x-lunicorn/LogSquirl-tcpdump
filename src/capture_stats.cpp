@@ -51,6 +51,10 @@ void CaptureStats::add( const PacketRecord& pkt )
     protocolBytes[ pkt.protocol ] += pkt.capturedLen;
     countEndpoint( pkt.srcIp );
     countEndpoint( pkt.dstIp );
+    for ( const auto& tunnel : pkt.tunnels ) {
+        countEndpoint( tunnel.srcIp );
+        countEndpoint( tunnel.dstIp );
+    }
 }
 
 void CaptureStats::addTcpMarkers( const TcpMarkers& markers )

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
+  without checksum, key and sequence number, carrying IPv4, IPv6 or an
+  Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by
+  the packet inside, as Wireshark shows it: Source, Destination, Protocol
+  and Info are the inner packet's, and Info names the tunnels first,
+  outermost first: `VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240`,
+  `GRE key=0x0000002A | 53053 → 53 Len=32 | Standard query …`,
+  `IPv6-in-IPv4 | …`. Streams are keyed by the inner addresses and ports,
+  whichever tunnel carries them; the Capture Summary counts the tunnel
+  endpoints among its endpoints. At most 4 tunnels are unwrapped, a
+  deeper one is described as such (`IPv4-in-IPv4 not dissected: more than
+  4 nested tunnels`). Before, such packets were shown as UDP to port 4789
+  (`VXLAN`), `GRE`, `IPIP` or `6in4` between the tunnel endpoints. GRE
+  carrying other protocols, PPTP's enhanced GRE among them, is still shown
+  as GRE, now with its protocol type.
+
 ## [0.3.0] — 2026-10-09
 
 ### Added

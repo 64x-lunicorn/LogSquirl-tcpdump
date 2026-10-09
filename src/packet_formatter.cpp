@@ -211,6 +211,12 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
         writeColumn( oss, pkt.srcMac, kMacWidth );
         writeColumn( oss, pkt.dstMac, kMacWidth );
     }
+    // The tunnels a packet came through, outermost first, before the
+    // description of the packet inside them: kept apart from info, whose
+    // start the TCP analysis markers and the Stream Labels look at.
+    for ( const auto& tunnel : pkt.tunnels ) {
+        oss << tunnel.name << kDescriptionSeparator;
+    }
     oss << pkt.info;
     if ( pkt.capturedLen < pkt.originalLen ) {
         oss << ( pkt.info.empty() ? "" : " " ) << "[cut to " << pkt.capturedLen << " bytes]";

@@ -24,7 +24,7 @@
  * Parses pcap (libpcap) files, and the packets of any capture, with
  * Ethernet, Raw IP, Linux cooked capture and BSD loopback link layers.
  * Extracts IPv4/IPv6, TCP, UDP, ICMP, and ARP protocol fields from each
- * packet.
+ * packet, unwrapping VXLAN, GRE and IP-in-IP tunnels to the packet inside.
  */
 
 #include "pcap_parser.h"
@@ -107,6 +107,12 @@ std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
     return std::nullopt;
 }
 
+// ── Tunnels (defined below the network layer they unwrap to) ─────────────
+
+void parseIpInIp( PacketRecord& pkt, const char* network, const uint8_t* data, size_t remaining );
+void parseGre( PacketRecord& pkt, const uint8_t* data, size_t remaining );
+void parseVxlan( PacketRecord& pkt, const uint8_t* data, size_t remaining );
+
 /// The transport layer of a packet quoted in an ICMP error: its protocol's
 /// name and the ports of a TCP or UDP header, the first 4 of the 8 bytes a
 /// router quotes.  Nothing else of it is read.
@@ -121,12 +127,13 @@ void parseQuotedTransport( PacketRecord& pkt, const uint8_t* data, size_t remain
 }
 
 /// Parse the transport layer from the @p remaining captured bytes at
-/// @p data.  @p wireLen is its length on the wire according to the IP
-/// header, more than @p remaining if the capture was cut at the snaplen.
-/// Of a @p quoted packet, only protocol and ports are read
-/// (parseQuotedTransport).
-void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, size_t wireLen,
-                     bool quoted )
+/// @p data, carried by @p network ("IPv4" or "IPv6").  @p wireLen is its
+/// length on the wire according to the IP header, more than @p remaining
+/// if the capture was cut at the snaplen.  Of a @p quoted packet, only
+/// protocol and ports are read (parseQuotedTransport), and no tunnel is
+/// unwrapped.
+void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data, size_t remaining,
+                     size_t wireLen, bool quoted )
 {
     if ( quoted ) {
         parseQuotedTransport( pkt, data, remaining );
@@ -189,6 +196,13 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         size_t payloadSize = ( remaining > 8 ) ? remaining - 8 : 0;
         payloadSize = std::min( payloadSize, static_cast<size_t>( pkt.payloadLen ) );
 
+        // VXLAN is told by its destination port alone, as RFC 7348 has it:
+        // the source port is a hash of the inner flow.
+        if ( pkt.dstPort == kVxlanPort && payloadSize >= 8 ) {
+            parseVxlan( pkt, payload, payloadSize );
+            return;
+        }
+
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " Len=" << pkt.payloadLen;
 
@@ -202,6 +216,13 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     else if ( pkt.ipProtocol == IpProtoIcmpv6 && remaining >= 8 ) {
         pkt.protocol = "ICMPv6";
         pkt.info = describeIcmpv6( data, remaining );
+    }
+    else if ( pkt.ipProtocol == IpProtoGre ) {
+        parseGre( pkt, data, remaining );
+    }
+    else if ( ( pkt.ipProtocol == IpProtoIpip && remaining >= 1 && data[ 0 ] >> 4 == 4 )
+              || ( pkt.ipProtocol == IpProtoIpv6Encap && remaining >= 1 && data[ 0 ] >> 4 == 6 ) ) {
+        parseIpInIp( pkt, network, data, remaining );
     }
     else {
         // A protocol not dissected further: its name, if it has one.
@@ -265,7 +286,7 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
         return;
     }
 
-    parseTransport( pkt, data + ihl, capturedLen - ihl, totalLen - ihl, quoted );
+    parseTransport( pkt, "IPv4", data + ihl, capturedLen - ihl, totalLen - ihl, quoted );
 }
 
 // ── Parse IPv6 header ────────────────────────────────────────────────────
@@ -318,7 +339,7 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
             break;
         default: // The upper-layer protocol, or one this parser does not walk
             pkt.ipProtocol = next;
-            parseTransport( pkt, data + offset, end - offset, wireEnd - offset, quoted );
+            parseTransport( pkt, "IPv6", data + offset, end - offset, wireEnd - offset, quoted );
             return;
         }
 
@@ -375,6 +396,182 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 
     pkt.srcIp = senderIp;
     pkt.dstIp = targetIp;
+}
+
+// ── Tunnels ──────────────────────────────────────────────────────────────
+
+/// Dissect the payload of EtherType @p etherType, @p remaining captured
+/// bytes at @p data, as the network layer of a frame a tunnel carries.  The
+/// type field of an @p ethernet frame may be an IEEE 802.3 length instead.
+void parseCarried( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, size_t remaining,
+                   bool ethernet )
+{
+    if ( etherType == EthertypeIpv4 ) {
+        parseIpv4( pkt, data, remaining );
+    }
+    else if ( etherType == EthertypeIpv6 ) {
+        parseIpv6( pkt, data, remaining );
+    }
+    else if ( etherType == EthertypeArp ) {
+        parseArp( pkt, data, remaining );
+    }
+    else if ( etherType <= kMax8023Length && ethernet ) {
+        pkt.protocol = "LLC";
+        pkt.info = "802.3 frame, length " + std::to_string( etherType );
+    }
+    else {
+        char hex[ 8 ];
+        std::snprintf( hex, sizeof( hex ), "%04X", etherType );
+        const auto* name = etherTypeName( etherType );
+        pkt.protocol = name ? name : std::string( "ETH(0x" ) + hex + ")";
+        pkt.info = std::string( "EtherType 0x" ) + hex;
+    }
+}
+
+/// Dissect the Ethernet frame a VXLAN or GRE tunnel carries, @p remaining
+/// captured bytes at @p data: its MAC addresses replace the outer frame's,
+/// its VLAN tags are stripped as on the wire.
+void parseCarriedEthernet( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+{
+    if ( remaining < 14 ) {
+        pkt.protocol = "Ethernet";
+        pkt.info = "Truncated Ethernet header";
+        return;
+    }
+    pkt.dstMac = formatMac( data );
+    pkt.srcMac = formatMac( data + 6 );
+    auto etherType = readBE16( data + 12 );
+    data += 14;
+    remaining -= 14;
+    for ( int tags = 0; tags < 8 && remaining >= 4
+                        && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
+                             || etherType == EthertypeQinQLegacy );
+          ++tags ) {
+        etherType = readBE16( data + 2 );
+        data += 4;
+        remaining -= 4;
+    }
+    pkt.etherType = etherType;
+    parseCarried( pkt, etherType, data, remaining, true );
+}
+
+/**
+ * Enter the tunnel @p name: what was dissected so far becomes the tunnel's
+ * outer packet, its addresses kept in pkt.tunnels, its transport fields
+ * cleared for the packet inside.  Beyond kMaxTunnels the tunnel is not
+ * entered: @p pkt is described as the tunnel, labelled @p protocol, and
+ * false returned.
+ */
+bool enterTunnel( PacketRecord& pkt, std::string name, const char* protocol )
+{
+    if ( pkt.tunnels.size() >= kMaxTunnels ) {
+        pkt.protocol = protocol;
+        pkt.info = name + " not dissected: more than " + std::to_string( kMaxTunnels )
+                   + " nested tunnels";
+        return false;
+    }
+    pkt.tunnels.push_back( { std::move( name ), pkt.srcIp, pkt.dstIp } );
+    pkt.srcIp.clear();
+    pkt.dstIp.clear();
+    pkt.ipProtocol = 0;
+    pkt.transport.reset();
+    pkt.srcPort = 0;
+    pkt.dstPort = 0;
+    pkt.payloadLen = 0;
+    return true;
+}
+
+/// An IPv4 (protocol 4) or IPv6 (protocol 41) packet inside one of
+/// @p network, the version of which the caller has checked.
+void parseIpInIp( PacketRecord& pkt, const char* network, const uint8_t* data, size_t remaining )
+{
+    const bool inner6 = pkt.ipProtocol == IpProtoIpv6Encap;
+    if ( !enterTunnel( pkt, std::string( inner6 ? "IPv6" : "IPv4" ) + "-in-" + network,
+                       ipProtocolName( pkt.ipProtocol ) ) ) {
+        return;
+    }
+    if ( inner6 ) {
+        parseIpv6( pkt, data, remaining );
+    }
+    else {
+        parseIpv4( pkt, data, remaining );
+    }
+}
+
+/// A GRE packet (RFC 2784, with RFC 2890's key and sequence number).  The
+/// packet it carries is dissected for IPv4, IPv6 and Ethernet (transparent
+/// Ethernet bridging, as NVGRE and gretap use); every other protocol type,
+/// PPTP's enhanced GRE (version 1) and RFC 1701's source routing leave the
+/// GRE packet itself to be shown.
+void parseGre( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+{
+    constexpr uint16_t kChecksum = 0x8000;
+    constexpr uint16_t kRouting = 0x4000;
+    constexpr uint16_t kKey = 0x2000;
+    constexpr uint16_t kSequence = 0x1000;
+
+    pkt.protocol = "GRE";
+    if ( remaining < 4 ) {
+        pkt.info = "Truncated GRE header";
+        return;
+    }
+    const auto flags = readBE16( data );
+    const auto protocolType = readBE16( data + 2 );
+    char type[ 8 ];
+    std::snprintf( type, sizeof( type ), "%04X", protocolType );
+    const auto version = flags & 0x0007;
+    if ( version != 0 ) {
+        pkt.info = "GRE version " + std::to_string( version ) + ", protocol type 0x" + type;
+        return;
+    }
+    if ( flags & kRouting ) {
+        pkt.info = std::string( "GRE with source routing, protocol type 0x" ) + type;
+        return;
+    }
+
+    std::string name = "GRE";
+    size_t offset = ( flags & kChecksum ) ? 8 : 4;
+    if ( ( flags & kKey ) && remaining >= offset + 4 ) {
+        char key[ 16 ];
+        std::snprintf( key, sizeof( key ), "0x%08X", readBE32( data + offset ) );
+        name += std::string( " key=" ) + key;
+    }
+    offset += ( ( flags & kKey ) ? 4 : 0 ) + ( ( flags & kSequence ) ? 4 : 0 );
+    if ( remaining < offset ) {
+        pkt.info = "Truncated GRE header";
+        return;
+    }
+
+    if ( protocolType != EthertypeIpv4 && protocolType != EthertypeIpv6
+         && protocolType != EthertypeTransparentBridging ) {
+        pkt.info = name + ", protocol type 0x" + type;
+        return;
+    }
+    if ( !enterTunnel( pkt, std::move( name ), "GRE" ) ) {
+        return;
+    }
+    if ( protocolType == EthertypeTransparentBridging ) {
+        parseCarriedEthernet( pkt, data + offset, remaining - offset );
+    }
+    else {
+        parseCarried( pkt, protocolType, data + offset, remaining - offset, false );
+    }
+}
+
+/// A VXLAN packet (RFC 7348), at least its 8-byte header, and the Ethernet
+/// frame it carries.  The VNI is named when the I flag says it is valid.
+void parseVxlan( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+{
+    constexpr uint8_t kVniValid = 0x08;
+    std::string name = "VXLAN";
+    if ( data[ 0 ] & kVniValid ) {
+        const auto vni = readBE32( data + 4 ) >> 8;
+        name += " VNI " + std::to_string( vni );
+    }
+    if ( !enterTunnel( pkt, std::move( name ), "VXLAN" ) ) {
+        return;
+    }
+    parseCarriedEthernet( pkt, data + 8, remaining - 8 );
 }
 
 } // anonymous namespace
