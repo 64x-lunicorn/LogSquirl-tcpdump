@@ -7,28 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **No `Ack=` without the ACK flag.** A segment without the ACK flag, a
-  SYN above all, showed `Ack=0`, though its acknowledgement field means
-  nothing; Info now leaves `Ack=` out, as Wireshark does: `[SYN] Seq=0
-  Win=64240`.
-- **A port alone no longer makes a UDP label stick.** A datagram on the
-  DNS, mDNS, SSDP, NTP, DHCP or DHCPv6 port whose payload does not parse
-  as that protocol is still named by the port, but as a guess: like every
-  port hint, its label no longer sticks to the stream.
-- **Port 8443 is `HTTPS-Alt`.** The port hint named TCP 8443 `HTTP-Alt`,
-  like 8080, although it is the usual alternative HTTPS port (IANA's
-  `pcsync-https`): the handshake of a TLS connection to 8443, before its
-  Client Hello, said `HTTP-Alt`. It now says `HTTPS-Alt`, and from the
-  Client Hello on the stream is `TLS`, as on 443; 8080 stays `HTTP-Alt`.
-- **The TCP window is shown scaled.** Once both SYNs of a connection
-  carried the window scale option, `Win=` is the window shifted by the
-  sender's scale, as Wireshark calculates it (`Win=408320` rather than
-  `Win=6380` on macOS, which scales by 64), and the TCP analysis markers
-  compare that window, as Wireshark's do. SYNs, connections where only
-  one side offered scaling and streams captured after their handshake, whose
-  scale is unknown, show the window as sent, as Wireshark does. A shift
-  beyond 14 counts as 14. No more memory per stream.
+## [0.3.0] — 2026-10-09
 
 ### Added
 - **Options dialog.** **Configure…** on the plugin's card in **Plugins →
@@ -236,6 +215,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SOCKS and the payload previews already used it.
 
 ### Fixed
+- **No `Ack=` without the ACK flag.** A segment without the ACK flag, a
+  SYN above all, showed `Ack=0`, though its acknowledgement field means
+  nothing; Info now leaves `Ack=` out, as Wireshark does: `[SYN] Seq=0
+  Win=64240`.
+- **Port 8443 is `HTTPS-Alt`.** The port hint named TCP 8443 `HTTP-Alt`,
+  like 8080, although it is the usual alternative HTTPS port (IANA's
+  `pcsync-https`): the handshake of a TLS connection to 8443, before its
+  Client Hello, said `HTTP-Alt`. It now says `HTTPS-Alt`, and from the
+  Client Hello on the stream is `TLS`, as on 443; 8080 stays `HTTP-Alt`.
+- **The TCP window is shown scaled.** Once both SYNs of a connection
+  carried the window scale option, `Win=` is the window shifted by the
+  sender's scale, as Wireshark calculates it (`Win=408320` rather than
+  `Win=6380` on macOS, which scales by 64), and the TCP analysis markers
+  compare that window, as Wireshark's do. SYNs, connections where only
+  one side offered scaling and streams captured after their handshake, whose
+  scale is unknown, show the window as sent, as Wireshark does. A shift
+  beyond 14 counts as 14. No more memory per stream.
 - **Columns no longer run together.** A value as wide as its column, or
   wider, such as packet number 1,000,000, the protocol `ETH(0x88CC)` or a
   length of a million bytes, is still followed by a space, and an empty
@@ -388,7 +384,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CI/CD** — GitHub Actions workflows for build (Linux, macOS, Windows)
   and tag-triggered releases with per-platform ZIP artifacts.
 
-[Unreleased]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/64x-lunicorn/LogSquirl-tcpdump/releases/tag/v0.1.0
