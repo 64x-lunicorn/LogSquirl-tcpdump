@@ -417,3 +417,35 @@ SCENARIO( "A ring buffer file without the headers a checkpoint names is not misr
         }
     }
 }
+
+SCENARIO( "A copy of the index shares the extents of its streams", "[capture_index]" )
+{
+    GIVEN( "an index of many streams, and a copy of it as a live snapshot takes" )
+    {
+        CaptureIndex index;
+        for ( uint32_t number = 1; number <= 20000; ++number ) {
+            index.noteStream( Transport::Tcp, static_cast<int>( number - 1 ), number );
+        }
+        const CaptureIndex copy( index );
+
+        THEN( "it shares their storage" )
+        {
+            REQUIRE( copy.streamChunksSharedWith( index ) > 1 );
+        }
+
+        WHEN( "the index goes on" )
+        {
+            index.noteStream( Transport::Tcp, 0, 20001 );
+            index.noteStream( Transport::Tcp, 20000, 20002 );
+
+            THEN( "the copy is as it was, and shares what did not change" )
+            {
+                REQUIRE( copy.streamExtent( Transport::Tcp, 0 )->last == 1 );
+                REQUIRE_FALSE( copy.streamExtent( Transport::Tcp, 20000 ) );
+                REQUIRE( index.streamExtent( Transport::Tcp, 0 )->last == 20001 );
+                REQUIRE( index.streamExtent( Transport::Tcp, 20000 )->first == 20002 );
+                REQUIRE( copy.streamChunksSharedWith( index ) > 0 );
+            }
+        }
+    }
+}

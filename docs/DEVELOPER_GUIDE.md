@@ -1451,12 +1451,32 @@ addresses as "other endpoints".
 Memory therefore grows with the conversations and addresses in a capture,
 not with its size, and both are capped, so a port scan or a busy NAT cannot
 exhaust it. By default the caps are 1,000,000 streams and 100,000
-addresses, roughly 150 MB (and 70 MB more for the Conversations table's
-counts) and 10 MB; the options (`settings.h`,
-*Advanced* in the dialog) let the user raise each up to tenfold
-(`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
-addresses, roughly 2.2 GB and 100 MB) or lower it to 1. The summary says
-when a cap was hit.
+addresses; the options (`settings.h`, *Advanced* in the dialog) let the
+user raise each up to tenfold (`kMaxStreamCap`, `kMaxEndpointCap`:
+10,000,000 streams and 1,000,000 addresses) or lower it to 1. The summary
+says when a cap was hit. What a numbered stream costs, measured on a SYN
+flood of 1,100,000 packets (1,000,000 streams numbered, the rest past the
+cap), peak resident memory of the conversion over the plugin at rest:
+
+| Per numbered stream | Bytes |
+|---|---|
+| Stream Tracker: its key in the map, its `StreamState` (72) | about 175 |
+| Conversations table: its counts (`ConversationStats`) | 64 |
+| Conversations table: its row (`Conversation`, in a `ConversationRows` chunk) | 136 |
+| `CaptureIndex`: its first and last packet | 8 |
+| **All** (measured: 390 MB for 1,000,000 streams) | **about 390** |
+
+The addresses take about 100 bytes each (10 MB at the default cap). So the
+default stream cap takes some 390 MB, the tenfold one some 3.9 GB. A live
+capture's snapshots, one a second, add little: the `CaptureIndex` copy
+shares its stream extents in chunks of 4,096 (`SharedChunks`, copy on
+write), the summary's rows are shared chunks of 4,096
+(`ConversationStats::rows()` makes anew only those whose streams had a
+packet since the last snapshot, all when the capture's start moved), and
+the snapshot is moved, not copied, to the UI thread, which keeps one
+summary per capture. Measured live with the same flood, snapshots every
+second: 470 MB, where it was 1.2 GB with a full copy of the rows and the
+index per snapshot.
 
 #### The Log Format (`formats/tcpdump_log.json`)
 An lnav-compatible Log Format definition, as LogSquirl's built-in ones in
@@ -1589,9 +1609,12 @@ first packet line are flushed (LogSquirl recognises a Log Format once, at
 the first load with lines, LogSquirl#794, so the tab must not open on the
 header alone), and `snapshot( LiveSnapshot )` with the first packet and
 then at most every `kLiveSnapshotInterval` (1 s): the summary so far
-(`summariseSoFar()`, from a copy of the statistics), the time since the
-start, the bytes read and a copy of the `CaptureIndex` so far, pointing
-into the raw file (flushed first) as `CaptureIndex::Growth::Growing`. The
+(`summariseSoFar()`, from a copy of the statistics, its conversation rows
+shared with the last snapshot's where they did not change), the time since
+the start, the bytes read and a copy of the `CaptureIndex` so far (its
+stream extents shared), pointing into the raw file (flushed first) as
+`CaptureIndex::Growth::Growing`; the snapshot is moved to the observer,
+and on to the UI thread. The
 final result's index points into the closed raw file. So that a burst's last packets are not left out
 until the next packet, the wait before a read sleeps until the snapshot's
 turn while the stream stays idle (a stop turns `ready()` on). The stream
@@ -2149,8 +2172,11 @@ export, conversation statistics):
   `SidebarWidget::updateSummary()` replaces a capture's summary and shows
   it if in front, the table keeping its sort and selected conversation; a
   live capture's snapshots come through it, each taken by
-  `summariseSoFar()` from copies of the `CaptureStats` and the table as it
-  stands, so the conversion goes on with them unchanged.
+  `summariseSoFar()` from a copy of the `CaptureStats` and the table as it
+  stands, so the conversion goes on with them unchanged. The rows are a
+  `ConversationRows`, chunks of 4,096 a summary shares with the one before
+  where their streams had no packet in between; the model orders pointers
+  to them.
   A click or *Filter on this conversation* opens the Regex Lab ("Filter")
   with `conversationPattern()`, the Follow stream pattern built from the
   row's stream number, addresses and ports.

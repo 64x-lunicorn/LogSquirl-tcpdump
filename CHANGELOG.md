@@ -247,10 +247,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by every column. A click on a row, or *Filter on this conversation*,
   opens the Regex Lab with the pattern of the stream's lines, as Follow
   stream builds it. The counts are taken while converting, for the
-  numbered streams only, so the stream cap bounds them (some 70 MB more at
-  the default cap of 1,000,000 streams); the packets of streams past it are
+  numbered streams only, so the stream cap bounds them (some 200 bytes a
+  stream for its counts and row; with the Stream Tracker some 390 MB at the
+  default cap of 1,000,000 streams); the packets of streams past it are
   one row, *Other streams*. The table is part of the Capture Summary and
-  shows a new summary snapshot as it comes, keeping its sort and selection.
+  shows a new summary snapshot as it comes, keeping its sort and selection;
+  a snapshot shares the rows of the streams that had no packet since the
+  last one.
 - **Export packets.** *Plugins → tcpdump → Export packets…* writes the
   packets of the selected lines to a new capture file, e.g. the lines of a
   Filtered View, to share a narrowed view or open it in Wireshark. Each

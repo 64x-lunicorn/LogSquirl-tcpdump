@@ -1045,7 +1045,13 @@ void SidebarWidget::openLiveCapture( const QString& logPath, const QString& rawP
 
 void SidebarWidget::takeLiveSnapshot( const LiveSnapshot& snapshot )
 {
-    liveSnapshot_ = snapshot;
+    // The progress line needs the counts only; the summary is kept once,
+    // with its capture.
+    liveSnapshot_.elapsed = snapshot.elapsed;
+    liveSnapshot_.rawBytes = snapshot.rawBytes;
+    liveSnapshot_.rawFile = snapshot.rawFile;
+    liveSnapshot_.summary.packets = snapshot.summary.packets;
+    liveSnapshot_.summary.bytes = snapshot.summary.bytes;
     showLiveProgress();
     const auto found = converted_.find( liveKey_ );
     if ( liveKey_.isEmpty() || found == converted_.end() ) {

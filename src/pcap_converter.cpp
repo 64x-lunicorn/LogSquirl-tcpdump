@@ -236,8 +236,9 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     }
     summary.handshakes = stats.initialRtts.count();
     summary.medianInitialRttNs = stats.medianInitialRttNs();
-    summary.conversations = std::make_shared<const std::vector<Conversation>>(
-        conversations.conversations( tracker, labels, stats.firstTimeSec, stats.firstTimeNsec ) );
+    // Rows of streams without a packet since the last summary are shared with it.
+    summary.conversations
+        = conversations.rows( tracker, labels, stats.firstTimeSec, stats.firstTimeNsec );
     summary.otherStreamPackets = conversations.otherPackets();
     summary.otherStreamBytes = conversations.otherBytes();
     summary.endsInsideRecord = reader.truncated();
@@ -518,7 +519,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         auto soFar = std::make_shared<CaptureIndex>( *index );
         soFar->setCaptureParts( raw->parts(), CaptureIndex::Growth::Growing );
         snapshot.index = std::move( soFar );
-        live->snapshot( snapshot );
+        live->snapshot( std::move( snapshot ) );
     };
     if ( live ) {
         beforeWait = [ & ] {

@@ -143,7 +143,7 @@ ConversationModel::ConversationModel( QObject* parent )
 {
 }
 
-void ConversationModel::setConversations( std::shared_ptr<const std::vector<Conversation>> rows,
+void ConversationModel::setConversations( std::shared_ptr<const ConversationRows> rows,
                                           uint64_t otherPackets, uint64_t otherBytes )
 {
     beginResetModel();
@@ -152,9 +152,11 @@ void ConversationModel::setConversations( std::shared_ptr<const std::vector<Conv
     otherBytes_ = otherBytes;
     order_.clear();
     if ( rows_ ) {
-        order_.resize( rows_->size() );
-        for ( size_t i = 0; i < order_.size(); ++i ) {
-            order_[ i ] = static_cast<uint32_t>( i );
+        order_.reserve( rows_->size() );
+        for ( const auto& chunk : rows_->chunks() ) {
+            for ( const auto& row : *chunk ) {
+                order_.push_back( &row );
+            }
         }
         applySort();
     }
@@ -166,13 +168,13 @@ const Conversation* ConversationModel::conversationAt( int row ) const
     if ( row < 0 || static_cast<size_t>( row ) >= order_.size() ) {
         return nullptr;
     }
-    return &( *rows_ )[ order_[ static_cast<size_t>( row ) ] ];
+    return order_[ static_cast<size_t>( row ) ];
 }
 
 int ConversationModel::rowOf( Transport transport, int stream ) const
 {
     for ( size_t row = 0; row < order_.size(); ++row ) {
-        const auto& conversation = ( *rows_ )[ order_[ row ] ];
+        const auto& conversation = *order_[ row ];
         if ( conversation.transport == transport && conversation.stream == stream ) {
             return static_cast<int>( row );
         }
@@ -266,17 +268,18 @@ void ConversationModel::applySort()
     if ( !rows_ ) {
         return;
     }
-    const auto& rows = *rows_;
     const auto column = sortColumn_;
     if ( sortOrder_ == Qt::AscendingOrder ) {
-        std::stable_sort( order_.begin(), order_.end(), [ & ]( uint32_t a, uint32_t b ) {
-            return before( rows[ a ], rows[ b ], column );
-        } );
+        std::stable_sort( order_.begin(), order_.end(),
+                          [ & ]( const Conversation* a, const Conversation* b ) {
+                              return before( *a, *b, column );
+                          } );
     }
     else {
-        std::stable_sort( order_.begin(), order_.end(), [ & ]( uint32_t a, uint32_t b ) {
-            return before( rows[ b ], rows[ a ], column );
-        } );
+        std::stable_sort( order_.begin(), order_.end(),
+                          [ & ]( const Conversation* a, const Conversation* b ) {
+                              return before( *b, *a, column );
+                          } );
     }
 }
 

@@ -91,8 +91,10 @@ void LiveCapture::start()
             observer.firstPacket = [ this ]( const QString& logPath, const QString& rawPath ) {
                 post( [ this, logPath, rawPath ] { emit readyToOpen( logPath, rawPath ); } );
             };
-            observer.snapshot = [ this ]( const LiveSnapshot& snapshot ) {
-                post( [ this, snapshot ] { emit snapshotTaken( snapshot ); } );
+            observer.snapshot = [ this ]( LiveSnapshot&& snapshot ) {
+                post( [ this, snapshot = std::move( snapshot ) ] {
+                    emit snapshotTaken( snapshot );
+                } );
             };
             result = convertStream( *source, name, outputRoot, cancel.get(), options, observer,
                                     limits, clock );

@@ -76,11 +76,11 @@ public:
 
     /// Show @p rows, and @p otherPackets and @p otherBytes of the streams
     /// past the cap as one more row unless there are none; sorted as before.
-    void setConversations( std::shared_ptr<const std::vector<Conversation>> rows,
-                           uint64_t otherPackets, uint64_t otherBytes );
+    void setConversations( std::shared_ptr<const ConversationRows> rows, uint64_t otherPackets,
+                           uint64_t otherBytes );
 
     /// The rows shown.
-    const std::shared_ptr<const std::vector<Conversation>>& conversations() const
+    const std::shared_ptr<const ConversationRows>& conversations() const
     {
         return rows_;
     }
@@ -103,9 +103,9 @@ private:
     /// Order order_ by sortColumn_ and sortOrder_.
     void applySort();
 
-    std::shared_ptr<const std::vector<Conversation>> rows_;
-    /// Indexes into rows_, in the order shown.
-    std::vector<uint32_t> order_;
+    std::shared_ptr<const ConversationRows> rows_;
+    /// The rows of rows_, in the order shown.
+    std::vector<const Conversation*> order_;
     uint64_t otherPackets_ = 0;
     uint64_t otherBytes_ = 0;
     int sortColumn_ = StreamColumn;

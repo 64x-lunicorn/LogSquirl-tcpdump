@@ -68,10 +68,12 @@ void CaptureIndex::noteStream( Transport transport, int id, uint32_t number )
     const auto at = static_cast<size_t>( id );
     if ( at >= streams.size() ) {
         // Numbered in order: a new stream is the next one.
-        streams.resize( at + 1 );
-        streams[ at ].first = number;
+        streams.growTo( at + 1 );
+        streams.writable( at ).first = number;
     }
-    streams[ at ].last = number;
+    if ( streams[ at ].last != number ) {
+        streams.writable( at ).last = number;
+    }
 }
 
 std::optional<CaptureIndex::StreamExtent> CaptureIndex::streamExtent( Transport transport,
