@@ -202,6 +202,15 @@ public:
     /// most @p timeout; on a worker thread.
     virtual LiveListing listInterfaces( const QString& device,
                                         std::chrono::milliseconds timeout ) const = 0;
+    /// The interfaces of @p device as the kind's @p options list them (ssh
+    /// lists with sudo -n if its option says so); by default as
+    /// listInterfaces( device, timeout ).  On a worker thread.
+    virtual LiveListing listInterfacesWith( const QString& device, const LiveOptions& options,
+                                            std::chrono::milliseconds timeout ) const
+    {
+        (void)options;
+        return listInterfaces( device, timeout );
+    }
 
     /// Why @p choice cannot be captured, kind-specific (the capture filter's
     /// syntax and the snaplen's range are checked before: captureFilterProblem());

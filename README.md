@@ -335,7 +335,9 @@ Client*) and shows the traffic live. Type the **Host** as
 `[user@]host[:port]` (`[address]:port` for an IPv6 address with a port), or
 pick one of the `Host` entries of `~/.ssh/config` that name one host (no
 wildcards); press Enter to list its interfaces, which are what `tcpdump -D`
-lists on the server. Every ssh runs as
+lists on the server (run with `sudo -n` while *Run tcpdump with sudo -n* is
+on, and listed anew when it is turned on or off), or, if that lists
+nothing, what `ip -o link` lists, with what tcpdump said. Every ssh runs as
 
 ```
 ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p <port>] -- <user@host> <remote command>

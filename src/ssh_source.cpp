@@ -49,8 +49,16 @@ const QStringList kSshOptions{ QStringLiteral( "-T" ), QStringLiteral( "-o" ),
                                QStringLiteral( "BatchMode=yes" ), QStringLiteral( "-o" ),
                                QStringLiteral( "ConnectTimeout=10" ) };
 
-/// What lists the server's interfaces.
-const QString kRemoteListing = QStringLiteral( "tcpdump -D" );
+/// What lists the server's interfaces, run by /bin/sh: tcpdump -D (behind
+/// sudo -n if @p sudo), and ip -o link if that lists nothing.
+QString remoteListing( bool sudo )
+{
+    const auto script
+        = QStringLiteral( "out=$(%1tcpdump -D) && [ -n \"$out\" ] && printf '%s\\n' \"$out\" || "
+                          "ip -o link show" )
+              .arg( sudo ? QStringLiteral( "sudo -n " ) : QString() );
+    return QStringLiteral( "exec /bin/sh -c " ) + shellQuote( script );
+}
 
 /// The exit code with which ssh reports its own failure (not the remote command's).
 constexpr int kSshFailed = 255;
@@ -80,6 +88,21 @@ bool parseInterface( const QString& line, LiveTarget& target )
     target.id = match.captured( 1 );
     const auto description = match.captured( 2 ).trimmed();
     target.description = description.isEmpty() ? match.captured( 3 ).trimmed() : description;
+    return true;
+}
+
+/// One interface of `ip -o link`: "2: eth0: <BROADCAST,UP> mtu 1500 …",
+/// "3: veth1@if4: <…>"; none if @p line is not one.
+bool parseLink( const QString& line, LiveTarget& target )
+{
+    static const QRegularExpression link(
+        QStringLiteral( "^\\s*\\d+:\\s+([^:@\\s]+)(?:@[^:\\s]*)?:\\s+<([^>]*)>" ) );
+    const auto match = link.match( line );
+    if ( !match.hasMatch() ) {
+        return false;
+    }
+    target.id = match.captured( 1 );
+    target.description = match.captured( 2 );
     return true;
 }
 
@@ -115,6 +138,8 @@ public:
         layout->addWidget( excludeOwn_ );
         setOptions( {} );
         connect( sudo_, &QCheckBox::toggled, this, &LiveOptionsWidget::changed );
+        // tcpdump -D is run with sudo -n, or without.
+        connect( sudo_, &QCheckBox::toggled, this, &LiveOptionsWidget::listingChanged );
         connect( excludeOwn_, &QCheckBox::toggled, this, &LiveOptionsWidget::changed );
     }
 
@@ -499,6 +524,12 @@ LiveListing SshSourceKind::listDevices( std::chrono::milliseconds timeout ) cons
 LiveListing SshSourceKind::listInterfaces( const QString& device,
                                            std::chrono::milliseconds timeout ) const
 {
+    return listInterfacesWith( device, {}, timeout );
+}
+
+LiveListing SshSourceKind::listInterfacesWith( const QString& device, const LiveOptions& options,
+                                               std::chrono::milliseconds timeout ) const
+{
     LiveListing listing;
     const auto destination = SshDestination::parse( device );
     if ( !destination.problem.isEmpty() ) {
@@ -511,19 +542,38 @@ LiveListing SshSourceKind::listInterfaces( const QString& device,
         return listing;
     }
     const auto output = runListing(
-        { ssh, sshArguments( destination, kRemoteListing ), QStringLiteral( "ssh" ) }, timeout );
+        { ssh, sshArguments( destination, remoteListing( optionOn( options, kSshSudoOption ) ) ),
+          QStringLiteral( "ssh" ) },
+        timeout );
     if ( !output.error.isEmpty() ) {
         listing.error = output.error;
         return listing;
     }
+    bool fromIp = false;
     for ( const auto& line : output.out.split( QLatin1Char( '\n' ), Qt::SkipEmptyParts ) ) {
         LiveTarget target;
         if ( parseInterface( line, target ) ) {
             listing.targets.push_back( std::move( target ) );
         }
+        else if ( parseLink( line, target ) ) {
+            fromIp = true;
+            listing.targets.push_back( std::move( target ) );
+        }
     }
     const auto err = output.err.trimmed();
-    if ( output.exitCode != 0 ) {
+    if ( output.exitCode == 0 && fromIp ) {
+        // Listed, but tcpdump did not: what it said may keep it from capturing.
+        listing.error = QStringLiteral( "tcpdump -D listed nothing on %1; these are the "
+                                        "interfaces ip -o link lists." )
+                            .arg( destination.host );
+        if ( !err.isEmpty() ) {
+            listing.error += QStringLiteral( "\n" ) + err;
+            if ( const auto hint = explainSshFailure( err ); !hint.isEmpty() ) {
+                listing.error += QStringLiteral( "\n\n" ) + hint;
+            }
+        }
+    }
+    else if ( output.exitCode != 0 ) {
         listing.error = output.exitCode == kSshFailed
                             ? QStringLiteral( "ssh to %1 failed" ).arg( destination.host )
                             : QStringLiteral( "tcpdump -D on %1 exited with code %2" )

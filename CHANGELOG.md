@@ -489,6 +489,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- SSH live capture lists the server's interfaces with `sudo -n tcpdump -D`
+  while *Run tcpdump with sudo -n* is on (anew as it is toggled), and with
+  `ip -o link` when tcpdump lists none, as #74 asked; the remote commands
+  run with `/bin/sh` whatever the login shell (#113).
 - SSH live capture: **Stop** left tcpdump running on the server, as root
   behind sudo, until its next packet (ssh without a terminal gets no
   hangup). The remote command is now a `/bin/sh` script with a watchdog

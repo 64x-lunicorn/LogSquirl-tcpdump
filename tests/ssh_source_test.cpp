@@ -282,6 +282,7 @@ struct FakeServer {
     QString sudo = "[ \"$1\" = -n ] || { echo 'fake sudo: -n missing' >&2; exit 97; }\n"
                    "shift; exec \"$@\"";
     bool tcpdump = true; ///< Whether the server has tcpdump.
+    bool ip = false;     ///< Whether the server has ip, listing two links.
     /// Whether a capture's tcpdump runs until it is killed, logging it.
     bool hang = false;
     /// Whether the remote command runs in a process group of its own, with
@@ -349,6 +350,11 @@ struct FakeServer {
                                                       "while :; do /bin/sleep 0.05; done" )
                                                  .arg( dir.filePath( "tcpdump.log" ) )
                                            : QString() ) );
+        }
+        if ( ip ) {
+            scriptAt( QDir( remote() ).filePath( "ip" ),
+                      "echo '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue'\n"
+                      "echo '2: eth0@if7: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500'" );
         }
         SshPrograms where;
         where.installed = { dir.filePath( "ssh" ) };
@@ -431,9 +437,35 @@ SCENARIO( "The SSH source lists and captures on a server through a fake ssh", "[
         REQUIRE( listing.targets[ 1 ].id == "any" );
         REQUIRE( listing.targets[ 1 ].description
                  == "Pseudo-device that captures on all interfaces" );
-        REQUIRE( server.loggedArgv()
-                 == "[-T]\n[-o]\n[BatchMode=yes]\n[-o]\n[ConnectTimeout=10]\n[-p]\n[2222]\n[--]\n"
-                    "[admin@srv]\n[tcpdump -D]\n" );
+        REQUIRE(
+            server.loggedArgv()
+            == "[-T]\n[-o]\n[BatchMode=yes]\n[-o]\n[ConnectTimeout=10]\n[-p]\n[2222]\n[--]\n"
+               "[admin@srv]\n[exec /bin/sh -c 'out=$(sudo -n tcpdump -D) && [ -n \"$out\" ] && "
+               "printf '\\''%s\\n'\\'' \"$out\" || ip -o link show']\n" );
+    }
+
+    THEN( "with the sudo option off, tcpdump -D runs without sudo" )
+    {
+        const auto listing = kind->listInterfacesWith( "srv", { { kSshSudoOption, "false" } },
+                                                       LiveSourceKind::kListTimeout );
+        REQUIRE( listing.error.isEmpty() );
+        REQUIRE( listing.targets.size() == 2 );
+        REQUIRE( server.loggedArgv().contains( "out=$(tcpdump -D)" ) );
+        REQUIRE_FALSE( server.loggedArgv().contains( "sudo" ) );
+    }
+
+    THEN( "the form lists anew, without sudo, when the sudo option is turned off" )
+    {
+        LiveCaptureForm form;
+        form.setSources( registryOf( kind ) );
+        form.setChoice( LiveChoice{ "ssh", "srv", "", "", kDefaultSnaplen, {} } );
+        REQUIRE( waitFor( [ & ] {
+            return !form.isListing() && server.loggedArgv().contains( "sudo -n tcpdump -D" );
+        } ) );
+        form.findChild<QCheckBox*>( "sshSudo" )->setChecked( false );
+        REQUIRE( waitFor( [ & ] {
+            return !form.isListing() && server.loggedArgv().contains( "out=$(tcpdump -D)" );
+        } ) );
     }
 
     THEN( "a typed host lists its interfaces in the form, which shows the options" )
@@ -566,6 +598,23 @@ SCENARIO( "What ssh, sudo and tcpdump fail with is reported with what to do", "[
             const auto error = kind.listInterfaces( "srv", LiveSourceKind::kListTimeout ).error;
             REQUIRE( error.contains( "exited with code 127" ) );
             REQUIRE( error.contains( "tcpdump is not installed on the server" ) );
+        }
+
+        AND_WHEN( "it has ip" )
+        {
+            server.ip = true;
+            const SshSourceKind withIp( server.write() );
+
+            THEN( "the interfaces are what ip -o link lists, with why tcpdump listed none" )
+            {
+                const auto listing = withIp.listInterfaces( "srv", LiveSourceKind::kListTimeout );
+                REQUIRE( listing.targets.size() == 2 );
+                REQUIRE( listing.targets[ 0 ].id == "lo" );
+                REQUIRE( listing.targets[ 1 ].id == "eth0" );
+                REQUIRE( listing.targets[ 1 ].description == "BROADCAST,MULTICAST,UP,LOWER_UP" );
+                REQUIRE( listing.error.contains( "ip -o link" ) );
+                REQUIRE( listing.error.contains( "tcpdump is not installed on the server" ) );
+            }
         }
 
         THEN( "so does a capture, behind sudo -n" )

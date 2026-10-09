@@ -1669,6 +1669,7 @@ knows none of them. A kind answers:
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
+| `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
 | `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
@@ -1761,8 +1762,13 @@ refuses what ssh could misread (a leading `-`, spaces, a bad port);
 `*`, `?` or `!`, described by their HostName, User and Port.
 `sshArguments()` is always `-T -o BatchMode=yes -o ConnectTimeout=10 [-p
 port] -- <destination> <remote command>`, so ssh never prompts (a
-listing's stdin is the null device too). `listInterfaces()` runs `tcpdump
--D` remotely; `command()` runs `sshRemoteCaptureCommand( choice )`, `exec
+listing's stdin is the null device too). `listInterfacesWith( device,
+options, timeout )` runs `out=$([sudo -n ]tcpdump -D) && [ -n "$out" ] &&
+printf … || ip -o link show` with `/bin/sh` remotely, `sudo -n` as the sudo
+option says (the options widget emits `LiveOptionsWidget::listingChanged()`
+as it is toggled, and the form lists anew); lines of `ip -o link` are
+listed when tcpdump listed none, with what it wrote on stderr as the
+listing's error; `command()` runs `sshRemoteCaptureCommand( choice )`, `exec
 /bin/sh -c '<sshRemoteCaptureScript( choice )>'`, so that the POSIX shell
 runs the script whatever the login shell is. The script is built with
 `shellQuote()` (single quotes, `'` as `'\''`): `[sudo -n] tcpdump -i '<if>'

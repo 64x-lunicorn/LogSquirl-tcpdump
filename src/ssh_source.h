@@ -31,7 +31,8 @@
  * or whether to trust a host key, so only keys and the SSH agent are used
  * and the plugin never asks for or stores a secret.  A listing's stdin is
  * the null device.  The interfaces are what `tcpdump -D` lists on the
- * server; the capture runs the script
+ * server (behind `sudo -n` with the sudo option on), or, if that lists
+ * nothing, `ip -o link`; the capture runs the script
  *
  *     [sudo -n] tcpdump -i '<if>' -s <snaplen> -U -w - '<filter>' &
  *     <watchdog: read stdin until it closes, then kill tcpdump> &
@@ -139,8 +140,13 @@ public:
     Devices devices() const override;
     QString deviceLabel() const override;
     LiveListing listDevices( std::chrono::milliseconds timeout ) const override;
+    /// With the default options: sudo -n.
     LiveListing listInterfaces( const QString& device,
                                 std::chrono::milliseconds timeout ) const override;
+    /// `[sudo -n] tcpdump -D` on the server, sudo as the option says; `ip -o
+    /// link` if tcpdump lists nothing.
+    LiveListing listInterfacesWith( const QString& device, const LiveOptions& options,
+                                    std::chrono::milliseconds timeout ) const override;
     QString validate( const LiveChoice& choice ) const override;
     LiveOptionsWidget* makeOptionsWidget() const override;
     ProcessCommand command( const LiveChoice& choice ) const override;
