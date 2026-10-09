@@ -643,15 +643,15 @@ SCENARIO( "The line layout chooses the time columns and adds the MAC columns",
     {
         const LineLayout layout{ TimeColumns::Both, true };
 
-        THEN( "Source MAC and Destination MAC follow Destination" )
+        THEN( "Source MAC and Destination MAC come before Info" )
         {
             REQUIRE( lineWith( layout )
-                     == "2      0       " + utc + time + addresses
-                            + "00:11:22:33:44:55  66:77:88:99:aa:bb  " + rest );
+                     == "2      0       " + utc + time + addresses + "UDP       60     "
+                            + "00:11:22:33:44:55  66:77:88:99:aa:bb  " + pkt.info );
             const auto header = headerWith( layout );
-            REQUIRE( header.find( "Destination" ) < header.find( "Source MAC" ) );
+            REQUIRE( header.find( "Length" ) < header.find( "Source MAC" ) );
             REQUIRE( header.find( "Source MAC" ) < header.find( "Destination MAC" ) );
-            REQUIRE( header.find( "Destination MAC" ) < header.find( "Protocol" ) );
+            REQUIRE( header.find( "Destination MAC" ) < header.find( "Info" ) );
         }
 
         AND_WHEN( "the packet has no MAC addresses" )
@@ -661,7 +661,8 @@ SCENARIO( "The line layout chooses the time columns and adds the MAC columns",
 
             THEN( "they show -" )
             {
-                REQUIRE( lineWith( layout ).find( addresses + "-" + std::string( 18, ' ' ) + "-" )
+                REQUIRE( lineWith( layout ).find( "60     -" + std::string( 18, ' ' ) + "-"
+                                                  + std::string( 18, ' ' ) + "443" )
                          != std::string::npos );
             }
         }

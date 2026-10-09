@@ -200,15 +200,17 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
     }
     writeColumn( oss, pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp, 40 );
     writeColumn( oss, pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp, 40 );
-    if ( layout.macColumns ) {
-        writeColumn( oss, pkt.srcMac, kMacWidth );
-        writeColumn( oss, pkt.dstMac, kMacWidth );
-    }
     writeColumn( oss, pkt.protocol, 10 );
     // The length on the wire, as Wireshark's Length column; a packet cut at
     // the snaplen says in Info how much of it was captured, so that a reader
     // knows why its description stops short.
     writeColumn( oss, std::to_string( pkt.originalLen ), 7 );
+    // Before Info, which a Log Format reads as the rest of the line: the
+    // MAC addresses are read as its start, the other columns as ever.
+    if ( layout.macColumns ) {
+        writeColumn( oss, pkt.srcMac, kMacWidth );
+        writeColumn( oss, pkt.dstMac, kMacWidth );
+    }
     oss << pkt.info;
     if ( pkt.capturedLen < pkt.originalLen ) {
         oss << ( pkt.info.empty() ? "" : " " ) << "[cut to " << pkt.capturedLen << " bytes]";
@@ -230,12 +232,12 @@ std::string PacketFormatter::header() const
     }
     writeColumn( hdr, "Source", 40 );
     writeColumn( hdr, "Destination", 40 );
+    writeColumn( hdr, "Protocol", 10 );
+    writeColumn( hdr, "Length", 7 );
     if ( layout_.macColumns ) {
         writeColumn( hdr, "Source MAC", kMacWidth );
         writeColumn( hdr, "Destination MAC", kMacWidth );
     }
-    writeColumn( hdr, "Protocol", 10 );
-    writeColumn( hdr, "Length", 7 );
     hdr << "Info";
     return hdr.str();
 }

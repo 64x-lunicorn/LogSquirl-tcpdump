@@ -44,7 +44,7 @@
  *
  * That is the default Line Layout, the one the Log Format is made for.  A
  * Line Layout may leave out one of the time columns, or add Source MAC and
- * Destination MAC after Destination.
+ * Destination MAC before Info.
  */
 
 #pragma once
@@ -70,8 +70,9 @@ enum class TimeColumns {
 /// expects.
 struct LineLayout {
     TimeColumns timeColumns = TimeColumns::Both;
-    /// Source MAC and Destination MAC after Destination, "-" for a packet
-    /// without them (one not on Ethernet).
+    /// Source MAC and Destination MAC between Length and Info, "-" for a
+    /// packet without them (one not on Ethernet).  Info is the rest of the
+    /// line to a Log Format, so they are read as its start.
     bool macColumns = false;
 };
 
