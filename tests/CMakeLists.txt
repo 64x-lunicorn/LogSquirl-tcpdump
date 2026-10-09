@@ -23,6 +23,7 @@ add_executable(logsquirl_tcpdump_tests
     socks_test.cpp
     tls_test.cpp
     dns_test.cpp
+    icmp_test.cpp
     http_test.cpp
     quic_test.cpp
     streaming_test.cpp
@@ -63,6 +64,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
+        "${CMAKE_SOURCE_DIR}/src/icmp.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcapng_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/payload_describer.cpp"
         "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"

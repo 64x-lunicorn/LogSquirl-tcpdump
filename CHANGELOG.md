@@ -18,6 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beyond 14 counts as 14. No more memory per stream.
 
 ### Added
+- **ICMP and ICMPv6 in full.** Info names messages in Wireshark's words. An
+  echo shows its identifier and sequence number, so request and reply pair
+  up: `Echo (ping) request id=0x1234, seq=7` (before: `Echo request`); so do
+  timestamp, information and address mask queries. Destination unreachable,
+  time exceeded, parameter problem and redirect name their code and the
+  packet they quote, dissected with the same IP parsers: `Destination
+  unreachable (Port unreachable) for 10.0.0.1:51234 → 192.168.1.5:53 UDP`,
+  `Time exceeded (TTL exceeded in transit) for …`, with the next hop's MTU
+  of a fragmentation needed and the gateway of a redirect (before:
+  `Destination unreachable (code=3)`, `Time exceeded`). ICMPv6 names its
+  error codes the same way, `Packet too big mtu=1280 for …`, a neighbor
+  solicitation or advertisement its target, flags and link-layer address,
+  `Neighbor advertisement fe80::2 (rtr, sol, ovr) is at 00:11:22:33:44:55`,
+  a router advertisement its flags and lifetime, `Router advertisement (M,
+  O) lifetime=1800s`, and multicast listener messages by name (before:
+  `Type=143`). A quote cut short shows what it holds; it is never read past
+  the captured bytes.
 - **HTTP names the host, the content type and length.** A request line
   shows the Host header's value before its path, `GET
   example.com/index.html HTTP/1.1`, when the header is in the segment; a

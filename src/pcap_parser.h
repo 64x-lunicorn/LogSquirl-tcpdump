@@ -206,6 +206,18 @@ std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window );
 void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* data,
                     size_t len );
 
+/**
+ * Dissect the IP packet an ICMP or ICMPv6 error message quotes into @p pkt,
+ * with the network parsers that dissect every packet: its addresses, its IP
+ * protocol and name (`protocol`, from ipProtocolName()), and the ports of a
+ * TCP or UDP header (`transport`), of which 4 bytes suffice, as a router
+ * quotes only 8.  Nothing past the ports is read, nor a packet the quote
+ * itself quotes.  Without the whole IP header, @p pkt keeps no address.
+ *
+ * @param data  The quoted bytes, @p len of them, an IPv4 or IPv6 header first.
+ */
+void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len );
+
 // ── Parser ───────────────────────────────────────────────────────────────
 
 /// Longest text preamble (e.g. tcpdump's stderr) searched for the pcap magic.

@@ -29,9 +29,9 @@
  * difference.  interfaces.pcapng is written by tests/make_pcapng_corpus.py,
  * tls.pcap by tests/make_tls_corpus.py, dns.pcap by tests/make_dns_corpus.py,
  * tcp-analysis.pcap by tests/make_tcp_analysis_corpus.py, stream-labels.pcap
- * by tests/make_stream_labels_corpus.py.  Captures of real loopback traffic,
- * recorded by tests/make_real_corpus.sh, stay uncommitted in
- * tests/corpus/local and are converted too when present.
+ * by tests/make_stream_labels_corpus.py, icmp.pcap by tests/make_icmp_corpus.py.
+ * Captures of real loopback traffic, recorded by tests/make_real_corpus.sh,
+ * stay uncommitted in tests/corpus/local and are converted too when present.
  * The malformed-*.pcap files, mutated captures from fuzzing,
  * must merely be read to their end.
  */

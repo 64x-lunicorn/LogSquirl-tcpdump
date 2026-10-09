@@ -35,7 +35,8 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
   length fields, falling back to the captured bytes for TSO/GSO lengths of 0;
   fragments after the first are not parsed as TCP/UDP
 - Dissects transport layer (TCP, UDP, ICMP, ICMPv6); a TCP header shorter
-  than 20 bytes is flagged and yields no payload
+  than 20 bytes is flagged and yields no payload. ICMP and ICMPv6 messages
+  are described by `icmp.h/cpp` (see below)
 - Hands a TCP or UDP payload with its ports to the Payload Describer, and
   appends the description it gets back to the transport summary after ` | `
 - Names an IP protocol or EtherType it does not dissect further from the
@@ -63,6 +64,38 @@ to the same dissection (`dissectPacket()`):
 - `if_tsoffset` is not applied: times are relative to the first packet
 
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
+
+#### ICMP and ICMPv6 (`icmp.h/cpp`)
+Pure C++. `describeIcmp()` and `describeIcmpv6()` turn a message of at
+least its 8-byte header into Info. Type and code names follow Wireshark's
+(RFC 792, RFC 4443, RFC 4861), in sentence case; a type without a name is
+`Type=42 Code=1`, a code without one `(code=99)`. One form throughout:
+the type's name, the code's name in parentheses, then `key=value` fields,
+then what the message is about.
+
+| Message | Info |
+|---|---|
+| Echo, timestamp, information and address mask queries | `Echo (ping) request id=0x1234, seq=7` (id in hexadecimal, seq in decimal, both read big-endian) |
+| Destination unreachable, time exceeded, parameter problem, source quench | `Destination unreachable (Port unreachable) for 10.0.0.1:51234 → 192.168.1.5:53 UDP` |
+| Fragmentation needed | `Destination unreachable (Fragmentation needed, mtu=1400) for …` |
+| Redirect | `Redirect (Redirect for host) gateway=10.0.0.254 for …` |
+| ICMPv6 errors | `Time exceeded (Hop limit exceeded in transit) for …`, `Packet too big mtu=1280 for [2001:db8::1]:40000 → [2001:db8::2]:443 TCP` |
+| Router solicitation | `Router solicitation from 00:11:22:33:44:55` |
+| Router advertisement | `Router advertisement (M, O, prf=high) lifetime=1800s from 00:11:22:33:44:55`: flags M, O, H, P, and the router preference unless medium |
+| Neighbor solicitation | `Neighbor solicitation for fe80::2 from 00:11:22:33:44:55` |
+| Neighbor advertisement | `Neighbor advertisement fe80::2 (rtr, sol, ovr) is at 00:11:22:33:44:55` |
+
+The ` for …` of an error message describes the packet it quotes, which
+`dissectQuotedPacket()` (`pcap_parser.h`) dissects with the same IPv4 and
+IPv6 parsers as every packet, extension headers and fragments included, but
+reads of its transport only the ports of a TCP or UDP header, the first 4 of
+the 8 bytes a router quotes, and never a packet the quote itself quotes. The
+protocol is `ipProtocolName()`'s; IPv6 addresses with a port are bracketed.
+A quote without its whole IP header adds nothing, one without the ports
+shows the addresses alone. The quote and the neighbor discovery options are
+whatever the sender put there: every field is checked against the captured
+bytes, an option of length 0 or running past them ends the walk. The ports
+of a quote are not the message's own: ICMP keeps the stream `-`.
 
 #### The reader seam
 Everything past the reader (Converter, Stream Tracker, TCP Analysis, Packet Formatter, `CaptureStats`)
@@ -543,7 +576,9 @@ connection that shows every analysis marker, is written by
 `tests/make_tcp_analysis_corpus.py`: a real lossy capture would need root
 for a lossy link (tc netem) and differ from run to run. `stream-labels.pcap`,
 streams whose protocol sticks and a new connection that forgets it, is
-written by `tests/make_stream_labels_corpus.py`. The pcapng unit tests build their
+written by `tests/make_stream_labels_corpus.py`. `icmp.pcap`, ICMP and
+ICMPv6 echoes, error messages with their quoted packets and neighbor
+discovery, is written by `tests/make_icmp_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in
