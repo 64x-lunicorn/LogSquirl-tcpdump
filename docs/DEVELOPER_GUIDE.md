@@ -532,12 +532,16 @@ importing a newer file offers *Replace*; keep it.
 
 Every pattern starts with `^` and reads the columns up to Protocol, as
 `regex_lab.cpp`'s patterns do, so that only a column or the start of Info
-decides: a word in a payload's text never does. Patterns use no capture
-groups (a highlighter with groups colours only what they take) and nothing
-Vectorscan, LogSquirl's default search engine, cannot compile (no
-lookaround or backreference), so that a filter is not left to the slower Qt
-engine. Highlighters have no names in the
-file; the topmost that matches colours the line.
+decides: a word in a payload's text never does. They read every
+`LineLayout`: either time column is optional, as in `upToSourcePattern()`,
+and a pattern that reads the start of Info (TCP flags and markers, ICMP
+errors) takes the two MAC columns as optional before it; one that reads the
+payload's description takes Info up to its first ` | `. Patterns use no
+capture groups (a highlighter with groups colours only what they take) and
+nothing Vectorscan, LogSquirl's default search engine, cannot compile (no
+lookaround, backreference or possessive quantifier), so that a filter is
+not left to the slower Qt engine. Highlighters have no names in the file;
+the topmost that matches colours the line.
 
 **Update the patterns when a column or an Info text they read changes**: a
 column added, moved or removed, a TCP flag or analysis marker renamed, a
@@ -546,7 +550,8 @@ protocol label or a DNS, HTTP or ICMP description reworded.
 pattern to every line of every corpus text (`tests/corpus/*.txt` and the
 local `tests/corpus/local/*.txt`) and checks that it matches exactly the
 lines its rule picks from the columns, and in the committed texts the
-packet numbers listed in the test; a new corpus text needs its list there.
+packet numbers listed in the test, also with the committed captures
+converted in every `LineLayout`; a new corpus text needs its list there.
 A new Wireshark analysis marker that is a problem goes into the *TCP
 problems* highlighter and the *TCP errors* filter (the test fails until it
 does); Window Update, Keep-Alive and Keep-Alive ACK stay out, as in

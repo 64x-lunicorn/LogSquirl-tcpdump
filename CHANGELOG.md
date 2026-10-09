@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predefined filters *TCP handshakes*, *TCP errors*, *DNS*, *HTTP*, *TLS*,
   *ICMP* and *ARP*. Both are imported once in LogSquirl (README,
   *Highlighters and filters*); their patterns read the columns, so a word in
-  a payload's text never matches. The release archives carry them next to
+  a payload's text never matches, and they read the packet list in every
+  choice of time and MAC columns. The release archives carry them next to
   the library, as `cmake --install` installs them.
 - **Options dialog.** **Configure…** on the plugin's card in **Plugins →
   Plugin Management…** opens the plugin's options: the time columns (UTC

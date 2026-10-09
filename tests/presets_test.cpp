@@ -35,14 +35,17 @@
 
 #include <catch2/catch.hpp>
 
+#include "corpus_layouts.h"
 #include "packet_formatter.h"
 #include "regex_lab.h"
 
 #include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QTemporaryDir>
 
 #include <functional>
 #include <map>
@@ -245,29 +248,24 @@ bool tcpSynFin( const Line& l )
     return l.tcp && ( l.flags.contains( "SYN" ) || l.flags.contains( "FIN" ) );
 }
 
-bool startsWithAny( const QString& text, const QStringList& prefixes )
-{
-    for ( const auto& prefix : prefixes ) {
-        if ( text.startsWith( prefix ) ) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /// Wireshark's "ICMP errors": ICMP types 3, 4, 5 and 11, ICMPv6 types 1 to
-/// 4, by name or, for a type the plugin does not name, by number.
+/// 4, which the plugin names all.
 bool icmpError( const Line& l )
 {
+    const auto named = [ &l ]( const QStringList& names ) {
+        for ( const auto& name : names ) {
+            if ( l.info == name || l.info.startsWith( name + ' ' ) ) {
+                return true;
+            }
+        }
+        return false;
+    };
     if ( l.protocol == "ICMP" ) {
-        return startsWithAny( l.info, { "Destination unreachable", "Source quench", "Redirect",
-                                        "Time exceeded", "Type=3 ", "Type=4 ", "Type=5 " } );
+        return named( { "Destination unreachable", "Source quench", "Redirect", "Time exceeded" } );
     }
     if ( l.protocol == "ICMPv6" ) {
-        return startsWithAny( l.info, { "Destination unreachable", "Packet too big",
-                                        "Time exceeded", "Parameter problem" } )
-               || QStringList{ "Type=1", "Type=2", "Type=3", "Type=4" }.contains(
-                   l.info.section( ' ', 0, 0 ) );
+        return named(
+            { "Destination unreachable", "Packet too big", "Time exceeded", "Parameter problem" } );
     }
     return false;
 }
@@ -279,7 +277,7 @@ bool dns( const Line& l )
 
 bool dnsNxdomain( const Line& l )
 {
-    return dns( l ) && ( l.info.contains( "[NXDOMAIN]" ) || l.info.contains( "No such name" ) );
+    return dns( l ) && l.description.contains( "[NXDOMAIN]" );
 }
 
 bool http( const Line& l )
@@ -301,7 +299,11 @@ bool httpError( const Line& l )
     if ( !http( l ) || !l.description.startsWith( "HTTP/" ) ) {
         return false;
     }
-    const auto status = l.description.section( ' ', 1, 1 );
+    // "HTTP/1.1 404 Not Found, Content-Type: …", or "HTTP/1.1 500, …"
+    auto status = l.description.section( ' ', 1, 1 );
+    if ( status.endsWith( ',' ) ) {
+        status.chop( 1 );
+    }
     return status.size() == 3 && ( status[ 0 ] == '4' || status[ 0 ] == '5' )
            && status[ 1 ].isDigit() && status[ 2 ].isDigit();
 }
@@ -358,11 +360,26 @@ using Numbers = std::set<int>;
 
 /// The packets each rule matches in each committed corpus text; a rule not
 /// listed matches none.  A corpus text that is not here fails the test, so
-/// that a new one gets its list.  A list of a text that does not exist is
-/// skipped: tcp-analysis.txt and tls.txt come with other branches.
+/// that a new one gets its list.
 const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
 {
     static const std::map<QString, std::map<QString, Numbers>> expected{
+        { "dhcp-ntp.txt", {} },
+        { "dns.txt",
+          {
+              { "DNS NXDOMAIN", { 14 } },
+              { "TCP SYN/FIN", { 17, 18 } }, // DNS over TCP
+              { "TCP handshakes", { 17, 18 } },
+              { "DNS", { 1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+                         13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 } },
+          } },
+        { "icmp.txt",
+          {
+              // Unreachable, time exceeded, fragmentation needed, redirect,
+              // unreachable without a quote; ICMPv6 unreachable, too big
+              { "ICMP errors", { 3, 4, 5, 6, 7, 14, 15 } },
+              { "ICMP", { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 } },
+          } },
         { "interfaces.txt",
           {
               { "TCP SYN/FIN", { 3, 5 } },
@@ -377,15 +394,22 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
           } },
         { "mixed.txt",
           {
-              { "TCP problems", { 19 } }, // bogus TCP header length
+              { "TCP problems", { 14, 15, 16, 18, 19 } }, // retransmissions, bogus length
               { "TCP SYN/FIN", { 1 } },
               { "TLS", { 4 } },
               { "ARP", { 21 } },
               { "TCP handshakes", { 1 } },
-              { "TCP errors", { 19 } },
+              { "TCP errors", { 14, 15, 16, 18, 19 } },
               { "DNS", { 5, 8 } },
               { "HTTP", { 2, 3 } },
               { "ICMP", { 7, 20 } },
+          } },
+        { "stream-labels.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 10, 11, 13, 14 } },
+              { "TLS", { 16, 17, 18 } }, // a Continuation and a bare ACK too
+              { "TCP handshakes", { 1, 2, 10, 11, 13, 14 } },
+              { "HTTP", { 4, 6 } }, // not the Continuation of the body
           } },
         { "tcp-analysis.txt",
           {
@@ -397,7 +421,8 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
         { "tls.txt",
           {
               { "TCP SYN/FIN", { 1, 2, 12, 13, 21, 22 } },
-              { "TLS", { 4, 6, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 24 } },
+              { "TLS",
+                { 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 24, 25 } }, // Continuations too
               { "TCP handshakes", { 1, 2, 12, 13, 21, 22 } },
           } },
     };
@@ -572,6 +597,42 @@ SCENARIO( "The highlighters and filters match the corpus lines they are meant fo
     }
 }
 
+SCENARIO( "The highlighters and filters match the same packets in every Line Layout",
+          "[presets][corpus]" )
+{
+    const auto highlighters = loadHighlighters();
+    const auto filters = loadFilters();
+    QTemporaryDir out;
+    REQUIRE( out.isValid() );
+
+    GIVEN( "the committed corpus captures, converted with each choice of columns" )
+    {
+        THEN( "each pattern matches exactly the packets listed for it" )
+        {
+            for ( const auto& capture : tcpdump_test::committedCaptures() ) {
+                const auto text = QFileInfo( capture ).completeBaseName() + ".txt";
+                const auto expected = expectedMatches().find( text );
+                REQUIRE( expected != expectedMatches().end() );
+                for ( const auto& layout : tcpdump_test::allLineLayouts() ) {
+                    INFO( "capture: " << QFileInfo( capture ).fileName().toStdString() << ", "
+                                      << tcpdump_test::describeLayout( layout ) );
+                    const auto lines = tcpdump_test::convertedLines( capture, layout, out.path() );
+                    for ( const auto* rules : { &highlighters, &filters } ) {
+                        for ( const auto& rule : *rules ) {
+                            INFO( "rule: " << rule.name.toStdString() );
+                            const auto listed = expected->second.find( rule.name );
+                            const auto want
+                                = listed == expected->second.end() ? Numbers{} : listed->second;
+                            REQUIRE( describe( matchedNumbers( rule, lines ) )
+                                     == describe( want ) );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[presets]" )
 {
     const auto highlighters = loadHighlighters();
@@ -618,15 +679,44 @@ SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[pr
                       "40000 " + kArrow + " 80 [ACK, FIN, PSH] Seq=1 Ack=1 Win=9 Len=1 | x" ),
           "TCP SYN/FIN",
           { "TCP handshakes" } },
-        { packetLine( "DNS", "53 " + kArrow + " 40000 Len=40 | Response nope.example [NXDOMAIN]" ),
+        { packetLine( "HTTP", "[TCP Previous segment not captured] 80 " + kArrow
+                                  + " 40000 [ACK, PSH] Seq=201 Ack=1 Win=9 Len=100" ),
+          "TCP problems",
+          { "TCP errors" } },
+        { packetLine( "HTTP", "[TCP Spurious Retransmission] 80 " + kArrow
+                                  + " 40000 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=100" ),
+          "TCP problems",
+          { "TCP errors" } },
+        { packetLine( "HTTP", "[TCP ZeroWindowProbeAck] [TCP ZeroWindow] 80 " + kArrow
+                                  + " 40000 [ACK] Seq=1 Ack=1 Win=0" ),
+          "TCP problems",
+          { "TCP errors" } },
+        { packetLine( "HTTPS-Alt", "50443 " + kArrow + " 8443 [SYN] Seq=0 Ack=0 Win=64240" ),
+          "TCP SYN/FIN",
+          { "TCP handshakes" } },
+        { packetLine( "DNS", "53 " + kArrow
+                                 + " 40000 Len=40 | Standard query response 0x1a2b A nope.example "
+                                   "[NXDOMAIN]" ),
           "DNS NXDOMAIN",
           { "DNS" } },
-        { packetLine( "DNS", "53 " + kArrow + " 40000 Len=40 | Response example.org (1 answers)" ),
+        { packetLine( "mDNS", "5353 " + kArrow
+                                  + " 5353 Len=40 | Standard query response 0x0000 A nope.local "
+                                    "[NXDOMAIN]" ),
+          "DNS NXDOMAIN",
+          { "DNS" } },
+        { packetLine( "DNS", "53 " + kArrow
+                                 + " 40000 Len=40 | Standard query response 0x1a2b A example.org "
+                                   "A 93.184.216.34" ),
+          "",
+          { "DNS" } },
+        { packetLine( "DNS", "53 " + kArrow
+                                 + " 40000 Len=40 | Standard query response 0x1a2b A example.org "
+                                   "[SERVFAIL]" ),
           "",
           { "DNS" } },
         { packetLine( "HTTP", "80 " + kArrow
                                   + " 50000 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | HTTP/1.1 404 "
-                                    "Not Found" ),
+                                    "Not Found, Content-Type: text/html, Content-Length: 9" ),
           "HTTP 4xx/5xx",
           { "HTTP" } },
         { packetLine( "HTTP", "80 " + kArrow
@@ -635,15 +725,30 @@ SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[pr
           "HTTP 4xx/5xx",
           { "HTTP" } },
         { packetLine( "HTTP", "80 " + kArrow
+                                  + " 50000 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | HTTP/1.1 500, "
+                                    "Content-Length: 0" ),
+          "HTTP 4xx/5xx",
+          { "HTTP" } },
+        { packetLine( "HTTP", "80 " + kArrow
                                   + " 50000 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | HTTP/1.1 301 "
-                                    "Moved Permanently" ),
+                                    "Moved Permanently, Content-Length: 404" ),
           "",
           { "HTTP" } },
-        { packetLine( "HTTP",
-                      "50000 " + kArrow
-                          + " 80 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | POST /api HTTP/1.1" ),
+        { packetLine( "HTTP", "50000 " + kArrow
+                                  + " 80 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | POST "
+                                    "example.com/api HTTP/1.1" ),
           "",
           { "HTTP" } },
+        { packetLine( "HTTP", "80 " + kArrow
+                                  + " 50000 [ACK, PSH] Seq=31 Ack=1 Win=9 Len=30 | Continuation: "
+                                    "body | HTTP/1.1 404 Not Found" ),
+          "",
+          {} },
+        { packetLine( "HTTP2", "50000 " + kArrow
+                                   + " 80 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=30 | Magic, "
+                                     "SETTINGS[0], WINDOW_UPDATE[0]" ),
+          "",
+          {} },
         { packetLine( "HTTP-Alt", "8080 " + kArrow
                                       + " 50000 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=9 | hello [RST]" ),
           "",
@@ -651,19 +756,37 @@ SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[pr
         { packetLine( "SSDP", "1900 " + kArrow + " 1900 Len=90 | HTTP/1.1 404 Not Found" ),
           "",
           {} },
-        { packetLine( "ICMP", "Destination unreachable (code=3)", false ),
+        { packetLine( "ICMP",
+                      "Destination unreachable (Port unreachable) for 10.0.0.1:51234 " + kArrow
+                          + " 192.168.1.5:53 UDP",
+                      false ),
           "ICMP errors",
           { "ICMP" } },
-        { packetLine( "ICMP", "Time exceeded", false ), "ICMP errors", { "ICMP" } },
-        { packetLine( "ICMP", "Type=5 Code=1", false ), "ICMP errors", { "ICMP" } },
-        { packetLine( "ICMP", "Type=13 Code=0", false ), "", { "ICMP" } },
-        { packetLine( "ICMPv6", "Type=1", false ), "ICMP errors", { "ICMP" } },
-        { packetLine( "ICMPv6", "Type=143", false ), "", { "ICMP" } },
-        { packetLine( "ICMPv6", "Neighbor solicitation", false ), "", { "ICMP" } },
-        { packetLine( "QUIC", "50000 " + kArrow + " 443 Len=1200 | Initial, DCID=0102" ), "", {} },
-        { packetLine( "TLS",
-                      "443 " + kArrow
-                          + " 50443 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=40 | Application Data" ),
+        { packetLine( "ICMP", "Time exceeded (TTL exceeded in transit)", false ),
+          "ICMP errors",
+          { "ICMP" } },
+        { packetLine( "ICMP", "Source quench", false ), "ICMP errors", { "ICMP" } },
+        { packetLine( "ICMP", "Redirect (Redirect for host) gateway=192.168.1.254", false ),
+          "ICMP errors",
+          { "ICMP" } },
+        { packetLine( "ICMP", "Parameter problem (Pointer indicates the error)", false ),
+          "",
+          { "ICMP" } },
+        { packetLine( "ICMP", "Echo (ping) request id=0x1234, seq=7", false ), "", { "ICMP" } },
+        { packetLine( "ICMP", "Type=42 Code=0", false ), "", { "ICMP" } },
+        { packetLine( "ICMPv6", "Packet too big mtu=1280", false ), "ICMP errors", { "ICMP" } },
+        { packetLine( "ICMPv6", "Parameter problem (Erroneous header field) pointer=6", false ),
+          "ICMP errors",
+          { "ICMP" } },
+        { packetLine( "ICMPv6", "Redirect fe80::1 via fe80::2", false ), "", { "ICMP" } },
+        { packetLine( "ICMPv6", "Neighbor solicitation for fe80::1", false ), "", { "ICMP" } },
+        { packetLine( "QUIC", "50000 " + kArrow
+                                  + " 443 Len=1200 | Initial, Version 1, DCID=0102, SCID=0a0b" ),
+          "",
+          {} },
+        { packetLine( "TLS", "50443 " + kArrow
+                                 + " 443 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=40 | Client Hello, "
+                                   "SNI=example.com, TLS 1.3, ALPN=h2,http/1.1" ),
           "TLS",
           { "TLS" } },
         { packetLine( "ARP", "192.168.1.1 is at 00:11:22:33:44:55", false ), "ARP", { "ARP" } },

@@ -151,7 +151,9 @@ the options it was converted with; open it again to apply new ones.
 
 The defaults write the packet list shown under [Example Output](#example-output),
 which the Log Format and every highlighter and filter written for it expect.
-Two options change the column layout:
+The plugin's own patterns, those of [Follow stream](#usage), the summary's
+filters and the [highlighter set and filter group](#highlighters-and-filters),
+read every layout. Two options change the column layout:
 
 - **Time**: a line has one time column fewer. The [Log Format](#log-format)
   still reads it, leaving the missing column empty: with the UTC time only,
@@ -230,8 +232,8 @@ before. The highlighters, the first that matches a line colouring it:
 |---------------|---------------------------------------------------------------------------------------|--------------|
 | TCP problems  | TCP analysis markers but Window Update and Keep-Alive (`[TCP Retransmission]`, `[TCP Dup ACK 7#1]`, `[TCP ZeroWindow]`, …) and a bogus TCP header length | orange |
 | TCP RST       | TCP segments with RST                                                                 | strong red   |
-| ICMP errors   | ICMP destination unreachable, source quench, redirect, time exceeded; ICMPv6 types 1–4 | orange      |
-| DNS NXDOMAIN  | DNS and mDNS responses for a name that does not exist                                 | red          |
+| ICMP errors   | ICMP destination unreachable, source quench, redirect, time exceeded; ICMPv6 destination unreachable, packet too big, time exceeded, parameter problem | orange |
+| DNS NXDOMAIN  | DNS and mDNS responses for a name that does not exist (`[NXDOMAIN]`)                  | red          |
 | HTTP 4xx/5xx  | HTTP responses with a client or server error status                                   | red          |
 | TCP SYN/FIN   | TCP segments with SYN or FIN: connections opened and closed                           | green        |
 | TLS           | Protocol TLS                                                                          | blue         |
@@ -251,7 +253,9 @@ The filters:
 
 Each pattern reads the columns, so it never matches a word that only
 appears in Info's payload text: a Protocol is read from the Protocol
-column, TCP flags from the bracket right after the ports.
+column, TCP flags from the bracket right after the ports, an HTTP status
+or a DNS response code from the description after the first ` | `. They
+match in every choice of [columns](#options).
 
 ## Example Output
 
