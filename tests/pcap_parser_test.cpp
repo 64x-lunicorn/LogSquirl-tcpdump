@@ -27,7 +27,7 @@
 
 #include <catch2/catch.hpp>
 
-#include "pcap_parser.h"
+#include "capture_reader.h"
 
 #include <cstring>
 #include <vector>

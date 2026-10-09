@@ -54,6 +54,7 @@ target_link_libraries(logsquirl_tcpdump_tests
 target_sources(logsquirl_tcpdump_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcapng_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/payload_describer.cpp"

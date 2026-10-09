@@ -24,8 +24,9 @@
  * Reads the global header and per-packet records from a pcap capture,
  * one packet at a time, producing PacketRecord structs suitable for
  * formatting.  Supports both big-endian and little-endian byte orders
- * (magic number).  makeCaptureReader() picks the reader for a capture
- * from its first block: this one, or the PcapngReader (pcapng_reader.h).
+ * (magic number).  makeCaptureReader() (capture_reader.h) picks the
+ * reader for a capture from its first block: this one, or the PcapngReader
+ * (pcapng_reader.h).
  *
  * The rest of the plugin sees a capture through the CaptureReader seam
  * only: each PacketRecord carries the link-layer type it was dissected with
@@ -41,7 +42,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -377,34 +377,5 @@ private:
     bool headerRead_ = false;
     uint32_t packetCount_ = 0;
 };
-
-/**
- * The reader for the capture in @p source, chosen by its first block as
- * findCaptureStart() finds it: a PcapngReader for a pcapng section header, a
- * PcapReader for a pcap global header.  For a file that holds neither, a
- * reader whose open() fails and says why.  It is not open yet; @p source
- * must outlive it.
- */
-std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source );
-
-/// Result of parsing a whole capture buffer.
-struct ParseResult {
-    bool ok = false;
-    std::string error;
-    PcapGlobalHeader header; ///< A pcap's global header; empty for a pcapng.
-    TimePrecision precision = TimePrecision::Microseconds; ///< What the reader announced.
-    std::vector<uint32_t> linkTypes;                       ///< What the capture declared.
-    std::vector<PacketRecord> packets;
-    bool truncated = false; ///< The capture ends in the middle of a record.
-};
-
-/**
- * Parse a pcap or pcapng capture held in memory, keeping every packet.
- *
- * @param data  Pointer to the raw capture file contents.
- * @param size  Size of the buffer in bytes.
- * @return ParseResult with packets on success, or an error string.
- */
-ParseResult parsePcap( const uint8_t* data, size_t size );
 
 } // namespace tcpdump

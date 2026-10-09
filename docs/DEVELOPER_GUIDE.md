@@ -4,11 +4,13 @@
 
 The plugin is structured into three layers:
 
-### 1. pcap Parser (`pcap_parser.h/cpp`, `pcapng_reader.h/cpp`)
+### 1. pcap Parser (`pcap_parser.h/cpp`, `pcapng_reader.h/cpp`, `capture_reader.h/cpp`)
 Pure C++ (no Qt dependency). A `CaptureReader` (see *The reader seam* below)
 reads a capture from a `ByteSource` one record at a time, so the capture is
-never held in memory. `makeCaptureReader()` picks the reader from the first
-block, which it looks at through a `HeadSource` without consuming it:
+never held in memory. `makeCaptureReader()` (`capture_reader.h`, apart from
+both readers, so that the pcap parser does not depend on the pcapng reader
+built on it) picks the reader from the
+first block, which it looks at through a `HeadSource` without consuming it:
 `findCaptureStart()` finds a pcap global header or a pcapng section header,
 also behind a text preamble, and the reader it picks is handed where that
 header starts, so that the format is told once; a file that holds neither

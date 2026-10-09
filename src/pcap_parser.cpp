@@ -30,7 +30,6 @@
 #include "pcap_parser.h"
 
 #include "payload_describer.h"
-#include "pcapng_reader.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
@@ -41,9 +40,6 @@
 namespace tcpdump {
 
 namespace {
-
-/// Why a file shorter than a pcap global header is no capture.
-constexpr const char* kTooSmall = "File too small to be a valid pcap (< 24 bytes)";
 
 // ── Byte-order helpers ───────────────────────────────────────────────────
 
@@ -705,7 +701,7 @@ bool PcapReader::open()
 {
     uint8_t data[ 24 ];
     if ( !skip( start_ ) || read( data, sizeof( data ) ) < sizeof( data ) ) {
-        error_ = kTooSmall;
+        error_ = "Not a valid pcap file (cut off inside the global header)";
         return false;
     }
 
@@ -784,88 +780,6 @@ bool PcapReader::next( PacketRecord& pkt )
     pkt.precision = precision();
     dissectPacket( pkt, pkt.linkType, swap_, packet_.data(), kept );
     return true;
-}
-
-// ── Choosing the reader ──────────────────────────────────────────────────
-
-namespace {
-
-/// The reader for a file that holds no capture: open() says why.
-class NoCaptureReader : public CaptureReader {
-public:
-    NoCaptureReader( ByteSource& source, std::string error )
-        : CaptureReader( source, 0 )
-    {
-        error_ = std::move( error );
-    }
-
-    bool open() override
-    {
-        return false;
-    }
-
-    bool next( PacketRecord& ) override
-    {
-        return false;
-    }
-
-    TimePrecision precision() const override
-    {
-        return TimePrecision::Microseconds;
-    }
-
-    std::vector<uint32_t> linkTypes() const override
-    {
-        return {};
-    }
-};
-
-} // anonymous namespace
-
-std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source )
-{
-    // Look at what may hold a text preamble and the first header.
-    const auto& head = source.peek( kMaxPreamble + 24 );
-    if ( head.size() < 24 ) {
-        return std::make_unique<NoCaptureReader>( source, kTooSmall );
-    }
-    CaptureFormat format = CaptureFormat::Pcap;
-    std::string error;
-    const auto start = findCaptureStart( head.data(), head.size(), format, error );
-    if ( start == head.size() ) {
-        return std::make_unique<NoCaptureReader>( source, error );
-    }
-    if ( format == CaptureFormat::Pcapng ) {
-        return std::make_unique<PcapngReader>( source, start );
-    }
-    return std::make_unique<PcapReader>( source, start );
-}
-
-// ── Whole-buffer convenience ─────────────────────────────────────────────
-
-ParseResult parsePcap( const uint8_t* data, size_t size )
-{
-    ParseResult result;
-    MemorySource memory( data, size );
-    HeadSource source( memory );
-    const auto reader = makeCaptureReader( source );
-    if ( !reader->open() ) {
-        result.error = reader->error();
-        return result;
-    }
-    if ( const auto* pcap = dynamic_cast<const PcapReader*>( reader.get() ) ) {
-        result.header = pcap->header();
-    }
-    result.precision = reader->precision();
-
-    PacketRecord pkt;
-    while ( reader->next( pkt ) ) {
-        result.packets.push_back( std::move( pkt ) );
-    }
-    result.linkTypes = reader->linkTypes();
-    result.truncated = reader->truncated();
-    result.ok = true;
-    return result;
 }
 
 } // namespace tcpdump

@@ -24,6 +24,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "capture_reader.h"
 #include "packet_formatter.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"

@@ -24,6 +24,7 @@
 
 #include "pcap_converter.h"
 
+#include "capture_reader.h"
 #include "packet_formatter.h"
 #include "stream_tracker.h"
 #include "tempdirs.h"

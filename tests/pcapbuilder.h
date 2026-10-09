@@ -28,7 +28,7 @@
 
 #pragma once
 
-#include "pcap_parser.h"
+#include "capture_reader.h"
 
 #include <cstdint>
 #include <string>
