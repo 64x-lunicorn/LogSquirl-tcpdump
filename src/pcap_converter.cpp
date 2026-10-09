@@ -250,7 +250,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
 
     ConversionResult result;
     result.status = ConversionResult::Status::Converted;
-    result.outputPath = output.fileName();
+    result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
     result.summary = summarise( std::move( stats ), formatter, reader, options.maxStreams );
     outputDir.setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );

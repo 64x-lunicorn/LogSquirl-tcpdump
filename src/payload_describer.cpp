@@ -569,40 +569,33 @@ std::optional<PayloadDescription> described( const char* label, std::string desc
     return result;
 }
 
-std::optional<PayloadDescription> tlsRecord( const Payload& p )
+/// A description with the given label, if the detector found anything.
+std::optional<PayloadDescription> describedIfAny( const char* label, std::string description )
 {
-    auto tls = detectTls( p.data, p.len );
-    if ( tls.empty() ) {
+    if ( description.empty() ) {
         return std::nullopt;
     }
-    return described( "TLS", std::move( tls ) );
+    return described( label, std::move( description ) );
+}
+
+std::optional<PayloadDescription> tlsRecord( const Payload& p )
+{
+    return describedIfAny( "TLS", detectTls( p.data, p.len ) );
 }
 
 std::optional<PayloadDescription> httpMessage( const Payload& p )
 {
-    auto http = detectHttp( p.data, p.len );
-    if ( http.empty() ) {
-        return std::nullopt;
-    }
-    return described( "HTTP", std::move( http ) );
+    return describedIfAny( "HTTP", detectHttp( p.data, p.len ) );
 }
 
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
-    auto nmea = detectNmea( p.data, p.len );
-    if ( nmea.empty() ) {
-        return std::nullopt;
-    }
-    return described( "NMEA", std::move( nmea ) );
+    return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
 }
 
 std::optional<PayloadDescription> socksMessage( const Payload& p )
 {
-    auto socks = detectSocks( p.data, p.len, p.srcPort, p.dstPort );
-    if ( socks.empty() ) {
-        return std::nullopt;
-    }
-    return described( "SOCKS", std::move( socks ) );
+    return describedIfAny( "SOCKS", detectSocks( p.data, p.len, p.srcPort, p.dstPort ) );
 }
 
 /// The last resort: the protocol the ports suggest, and a preview of the
@@ -677,8 +670,6 @@ std::pair<const Detector*, const Detector*> detectorsOf( const Detector ( &table
     return { table, table + N };
 }
 
-} // namespace
-
 /// The description as one line: a control character a detector let
 /// through, a newline above all, is escaped as \xNN.  The detectors escape
 /// the payload text they quote, so this normally changes nothing; the
@@ -704,6 +695,8 @@ std::string oneLine( std::string description )
     }
     return escaped;
 }
+
+} // namespace
 
 // ── The describer ────────────────────────────────────────────────────────
 

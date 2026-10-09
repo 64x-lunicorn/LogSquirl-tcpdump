@@ -439,7 +439,67 @@ SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
 }
 
 #ifdef Q_OS_UNIX
+#include <csignal>
+#include <sys/resource.h>
 #include <sys/stat.h>
+
+namespace {
+
+/// Caps the size of any file this process writes while it lives, so that a
+/// write past the cap fails with EFBIG instead of filling the disk.
+class FileSizeLimit {
+public:
+    explicit FileSizeLimit( rlim_t bytes )
+    {
+        ::getrlimit( RLIMIT_FSIZE, &saved_ );
+        previousHandler_ = std::signal( SIGXFSZ, SIG_IGN ); // get EFBIG, not killed
+        rlimit limit = saved_;
+        limit.rlim_cur = bytes;
+        ::setrlimit( RLIMIT_FSIZE, &limit );
+    }
+
+    ~FileSizeLimit()
+    {
+        ::setrlimit( RLIMIT_FSIZE, &saved_ );
+        std::signal( SIGXFSZ, previousHandler_ );
+    }
+
+private:
+    rlimit saved_{};
+    void ( *previousHandler_ )( int ) = nullptr;
+};
+
+} // namespace
+
+SCENARIO( "A write that fails in the middle of the capture fails the conversion", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a capture whose text is longer than any file this process may write" )
+    {
+        std::vector<Bytes> packets( 200, udpPacket( 1 ) );
+        const auto input = writeFile( dir, "long.pcap", pcapOf( packets ) );
+
+        WHEN( "it is converted" )
+        {
+            ConversionResult result;
+            {
+                const FileSizeLimit limit( 4096 );
+                result = convertPcap( input, out.path() );
+            }
+
+            THEN( "the conversion fails with the write error and leaves nothing behind" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Failed );
+                REQUIRE( result.error.startsWith( "Cannot write the output file: " ) );
+                REQUIRE( nothingBelow( out ) );
+            }
+        }
+    }
+}
 
 SCENARIO( "Only regular files are converted", "[converter]" )
 {

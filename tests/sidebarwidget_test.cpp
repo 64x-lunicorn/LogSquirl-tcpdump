@@ -146,6 +146,37 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
     }
 }
 
+SCENARIO( "the sidebar shows why the output could not be written", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar whose temporary root does not exist" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.filePath( "no-such-root" ) );
+        const auto capture = writeCapture( dir, "small.pcap", captureOf( 1 ) );
+
+        WHEN( "a capture is opened" )
+        {
+            widget.openPcapFile( capture );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "the error names the temporary directory, and no tab is opened" )
+            {
+                REQUIRE( host.openedFiles.isEmpty() );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE(
+                    host.notifications.first().contains( "Cannot create a temporary directory" ) );
+                REQUIRE( child<QLabel>( widget, "summary" )
+                             ->text()
+                             .contains( "Error: Cannot create a temporary directory" ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
 {
     QTemporaryDir dir;

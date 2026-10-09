@@ -89,9 +89,16 @@ std::string formatMac( const uint8_t* p )
 /// Separates the transport summary from the description of the payload.
 constexpr const char* kDescriptionSeparator = " | ";
 
-/// Append what the describer says about the payload to the transport summary.
-void appendDescription( std::ostringstream& oss, const PayloadDescription& described )
+/// Ask the describer what the @p len captured payload bytes are: its label
+/// becomes the packet's protocol, its description follows the transport
+/// summary in @p oss.
+void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport transport,
+                        const uint8_t* payload, size_t len )
 {
+    const auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
+    if ( !described.label.empty() ) {
+        pkt.protocol = described.label;
+    }
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
     }
@@ -136,15 +143,8 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
             oss << " Len=" << pkt.payloadLen;
         }
 
-        // The application layer: ask the describer what the payload is.
-        const uint8_t* payload = data + std::min( dataOffset, remaining );
-        const auto described
-            = describePayload( Transport::Tcp, payload, payloadSize, pkt.srcPort, pkt.dstPort );
-        if ( !described.label.empty() ) {
-            pkt.protocol = described.label;
-        }
-        appendDescription( oss, described );
-
+        describePayloadOf( pkt, oss, Transport::Tcp, data + std::min( dataOffset, remaining ),
+                           payloadSize );
         pkt.info = oss.str();
     }
     else if ( pkt.ipProtocol == IpProtoUdp && remaining >= 8 ) {
@@ -161,13 +161,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " Len=" << pkt.payloadLen;
 
-        const auto described
-            = describePayload( Transport::Udp, payload, payloadSize, pkt.srcPort, pkt.dstPort );
-        if ( !described.label.empty() ) {
-            pkt.protocol = described.label;
-        }
-        appendDescription( oss, described );
-
+        describePayloadOf( pkt, oss, Transport::Udp, payload, payloadSize );
         pkt.info = oss.str();
     }
     else if ( pkt.ipProtocol == IpProtoIcmp && remaining >= 8 ) {
