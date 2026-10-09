@@ -52,7 +52,10 @@ namespace tcpdump {
  * promises that no packet is finer; writers that declare interfaces as they
  * see them, such as macOS's tcpdump, in practice give them all the same
  * resolution.  Reading the whole file twice to know better would double
- * the time a large capture takes to open.
+ * the time a large capture takes to open.  On a stream that is still being
+ * written (ByteSource::ready()), open() reads on past the first interface
+ * only as far as blocks have come, so that a capture with no traffic yet
+ * opens; dumpcap and tcpdump write all their interfaces at once.
  *
  * linkTypes() lists the link-layer types of all interfaces declared so far,
  * each once, also those of interfaces without a packet; a capture without
@@ -77,7 +80,7 @@ public:
     }
 
     /// Read the first section header and the blocks up to the first packet
-    /// block.
+    /// block, on a stream up to the first that has not come yet.
     bool open() override;
 
     bool next( PacketRecord& pkt ) override;
@@ -98,6 +101,10 @@ public:
 
     bool resume( const ReaderCheckpoint& checkpoint ) override;
 
+    /// The section header block of the last packet's section and the
+    /// interface description blocks declared in it so far.
+    CaptureHeaders headers() const override;
+
 private:
     /// A timestamp unit: 10^-exponent or, if binary, 2^-exponent seconds.
     struct TimeUnit {
@@ -110,6 +117,7 @@ private:
         uint32_t snaplen = 0; ///< 0: no limit
         TimeUnit unit;
         TimePrecision precision = TimePrecision::Microseconds;
+        RecordSpan block; ///< Its interface description block.
     };
 
     struct BlockHeader {
@@ -122,6 +130,7 @@ private:
     /// What a checkpoint keeps of the section it lies in.
     struct SectionState : ReaderState {
         bool swap = false;
+        RecordSpan sectionHeader;
         std::vector<Interface> interfaces;
     };
 
@@ -133,8 +142,9 @@ private:
     bool readSectionHeader( BlockHeader& block );
     bool readInterface( BlockHeader& block );
     bool readPacket( BlockHeader& block, PacketRecord& pkt );
-    bool readBlocksUpToPacket();
+    bool readBlocksUpToPacket( bool untilWaiting = false );
 
+    RecordSpan sectionHeader_;          ///< The current section's header block.
     std::vector<Interface> interfaces_; ///< The current section's.
     /// The section state the last checkpoint kept, while it is still current.
     mutable std::shared_ptr<const SectionState> sectionState_;

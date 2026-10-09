@@ -462,10 +462,11 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
           } },
         { "tcp-analysis.txt",
           {
-              { "TCP problems", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20 } },
-              { "TCP SYN/FIN", { 1, 2, 24, 25 } },
-              { "TCP handshakes", { 1, 2, 24, 25 } },
-              { "TCP errors", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20 } },
+              // the second connection's full and zero window too
+              { "TCP problems", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20, 33, 34 } },
+              { "TCP SYN/FIN", { 1, 2, 24, 25, 27, 28, 36, 37 } },
+              { "TCP handshakes", { 1, 2, 24, 25, 27, 28, 36, 37 } },
+              { "TCP errors", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20, 33, 34 } },
           } },
         { "tls.txt",
           {
@@ -741,6 +742,20 @@ SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[pr
                       "[TCP Keep-Alive ACK] 80 " + kArrow + " 40000 [ACK] Seq=1 Ack=1 Win=9" ),
           "",
           {} },
+        { packetLine( "HTTP", "[TCP Window Full] 40000 " + kArrow
+                                  + " 80 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=9 TSval=1 TSecr=2 | x" ),
+          "TCP problems",
+          { "TCP errors" } },
+        { packetLine( "HTTPS", "50100 " + kArrow
+                                   + " 443 [ACK] Seq=1 Ack=1 Win=64256 TSval=1 TSecr=2 "
+                                     "[iRTT=0.024000]" ),
+          "",
+          {} },
+        { packetLine( "HTTPS", "50100 " + kArrow
+                                   + " 443 [SYN] Seq=0 Win=64240 MSS=1460 SACK_PERM TSval=1 "
+                                     "TSecr=0 WS=128" ),
+          "TCP SYN/FIN",
+          { "TCP handshakes" } },
         { packetLine( "HTTP", "[TCP Keep-Alive] [TCP ZeroWindow] 80 " + kArrow
                                   + " 40000 [ACK] Seq=1 Ack=1 Win=0" ),
           "TCP problems",

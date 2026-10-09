@@ -24,14 +24,19 @@
 
 #include "packet_panel.h"
 
+#include "conversation_table.h"
 #include "plugin.h"
 #include "regex_lab.h"
+#include "stream_content_view.h"
+#include "stream_tracker.h"
 
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSplitter>
+#include <QTabWidget>
 #include <QTextCursor>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -175,7 +180,36 @@ PacketPanel::PacketPanel( QWidget* parent )
     dump_->setLineWrapMode( QPlainTextEdit::NoWrap );
     dump_->setFont( QFontDatabase::systemFont( QFontDatabase::FixedFont ) );
     splitter->addWidget( dump_ );
-    layout->addWidget( splitter, 1 );
+
+    followButton_ = new QPushButton( "Follow stream content" );
+    followButton_->setObjectName( "followContentButton" );
+    followButton_->setToolTip( "Show the payload of this packet's conversation, as text or hex" );
+    followButton_->setEnabled( false );
+    layout->addWidget( followButton_ );
+    connect( followButton_, &QPushButton::clicked, this, [ this ] {
+        try {
+            followStreamContent();
+        } catch ( const std::exception& e ) {
+            // An exception must not escape into Qt or the host.
+            hostLog( LOGSQUIRL_LOG_ERROR,
+                     "Follow stream content failed: " + QString::fromUtf8( e.what() ) );
+        }
+    } );
+
+    // The packet's layers and bytes, and the content of its stream; below
+    // them, whichever tab is shown, the capture's Conversations table.
+    tabs_ = new QTabWidget;
+    tabs_->setObjectName( "packetTabs" );
+    tabs_->addTab( splitter, "Packet" );
+    streamView_ = new StreamContentView;
+    streamView_->setObjectName( "streamView" );
+    tabs_->addTab( streamView_, "Stream" );
+    auto* outer = new QSplitter( Qt::Vertical );
+    outer->addWidget( tabs_ );
+    conversations_ = new ConversationTable;
+    conversations_->setObjectName( "conversationTable" );
+    outer->addWidget( conversations_ );
+    layout->addWidget( outer, 1 );
 
     connect( tree_, &QTreeWidget::currentItemChanged, this,
              [ this ]( QTreeWidgetItem* item ) { highlight( item ); } );
@@ -210,6 +244,11 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     index_ = std::move( index );
     cursor_.reset();
     haveLast_ = false;
+    // The stream shown was one of the capture of the tab before.
+    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Follow stream "
+                                                 "content." )
+                               : QStringLiteral( "No capture in this tab." ) );
+    tabs_->setCurrentIndex( 0 );
     if ( !index_ ) {
         showReason( QStringLiteral( "No capture in this tab." ) );
         return;
@@ -290,7 +329,30 @@ void PacketPanel::showSelection( const QString& selection )
         showReason( QStringLiteral( "The selected line has no packet number." ) );
         return;
     }
+    const auto stream = match.captured( "stream" );
+    shownStream_ = stream == "-" ? kNoStream : stream == "?" ? kUnnumbered : stream.toInt();
     showPacket( number );
+}
+
+bool PacketPanel::followStreamContent( QString* why )
+{
+    QString reason;
+    if ( shownPacket_ == 0 ) {
+        reason = statusText();
+    }
+    else if ( shownStream_ == kNoStream ) {
+        reason = QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
+                     .arg( shownPacket_ );
+    }
+    if ( !reason.isEmpty() ) {
+        if ( why ) {
+            *why = reason;
+        }
+        return false;
+    }
+    streamView_->follow( index_, shownPacket_, shownStream_ );
+    tabs_->setCurrentWidget( streamView_ );
+    return true;
 }
 
 void PacketPanel::showPacket( uint32_t number )
@@ -308,6 +370,7 @@ void PacketPanel::showPacket( uint32_t number )
                              packet.byteSwapped );
     shownPacket_ = number;
     shownBytes_ = packet.bytes.size();
+    followButton_->setEnabled( shownStream_ != kNoStream );
     auto status = QStringLiteral( "Packet %1" ).arg( number );
     if ( packet.record.capturedLen > packet.bytes.size() ) {
         status += QStringLiteral( " (the first %1 bytes)" ).arg( packet.bytes.size() );
@@ -338,6 +401,7 @@ void PacketPanel::showReason( const QString& reason )
 {
     shownPacket_ = 0;
     shownBytes_ = 0;
+    followButton_->setEnabled( false );
     layers_.clear();
     status_->setText( reason );
     tree_->clear();

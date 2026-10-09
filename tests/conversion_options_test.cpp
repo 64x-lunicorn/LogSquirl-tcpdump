@@ -203,6 +203,41 @@ SCENARIO( "The corpus converts without payload previews", "[converter][corpus]" 
     REQUIRE( previewsLeftOut > 0 );
 }
 
+SCENARIO( "The corpus converts with TCP timestamps on every segment", "[converter][corpus]" )
+{
+    const auto captures = corpusCaptures();
+    static const QRegularExpression timestamps( R"( TSval=\d+ TSecr=\d+)" );
+    const auto separator = QString::fromUtf8( kDescriptionSeparator );
+    qsizetype shown = 0;
+
+    for ( const auto& capture : captures ) {
+        const auto defaults = convert( capture, {} );
+        ConversionOptions options;
+        options.tcpTimestamps = true;
+        const auto lines = convert( capture, options );
+
+        INFO( "capture " << capture.fileName().toStdString() );
+        REQUIRE( lines.size() == defaults.size() );
+        for ( qsizetype i = 0; i < lines.size(); ++i ) {
+            INFO( "line " << i + 1 << ": " << defaults[ i ].toStdString() );
+            if ( lines[ i ] == defaults[ i ] ) {
+                continue;
+            }
+            // The timestamps are put in once, before any description, on a
+            // segment that is no SYN: the SYN's show among its options.
+            const auto match = timestamps.match( lines[ i ] );
+            REQUIRE( match.hasMatch() );
+            REQUIRE_FALSE( match.captured().isEmpty() );
+            REQUIRE( QString( lines[ i ] ).remove( match.capturedStart(), match.capturedLength() )
+                     == defaults[ i ] );
+            REQUIRE_FALSE( lines[ i ].left( match.capturedStart() ).contains( separator ) );
+            REQUIRE_FALSE( lines[ i ].contains( "SYN" ) );
+            ++shown;
+        }
+    }
+    REQUIRE( shown > 0 );
+}
+
 SCENARIO( "The corpus converts with shorter payload previews", "[converter][corpus]" )
 {
     const auto captures = corpusCaptures();

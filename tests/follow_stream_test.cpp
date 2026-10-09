@@ -302,9 +302,15 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
 
         THEN( "Plugins > tcpdump > Follow stream and the sidebar button are offered" )
         {
-            REQUIRE( host.menuActions.size() == 3 ); // Open pcap…, Packet details
+            QStringList labels;
+            for ( const auto& action : host.menuActions ) {
+                labels << action.label;
+            }
+            REQUIRE( labels
+                     == QStringList{ "Open pcap\xe2\x80\xa6", "Packet details",
+                                     "Export packets\xe2\x80\xa6", "Display filter\xe2\x80\xa6",
+                                     "Follow stream content", "Follow stream" } );
             REQUIRE( host.menuActions.last().menuPath == "tcpdump" );
-            REQUIRE( host.menuActions.last().label == "Follow stream" );
             REQUIRE( button );
         }
 

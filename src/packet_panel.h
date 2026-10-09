@@ -31,6 +31,13 @@
  * nothing when it did not change; Plugins > tcpdump > Packet details reads
  * it at once.  The packet is found by the No. column of the first selected
  * line and read back from the capture file by a CaptureCursor.
+ *
+ * Its Stream tab shows the content of the shown packet's conversation
+ * (Follow stream content, StreamContentView) once the user asks for it: by
+ * the panel's button or Plugins > tcpdump > Follow stream content.
+ *
+ * Below the tabs, the Conversations table (conversation_table.h) lists the
+ * streams of the capture in front, from its Capture Summary.
  */
 
 #pragma once
@@ -51,10 +58,15 @@
 
 class QLabel;
 class QPlainTextEdit;
+class QPushButton;
+class QTabWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
 
 namespace tcpdump {
+
+class StreamContentView;
+class ConversationTable;
 
 /// The hex dump of @p bytes, 16 to a line: the offset, the bytes in hex in
 /// two groups of 8, then as ASCII, '.' for a byte that is not printable.
@@ -108,6 +120,23 @@ public:
     /// The panel's status line: the packet shown, or why there is none.
     QString statusText() const;
 
+    /// Follow stream content: show the content of the shown packet's stream
+    /// in the Stream tab.  False, and the reason in @p why, when no packet
+    /// of a TCP or UDP stream is shown.
+    bool followStreamContent( QString* why = nullptr );
+
+    /// The Stream tab.
+    StreamContentView* streamView() const
+    {
+        return streamView_;
+    }
+
+    /// The Conversations table of the capture in front.
+    ConversationTable* conversationTable() const
+    {
+        return conversations_;
+    }
+
 protected:
     void showEvent( QShowEvent* event ) override;
     void hideEvent( QHideEvent* event ) override;
@@ -124,8 +153,12 @@ private:
     void highlight( QTreeWidgetItem* item );
 
     QLabel* status_ = nullptr;
+    QPushButton* followButton_ = nullptr;
+    QTabWidget* tabs_ = nullptr;
+    StreamContentView* streamView_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
+    ConversationTable* conversations_ = nullptr;
     QTimer timer_;
 
     std::shared_ptr<const CaptureIndex> index_;
@@ -136,6 +169,9 @@ private:
     bool haveLast_ = false;
 
     uint32_t shownPacket_ = 0;
+    /// The Stream column of the shown packet's line: its number, or
+    /// kNoStream ("-") or kUnnumbered ("?").
+    int shownStream_ = -1;
     size_t shownBytes_ = 0;
     std::vector<PacketLayer> layers_;
 };

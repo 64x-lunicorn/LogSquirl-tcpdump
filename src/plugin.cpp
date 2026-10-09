@@ -38,10 +38,11 @@
  *      the host capabilities the size tells, create a SidebarWidget,
  *      register it as a sidebar tab, add Plugins > tcpdump >
  *      Open pcap… to the menu (and Follow stream, on a host with the
- *      Regex Lab and the selected lines; Packet details on a host with the
- *      selected lines), and register for the host's active-file
- *      notifications, so the sidebar shows the summary and the Packet Panel
- *      the packets of the tab in front.
+ *      Regex Lab and the selected lines; Packet details, Export packets…
+ *      and Follow stream content on a host with the selected lines; Display
+ *      filter… on a host with the Regex Lab), and register for the host's
+ *      active-file notifications, so the sidebar shows the summary and the
+ *      Packet Panel the packets of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
@@ -54,7 +55,9 @@
 
 #include "plugin.h"
 #include "configdialog.h"
+#include "display_filter_dialog.h"
 #include "follow_stream.h"
+#include "process_source.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
@@ -164,12 +167,41 @@ static void followStreamFromMenu( void* /* user_data */ )
     guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
 }
 
+/// Plugins > tcpdump > Display filter…: a filter typed, opened in the Regex Lab.
+static void displayFilterFromMenu( void* /* user_data */ )
+{
+    guarded( "opening a display filter", [] {
+        auto* sidebar = tcpdump::g_state.sidebarWidget;
+        tcpdump::openDisplayFilter( sidebar ? sidebar->window() : nullptr );
+    } );
+}
+
 /// Plugins > tcpdump > Packet details: the selected line's packet in the panel.
 static void packetDetailsFromMenu( void* /* user_data */ )
 {
     guarded( "showing the packet details", [] {
         if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
             sidebar->showPacketDetails();
+        }
+    } );
+}
+
+/// Plugins > tcpdump > Follow stream content: the stream's payload in the panel.
+static void followStreamContentFromMenu( void* /* user_data */ )
+{
+    guarded( "following a stream's content", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->followStreamContent();
+        }
+    } );
+}
+
+/// Plugins > tcpdump > Export packets…: the selected lines' packets to a file.
+static void exportPacketsFromMenu( void* /* user_data */ )
+{
+    guarded( "exporting packets", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->exportSelectedPackets();
         }
     } );
 }
@@ -229,11 +261,22 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
                                    nullptr );
-        // The Packet Panel reads the selected line: only a host that tells
-        // it gets the entry.
+        // The Packet Panel and Export packets read the selected lines, and
+        // a display filter opens in the Regex Lab: only a host that tells the
+        // lines, or has the Lab (LogSquirl 26.11 or later), gets the entries.
         if ( tcpdump::g_state.hostCapabilities.selectedLogLines ) {
             api->register_menu_action( handle, "tcpdump", "Packet details", &packetDetailsFromMenu,
                                        nullptr );
+            api->register_menu_action( handle, "tcpdump", "Export packets\xe2\x80\xa6",
+                                       &exportPacketsFromMenu, nullptr );
+        }
+        if ( tcpdump::g_state.hostCapabilities.regexLab ) {
+            api->register_menu_action( handle, "tcpdump", "Display filter\xe2\x80\xa6",
+                                       &displayFilterFromMenu, nullptr );
+        }
+        if ( tcpdump::g_state.hostCapabilities.selectedLogLines ) {
+            api->register_menu_action( handle, "tcpdump", "Follow stream content",
+                                       &followStreamContentFromMenu, nullptr );
         }
         // Only a host that has the Regex Lab and tells the selected lines
         // can follow a stream.
@@ -300,6 +343,10 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         guarded( "shutdown", [] { delete tcpdump::g_state.sidebarWidget; } );
         st.sidebarWidget = nullptr;
     }
+
+    // No capture program may outlive the plugin: whatever runs still, also
+    // on a thread the widget did not wait for, ends with what it started.
+    guarded( "ending capture programs", [] { tcpdump::terminateCaptureProcesses(); } );
 
     // The tabs close with LogSquirl: remove the files of every instance of
     // the plugin in this process, also those of instances before a runtime

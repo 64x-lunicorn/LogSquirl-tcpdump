@@ -144,6 +144,36 @@ enum class Transport { Tcp, Udp };
 /// Separates the transport summary in Info from the description of the payload.
 constexpr const char* kDescriptionSeparator = " | ";
 
+/// A TCP timestamps option (RFC 7323), as sent.
+struct TcpTimestamps {
+    uint32_t value;     ///< TSval
+    uint32_t echoReply; ///< TSecr
+};
+
+/**
+ * What a TCP header's options tell, as parseTcpOptions() read them: the
+ * ones Wireshark shows in Info, each only if its length is the one RFC
+ * 9293 and RFC 7323 give it.
+ */
+struct TcpOptions {
+    std::optional<uint16_t> mss;        ///< Maximum segment size.
+    std::optional<uint8_t> windowShift; ///< The window scale option's shift count, as sent.
+    bool sackPermitted = false;         ///< SACK permitted, whatever its length.
+    std::optional<TcpTimestamps> timestamps;
+    /// The options as Wireshark appends them to Info, in the order they
+    /// come in: " MSS=1460 SACK_PERM TSval=1 TSecr=0 WS=128"; empty without any.
+    std::string info;
+};
+
+/**
+ * Read the TCP options at @p options, @p len bytes of them, as Wireshark
+ * walks them: an end-of-options ends the walk, a NOP takes one byte, every
+ * other kind (also an unknown one) takes the length it gives, and a length
+ * below 2 or one that runs past the options ends the walk.  Nothing past
+ * @p len is read.
+ */
+TcpOptions parseTcpOptions( const uint8_t* options, size_t len );
+
 /// What a payload begins that the rest of its stream builds on, as the
 /// Payload Describer recognised it: describeInStream() looks at the
 /// stream's later packets with it in mind.
@@ -229,6 +259,10 @@ struct PacketRecord {
     /// 7323 allows at most 14); unset without the option.  Only a SYN's
     /// counts, see analyseTcp().
     std::optional<uint8_t> tcpWindowShift;
+    /// The header's timestamps option; unset without one.  Info shows it
+    /// on a SYN with the other options, on other segments only through
+    /// showTcpTimestamps().
+    std::optional<TcpTimestamps> tcpTimestamps;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
 
@@ -291,6 +325,18 @@ std::string formatTcpFlags( uint8_t flags );
 std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window );
 
 /**
+ * Show @p pkt's TCP timestamps option in Info, " TSval=… TSecr=…" after
+ * the TCP fields and before any payload description, as Wireshark does on
+ * every segment; a SYN shows it with its other options already.  Other
+ * packets are left as they are.
+ */
+void showTcpTimestamps( PacketRecord& pkt );
+
+/// Where the TCP fields of @p info end: before the payload description
+/// (kDescriptionSeparator), or at its end without one.
+size_t tcpFieldsEnd( const std::string& info );
+
+/**
  * Dissect one captured packet into @p pkt, from its link-layer header up.
  *
  * @param linkType  The link-layer type (DLT_*) the packet was captured with.
@@ -327,16 +373,28 @@ struct ByteView {
     size_t size = 0;
 };
 
-/// Where a CaptureReader reads the capture from.
+/**
+ * Where a CaptureReader reads the capture from: a file, a buffer, or a
+ * stream that is still being written (capture_source.h).
+ */
 class ByteSource {
 public:
     virtual ~ByteSource() = default;
 
-    /// Read up to @p n bytes into @p dst; returns how many, 0 at the end or on error.
+    /// Read up to @p n bytes into @p dst; returns how many, 0 at the end or on
+    /// error.  A stream may return fewer than @p n while it is written, and
+    /// waits until at least one byte has come.
     virtual size_t read( uint8_t* dst, size_t n ) = 0;
 
     /// Skip @p n bytes; false if the source ends first.  Reads them by default.
     virtual bool skip( uint64_t n );
+
+    /// Whether a read would return without waiting for more to be written:
+    /// always for a source whose bytes are all there, a buffer or a file.
+    virtual bool ready()
+    {
+        return true;
+    }
 };
 
 /// A ByteSource over a buffer in memory.
@@ -372,11 +430,12 @@ public:
     HeadSource& operator=( const HeadSource& ) = delete;
 
     /// The next @p n bytes, or fewer at the end of the source, without
-    /// consuming them.
+    /// consuming them.  On a stream, waits until @p n bytes have come.
     const std::vector<uint8_t>& peek( size_t n );
 
     size_t read( uint8_t* dst, size_t n ) override;
     bool skip( uint64_t n ) override;
+    bool ready() override;
 
 private:
     ByteSource& source_;
@@ -389,8 +448,16 @@ enum class CaptureFormat : uint8_t {
     Pcapng,
 };
 
+/// What findCaptureStart() makes of the first bytes of a capture.
+enum class CaptureStart : uint8_t {
+    Found,    ///< The header was found: its offset and format are set.
+    NeedMore, ///< These bytes do not decide it: offset is how many would.
+    None,     ///< These bytes are no capture, whatever follows: error says why.
+};
+
 /**
- * Find where the capture starts in the first bytes of a file, and its format.
+ * Find where the capture starts in the first bytes of a file or stream, and
+ * its format.
  *
  * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
  * e.g. "tcpdump: listening on …", into the output ahead of the capture.
@@ -402,11 +469,37 @@ enum class CaptureFormat : uint8_t {
  * capture.  At offset 0 the magic decides, so that an unsupported version
  * is reported as such.
  *
- * @return The offset of the header, or @p size if there is none; @p error
- *         then says why.
+ * The bytes are looked at in order, and the answer is given as soon as
+ * they give it: a header is decided by its first 24 bytes (a pcap's global
+ * header, a pcapng section header's start), a byte that is neither text nor
+ * a header ends the search.  So a stream is decided once its header has
+ * come, whatever follows; until then the answer is NeedMore, with the
+ * number of bytes that decide the next step in @p offset.  At the end of
+ * the bytes NeedMore means None, with @p error set.
+ *
+ * @param offset  Where the header starts, when Found; the bytes needed, when
+ *                NeedMore.
  */
-size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
-                         std::string& error );
+CaptureStart findCaptureStart( const uint8_t* data, size_t size, size_t& offset,
+                               CaptureFormat& format, std::string& error );
+
+/// Where a record of a capture lies in its source: a header, a block, a packet's record.
+struct RecordSpan {
+    uint64_t offset = 0; ///< Where it starts.
+    uint64_t length = 0; ///< Its length, header and all.
+};
+
+/**
+ * The records a capture file needs ahead of a packet for the packet's record
+ * to be read as it is: what a file of some of its packets copies before them.
+ */
+struct CaptureHeaders {
+    CaptureFormat format = CaptureFormat::Pcap;
+    /// A pcap's global header; or a pcapng's section header block, then the
+    /// interface description blocks its section declared so far, in order,
+    /// so that a packet block's interface ID is the index of its own.
+    std::vector<RecordSpan> records;
+};
 
 /**
  * What a reader needs besides a position to go on reading a capture there,
@@ -522,6 +615,13 @@ public:
         return recordLength_;
     }
 
+    /// The records a file of the last packet returned needs ahead of it;
+    /// none before open().
+    virtual CaptureHeaders headers() const
+    {
+        return {};
+    }
+
     /// The captured bytes of the last packet returned, as it was dissected:
     /// at most kMaxDissectedBytes of them.
     const std::vector<uint8_t>& packetBytes() const
@@ -551,6 +651,12 @@ protected:
 
     /// Skip @p n bytes, counted in bytesRead(); false if the source ends first.
     bool skip( uint64_t n );
+
+    /// Whether the source has more to read without waiting (ByteSource::ready()).
+    bool ready()
+    {
+        return source_.ready();
+    }
 
     const uint64_t start_; ///< Where the first header starts; skipped by open().
     std::string error_;
@@ -594,6 +700,9 @@ public:
     std::vector<uint32_t> linkTypes() const override;
 
     bool resume( const ReaderCheckpoint& checkpoint ) override;
+
+    /// The global header.
+    CaptureHeaders headers() const override;
 
     const PcapGlobalHeader& header() const
     {

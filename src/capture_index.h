@@ -31,6 +31,10 @@
  * CaptureCursor reads packet N from the nearest checkpoint before it, at
  * most kCheckpointInterval - 1 packets more, and on from there in order.
  *
+ * It also keeps where each numbered stream begins and ends, the numbers of
+ * its first and last packet, 8 bytes a stream, so that Follow stream
+ * content reads only the packets between the two.
+ *
  * The capture file is told by its path, size and modification time when it
  * was converted: a file changed since is reported, not misread.
  */
@@ -45,6 +49,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace tcpdump {
@@ -70,9 +75,31 @@ public:
     /// counted either way.
     void note( const CaptureReader& reader );
 
+    /// Whether the capture file may still grow behind the packets noted.
+    enum class Growth {
+        Fixed,   ///< A file converted whole: any change is a change.
+        Growing, ///< A live capture's raw file, still written: it may grow.
+    };
+
+    /// The first and the last packet of a stream, by their numbers.
+    struct StreamExtent {
+        uint32_t first = 0;
+        uint32_t last = 0;
+    };
+
+    /// Note that packet @p number belongs to stream @p id of @p transport,
+    /// as the StreamTracker numbered it; packets of no stream or of one
+    /// past the stream cap (a negative id) are not noted.
+    void noteStream( Transport transport, int id, uint32_t number );
+
+    /// The first and last packet of stream @p id of @p transport; unset for
+    /// a stream not noted.
+    std::optional<StreamExtent> streamExtent( Transport transport, int id ) const;
+
     /// Remember the capture file at @p path as it is now, the file the
-    /// checkpoints point into.
-    void setCaptureFile( const QString& path );
+    /// checkpoints point into.  A Growing file is read as it was converted
+    /// as long as it is not shorter than now.
+    void setCaptureFile( const QString& path, Growth growth = Growth::Fixed );
 
     /// The checkpoint to read packet @p number from: the last one before
     /// it, or null to read from the start of the capture.
@@ -108,8 +135,12 @@ private:
     uint32_t interval_;
     uint32_t packets_ = 0;
     std::vector<ReaderCheckpoint> checkpoints_;
+    /// By stream id, per transport: the StreamTracker numbers them from 0.
+    std::vector<StreamExtent> tcpStreams_;
+    std::vector<StreamExtent> udpStreams_;
     QString path_;
     qint64 size_ = -1;
+    Growth growth_ = Growth::Fixed;
     QDateTime modified_;
 };
 
@@ -123,6 +154,9 @@ struct CapturedPacket {
     bool byteSwapped = false;  ///< As CaptureReader::byteSwapped() said.
     uint64_t recordOffset = 0; ///< Where its record starts in the capture file.
     uint64_t recordLength = 0; ///< Its record's length in the file, header and all.
+    /// The records a file of it needs ahead of it, where they lie in the
+    /// capture file: its format's header, a pcapng section's interfaces.
+    CaptureHeaders headers;
 };
 
 /**

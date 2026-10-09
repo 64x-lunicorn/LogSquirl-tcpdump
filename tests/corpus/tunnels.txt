@@ -1,7 +1,7 @@
 No.    Stream  UTC Time                     Time           Source                                  Destination                             Protocol  Length Info
 1      0       2025-10-09 08:53:20.002500Z  0.000000       10.1.0.10                               10.2.0.20                               HTTP-Alt  104    VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240
 2      0       2025-10-09 08:53:20.005000Z  0.002500       10.2.0.20                               10.1.0.10                               HTTP-Alt  104    VXLAN VNI 100 | 8080 → 50000 [SYN, ACK] Seq=0 Ack=1 Win=64240
-3      0       2025-10-09 08:53:20.007500Z  0.005000       10.1.0.10                               10.2.0.20                               HTTP-Alt  104    VXLAN VNI 100 | 50000 → 8080 [ACK] Seq=1 Ack=1 Win=64240
+3      0       2025-10-09 08:53:20.007500Z  0.005000       10.1.0.10                               10.2.0.20                               HTTP-Alt  104    VXLAN VNI 100 | 50000 → 8080 [ACK] Seq=1 Ack=1 Win=64240 [iRTT=0.005000]
 4      0       2025-10-09 08:53:20.010000Z  0.007500       10.1.0.10                               10.2.0.20                               HTTP      150    VXLAN VNI 100 | 50000 → 8080 [ACK, PSH] Seq=1 Ack=1 Win=64240 Len=46 | GET tunnelled.test/status HTTP/1.1
 5      -       2025-10-09 08:53:20.012500Z  0.010000       10.1.0.10                               10.1.0.1                                ARP       92     VXLAN VNI 100 | Who has 10.1.0.1? Tell 10.1.0.10
 6      -       2025-10-09 08:53:20.015000Z  0.012500       10.1.0.10                               10.2.0.20                               ICMP      86     GRE | Echo (ping) request id=0x4e01, seq=1

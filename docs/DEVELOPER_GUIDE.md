@@ -14,7 +14,9 @@ first block, which it looks at through a `HeadSource` without consuming it:
 `findCaptureStart()` finds a pcap global header or a pcapng section header,
 also behind a text preamble, and the reader it picks is handed where that
 header starts, so that the format is told once; a file that holds neither
-gets a reader whose `open()` fails and says why. The readers share reading
+gets a reader whose `open()` fails and says why. Only the bytes the
+decision needs are looked at (see *The Capture Source seam* below), so the
+same path reads a file and a stream that is still being written. The readers share reading
 and skipping, with the byte count for progress, in the `CaptureReader` base.
 
 `PcapReader` reads libpcap captures:
@@ -240,7 +242,128 @@ each packet the reader also tells where its record lies (`recordOffset()`,
 `recordLength()`: the pcap record header or the pcapng block, header and
 all), its bytes as dissected (`packetBytes()`, at most
 `kMaxDissectedBytes`) and the byte order they were read in
-(`byteSwapped()`).
+(`byteSwapped()`). `headers()` tells the records a file of that packet
+needs ahead of it (`CaptureHeaders`: the format and `RecordSpan`s): a
+pcap's global header, or a pcapng section's header block and the interface
+description blocks declared in it so far, in order, so that an interface ID
+is an index into them. The pcapng reader keeps those spans in its
+`SectionState`, so a reader resumed at a checkpoint tells them too.
+
+#### The Capture Source seam (`capture_source.h/cpp`)
+A capture need not be a file: a pipe, a FIFO, a socket or a capture
+program's stdout holds what has been written so far, and more comes later
+or never. Every live source (a local tcpdump or dumpcap, adb, ssh, an
+extcap, a custom command) is read through this seam, and only the source
+differs; everything from `makeCaptureReader()` on is the file's path.
+
+What a source provides is a `StreamSource`, a `ByteSource` whose `read()`
+waits until at least one byte has come and returns what has (possibly
+fewer than asked), and 0 once the stream has ended. A subclass implements
+two things: `readFor( dst, n, timeout )`, which waits at most `timeout`
+and returns the bytes read, 0 at the end (setting `error_` if it broke
+off), or -1 if nothing came in time; and `available()`, whether a read
+would not wait. Two exist:
+
+- `FdSource` reads an open file descriptor (pipe, FIFO, socket) with
+  `poll()`; the descriptor stays the caller's. Unix only.
+- `DeviceSource` reads a `QIODevice` that can wait (`waitForReadyRead()`):
+  a `QProcess`'s stdout, a `QLocalSocket` (a Windows named pipe), a
+  `QTcpSocket`, on the thread it belongs to; no event loop is needed. The
+  stream ends when the device has nothing left and stops waiting before the
+  timeout, as a finished process or a closed socket does.
+
+A new live source either hands one of these its descriptor or device, or
+implements the two functions for its own handle.
+
+**Waits.** A source is given a stop flag (`std::atomic_bool`); `read()`
+checks it before every wait, and no wait is longer than
+`StreamSource::kWaitSlice` (50 ms), so a read returns within that of a
+Stop or Cancel even when nothing is written. A stopped stream reads as
+ended (`stopped()` tells it from a closed one). The Converter's own cancel
+flag is checked between packets, so a conversion gives the same flag to
+the source.
+
+**Detection.** `findCaptureStart()` answers `Found`, `None` or `NeedMore`
+with the number of bytes that decide the next step, and
+`makeCaptureReader()` peeks exactly that many: a pcap is decided by its
+24-byte global header, a pcapng by the start of its section header, each
+byte of a text preamble by itself, and a byte that is neither text nor a
+header means "not a capture" at once. A stream that has sent its header
+and nothing more is thus decided without waiting. `PcapngReader::open()`
+then reads the section header and at least the first interface, and on
+past it only while `ByteSource::ready()` says blocks have come, so a
+capture with no traffic yet opens; a file is always ready and is read up to
+its first packet block as before.
+
+**The end.** The writer closing the stream (the process exited, the pipe
+was closed) or a stop ends the capture as the end of a file does: a record
+cut off there is `truncated()`. A stream that breaks off with a read error
+ends the conversion as Failed ("Cannot read the capture: …").
+
+`convertStream( source, name, outputRoot, cancel, options )` converts a
+stream as `convertPcap()` converts a file, into `<name>.log`, without
+progress, as a stream has no size. Regular files keep their own path:
+`convertPcap()` opens them as `FileSource` with size-based progress.
+
+#### The Process Source (`process_source.h/cpp`)
+A capture program (tcpdump, dumpcap, adb, ssh, an extcap, a user's
+command) writes its capture to stdout and its complaints to stderr. A
+`ProcessSource` runs one, given as a `ProcessCommand` (program, argument
+list, optional display name), and is the `StreamSource` over its stdout,
+read through a `DeviceSource`:
+
+- **Separate channels.** The `QProcess` keeps stdout and stderr apart
+  (stdin is the null device): text after a pcap header would corrupt the
+  stream. stderr is drained after every wait slice and split by
+  `StderrLines` into lines (UTF-8, line ends dropped, blank lines skipped,
+  a line without end handed on at 4096 bytes), each handed to the source's
+  `onLine` callback on the reading thread, and the last
+  `StderrLines::kKept` (10) are kept. The callback runs on the worker
+  thread; whoever shows the lines in the log (`hostLog`) or the sidebar
+  posts them to the UI thread.
+- **No shell.** The program gets its arguments as a list, each one
+  argument, untouched (spaces, quotes, `$( )`, `;`). A custom command opts
+  into the shell explicitly with `ProcessCommand::shell( commandLine )`
+  (`/bin/sh -c`, or `cmd.exe /d /s /c` on Windows), named by its first word.
+- **Thread.** The source starts the program when it is constructed and
+  owns it on that thread, which needs no event loop: build it on the
+  worker thread that converts the stream.
+- **The end.** The stream ends when the program has exited (stdout closing
+  alone does not end it while the program runs) or on the stop flag. A
+  program that could not be started, exited with a code other than 0 or
+  crashed breaks the stream off, so `convertStream()` ends Failed with
+  `Cannot start <name>: …`, `<name> exited with code N:` or
+  `<name> crashed (exit code N):` followed by its last stderr lines. A
+  program ended on purpose (`terminate()`, `terminateCaptureProcesses()`)
+  did not fail: its stream reads as `stopped()`
+  (`StreamSource::endedOnPurpose()`).
+- **Ending it.** On Unix the program runs in a process group of its own
+  (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
+  group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
+  (2 s), and returns when the group is gone (a second more at most, for a
+  process of another user, as behind sudo, that cannot be killed). On
+  Windows the program is put in a job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` right after it starts (what it
+  starts later is in the job too), and `terminate()` terminates the job;
+  closing the job's last handle, even as LogSquirl crashes, kills what is
+  left. The destructor terminates.
+- **Stop.** The stop flag ends the stream, not the program: the
+  conversion finalises (Converted), then the caller terminates the source,
+  or destroys it. A Stop, or a shutdown, before the capture header has come
+  ends Stopped: nothing was captured, nothing went wrong.
+- **No orphans.** Every started source's group is enrolled in a registry;
+  `terminateCaptureProcesses()` ends them all, from any thread, and
+  `logsquirl_plugin_shutdown()` calls it after deleting the sidebar
+  widget, so no capture program outlives LogSquirl or a disabled plugin.
+
+The tests (`tests/process_source_test.cpp`) run fake capture programs,
+shell scripts that write a synthetic pcap to stdout and text to stderr,
+exit with an error, crash, start a child and ignore SIGTERM; they need a
+Unix shell, so on Windows only the stderr splitting is run. A test never
+waits on time for a fake program: it acts on what the program has
+signalled, the first packet converted (`LiveObserver::firstPacket`) or a
+`child <pid>` line on stderr written once the program is ready, so that the
+tests pass on a loaded machine and in parallel runs.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -693,7 +816,8 @@ a number), and the packet's direction in it, 0 or 1 (the same for every
 packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
 pointer. Every field added costs memory once per numbered stream: today a
-`TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
+`TcpDirection` per direction, 32 bytes (a `static_assert` holds it there,
+and its `flags` and `windowScale` have no bit left but four of the latter),
 the Payload Describer's `QuicConnection` (whether a QUIC long header was
 seen, and the connection ID length of each direction), 3 bytes, whether a
 TCP stream began with the HTTP/2 preface, 1 byte, the stream's label,
@@ -724,11 +848,26 @@ TCP Analysis replaces that text; segments of a stream past the stream cap
 have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
 `tcpAck` stay the raw values.
 
+The parser reads a header's options with `parseTcpOptions()`, walking them
+as Wireshark does: a NOP is one byte, every other kind, an unknown one too,
+the length it gives, and the end of options, or an option whose length is
+below 2 or runs past the header, ends the walk; nothing past the captured
+header is read. An option counts only with its RFC length (MSS 4, window
+scale 3, timestamps 10), except SACK permitted, which Wireshark names
+whatever its length. A SYN's Info gets the options after `Len=`, in the
+order they come in and in Wireshark's words: `[SYN] Seq=0 Win=64240
+MSS=1460 SACK_PERM TSval=12345 TSecr=0 WS=128` (`WS=` is the multiplier,
+`1 << shift` with the shift capped at 14). Other segments show none of
+them, except the timestamps when `ConversionOptions::tcpTimestamps` asks
+for them, as Wireshark does on every segment: the parser keeps them in
+`PacketRecord::tcpTimestamps`, and the Converter calls
+`showTcpTimestamps()`, which puts ` TSval=… TSecr=…` after the TCP fields
+(`tcpFieldsEnd()`, before the payload description), before the TCP
+Analysis runs.
+
 `Win=` is the calculated window, as in Wireshark: the window field shifted
-by the sender's window scale (RFC 7323). The parser reads the shift count of
-a header's window scale option into `PacketRecord::tcpWindowShift`, walking
-the options as Wireshark does (a NOP is one byte; the end of options, or an
-option whose length is bogus or runs past the header, ends the walk). A
+by the sender's window scale (RFC 7323). The parser keeps the shift count of
+a header's window scale option in `PacketRecord::tcpWindowShift`. A
 SYN's option, its shift capped at 14 as RFC 7323 and Wireshark do, is kept
 in its direction's `TcpDirection::windowScale` (the shift plus one, 0 when
 the SYN carried none), and the TCP Analysis shifts the window of every later
@@ -821,8 +960,13 @@ are described alone. The segment that completes it is described by
 segments]`, with the calls their SDP bodies announce (`PacketRecord::sipCalls`,
 cleared on the segments before; the `MediaExpectations` run after the
 reassembly for this), and `apply()` returns those bytes (`ReassembledMessages`) for
-a module that wants the whole messages. Bytes are taken in sequence order:
-a segment ahead of the held bytes is held apart (at most
+a module that wants the whole messages. Bytes are taken in sequence order,
+by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
+C++, shared with Follow stream content): `place()` says whether a segment
+is next (and how many of its first bytes were taken), came early or was
+taken already; it holds the early ones (`holdEarly()`), pops them once they
+are next (`popNext()`) and skips a gap (`skipTo()`), and leaves the limits
+to its user. Here, a segment ahead of the held bytes is held apart (at most
 `kMaxEarlySegments`, 32) and also described as a segment of the message,
 then appended once the bytes before it come; a segment whose bytes were
 all taken (a retransmission) is left as it is, and the part of one that
@@ -888,6 +1032,7 @@ keep-alive or a zero window probe. With `fwd` the segment's direction,
 | `[TCP Previous segment not captured]` | sequence number beyond `fwd.nextSeq`, no RST |
 | `[TCP Keep-Alive]` | `len` 0 or 1 at `fwd.nextSeq - 1`, no SYN, FIN or RST |
 | `[TCP Window Update]` | `len` 0, a new window other than 0, same sequence number (`fwd.nextSeq`) and ACK as before |
+| `[TCP Window Full]` | data, no SYN, FIN or RST, ending at `rev`'s last ACK plus its last window, scaled as `Win=` showed it, once `rev`'s scale is known: `rev`'s SYN was seen, or `fwd`'s without the window scale option |
 | `[TCP Keep-Alive ACK]` | `len` 0, the same window (not 0), sequence number and ACK as before, after a keep-alive from `rev` |
 | `[TCP ZeroWindowProbeAck]` | `len` 0, window still 0, the same sequence number and ACK (or one more) as before, after a probe from `rev` |
 | `[TCP Dup ACK n#m]` | `len` 0, the same window (not 0), sequence number and ACK as before: the `m`th repeat of the ACK of packet `n` |
@@ -897,6 +1042,28 @@ keep-alive or a zero window probe. With `fwd` the segment's direction,
 | `[TCP Retransmission]` | otherwise before `fwd.nextSeq` |
 
 Segments with a bogus TCP header length are not analysed, as in Wireshark.
+
+The analysis also follows the handshake, with two bits of each direction's
+`flags`: `kSynSeen` (a SYN of the direction was seen, so its window scale
+is known, also when it has none) and `kSynPending` (its last segment was a
+SYN without ACK, whose time `lastTime` still holds). The first segment
+with ACK and without SYN of a direction whose SYN is pending, once the
+other direction sent its SYN-ACK, completes the handshake: it gets the
+initial round-trip time, from the SYN (the last one, if it was sent again,
+as Wireshark's `ts_mru_syn`) to it, after its TCP fields, `[iRTT=0.012345]`
+in seconds with 6 decimals, or 9 at nanosecond precision, and
+`analyseTcp()` returns it with the markers (`TcpAnalysis`). Wireshark shows
+`tcp.analysis.initial_rtt` in the packet's details only, and on the first
+pure ACK in either direction even without a SYN-ACK; here it is in Info,
+and a stream whose handshake was not captured whole has none. Each stream
+shows it once: a SYN sent after the handshake does not arm it again, a new
+connection on the same ports does. The Converter collects the times in
+`CaptureStats::initialRtts`, a `RunningMedian`, for the summary's median:
+it keeps the first 4,096 times as they are and gives their exact median,
+then counts them in a histogram of fixed size (64 buckets per power of
+two, an HDR histogram), whose median is the middle of its bucket and lies
+within 1/128 (0.8 %) of the exact one. It holds 32 KB at most, however
+long a capture or live capture runs.
 The limits, all where Wireshark keeps more than a few integers per
 direction:
 
@@ -905,10 +1072,11 @@ direction:
   out of order, where Wireshark knows it was seen and calls it a
   retransmission; and `[TCP ACKed unseen segment]` is not shown.
 - The 3 ms out-of-order limit is Wireshark's for a connection whose
-  round-trip time it does not know; Wireshark takes the handshake's when it
-  saw the handshake, this analysis never does.
+  round-trip time it does not know; Wireshark takes the handshake's iRTT
+  when it saw the handshake, this analysis never does: the iRTT is shown,
+  but not kept per stream.
 - SACK blocks are not read, so there is no SACK-based fast
-  retransmission; `[TCP Window Full]` is not shown.
+  retransmission, and Info shows no `SLE=`/`SRE=`.
 - `[TCP Port numbers reused]`, `[TCP Retransmission]`'s RTO and the other
   fields Wireshark shows in its tree only are left out.
 - As in Wireshark, sequence numbers compare modulo 2^32, and a segment
@@ -916,8 +1084,9 @@ direction:
   reordering) counts as 0 ms after it.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet
-(among them the packets cut at the snaplen and the TCP segments per
-analysis marker kind),
+(among them the packets cut at the snaplen, the TCP segments per
+analysis marker kind and the handshakes' initial round-trip times, whose
+median `medianInitialRttNs()` gives),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, endpoints and tunnel endpoints together, and those of further
@@ -926,10 +1095,11 @@ addresses as "other endpoints".
 Memory therefore grows with the conversations and addresses in a capture,
 not with its size, and both are capped, so a port scan or a busy NAT cannot
 exhaust it. By default the caps are 1,000,000 streams and 100,000
-addresses, roughly 150 MB and 10 MB; the options (`settings.h`,
+addresses, roughly 150 MB (and 70 MB more for the Conversations table's
+counts) and 10 MB; the options (`settings.h`,
 *Advanced* in the dialog) let the user raise each up to tenfold
 (`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
-addresses, roughly 1.5 GB and 100 MB) or lower it to 1. The summary says
+addresses, roughly 2.2 GB and 100 MB) or lower it to 1. The summary says
 when a cap was hit.
 
 #### The Log Format (`formats/tcpdump_log.json`)
@@ -1012,40 +1182,89 @@ share a base name), and `cmake --install` puts them there too.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
-`makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream and the TCP Analysis show its numbers relative and mark it,
-lets the Payload Describer look at it again in its stream, the TCP
-Reassembly describe a message that spans segments where it completes, the
-`MediaExpectations` as RTP or RTCP where SDP announced them, and
-the Stream Labels name it by its stream's protocol, counts its markers
-and its protocol, formats the packet and appends its line to a new output file,
-reporting progress and checking a
-cancel flag between packets. The file, `<name>.log`, is created with
+`makeCaptureReader()` picks for it and takes each packet through the same
+steps, in this order: `limitPreview()` cuts its preview, the Stream Tracker
+gives it its stream (`track()`), the TCP Analysis shows its numbers relative
+and marks it (`analyseTcp()`), the Payload Describer looks at it again in
+its stream (`describeInStream()`), the TCP Reassembly describes a message
+that spans segments where it completes (`TcpReassembly::apply()`), the
+`MediaExpectations` describe it as RTP or RTCP where SDP announced them
+(`apply()`), the Stream Labels name it by its stream's protocol
+(`StreamLabels::apply()`), the `ConversationStats` and the `CaptureStats`
+count it, the Packet Formatter writes its line to a new output file, and its
+place is noted in a `CaptureIndex` (see *Packet Panel*); progress is
+reported and a cancel flag checked between packets. `convertStream()` does the same for a
+capture read from a stream (*The Capture Source seam*), without progress
+but live (see *Live conversion* below): both run one loop
+(`convertOrThrow()`), so every packet of a file and of a stream goes
+through the same steps. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three
 outcomes and a `CaptureSummary`, whose link-layer types are those of the
 packets followed by any the capture declares without a packet of it (so a
 pcap with no packets still names its one): Converted (with the output path), Failed
-(with a message) or Cancelled. Failed is the only error mode: an unreadable
+(with a message) or Cancelled, and for a stream Stopped: stopped before its
+capture header came (`StreamSource::stopped()`), so nothing was captured and
+nothing is left, which is not a failure. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
 failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
 
-`ConversionOptions` are everything the user can choose: the `LineLayout`,
-the payload preview (`preview`, `previewChars`), the stream and endpoint
-caps, the TCP Reassembly's memory (`reassemblyMegabytes`), whether every TCP
-segment shows its timestamps (`tcpTimestamps`), the
-ports SOME/IP is read on besides 30490 (`someIpPorts`) and its name table
-(`someIpNamesFile`); besides, `checkpointInterval`, which tests lower. The
-Converter loads the name table (`loadSomeIpNames()`, `someip.h`; a file that
-cannot be read names nothing) and puts the ports and names in place for the
-Payload Describer on its thread with a `SomeIpScope` while it converts (a
-`thread_local` pointer, as the describer's signature stays the same for
-every protocol). The Packet Panel dissects without one: there, SOME/IP is
-read on 30490 and by its header, without names. The
+#### Live conversion
+`convertStream()` converts live: a `LiveInput` between the stream and the
+reader writes every byte read, unchanged, to the raw capture next to the
+text (`<name>.pcap`, or `<name>.pcapng` when the reader is a
+`PcapngReader`; `ConversionResult::rawPath`); the bytes read before the
+output directory exists, the header the format is told by, are kept until
+it does. Before every read that would wait (`ByteSource::ready()` is
+false), it flushes the text and the raw file, so a line is readable as soon
+as the stream pauses; a stream that never pauses is flushed at least every
+`kLiveFlushInterval` (100 ms). A `LiveObserver` is told on the converting
+thread: `firstPacket( logPath, rawPath )` once, after the header and the
+first packet line are flushed (LogSquirl recognises a Log Format once, at
+the first load with lines, LogSquirl#794, so the tab must not open on the
+header alone), and `snapshot( LiveSnapshot )` with the first packet and
+then at most every `kLiveSnapshotInterval` (1 s): the summary so far
+(`summariseSoFar()`, from a copy of the statistics), the time since the
+start, the bytes read and a copy of the `CaptureIndex` so far, pointing
+into the raw file (flushed first) as `CaptureIndex::Growth::Growing`. The
+final result's index points into the closed raw file. So that a burst's last packets are not left out
+until the next packet, the wait before a read sleeps until the snapshot's
+turn while the stream stays idle (a stop turns `ready()` on). The stream
+stopping (Stop) ends Converted with the final summary, which equals that of
+converting the raw file (tested); Cancel removes both files. A stream that
+breaks off with an error after its first packet ends Failed with the
+message *and* `outputPath`, `rawPath` and the summary of what was captured;
+before a packet, it leaves nothing behind, as before.
+
+`LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
+own and posts what it is told to its own (the UI) thread as signals:
+`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
+`finished( ConversionResult )`. The source is made on the worker by a
+`SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
+ProcessCommand )` for a capture program), as a `ProcessSource` must be.
+`stop()` sets the source's stop flag, `cancel()` also the cancel flag. The
+outcome is posted before the source is destroyed, so a program that takes
+up to `kTerminateGrace` to end does not delay it; the destructor stops and
+waits for the worker.
+
+`ConversionOptions` are everything the user can choose: the `LineLayout`
+(`layout`: the time columns and the MAC columns), the payload preview
+(`preview`, `previewChars`), the stream and endpoint caps (`maxStreams`,
+`maxEndpoints`), the TCP Reassembly's memory (`reassemblyMegabytes`),
+whether every TCP segment shows its timestamps (`tcpTimestamps`), the ports
+SOME/IP is read on besides 30490 (`someIpPorts`) and its name table
+(`someIpNamesFile`); besides, `checkpointInterval`, the packets between two
+checkpoints of the `CaptureIndex`, which tests lower. The Converter loads
+the name table (`loadSomeIpNames()`, `someip.h`; a file that cannot be read
+names nothing) and puts the ports and names in place for the Payload
+Describer on its thread with a `SomeIpScope` while it converts, a file or a
+live stream alike (a `thread_local` pointer, as the describer's signature
+stays the same for every protocol). The Packet Panel dissects without one:
+there, SOME/IP is read on 30490 and by its header, without names. The
 defaults write the text of `tests/corpus`; any other choice is
 tested by deriving its text from that one, not by more committed text.
 
@@ -1087,8 +1306,9 @@ Qt UI that provides:
   link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
   (comma-separated when there are several), the number of packets cut
-  at the snaplen when there are any, and under *Analysis* the TCP segments
-  per analysis marker kind when there are any
+  at the snaplen when there are any, and under *Analysis* the median
+  initial round-trip time of the handshakes and how many there were, and
+  the TCP segments per analysis marker kind, when there are any
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
@@ -1102,6 +1322,23 @@ Qt UI that provides:
   is being read the label keeps saying so. The summaries are lost when the
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
+
+A live capture, `startLiveCapture( name, SourceFactory )`, runs in a
+`LiveCapture`. On `readyToOpen` the sidebar keeps the capture's entry under
+its text file and calls `open_file( path, follow = 1 )` on the UI thread
+(LogSquirl#796); snapshots replace the entry's summary through
+`updateSummary( textPath, summary )`, which redraws it if its tab is in
+front, and update a label with packets, bytes, packets/s (as of the
+snapshot) and the elapsed time (ticked by a 1 s timer) in place of the
+progress bar; the snapshot's index replaces the entry's, so the Packet
+Panel shows the packets captured so far. **Stop** calls `stopLiveCapture()`. At the end the final
+summary and index replace the last snapshot's; a capture without packets has its files
+removed and a notification; a failed one keeps its entry with the error
+shown above the summary. **Save capture…**, shown for a tab whose capture
+has a raw file, copies it where `setSaveChooser()`'s dialog says. stderr
+lines go to the host's log. Opening a file and a live capture exclude each
+other; the `LiveCapture` is kept until the next one starts, since its
+worker may still be ending the capture program.
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
@@ -1138,8 +1375,12 @@ export, conversation statistics):
   order, and its record's offset and length in the file. Before every read
   the file's size and modification time are compared with those at the
   conversion (`fileProblem()`): a changed or removed file is reported with
-  a message for the user, never misread. A live capture would keep adding
-  checkpoints and update the file's identity as it grows.
+  a message for the user, never misread. A live capture's raw file, still
+  being written, is set `Growing`: it may grow behind the packets noted, and
+  only a shorter file is a changed one; each snapshot brings an index with
+  the packets so far, and a packet line newer than the index the panel has
+  is reported as not there yet ("The capture has no packet N") until the
+  next snapshot.
 - **The layer description.** The dissectors describe the layers they read
   when the `PacketRecord`'s `layers` points at a `PacketLayers`: each
   header as a `PacketLayer` (name, offset, length) with its `LayerField`s
@@ -1171,25 +1412,143 @@ export, conversation statistics):
   and ASCII on each line. The packet is read on the UI thread: at most
   `kCheckpointInterval` records from a local file.
 
+- **Follow stream content** (`stream_content.h/cpp`,
+  `stream_content_view.h/cpp`). The panel's Stream tab, a
+  `StreamContentView`, shows the payload of the shown packet's stream when
+  the user asks for it: the panel's *Follow stream content* button calls
+  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
+  stream content does through `SidebarWidget::followStreamContent()`
+  (which notifies where it is shown when the panel is out of view). The
+  panel keeps the Stream column of the line it shows (`shownStream_`).
+  `StreamContentReader` reads the stream back: `open()` reads the packet
+  for its transport, addresses and ports, then `read()` reads the packets
+  from the stream's first to its last, which the Converter notes in the
+  index (`CaptureIndex::noteStream()`, `streamExtent()`: 8 bytes per
+  numbered stream; an unnumbered one is looked for in the whole capture),
+  and keeps those of the stream by their addresses and ports. The client,
+  end 0, is the side of the stream's first packet (the SYN's side when that
+  is a SYN-ACK). A UDP datagram is a `StreamChunk` as it comes (the part cut
+  at the snaplen as missing). TCP bytes go through a `ByteStreamOrderer`
+  per direction: a SYN starts it, the first data segment when the
+  handshake was not captured; early segments are held, at most
+  `kMaxEarlySegments` (64) and `kMaxEarlyBytes` (1 MB) a direction, beyond
+  which the bytes before them are taken as missing; an ACK of the other
+  direction past its bytes (but not past its FIN, which takes a sequence
+  number and no byte) takes the bytes it lacks as missing, and so does the
+  stream's end for what is still held. A chunk is either bytes or a gap
+  (`missing`). `read()` stops at the end of a packet once a budget of bytes
+  was handed out (`Status::More`), checks the cancel flag between packets
+  and reports progress; it goes on where it stopped. `StreamRenderer`
+  turns chunks into text: `streamText()` keeps printable ASCII, tab, line
+  breaks (CR LF as one) and valid UTF-8 beyond the C1 controls, and escapes
+  every other byte as `\xNN`; each direction's run, each datagram and
+  each gap begin a line; the hex dump is Wireshark's, 16 bytes a line,
+  the offset counted per direction (gaps included), the server's lines
+  indented by 4. `exportStreamContent()` reads the whole stream with a
+  fresh reader, a budget at a time, writing raw bytes of the directions
+  chosen (gaps left out) or the rendered text; a failed or cancelled export
+  removes its file. The view runs reads and exports on a `QThreadPool` of
+  its own, one at a time, with a `QFutureWatcher` per task and a
+  generation count, so a result of a stream followed before is dropped;
+  its destructor cancels and waits. It holds the chunks read, at most
+  `kMaxShownBytes` (16 MB), for re-rendering when the format or direction
+  changes, and reads `kShowBytes` (1 MB) at first and per Show more.
+  `stream_content_test.cpp` checks the reader, renderer and export on
+  built captures; `packet_panel_test.cpp` follows streams of
+  `reassembly.pcap` and `mixed.pcap` through the `FakeHost` and compares
+  the export with the payloads its script wrote.
+
+- **The Conversations table** (`conversations.h/cpp`, pure C++;
+  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter
+  next to the Stream Tracker, counts each numbered stream after the Stream
+  Labels ran (`add(pkt, stream)`): packets and wire bytes per direction,
+  its earliest and latest packet, the direction of its first packet (end
+  A is that packet's source) and its last label byte, 64 bytes per stream.
+  Packets of `kUnnumbered` streams are counted together, so the stream cap
+  bounds the table. `conversations()` takes the table as it stands, a
+  `Conversation` per stream, TCP's first: the ends come from
+  `StreamTracker::endpoints()`, which parses the stream's key (the tracker
+  keeps a pointer to each key, 8 bytes per stream), the protocol from
+  `StreamLabels::name()`. The Converter puts it into
+  `CaptureSummary::conversations` as a `shared_ptr<const vector>`, with
+  `otherStreamPackets`/`otherStreamBytes`: a snapshot never changes, a new
+  one (a live capture's) is a new vector, and a tab switch copies nothing.
+  `ConversationTable` (below the Packet Panel's tabs) shows it through
+  `ConversationModel`, which sorts an index vector by any column (ties by
+  transport and stream) and keeps the *Other streams* row last.
+  `SidebarWidget::showSummaryFor()` hands it the summary in front;
+  `SidebarWidget::updateSummary()` replaces a capture's summary and shows
+  it if in front, the table keeping its sort and selected conversation; a
+  live capture's snapshots come through it, each taken by
+  `summariseSoFar()` from copies of the `CaptureStats` and the table as it
+  stands, so the conversion goes on with them unchanged.
+  A click or *Filter on this conversation* opens the Regex Lab ("Filter")
+  with `conversationPattern()`, the Follow stream pattern built from the
+  row's stream number, addresses and ports.
+
+- **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
+  `exportPackets(index, numbers, path, cancel, progress)` sorts the
+  numbers, reads them with one `CaptureCursor` in one pass, and copies each
+  packet's record (`recordOffset`/`recordLength`) from the capture file
+  byte for byte through a `QSaveFile`, which appears only when complete, so
+  a cancel or a failure leaves nothing. Ahead of a packet go the records
+  of its `CapturedPacket::headers` not written yet: a pcap's global header
+  once; for a pcapng, its section's header block when the section changes
+  (its section length set to -1, "unknown") and the section's interface
+  description blocks as they are declared, all of them, in order, so that
+  the packet block's interface ID stays valid without changing the block.
+  A pcapng is thus exported as a pcapng, never converted to a pcap; other
+  blocks (name resolution, interface statistics, custom) are not exported.
+  Nothing is written from what was dissected. Writing over the capture
+  itself is refused. `parsePacketSet()` reads packet lines (their No.) and
+  numbers and ranges ("1-5, 9") and counts what names no packet;
+  `packetLinesOf()` reads packet lines only, as the selection holds them;
+  `formatPacketRanges()` writes numbers back as ranges.
+  `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
+  packets…) reads the selection with `get_selected_log_lines`, whose
+  `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
+  selected) is carried in the `ExportRequest`; the `ExportConfirmer`
+  (`setExportConfirmer()` for tests) shows the `ExportDialog`, where the
+  user may change the numbers or paste lines copied in LogSquirl, then a
+  save dialog. The host offers no call for the lines of a Filtered View
+  or a search, so selecting them there (or pasting them) is the way to
+  export a filtered view. The export runs on `exportPool_`, a thread of
+  its own, with a `QProgressDialog` whose Cancel sets the flag the export
+  checks between packets; as for a conversion, a cancel wins over an
+  export that was done when it came. The notification after the export
+  repeats a truncation that limited it.
+
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details entry and no polling; the panel says what it needs.
+details, Export packets or Follow stream content entry and no polling; the
+panel says what it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
 it against its line and an in-memory parse, and that its layers stay
 within its bytes; `packet_layers_test.cpp` checks layer and field names,
 values and offsets on built packets; `packet_panel_test.cpp` drives the
 panel through the `FakeHost` (scripted selection, active file, call count
-of `get_selected_log_lines`).
+of `get_selected_log_lines`). `conversations_test.cpp` checks the counts
+on built packets and that every row's pattern finds exactly its packets in
+every corpus text; `conversation_table_test.cpp` drives the table (sorting
+by every column, clicks, the stream cap's row, snapshot updates) through
+the `FakeHost`. `packet_export_test.cpp` exports every other packet of
+every corpus capture, read with a checkpoint every 3 packets, re-reads the
+export and compares each record byte for byte and each packet's fields
+with the capture's; it checks that a pcapng export of packets of two
+sections and interfaces keeps them, progress, cancel and failure, and
+drives Export packets… and the `ExportDialog` through the `FakeHost`.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entries (Open pcap…, and Packet details and Follow stream where
-the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
+the menu entries (Open pcap…, and Packet details, Export packets…, Display
+filter…, Follow stream content and
+Follow stream where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
 open; the plugin notes `QCoreApplication::aboutToQuit` and removes the
-temporary files only in the first case. `logsquirl_plugin_configure()`,
+temporary files only in the first case. In both, it ends every capture program
+still running (`terminateCaptureProcesses()`, *The Process Source*). `logsquirl_plugin_configure()`,
 which LogSquirl calls for **Configure…** in Plugin Management with its main
 window as the parent, runs the `ConfigDialog` modally and saves the options
 when it is accepted; `hostConfigDir()` is the directory, empty without a
@@ -1255,6 +1614,42 @@ each corpus capture, converted in every `LineLayout`, against the columns of
 its lines;
 `sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
 
+#### Display filters (`display_filter.h/cpp`, `display_filter_dialog.h/cpp`)
+`Plugins → tcpdump → Display filter…`, offered on a host with `regexLab`,
+calls `openDisplayFilter()`: a `DisplayFilterDialog` translates the text on
+every change with `displayFilterPattern()`, shows a rejection as "Column N:
+reason" below the field and enables *Open in Regex Lab* only for a valid
+filter; the filter accepted is logged and offered again next time, its
+pattern opened with `openRegexLab()` ("Display filter").
+`parseDisplayFilter()` is a tokenizer and a recursive-descent parser
+(`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
+as a `FilterError` with its index into the filter. Unsupported syntax
+(strings, slices, sets, `contains`, `matches`, `xor`, `=`, `&`, `===`) is
+rejected by the tokenizer, unknown fields, wrong operators and bad values
+(an IPv6 address for `ip.addr`, a port above 65535, two fields) by the
+parser; an address is stored as the column shows it (`formatIpv4()`,
+`formatIpv6()`, an IPv4 network masked to its prefix).
+`filterPattern()` makes each test a pattern from the start of the line:
+`upToSourcePattern()` without its `^`, Source and Destination, Protocol
+and Length, and for a port or stream the start of Info as Follow stream
+reads it (MAC columns, tunnels, `[TCP …]` markers, then `a → b` followed
+by `[` for TCP or `Len=` for UDP, which tells the transport). A filter of
+one test is `^` and that pattern; otherwise each test is a lookahead,
+`&&` their sequence, `||` an alternation of them and `!` a negative
+lookahead, with a lookahead for a packet line first when a negation alone
+could select another line. `!=` is the field present and no value equal,
+as in Wireshark. Numbers compared with `<`, `>`, `<=`, `>=` and IPv4
+networks become exact ranges by `numberRangePattern()`, digit by digit,
+without leading zeros. The patterns need PCRE2's lookaheads, so they are
+for the Regex Lab and searches only (LogSquirl runs a pattern Vectorscan
+rejects with Qt's engine), never for `presets/`. `display_filter_test.cpp`
+checks a table of filters on hand-made lines, a table of rejections with
+their positions, every number range up to 30,000, and, for every corpus
+text in every `LineLayout`, a list of filters plus filters on the values
+the lines have against a reference evaluation of the `FilterExpression`
+over each line's columns, read with the Log Format's regex and Info word
+by word; it drives the dialog and the menu entry through the `FakeHost`.
+
 #### The plugin API header
 `include/logsquirl_plugin_api.h` is the host's
 `src/plugins/include/logsquirl_plugin_api.h`, byte for byte, from the
@@ -1264,6 +1659,10 @@ host, set `host_ref` to that release and refresh the header with
 LogSquirl-Plugin-CI's `scripts/sync-plugin.sh <this checkout>` (or copy the
 file from the LogSquirl release tag); never edit it by hand. A function the
 new header adds goes into `HostCapabilities` before anything calls it.
+`host_ref` may name a LogSquirl beta (`v26.11.0-beta1`) while the next host
+release is in beta; CI builds against it, but CI Release refuses to publish
+a plugin built against a beta, so switch to the final release before
+tagging.
 
 ## Adding Protocol Support
 

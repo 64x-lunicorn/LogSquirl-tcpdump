@@ -27,13 +27,19 @@
 
 #pragma once
 
+#include "export_dialog.h"
+#include "live_capture.h"
 #include "pcap_converter.h"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QLabel>
+#include <QPointer>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QThreadPool>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -53,6 +59,11 @@ class PacketPanel;
 QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
                      bool filterLinks = false );
 
+/// The progress of a live capture as the sidebar shows it, in place of a
+/// percentage (a stream has no size): packets, bytes and packets/s as of
+/// @p snapshot, and the time since the capture started, @p elapsedMs.
+QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs );
+
 /**
  * Sidebar widget displayed in the LogSquirl sidebar panel.
  *
@@ -62,6 +73,10 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *     has the Regex Lab and tells the selected lines: g_state.hostCapabilities
  *     when the widget is created
  *   - progress bar and Cancel button, while a capture is converted
+ *   - while a live capture runs (startLiveCapture()), its packets, bytes,
+ *     packets/s and elapsed time, and a Stop button
+ *   - "Save capture…", for a live capture's raw file, which lives in the
+ *     temporary directory and goes when LogSquirl quits
  *   - Summary label showing the stats of the capture in the tab in front,
  *     or that the tab holds none; the summary of the first capture after
  *     the plugin is loaded also links to the README section on installing
@@ -69,12 +84,21 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *     with the Regex Lab, a click on an endpoint or a protocol listed opens
  *     the Lab on its lines, as Wireshark's Apply as Filter
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
- *     packet of the line selected in the tab in front
+ *     packet of the line selected in the tab in front, and the
+ *     Conversations table of the capture in front
+ *
+ * Plugins > tcpdump > Export packets… writes the packets of the lines
+ * selected in the tab in front to a new capture file (packet_export.h), on
+ * a worker thread of its own, with a progress dialog and Cancel.
  *
  * The summaries of all captures converted while the plugin is loaded are
  * kept with their CaptureIndex, keyed by the text file written for each, so
  * that a capture's tab that comes to the front again shows its own, and the
  * Packet Panel its packets.
+ *
+ * A live capture's tab is opened, following its file, once the header and
+ * the first packet line are in it; its summary in the sidebar follows the
+ * snapshots while it runs, and is final when it ends.
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -121,10 +145,81 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
+    /// Plugins > tcpdump > Follow stream content: show the content of the
+    /// selected line's stream in the Packet Panel's Stream tab, or notify
+    /// the user why not; if the panel is not in view, a notification says
+    /// where it is.
+    void followStreamContent();
+
+    /// Plugins > tcpdump > Export packets…: the packets of the lines selected
+    /// in the tab in front, confirmed by the user, written to a new capture
+    /// file in the background.  While an export runs, only a notification
+    /// says so.
+    void exportSelectedPackets();
+
+    /// Asks the user to confirm the packets of @p request and where to write
+    /// them; false if the user does not want them exported.
+    using ExportConfirmer = std::function<bool( QWidget* parent, ExportRequest& request )>;
+
+    /// Ask with @p confirmer instead of the Export dialog and a file dialog
+    /// (for tests).
+    void setExportConfirmer( ExportConfirmer confirmer )
+    {
+        confirmExport_ = std::move( confirmer );
+    }
+
+    /// Whether an export is running.
+    bool isExporting() const
+    {
+        return exportWatcher_ != nullptr;
+    }
+
+    /// Stop a running export; nothing is left of it then.
+    void cancelExport();
+
     /// The Packet Panel.
     PacketPanel* packetPanel() const
     {
         return packetPanel_;
+    }
+
+    /// Replace the summary kept for the capture whose text is @p textPath
+    /// with @p summary, taken anew (a live capture's snapshot or its final
+    /// summary), and show it if its tab is in front: the summary and the
+    /// Conversations table.  Does nothing for a file the plugin did not write.
+    void updateSummary( const QString& textPath, CaptureSummary summary );
+
+    /**
+     * Capture live from the stream @p makeSource makes on the worker thread
+     * (LiveCapture), named @p name: its files are <name>.log and the raw
+     * <name>.pcap or .pcapng.  Its tab opens, following the file, once the
+     * first packet line is in it; a capture that ends without packets opens
+     * none and says so.  False, with a notification, while a capture is
+     * being read or captured.
+     */
+    bool startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource );
+
+    /// End the running live capture and keep what was captured.
+    void stopLiveCapture();
+
+    /// Whether a live capture runs.
+    bool isCapturing() const
+    {
+        return capturing_;
+    }
+
+    /// Ask where to save the raw capture of the tab in front, and copy it
+    /// there; what Save capture… does.
+    void saveCapture();
+
+    /// Asks where to save a capture: given the dialog's parent and the
+    /// suggested path, returns the chosen path, or an empty one.
+    using SaveChooser = std::function<QString( QWidget* parent, const QString& suggested )>;
+
+    /// Ask with @p chooser instead of a file dialog (for tests).
+    void setSaveChooser( SaveChooser chooser )
+    {
+        chooseSaveFile_ = std::move( chooser );
     }
 
     /// Create the temporary files below @p dir instead of the system's
@@ -155,6 +250,8 @@ private:
         /// Where its packets are in the capture file, for the Packet Panel.
         std::shared_ptr<const CaptureIndex> index;
         bool withFormatHint = false; ///< Links to the Log Format section.
+        QString rawPath;             ///< A live capture's raw file; empty for a file.
+        QString error;               ///< Why a live capture failed, keeping what it had.
     };
 
     /// Open a link of the summary: a filter in the Regex Lab, or a web page.
@@ -163,15 +260,36 @@ private:
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
+    /// Show the idle or the capturing controls.
+    void setCapturing( bool capturing );
+    /// The live capture's file is ready: keep its summary, open its tab.
+    void openLiveCapture( const QString& logPath, const QString& rawPath );
+    /// The live capture's summary so far.
+    void takeLiveSnapshot( const LiveSnapshot& snapshot );
+    /// Show the outcome of a live capture and return to idle.
+    void finishLiveCapture( const ConversionResult& result );
+    /// Show the live capture's packets, bytes, packets/s and elapsed time.
+    void showLiveProgress();
+    /// Whether a capture is being read or captured, said in a notification.
+    bool refuseWhileBusy();
+    /// Report the outcome of the export @p request asked for.
+    void finishExport( const ExportRequest& request, ExportResult result );
 
     QPushButton* openButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
     QProgressBar* progressBar_ = nullptr;
     QLabel* summaryLabel_ = nullptr;
     PacketPanel* packetPanel_ = nullptr;
+    QPushButton* stopButton_ = nullptr;
+    QPushButton* saveButton_ = nullptr;
+    QLabel* liveLabel_ = nullptr;
     QString lastDir_;              ///< Remembers the last browsed directory.
     bool formatHintShown_ = false; ///< The Log Format hint was shown once.
     FileChooser chooseFile_;       ///< Shows the file dialog.
+    SaveChooser chooseSaveFile_;   ///< Shows the save dialog.
+    /// The key in converted_ of the file in the tab in front, as fileKey()
+    /// spells it, whether or not it holds a capture.
+    QString frontKey_;
     /// The captures converted so far, by the text file written for each.
     std::map<QString, ConvertedCapture> converted_;
 
@@ -184,6 +302,24 @@ private:
     QFutureWatcher<ConversionResult>* watcher_ = nullptr;
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
+
+    bool capturing_ = false;
+    /// The live capture, running or the last one; kept until the next starts,
+    /// as its worker may still be ending the capture program.
+    std::unique_ptr<LiveCapture> live_;
+    QString liveKey_;           ///< The live capture's text file, once it is there.
+    LiveSnapshot liveSnapshot_; ///< The latest snapshot of the live capture.
+    QElapsedTimer liveClock_;   ///< Since the live capture started.
+    QTimer liveTicker_;         ///< Moves the elapsed time on.
+
+    ExportConfirmer confirmExport_; ///< Shows the Export dialog and a file dialog.
+    /// Cancels the running export.
+    std::shared_ptr<std::atomic_bool> cancelExport_;
+    /// The running export's outcome, delivered on this thread; null while none runs.
+    QFutureWatcher<ExportResult>* exportWatcher_ = nullptr;
+    QPointer<QProgressDialog> exportProgress_; ///< Its progress, and Cancel.
+    /// The export's worker thread, apart from the conversion's.
+    QThreadPool exportPool_;
 };
 
 } // namespace tcpdump

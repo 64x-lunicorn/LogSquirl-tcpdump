@@ -167,6 +167,7 @@ bool PcapngReader::readSectionHeader( BlockHeader& block )
     }
     interfaces_.clear();
     sectionState_.reset();
+    sectionHeader_ = { block.start, block.length };
     return finishBlock( block );
 }
 
@@ -228,6 +229,7 @@ bool PcapngReader::readInterface( BlockHeader& block )
         return false;
     }
 
+    iface.block = { block.start, block.length };
     interfaces_.push_back( iface );
     sectionState_.reset();
     if ( !precisionAnnounced_ ) {
@@ -330,9 +332,14 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
 
 /// Read blocks up to the next packet block, whose header is then pending.
 /// False at the end of the capture and for a block that cannot be read.
-bool PcapngReader::readBlocksUpToPacket()
+/// @p untilWaiting: once an interface is declared, stop (true, with no
+/// packet block pending) before a block that has not come yet.
+bool PcapngReader::readBlocksUpToPacket( bool untilWaiting )
 {
     for ( ;; ) {
+        if ( untilWaiting && !interfaces_.empty() && !ready() ) {
+            return true;
+        }
         BlockHeader block;
         if ( !readBlockHeader( block ) ) {
             return false;
@@ -373,7 +380,7 @@ bool PcapngReader::open()
     }
 
     open_ = true;
-    if ( !readBlocksUpToPacket() && !problem_.empty() ) {
+    if ( !readBlocksUpToPacket( true ) && !problem_.empty() ) {
         endBroken();
     }
     precisionAnnounced_ = true;
@@ -385,6 +392,7 @@ ReaderCheckpoint PcapngReader::checkpoint() const
     if ( !sectionState_ ) {
         auto state = std::make_shared<SectionState>();
         state->swap = swap_;
+        state->sectionHeader = sectionHeader_;
         state->interfaces = interfaces_;
         sectionState_ = std::move( state );
     }
@@ -413,9 +421,25 @@ bool PcapngReader::resume( const ReaderCheckpoint& checkpoint )
         }
     }
     swap_ = state->swap;
+    sectionHeader_ = state->sectionHeader;
     interfaces_ = state->interfaces;
     sectionState_ = std::static_pointer_cast<const SectionState>( checkpoint.state );
     return true;
+}
+
+CaptureHeaders PcapngReader::headers() const
+{
+    CaptureHeaders headers;
+    headers.format = CaptureFormat::Pcapng;
+    if ( sectionHeader_.length == 0 ) {
+        return headers; // not open
+    }
+    headers.records.reserve( interfaces_.size() + 1 );
+    headers.records.push_back( sectionHeader_ );
+    for ( const auto& iface : interfaces_ ) {
+        headers.records.push_back( iface.block );
+    }
+    return headers;
 }
 
 bool PcapngReader::next( PacketRecord& pkt )

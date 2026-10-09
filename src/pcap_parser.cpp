@@ -127,32 +127,6 @@ void dataLayer( PacketRecord& pkt, const uint8_t* data, size_t len, const char* 
     }
 }
 
-/// The shift count of the window scale option among the TCP options at
-/// @p options, @p len bytes of them; unset without one.  The options are
-/// walked as Wireshark does: a NOP takes one byte, the end of options or an
-/// option whose length is bogus or runs past them ends the walk.
-std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
-{
-    constexpr uint8_t kEndOfOptions = 0;
-    constexpr uint8_t kNop = 1;
-    constexpr uint8_t kWindowScale = 3;
-    size_t at = 0;
-    while ( at < len && options[ at ] != kEndOfOptions ) {
-        if ( options[ at ] == kNop ) {
-            ++at;
-            continue;
-        }
-        if ( at + 1 >= len || options[ at + 1 ] < 2 || at + options[ at + 1 ] > len ) {
-            break;
-        }
-        if ( options[ at ] == kWindowScale && options[ at + 1 ] == 3 ) {
-            return options[ at + 2 ];
-        }
-        at += options[ at + 1 ];
-    }
-    return std::nullopt;
-}
-
 // ── Tunnels (defined below the network layer they unwrap to) ─────────────
 
 void parseIpInIp( PacketRecord& pkt, const char* network, const uint8_t* data, size_t remaining );
@@ -237,7 +211,9 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
             return;
         }
 
-        pkt.tcpWindowShift = tcpWindowShiftOf( data + 20, std::min( dataOffset, remaining ) - 20 );
+        const auto options = parseTcpOptions( data + 20, std::min( dataOffset, remaining ) - 20 );
+        pkt.tcpWindowShift = options.windowShift;
+        pkt.tcpTimestamps = options.timestamps;
 
         // Len is the payload on the wire, as Wireshark shows it; only the
         // captured part of it can be looked at.
@@ -245,6 +221,11 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
         pkt.payloadLen = static_cast<uint32_t>( wireLen >= dataOffset ? wireLen - dataOffset : 0 );
         if ( pkt.payloadLen > 0 ) {
             oss << " Len=" << pkt.payloadLen;
+        }
+        // A SYN's options follow, as Wireshark appends them; on other
+        // segments the timestamps only, if asked for (showTcpTimestamps()).
+        if ( pkt.tcpFlags & 0x02 ) {
+            oss << options.info;
         }
 
         describePayloadOf( pkt, oss, Transport::Tcp, data + std::min( dataOffset, remaining ),
@@ -968,26 +949,32 @@ bool isPcapNgHeader( const uint8_t* p )
 
 // ── Format detection ─────────────────────────────────────────────────────
 
-size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
-                         std::string& error )
+CaptureStart findCaptureStart( const uint8_t* data, size_t size, size_t& offset,
+                               CaptureFormat& format, std::string& error )
 {
-    for ( size_t i = 0; i + 24 <= size && i <= kMaxPreamble; ++i ) {
+    error = "Not a valid pcap or pcapng file (no pcap magic found)";
+    for ( size_t i = 0; i <= kMaxPreamble; ++i ) {
+        if ( i + 24 > size ) {
+            offset = i + 24; // the header that may start here
+            return CaptureStart::NeedMore;
+        }
         uint32_t magic;
         std::memcpy( &magic, data + i, 4 );
         if ( ( i == 0 && isPcapMagic( magic ) ) || isPcapHeader( data + i ) ) {
             format = CaptureFormat::Pcap;
-            return i;
+            offset = i;
+            return CaptureStart::Found;
         }
         if ( ( i == 0 && magic == PcapNgMagic ) || isPcapNgHeader( data + i ) ) {
             format = CaptureFormat::Pcapng;
-            return i;
+            offset = i;
+            return CaptureStart::Found;
         }
         if ( !isPreambleText( data[ i ] ) ) {
             break; // binary data that is no capture header: no text preamble
         }
     }
-    error = "Not a valid pcap or pcapng file (no pcap magic found)";
-    return size;
+    return CaptureStart::None;
 }
 
 // ── Link-layer types ─────────────────────────────────────────────────────
@@ -1060,6 +1047,69 @@ std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_
            + " Win=" + std::to_string( window );
 }
 
+TcpOptions parseTcpOptions( const uint8_t* options, size_t len )
+{
+    constexpr uint8_t kEndOfOptions = 0;
+    constexpr uint8_t kNop = 1;
+    constexpr uint8_t kMss = 2;
+    constexpr uint8_t kWindowScale = 3;
+    constexpr uint8_t kSackPermitted = 4;
+    constexpr uint8_t kTimestamps = 8;
+    /// RFC 7323's largest shift count; Wireshark shows a larger one as 14.
+    constexpr uint8_t kMaxWindowShift = 14;
+
+    TcpOptions result;
+    size_t at = 0;
+    while ( at < len && options[ at ] != kEndOfOptions ) {
+        if ( options[ at ] == kNop ) {
+            ++at;
+            continue;
+        }
+        if ( at + 1 >= len || options[ at + 1 ] < 2 || options[ at + 1 ] > len - at ) {
+            break;
+        }
+        const uint8_t* option = options + at;
+        const uint8_t length = option[ 1 ];
+        if ( option[ 0 ] == kMss && length == 4 ) {
+            result.mss = readBE16( option + 2 );
+            result.info += " MSS=" + std::to_string( *result.mss );
+        }
+        else if ( option[ 0 ] == kWindowScale && length == 3 ) {
+            result.windowShift = option[ 2 ];
+            result.info
+                += " WS=" + std::to_string( 1u << std::min( option[ 2 ], kMaxWindowShift ) );
+        }
+        else if ( option[ 0 ] == kSackPermitted ) {
+            // Wireshark names it before it checks its length.
+            result.sackPermitted = true;
+            result.info += " SACK_PERM";
+        }
+        else if ( option[ 0 ] == kTimestamps && length == 10 ) {
+            result.timestamps = TcpTimestamps{ readBE32( option + 2 ), readBE32( option + 6 ) };
+            result.info += " TSval=" + std::to_string( result.timestamps->value )
+                           + " TSecr=" + std::to_string( result.timestamps->echoReply );
+        }
+        at += length;
+    }
+    return result;
+}
+
+size_t tcpFieldsEnd( const std::string& info )
+{
+    const auto at = info.find( kDescriptionSeparator );
+    return at == std::string::npos ? info.size() : at;
+}
+
+void showTcpTimestamps( PacketRecord& pkt )
+{
+    if ( pkt.transport != Transport::Tcp || !pkt.tcpTimestamps || ( pkt.tcpFlags & 0x02 ) ) {
+        return;
+    }
+    pkt.info.insert( tcpFieldsEnd( pkt.info ),
+                     " TSval=" + std::to_string( pkt.tcpTimestamps->value )
+                         + " TSecr=" + std::to_string( pkt.tcpTimestamps->echoReply ) );
+}
+
 // ── Byte sources ─────────────────────────────────────────────────────────
 
 bool ByteSource::skip( uint64_t n )
@@ -1122,6 +1172,11 @@ size_t HeadSource::read( uint8_t* dst, size_t n )
     std::memcpy( dst, head_.data(), got );
     head_.erase( head_.begin(), head_.begin() + static_cast<std::ptrdiff_t>( got ) );
     return got;
+}
+
+bool HeadSource::ready()
+{
+    return !head_.empty() || source_.ready();
 }
 
 bool HeadSource::skip( uint64_t n )
@@ -1224,6 +1279,15 @@ bool PcapReader::resume( const ReaderCheckpoint& checkpoint )
         return false;
     }
     return true;
+}
+
+CaptureHeaders PcapReader::headers() const
+{
+    CaptureHeaders headers;
+    if ( headerRead_ ) {
+        headers.records.push_back( { start_, 24 } );
+    }
+    return headers;
 }
 
 std::vector<uint32_t> PcapReader::linkTypes() const

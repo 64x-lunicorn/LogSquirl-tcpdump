@@ -48,11 +48,38 @@ void CaptureIndex::note( const CaptureReader& reader )
     }
 }
 
-void CaptureIndex::setCaptureFile( const QString& path )
+void CaptureIndex::noteStream( Transport transport, int id, uint32_t number )
+{
+    if ( id < 0 ) {
+        return;
+    }
+    auto& streams = transport == Transport::Tcp ? tcpStreams_ : udpStreams_;
+    const auto at = static_cast<size_t>( id );
+    if ( at >= streams.size() ) {
+        // Numbered in order: a new stream is the next one.
+        streams.resize( at + 1 );
+        streams[ at ].first = number;
+    }
+    streams[ at ].last = number;
+}
+
+std::optional<CaptureIndex::StreamExtent> CaptureIndex::streamExtent( Transport transport,
+                                                                      int id ) const
+{
+    const auto& streams = transport == Transport::Tcp ? tcpStreams_ : udpStreams_;
+    if ( id < 0 || static_cast<size_t>( id ) >= streams.size()
+         || streams[ static_cast<size_t>( id ) ].first == 0 ) {
+        return std::nullopt;
+    }
+    return streams[ static_cast<size_t>( id ) ];
+}
+
+void CaptureIndex::setCaptureFile( const QString& path, Growth growth )
 {
     const QFileInfo info( path );
     path_ = info.canonicalFilePath();
     size_ = info.size();
+    growth_ = growth;
     modified_ = info.lastModified();
 }
 
@@ -71,7 +98,10 @@ QString CaptureIndex::fileProblem() const
     if ( path_.isEmpty() || !info.exists() ) {
         return QStringLiteral( "The capture file %1 is gone." ).arg( path_ );
     }
-    if ( info.size() != size_ || info.lastModified() != modified_ ) {
+    const bool changed = growth_ == Growth::Growing
+                             ? info.size() < size_
+                             : info.size() != size_ || info.lastModified() != modified_;
+    if ( changed ) {
         return QStringLiteral( "The capture file %1 has changed since it was converted: "
                                "open it again to see its packets." )
             .arg( info.fileName() );
@@ -162,6 +192,7 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
     packet.byteSwapped = reader_->byteSwapped();
     packet.recordOffset = reader_->recordOffset();
     packet.recordLength = reader_->recordLength();
+    packet.headers = reader_->headers();
     return true;
 }
 

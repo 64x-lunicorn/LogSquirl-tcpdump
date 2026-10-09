@@ -33,6 +33,7 @@
 #include <deque>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -86,7 +87,14 @@ struct TcpDirection {
     static constexpr uint8_t kZeroWindowProbe = 0x10; ///< The last segment was a probe.
     /// The last segment that raised nextSeq carried data.
     static constexpr uint8_t kAdvancedWithData = 0x20;
-    /// The bits each segment sets afresh; kBaseSeqSet stays.
+    /// A SYN of this direction was seen: windowScale tells its option, or
+    /// that it had none.
+    static constexpr uint8_t kSynSeen = 0x40;
+    /// The direction's last segment was a SYN without ACK that awaits the
+    /// ACK which completes its handshake: lastTime is the SYN's.
+    static constexpr uint8_t kSynPending = 0x80;
+    /// The bits each segment sets afresh; kBaseSeqSet, kSynSeen and
+    /// kSynPending stay until the analysis changes them.
     static constexpr uint8_t kSegmentFlags
         = kWindowKnown | kWindowScaled | kKeepAlive | kZeroWindowProbe | kAdvancedWithData;
 };
@@ -137,6 +145,13 @@ struct Stream {
     unsigned direction = 0;
 };
 
+/// The two ends of a numbered stream, each an address and a port, indexed
+/// by Stream::direction: end d is the source of the packets of direction d.
+struct StreamEndpoints {
+    std::string address[ 2 ];
+    uint16_t port[ 2 ] = { 0, 0 };
+};
+
 /**
  * Follows the conversations of one capture, packet by packet, as the
  * Converter reads them.
@@ -153,8 +168,10 @@ struct Stream {
  */
 class StreamTracker {
 public:
-    /// Conversations numbered by default: some 150 MB of memory at most.  The
-    /// options may raise it tenfold (kMaxStreamCap, some 1.5 GB) or lower it.
+    /// Conversations numbered by default: some 150 MB of memory at most, and
+    /// some 70 MB more for their counts in the Conversations table
+    /// (conversations.h).  The options may raise it tenfold (kMaxStreamCap,
+    /// some 2.2 GB in all) or lower it.
     static constexpr size_t kMaxStreams = 1000000;
 
     explicit StreamTracker( size_t maxStreams = kMaxStreams )
@@ -164,6 +181,9 @@ public:
 
     /// The stream of @p pkt, numbering its conversation if it is a new one.
     Stream track( const PacketRecord& pkt );
+
+    /// The ends of stream @p id of @p transport, a stream track() numbered.
+    StreamEndpoints endpoints( Transport transport, int id ) const;
 
     /// Whether a conversation went unnumbered because of maxStreams.
     bool limitReached() const
@@ -176,6 +196,8 @@ private:
     struct Conversations {
         std::map<std::string, int> ids; ///< By their endpoints, in either order.
         std::deque<StreamState> states; ///< By stream id; a deque never moves them.
+        /// The key of each in ids, by stream id: a map never moves them.
+        std::vector<const std::string*> keys;
     };
 
     Conversations tcp_;

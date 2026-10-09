@@ -39,6 +39,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <map>
 #include <random>
 
 using namespace tcpdump;
@@ -123,6 +124,56 @@ SCENARIO( "The Converter keeps checkpoints of a capture's records", "[capture_in
             REQUIRE( result.index->interval() == CaptureIndex::kCheckpointInterval );
             REQUIRE( result.index->checkpoints().empty() );
             REQUIRE( result.index->packets() == result.summary.packets );
+        }
+    }
+}
+
+SCENARIO( "The Converter keeps where each stream begins and ends", "[capture_index]" )
+{
+    QTemporaryDir out;
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a converted capture of TCP and UDP streams" )
+    {
+        const auto capture = QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" );
+        const auto result = convertPcap( capture, out.path() );
+        REQUIRE( result.status == ConversionResult::Status::Converted );
+        const auto lines = packetLines( result.outputPath );
+        const auto parsed = parseFile( capture );
+        REQUIRE( parsed.packets.size() == static_cast<size_t>( lines.size() ) );
+
+        THEN( "each stream's extent runs from its first to its last packet line" )
+        {
+            // Per transport and stream: the first and last line numbering it.
+            std::map<std::pair<int, int>, std::pair<uint32_t, uint32_t>> expected;
+            for ( int i = 0; i < lines.size(); ++i ) {
+                const auto match = packetLineRegex().match( lines[ i ] );
+                REQUIRE( match.hasMatch() );
+                bool numbered = false;
+                const int stream = match.captured( "stream" ).toInt( &numbered );
+                const auto& transport = parsed.packets[ static_cast<size_t>( i ) ].transport;
+                if ( !numbered || !transport ) {
+                    continue;
+                }
+                const auto number = static_cast<uint32_t>( i + 1 );
+                auto [ it, added ] = expected.try_emplace(
+                    { static_cast<int>( *transport ), stream }, number, number );
+                it->second.second = number;
+            }
+            REQUIRE( expected.size() >= 3 );
+            for ( const auto& [ key, extent ] : expected ) {
+                const auto noted
+                    = result.index->streamExtent( static_cast<Transport>( key.first ), key.second );
+                REQUIRE( noted );
+                REQUIRE( noted->first == extent.first );
+                REQUIRE( noted->last == extent.second );
+            }
+        }
+
+        THEN( "a stream not numbered has no extent" )
+        {
+            REQUIRE_FALSE( result.index->streamExtent( Transport::Tcp, 100000 ) );
+            REQUIRE_FALSE( result.index->streamExtent( Transport::Udp, -2 ) );
         }
     }
 }
@@ -242,6 +293,39 @@ SCENARIO( "A packet past the capture or of a changed file is reported", "[captur
         {
             REQUIRE_FALSE( cursor.read( 5, packet ) );
             REQUIRE( cursor.error().contains( "has changed since it was converted" ) );
+        }
+    }
+
+    GIVEN( "a live capture's file, still growing, set Growing" )
+    {
+        auto growing = std::make_shared<CaptureIndex>( *result.index );
+        growing->setCaptureFile( capture, CaptureIndex::Growth::Growing );
+        CaptureCursor live( growing );
+
+        WHEN( "more is written behind its packets" )
+        {
+            QFile file( capture );
+            REQUIRE( file.open( QIODevice::Append ) );
+            file.write( QByteArray( 16, '\0' ) );
+            file.close();
+
+            THEN( "its packets are still read" )
+            {
+                REQUIRE( live.read( 5, packet ) );
+                REQUIRE( packet.record.number == 5 );
+            }
+        }
+
+        WHEN( "it became shorter" )
+        {
+            QFile file( capture );
+            REQUIRE( file.resize( file.size() - 1 ) );
+
+            THEN( "no packet is read from it" )
+            {
+                REQUIRE_FALSE( live.read( 5, packet ) );
+                REQUIRE( live.error().contains( "has changed since it was converted" ) );
+            }
         }
     }
 

@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Follow stream content.** The Packet Panel's new **Stream** tab shows
+  the payload of the selected packet's TCP or UDP conversation, as
+  Wireshark's *Follow TCP/UDP Stream* does: the client's bytes in red, the
+  server's in blue, as text (UTF-8 kept, control bytes escaped) or a hex
+  dump, both directions or one. TCP bytes come in sequence order, as the
+  TCP reassembly orders them (the ordering is now a module of its own, the
+  Byte Stream Orderer): out-of-order segments wait, retransmitted and
+  overlapping bytes show once, and bytes the capture lacks show as `[n
+  bytes missing]`; UDP streams show their datagrams. The stream is read
+  again from the capture file, in the background with a progress bar and
+  Cancel, from the stream's first packet to its last (the Converter now
+  notes them, 8 bytes per stream); 1 MB is shown at first and **Show more**
+  reads on, up to 16 MB, with a note. **Export…** writes the whole stream,
+  raw bytes per direction or the text as shown, without holding it. Opened
+  with the panel's **Follow stream content** button or **Plugins →
+  tcpdump → Follow stream content**; *Follow stream* still filters the
+  stream's lines in the Regex Lab. Needs LogSquirl ≥ 26.11.
+- **TCP details as Wireshark shows them.** A SYN and a SYN-ACK show their
+  options after the window, in the order they were sent: `[SYN] Seq=0
+  Win=64240 MSS=1460 SACK_PERM TSval=1000 TSecr=0 WS=128`; unknown options
+  are skipped by their length, and a malformed length ends the walk
+  without reading past the header. The new option *Show TCP timestamps
+  (TSval, TSecr) on every segment* (off by default) shows the timestamps
+  on the other segments too. The ACK that completes a handshake shows its
+  initial round-trip time, from the SYN, `[iRTT=0.012345]`, and the
+  summary the median of all handshakes captured whole (exact up to 4,096
+  handshakes, within 0.8 % beyond, in 32 KB of memory however long the
+  capture). A segment that
+  fills the window the receiver advertised last, scaled as negotiated, is
+  marked `[TCP Window Full]`, counted in the summary and coloured and
+  filtered with the other TCP problems. `tests/corpus/tcp-analysis.pcap`
+  has a second connection that shows them.
+- **Display filters.** **Plugins → tcpdump → Display filter…** (also in
+  the Command Palette) takes a Wireshark-style display filter, such as
+  `ip.addr == 10.0.0.0/8 && tcp.port == 443 || dns`, and opens the Regex
+  Lab with the pattern of the packet lines it selects, in every column
+  layout. Supported: `ip.addr`/`src`/`dst` (an address or an IPv4
+  network), `ipv6.addr`/`src`/`dst`, `tcp.port`/`srcport`/`dstport`, the
+  same of `udp`, `tcp.stream`, `udp.stream` and `frame.len`, compared with
+  `==`, `!=`, `<`, `>`, `<=`, `>=` (or alone), protocol names as in the
+  Protocol column, `tcp`, `udp`, `ip`, `ipv6`, combined with `!`, `&&`,
+  `||` and parentheses. `!=` means what it does in Wireshark. Anything
+  else is rejected below the field with its column and the reason, never
+  approximated. Each condition is a lookahead from the start of the line
+  and a number range an exact pattern, so the pattern selects exactly the
+  lines the filter means; it runs with Qt's regular expressions, as the
+  Regex Lab and LogSquirl's search run a pattern Vectorscan cannot read.
+  Needs LogSquirl ≥ 26.11 (#82)
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
   DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
   control packet on port 1883 (by its Remaining Length), a SOME/IP
@@ -46,6 +94,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Converter now keeps every 10,000 packets, in pcap and pcapng alike, so
   no packet is held in memory. A capture file changed since it was
   opened is reported, not misread. Needs LogSquirl ≥ 26.11.
+- **Conversations table.** Below the packet in the Packet Panel, a row per
+  TCP and UDP stream, as Wireshark's *Statistics → Conversations*: Stream,
+  protocol (the Stream Label), address and port of ends A and B, packets
+  and bytes (on the wire) in all and each way, start and duration; sortable
+  by every column. A click on a row, or *Filter on this conversation*,
+  opens the Regex Lab with the pattern of the stream's lines, as Follow
+  stream builds it. The counts are taken while converting, for the
+  numbered streams only, so the stream cap bounds them (some 70 MB more at
+  the default cap of 1,000,000 streams); the packets of streams past it are
+  one row, *Other streams*. The table is part of the Capture Summary and
+  shows a new summary snapshot as it comes, keeping its sort and selection.
+- **Export packets.** *Plugins → tcpdump → Export packets…* writes the
+  packets of the selected lines to a new capture file, e.g. the lines of a
+  Filtered View, to share a narrowed view or open it in Wireshark. Each
+  packet's record is copied byte for byte (timestamps, lengths, link type);
+  a pcap gives a pcap with the capture's header, a pcapng a pcapng with
+  the section headers and interfaces of the exported packets. A dialog
+  shows the packets as numbers and ranges to confirm or change, or to
+  paste packet lines into: LogSquirl tells at most the first 1,000
+  selected lines (or 1 MiB), and says so, which the dialog and the
+  notification after the export repeat. The capture is read once, front to
+  back, from the Packet Panel's checkpoints, on a worker thread with
+  progress and Cancel. Needs LogSquirl ≥ 26.11.
 - **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
   without checksum, key and sequence number, carrying IPv4, IPv6 or an
   Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by
@@ -84,6 +155,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery with its stage, `Active Discovery Offer (PADO)
   AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
   type` on every line, and PPPoE frames only their EtherType.
+- **Capture Source seam.** The Capture Reader reads a capture that is
+  still being written, from a pipe, a FIFO, a socket or a process's stdout
+  (`FdSource`, `DeviceSource`), as well as from a file: the format is
+  decided as soon as the header has come (a pcap's 24-byte global header,
+  a pcapng's section header and first interface), a wait for data ends
+  within 100 ms of Stop or Cancel, and the stream closing ends the capture,
+  a record cut off there reported as such. The live sources to come plug
+  into it; converting a file is unchanged.
+- **Process Source.** A capture program (tcpdump, dumpcap, adb, ssh, an
+  extcap, a custom command) is run with its stdout as the capture stream
+  and its stderr kept apart, handed on line by line and the last lines
+  kept, so that "permission denied" or "no such device" can be shown. It
+  is started from an argument list, never through a shell, unless a custom
+  command opts into one. A program that cannot be started, exits with a
+  code other than 0 or crashes ends the capture with a message naming it,
+  the code and its last stderr lines. Ending it ends its whole process
+  group: SIGTERM, then SIGKILL after 2 s; on Windows it runs in a job
+  object that is terminated. Shutting the plugin down, as LogSquirl quits
+  or the plugin is disabled, ends every capture program still running.
+- **Live conversion.** A capture read from a stream is converted while it
+  runs: its packet lines are flushed before every wait for more and at
+  least every 100 ms, and its tab opens, following the file, as soon as
+  the header and the first packet line are in it (so LogSquirl recognises
+  the Log Format and shows the table view); a capture that ends without
+  packets opens no tab and says so. The sidebar shows packets, bytes,
+  packets/s and the elapsed time instead of a percentage, and the Capture
+  Summary of the capture's tab follows snapshots, at most one a second.
+  **Stop** ends the capture within a second and finalises it: the last
+  lines flushed, the summary final, the same as converting the saved
+  capture gives. The bytes read are kept unchanged next to the text, as
+  `<name>.pcap` or `<name>.pcapng`, and **Save capture…** in the sidebar
+  copies them out of the temporary directory, to convert again or open in
+  Wireshark. A source that fails (a capture program that exits with an
+  error) ends with its message and keeps what was captured. A live
+  capture's lines go through the same TCP reassembly and analysis as a
+  file's, and the Packet Panel shows its packets, read from the raw
+  capture, while it runs (up to the latest snapshot) and after.
 - **MQTT described.** MQTT 3.1, 3.1.1 and 5.0 on TCP port 1883, and on
   any port behind a CONNECT, is described as Wireshark names its control
   packets, every one in a segment: `Connect Command (MQTT 3.1.1, Keep
@@ -197,6 +305,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wire: a PPPoE session frame inside is unwrapped to its IP packet, a
   discovery message named, where before they showed as `PPPoES` /
   `PPPoED` with `EtherType 0x8864` / `0x8863` (#67).
+- A live capture stopped before its capture header came (Stop pressed
+  early, or LogSquirl quitting while the capture program was still
+  starting) no longer fails with "not a capture": the sidebar says it was
+  stopped before anything was captured (`ConversionResult::Status::Stopped`).
+  The Process Source tests wait for the fake capture programs to signal
+  that they are ready instead of timing them, so they no longer fail on a
+  loaded machine (#94).
 
 ## [0.3.0] — 2026-10-09
 

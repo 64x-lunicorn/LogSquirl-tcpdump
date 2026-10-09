@@ -67,13 +67,107 @@ void CaptureStats::add( const PacketRecord& pkt )
     }
 }
 
-void CaptureStats::addTcpMarkers( const TcpMarkers& markers )
+void CaptureStats::addTcpAnalysis( const TcpAnalysis& analysis )
 {
     for ( size_t i = 0; i < kTcpMarkerKinds; ++i ) {
-        if ( markers.test( static_cast<TcpMarker>( i ) ) ) {
+        if ( analysis.markers.test( static_cast<TcpMarker>( i ) ) ) {
             ++tcpMarkers[ i ];
         }
     }
+    if ( analysis.initialRttNs ) {
+        initialRtts.add( *analysis.initialRttNs );
+    }
+}
+
+namespace {
+
+/// Bits of a value below its highest set one that pick its sub-bucket.
+constexpr int kSubBucketBits = 6;
+static_assert( RunningMedian::kSubBuckets == uint64_t{ 1 } << kSubBucketBits );
+/// Buckets of the histogram: kSubBuckets for the values below it, and as
+/// many for each power of two from it up to 2^63.
+constexpr size_t kBuckets = RunningMedian::kSubBuckets * ( 64 - kSubBucketBits + 1 );
+static_assert( kBuckets * sizeof( uint64_t ) <= RunningMedian::kMaxMemoryBytes );
+
+int highestBit( uint64_t value )
+{
+    int bit = 0;
+    while ( value >>= 1 ) {
+        ++bit;
+    }
+    return bit;
+}
+
+size_t bucketOf( uint64_t value )
+{
+    if ( value < RunningMedian::kSubBuckets ) {
+        return static_cast<size_t>( value );
+    }
+    const int shift = highestBit( value ) - kSubBucketBits;
+    return static_cast<size_t>( RunningMedian::kSubBuckets * static_cast<uint64_t>( shift + 1 )
+                                + ( ( value >> shift ) - RunningMedian::kSubBuckets ) );
+}
+
+/// The middle of bucket @p bucket: the value itself below kSubBuckets.
+uint64_t bucketMiddle( size_t bucket )
+{
+    if ( bucket < RunningMedian::kSubBuckets ) {
+        return bucket;
+    }
+    const int shift = static_cast<int>( bucket / RunningMedian::kSubBuckets ) - 1;
+    const uint64_t lower = ( RunningMedian::kSubBuckets + bucket % RunningMedian::kSubBuckets )
+                           << shift;
+    return lower + ( ( uint64_t{ 1 } << shift ) >> 1 );
+}
+
+} // namespace
+
+void RunningMedian::add( uint64_t value )
+{
+    ++count_;
+    if ( !exact() ) {
+        countInBucket( value );
+        return;
+    }
+    if ( exact_.size() < kExactValues ) {
+        exact_.reserve( kExactValues );
+        exact_.push_back( value );
+        return;
+    }
+    buckets_.assign( kBuckets, 0 );
+    for ( const uint64_t kept : exact_ ) {
+        countInBucket( kept );
+    }
+    std::vector<uint64_t>().swap( exact_ );
+    countInBucket( value );
+}
+
+void RunningMedian::countInBucket( uint64_t value )
+{
+    ++buckets_[ bucketOf( value ) ];
+}
+
+std::optional<uint64_t> RunningMedian::median() const
+{
+    if ( count_ == 0 ) {
+        return std::nullopt;
+    }
+    // The upper of the two middle ones of an even count, as an integer.
+    const uint64_t rank = count_ / 2;
+    if ( exact() ) {
+        auto values = exact_;
+        const auto middle = values.begin() + static_cast<std::ptrdiff_t>( rank );
+        std::nth_element( values.begin(), middle, values.end() );
+        return *middle;
+    }
+    uint64_t below = 0;
+    for ( size_t bucket = 0; bucket < buckets_.size(); ++bucket ) {
+        below += buckets_[ bucket ];
+        if ( below > rank ) {
+            return bucketMiddle( bucket );
+        }
+    }
+    return std::nullopt; // Not reached: the buckets hold count_ values.
 }
 
 void CaptureStats::addLinkType( uint32_t linkType )

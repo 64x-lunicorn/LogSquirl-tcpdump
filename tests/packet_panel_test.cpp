@@ -27,11 +27,17 @@
 
 #include "fakehost.h"
 #include "packet_panel.h"
+#include "pcapbuilder.h"
+#include "regex_lab.h"
 #include "sidebarwidget.h"
+#include "stream_content_view.h"
 
+#include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTreeWidget>
 
@@ -45,6 +51,7 @@ using tcpdump_test::waitFor;
 namespace {
 
 const QString kMixed = QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" );
+const QString kReassembly = QStringLiteral( TCPDUMP_CORPUS_DIR "/reassembly.pcap" );
 
 /// The lines of the text file at @p path, the header first.
 QStringList linesOf( const QString& path )
@@ -388,6 +395,263 @@ SCENARIO( "Packet details reads the selected line at once", "[packet_panel]" )
             loaded.sidebar->show();
             REQUIRE( loaded.panel->statusText().contains( "26.11" ) );
             REQUIRE_FALSE( loaded.panel->isPolling() );
+        }
+    }
+}
+
+namespace {
+
+/// The first packet line of @p lines in stream @p stream whose Info has @p text.
+QString lineOf( const QStringList& lines, int stream, const QString& text )
+{
+    for ( const auto& line : lines ) {
+        const auto match = tcpdump::packetLineRegex().match( line );
+        if ( match.hasMatch() && match.captured( "stream" ) == QString::number( stream )
+             && line.contains( text ) ) {
+            return line;
+        }
+    }
+    FAIL( "no such line" );
+    return {};
+}
+
+/// Follow the content of @p line's stream with the panel's button, and
+/// wait until it is read.
+tcpdump::StreamContentView* followContent( LoadedCapture& loaded, const QString& line )
+{
+    loaded.host.selectedLines = { line };
+    loaded.panel->refresh();
+    auto* button = loaded.panel->findChild<QPushButton*>( "followContentButton" );
+    REQUIRE( button->isEnabled() );
+    button->click();
+    auto* view = loaded.panel->streamView();
+    REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+    return view;
+}
+
+QByteArray fileBytes( const QString& path )
+{
+    QFile file( path );
+    REQUIRE( file.open( QIODevice::ReadOnly ) );
+    return file.readAll();
+}
+
+} // namespace
+
+SCENARIO( "Follow stream content shows a conversation's payload in the Packet Panel",
+          "[packet_panel][stream_content]" )
+{
+    GIVEN( "the synthetic reassembly capture in the tab in front" )
+    {
+        LoadedCapture loaded( kReassembly );
+        auto* panel = loaded.panel;
+        auto* tabs = panel->findChild<QTabWidget*>( "packetTabs" );
+
+        WHEN( "the content of the HTTP stream is followed" )
+        {
+            auto* view = followContent( loaded, lineOf( loaded.lines, 1, "200 OK" ) );
+
+            THEN( "the Stream tab shows both directions in order, as text" )
+            {
+                REQUIRE( tabs->currentWidget() == view );
+                REQUIRE( view->contentText()
+                         == "GET /index.html HTTP/1.1\nHost: example.com\nUser-Agent: "
+                            "corpus/1.0\nAccept: */*\n\nHTTP/1.1 200 OK\nContent-Type: "
+                            "text/html\nContent-Length: 31\n\n<html><body>Hello</body></html>" );
+                REQUIRE( view->statusText().startsWith(
+                    QString::fromUtf8( "TCP stream 1: 192.0.2.10:50002 \xe2\x86\x92 "
+                                       "198.51.100.7:80 84 bytes" ) ) );
+                REQUIRE_FALSE( view->hasMore() );
+                REQUIRE( view->noteText().isEmpty() );
+            }
+
+            AND_WHEN( "one direction is chosen" )
+            {
+                view->findChild<QComboBox*>( "streamDirection" )->setCurrentIndex( 2 );
+
+                THEN( "only the server's bytes are shown" )
+                {
+                    REQUIRE( view->contentText().startsWith( "HTTP/1.1 200 OK\n" ) );
+                    REQUIRE_FALSE( view->contentText().contains( "GET" ) );
+                }
+            }
+
+            AND_WHEN( "the hex dump is chosen" )
+            {
+                view->findChild<QComboBox*>( "streamFormat" )->setCurrentIndex( 1 );
+
+                THEN( "the bytes are shown in hex, the server's indented" )
+                {
+                    const auto lines = view->contentText().split( '\n' );
+                    REQUIRE( lines[ 0 ].startsWith( "00000000  47 45 54 20 2f 69 6e 64" ) );
+                    REQUIRE( view->contentText().contains( "\n    00000000  48 54 54 50" ) );
+                }
+            }
+        }
+
+        WHEN( "the stream of out-of-order, retransmitted and overlapping segments is followed" )
+        {
+            auto* view = followContent( loaded, lineOf( loaded.lines, 3, "TLS" ) );
+            QTemporaryDir out;
+            REQUIRE( out.isValid() );
+
+            THEN( "its client's raw bytes export as the script sent them, each once" )
+            {
+                view->setDirections( tcpdump::kClientToServer );
+                const auto path = out.filePath( "client.bin" );
+                view->exportTo( path, true );
+                REQUIRE( view->isBusy() );
+                REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+                QByteArray expected( "\x17\x03\x03\x02\x00", 5 );
+                for ( int i = 0; i < 512; ++i ) {
+                    expected += static_cast<char>( i % 256 );
+                }
+                expected += QByteArray( "\x17\x03\x03\x01\x2c", 5 ) + QByteArray( 300, '\0' );
+                REQUIRE( fileBytes( path ) == expected );
+                REQUIRE( view->statusText().contains( "exported 822 bytes to client.bin" ) );
+            }
+
+            THEN( "the text as shown exports whole" )
+            {
+                const auto path = out.filePath( "shown.txt" );
+                view->exportTo( path, false );
+                REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+                REQUIRE( QString::fromUtf8( fileBytes( path ) ) == view->contentText() );
+            }
+        }
+
+        WHEN( "the stream whose segment the capture lost is followed" )
+        {
+            auto* view = followContent( loaded, lineOf( loaded.lines, 4, "TLS" ) );
+
+            THEN( "the gap shows where the bytes are missing, the record after it" )
+            {
+                REQUIRE( view->contentText().contains( "\n[272 bytes missing]\n" ) );
+                view->setFormat( tcpdump::StreamFormat::Hex );
+                REQUIRE( view->contentText().contains(
+                    "[272 bytes missing]\n0000023c  15 03 03 00 02 01 00 " ) );
+                REQUIRE( view->contentText().endsWith( "  .......\n" ) );
+            }
+        }
+
+        WHEN( "a tab without a capture comes to the front" )
+        {
+            auto* view = followContent( loaded, lineOf( loaded.lines, 1, "200 OK" ) );
+            loaded.host.activateFile( "/some/other.log" );
+
+            THEN( "the stream is no longer shown" )
+            {
+                REQUIRE( view->contentText().isEmpty() );
+                REQUIRE( view->statusText() == "No capture in this tab." );
+            }
+        }
+    }
+
+    GIVEN( "a capture with a UDP stream" )
+    {
+        LoadedCapture loaded( kMixed );
+
+        THEN( "its datagrams are shown" )
+        {
+            auto* view = followContent( loaded, loaded.lines[ 5 ] );
+            REQUIRE( view->statusText().startsWith( "UDP stream 0: 192.168.1.1:40000" ) );
+            REQUIRE( view->contentText().contains( "example" ) );
+        }
+    }
+}
+
+SCENARIO( "A long stream is shown in part, read off the UI thread with Cancel",
+          "[packet_panel][stream_content]" )
+{
+    using namespace tcpdump_test;
+    using tcpdump::EthertypeIpv4;
+    using tcpdump::IpProtoTcp;
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+    // 1,500 segments of 1,000 bytes: 1.5 MB from the client.
+    std::vector<Bytes> packets;
+    for ( uint32_t i = 0; i < 1500; ++i ) {
+        packets.push_back(
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 80, Bytes( 1000, 'a' + i % 26 ), 5,
+                                                       0x18, 1 + i * 1000, 1 ) ) ) );
+    }
+    const auto bytes = pcapOf( packets );
+    const auto capture = dir.filePath( "long.pcap" );
+    QFile file( capture );
+    REQUIRE( file.open( QIODevice::WriteOnly ) );
+    file.write( reinterpret_cast<const char*>( bytes.data() ),
+                static_cast<qint64>( bytes.size() ) );
+    file.close();
+
+    GIVEN( "the long stream followed" )
+    {
+        LoadedCapture loaded( capture );
+        auto* view = followContent( loaded, loaded.lines[ 1 ] );
+
+        THEN( "the first part is shown, with a note, and Show more reads the rest" )
+        {
+            REQUIRE( view->hasMore() );
+            REQUIRE( view->noteText().startsWith( "Showing the first 1.0 MB of the stream" ) );
+            const auto shown = view->contentText().size();
+            REQUIRE( shown >= 1024 * 1024 );
+            REQUIRE( shown < 1024 * 1024 + 1000 );
+            auto* more = view->findChild<QPushButton*>( "streamMore" );
+            REQUIRE( more->isEnabled() );
+            more->click();
+            REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+            REQUIRE_FALSE( view->hasMore() );
+            REQUIRE( view->contentText().size() == 1500 * 1000 );
+            REQUIRE( view->noteText().isEmpty() );
+        }
+
+        THEN( "a read cancelled at once can go on later" )
+        {
+            loaded.panel->followStreamContent();
+            REQUIRE( view->isBusy() );
+            REQUIRE( view->findChild<QPushButton*>( "streamCancel" )->isVisibleTo( view ) );
+            view->cancel();
+            REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+            REQUIRE( view->statusText().contains( "Cancelled" ) );
+            REQUIRE( view->hasMore() );
+        }
+    }
+}
+
+SCENARIO( "Follow stream content from the menu", "[packet_panel][stream_content]" )
+{
+    GIVEN( "a capture whose sidebar is not in view" )
+    {
+        LoadedCapture loaded( kReassembly );
+        auto& host = loaded.host;
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(),
+                            []( const auto& a ) { return a.label == "Follow stream content"; } );
+        REQUIRE( entry != host.menuActions.end() );
+
+        WHEN( "a packet line is selected and the entry chosen" )
+        {
+            host.selectedLines = { loaded.lines[ 9 ] };
+            entry->trigger();
+
+            THEN( "its stream is followed in the panel, and a notification says where" )
+            {
+                REQUIRE( loaded.panel->streamView()->isBusy() );
+                REQUIRE( host.notifications.size() == 1 );
+                REQUIRE( host.notifications.first().contains( "sidebar tab" ) );
+                REQUIRE( waitFor( [ &loaded ] { return !loaded.panel->streamView()->isBusy(); } ) );
+            }
+        }
+
+        WHEN( "nothing is selected and the entry chosen" )
+        {
+            entry->trigger();
+
+            THEN( "the notification says why no stream is followed" )
+            {
+                REQUIRE( host.notifications
+                         == QStringList{ "Follow stream content: Select a packet line to see "
+                                         "its packet." } );
+            }
         }
     }
 }

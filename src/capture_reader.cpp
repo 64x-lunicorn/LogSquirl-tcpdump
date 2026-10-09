@@ -71,21 +71,31 @@ public:
 
 std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source )
 {
-    // Look at what may hold a text preamble and the first header.
-    const auto& head = source.peek( kMaxPreamble + 24 );
-    if ( head.size() < 24 ) {
-        return std::make_unique<NoCaptureReader>( source, kTooSmall );
+    // Look at no more than the next step of the decision needs: on a stream,
+    // bytes beyond the header may take long to come.
+    size_t needed = 24;
+    for ( ;; ) {
+        const auto& head = source.peek( needed );
+        size_t offset = 0;
+        CaptureFormat format = CaptureFormat::Pcap;
+        std::string error;
+        switch ( findCaptureStart( head.data(), head.size(), offset, format, error ) ) {
+        case CaptureStart::Found:
+            if ( format == CaptureFormat::Pcapng ) {
+                return std::make_unique<PcapngReader>( source, offset );
+            }
+            return std::make_unique<PcapReader>( source, offset );
+        case CaptureStart::None:
+            return std::make_unique<NoCaptureReader>( source, error );
+        case CaptureStart::NeedMore:
+            if ( head.size() < needed ) { // the source ended before deciding it
+                return std::make_unique<NoCaptureReader>( source,
+                                                          head.size() < 24 ? kTooSmall : error );
+            }
+            needed = offset;
+            break;
+        }
     }
-    CaptureFormat format = CaptureFormat::Pcap;
-    std::string error;
-    const auto start = findCaptureStart( head.data(), head.size(), format, error );
-    if ( start == head.size() ) {
-        return std::make_unique<NoCaptureReader>( source, error );
-    }
-    if ( format == CaptureFormat::Pcapng ) {
-        return std::make_unique<PcapngReader>( source, start );
-    }
-    return std::make_unique<PcapReader>( source, start );
 }
 
 // ── Whole-buffer convenience ─────────────────────────────────────────────

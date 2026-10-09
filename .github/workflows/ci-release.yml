@@ -30,7 +30,7 @@ permissions: {}
 jobs:
   release:
     name: Release
-    uses: 64x-lunicorn/LogSquirl-Plugin-CI/.github/workflows/plugin-release.yml@fab0686c6966dcd8a4146dd90addd34ad4b9f34c # v1.1.0
+    uses: 64x-lunicorn/LogSquirl-Plugin-CI/.github/workflows/plugin-release.yml@2570b74ec46f8be33720381c98aa568f4b962e04 # v1.2.0
     permissions:
       contents: write # create the release
       actions: read # the CI Build run and its artifacts

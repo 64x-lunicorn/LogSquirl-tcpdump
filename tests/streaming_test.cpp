@@ -203,6 +203,74 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
     }
 }
 
+SCENARIO( "The median initial round-trip time is kept in bounded memory", "[capture_stats]" )
+{
+    GIVEN( "fewer handshakes than are kept exactly" )
+    {
+        RunningMedian median;
+        for ( const uint64_t ns : { 30u, 10u, 20u, 40u } ) {
+            median.add( ns );
+        }
+
+        THEN( "the median is exact, the upper middle one of an even count" )
+        {
+            REQUIRE( median.exact() );
+            REQUIRE( median.count() == 4 );
+            REQUIRE( median.median() == 30u );
+        }
+    }
+
+    GIVEN( "no value" )
+    {
+        THEN( "there is no median" )
+        {
+            REQUIRE_FALSE( RunningMedian{}.median() );
+        }
+    }
+
+    GIVEN( "far more handshakes than are kept exactly, as a long or live capture has" )
+    {
+        RunningMedian median;
+        // 1 to 200000 microseconds, every value once, in a scrambled order.
+        constexpr uint64_t kCount = 200000;
+        for ( uint64_t i = 0; i < kCount; ++i ) {
+            median.add( ( ( i * 7919 ) % kCount + 1 ) * 1000 );
+        }
+
+        THEN( "the values are counted in a histogram of fixed size" )
+        {
+            REQUIRE_FALSE( median.exact() );
+            REQUIRE( median.count() == kCount );
+            REQUIRE( median.memoryBytes() <= RunningMedian::kMaxMemoryBytes );
+        }
+
+        THEN( "the median lies within the histogram's precision of the exact one" )
+        {
+            const double exact = 100001.0 * 1000;
+            REQUIRE( static_cast<double>( *median.median() )
+                     == Approx( exact ).epsilon( RunningMedian::kRelativePrecision ) );
+        }
+    }
+
+    GIVEN( "values beyond the exact buffer of zero and of the largest round-trip times" )
+    {
+        RunningMedian median;
+        for ( size_t i = 0; i <= RunningMedian::kExactValues; ++i ) {
+            median.add( i % 2 == 0 ? 0 : UINT64_MAX );
+        }
+
+        THEN( "both ends of the range are counted" )
+        {
+            REQUIRE( median.median() == 0u );
+            median.add( UINT64_MAX );
+            median.add( UINT64_MAX );
+            REQUIRE( static_cast<double>( *median.median() )
+                     == Approx( static_cast<double>( UINT64_MAX ) )
+                            .epsilon( RunningMedian::kRelativePrecision ) );
+        }
+    }
+}
+
 SCENARIO( "Packets captured shorter than on the wire are counted as cut", "[capture_stats]" )
 {
     CaptureStats stats;
@@ -287,6 +355,68 @@ SCENARIO( "The summary counts the TCP analysis markers per kind", "[converter]" 
                     result.summary.tcpMarkers
                     == std::vector<Count>{ { "TCP Retransmission", 2 }, { "TCP Dup ACK", 1 } } );
             }
+        }
+    }
+}
+
+SCENARIO( "The summary gives the median initial round-trip time of the handshakes", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    // A handshake from client port @p port whose ACK comes @p usec after its SYN.
+    auto handshake = []( uint16_t port, uint32_t second, uint32_t usec ) {
+        Ipv4Options back;
+        std::swap( back.src, back.dst );
+        return std::vector<Record>{
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( port, 80, {}, 5, 0x02, 100, 0 ) ) ),
+              second, 0 },
+            { eth( EthertypeIpv4,
+                   ipv4( IpProtoTcp, tcp( 80, port, {}, 5, 0x12, 900, 101 ), back ) ),
+              second, usec / 2 },
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( port, 80, {}, 5, 0x10, 101, 901 ) ) ),
+              second, usec },
+        };
+    };
+
+    GIVEN( "three handshakes of 10, 30 and 20 ms, and a stream captured mid-way" )
+    {
+        std::vector<Record> records;
+        for ( const auto& part : { handshake( 40000, 1000, 10000 ), handshake( 40001, 1001, 30000 ),
+                                   handshake( 40002, 1002, 20000 ) } ) {
+            records.insert( records.end(), part.begin(), part.end() );
+        }
+        records.push_back(
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40003, 80, {}, 5, 0x10, 1, 1 ) ) ), 1003,
+              0 } );
+        const auto input = writeFile( dir, "handshakes.pcap", pcapFile( records ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "the summary counts the three, with their median" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.handshakes == 3 );
+                REQUIRE( result.summary.medianInitialRttNs == 20000000u );
+            }
+        }
+    }
+
+    GIVEN( "no handshake" )
+    {
+        const auto input = writeFile(
+            dir, "midway.pcap",
+            pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40003, 80, {}, 5, 0x10 ) ) ) } ) );
+
+        THEN( "the summary has no median" )
+        {
+            const auto result = convertPcap( input, out.path() );
+            REQUIRE( result.summary.handshakes == 0 );
+            REQUIRE_FALSE( result.summary.medianInitialRttNs );
         }
     }
 }

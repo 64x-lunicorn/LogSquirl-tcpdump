@@ -1,0 +1,511 @@
+/*
+ * Copyright (C) 2026 LogSquirl Contributors
+ *
+ * This file is part of logsquirl-tcpdump.
+ *
+ * logsquirl-tcpdump is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * logsquirl-tcpdump is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with logsquirl-tcpdump.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file capture_source_test.cpp
+ * @brief BDD tests for reading a capture from a stream as it is written.
+ *
+ * A synthetic capture is fed through a pipe by a writer thread, in chunks
+ * and with pauses, as tcpdump writes one; what is read must be what the
+ * same capture gives from a file.
+ */
+
+#include <catch2/catch.hpp>
+
+#include <QtGlobal>
+
+#ifdef Q_OS_UNIX
+
+#include "capture_reader.h"
+#include "capture_source.h"
+#include "pcap_converter.h"
+#include "pcapbuilder.h"
+#include "stream_capture.h"
+
+#include <QDir>
+#include <QFile>
+#include <QProcess>
+#include <QTemporaryDir>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+#include <unistd.h>
+
+using namespace tcpdump;
+using namespace tcpdump_test;
+using Clock = std::chrono::steady_clock;
+using std::chrono::milliseconds;
+
+namespace {
+
+/// Writes @p capture into @p pipe in chunks of @p chunk bytes (0: the
+/// records as they are, @p cuts), pausing now and then, then closes it.
+std::thread writeInChunks( Pipe& pipe, Bytes capture, size_t chunk, std::vector<size_t> cuts = {} )
+{
+    return std::thread( [ &pipe, capture = std::move( capture ), chunk, cuts ] {
+        size_t at = 0;
+        size_t written = 0;
+        while ( at < capture.size() ) {
+            size_t end = capture.size();
+            if ( chunk > 0 ) {
+                end = std::min( at + chunk, capture.size() );
+            }
+            else {
+                for ( const auto cut : cuts ) {
+                    if ( cut > at ) {
+                        end = std::min( end, cut );
+                        break;
+                    }
+                }
+            }
+            pipe.write( Bytes( capture.begin() + static_cast<std::ptrdiff_t>( at ),
+                               capture.begin() + static_cast<std::ptrdiff_t>( end ) ) );
+            at = end;
+            if ( ++written % 40 == 0 || chunk == 0 ) {
+                std::this_thread::sleep_for( milliseconds( 5 ) );
+            }
+        }
+        pipe.closeWrite();
+    } );
+}
+
+/// Sets @p stop after @p after unless @p done is set first: a test that
+/// would hang ends, and shows that it was stopped.
+std::thread watchdog( std::atomic_bool& stop, const std::atomic_bool& done,
+                      milliseconds after = milliseconds( 3000 ) )
+{
+    return std::thread( [ &stop, &done, after ] {
+        const auto until = Clock::now() + after;
+        while ( !done && Clock::now() < until ) {
+            std::this_thread::sleep_for( milliseconds( 5 ) );
+        }
+        if ( !done ) {
+            stop = true;
+        }
+    } );
+}
+
+Bytes somePcapng()
+{
+    Pcapng le;
+    Bytes file = le.shb() + le.idb( DltEthernet, 9 );
+    uint64_t ts = 1000000000000;
+    for ( const auto& p : somePackets() ) {
+        file = file + le.epb( 0, ts, p );
+        ts += 1500000;
+    }
+    return file;
+}
+
+/// Where each record of a pcap of @p packets starts, and its end.
+std::vector<size_t> recordCuts( const std::vector<Bytes>& packets )
+{
+    std::vector<size_t> cuts{ 24 };
+    for ( const auto& p : packets ) {
+        cuts.push_back( cuts.back() + 16 + p.size() );
+    }
+    return cuts;
+}
+
+} // namespace
+
+SCENARIO( "A capture read from a pipe gives the lines it gives from a file", "[capture_source]" )
+{
+    const auto packets = somePackets();
+    const std::pair<const char*, Bytes> captures[] = {
+        { "pcap", pcapOf( packets ) },
+        { "pcapng", somePcapng() },
+    };
+    for ( const auto& [ format, capture ] : captures ) {
+        for ( const size_t chunk : { size_t( 1 ), size_t( 7 ), size_t( 0 ) } ) {
+            GIVEN( std::string( "a " ) + format + " written into a pipe in chunks of "
+                   + ( chunk ? std::to_string( chunk ) + " bytes" : "whole records" )
+                   + ", with pauses" )
+            {
+                const auto expected = linesFromFile( capture );
+                Pipe pipe;
+                auto writer
+                    = writeInChunks( pipe, capture, chunk,
+                                     std::string( format ) == "pcap" ? recordCuts( packets )
+                                                                     : std::vector<size_t>{} );
+                QTemporaryDir out;
+                FdSource source( pipe.readEnd() );
+                const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+                writer.join();
+
+                THEN( "it is converted to the same lines, once the writer closes it" )
+                {
+                    REQUIRE( result.status == ConversionResult::Status::Converted );
+                    REQUIRE( QFileInfo( result.outputPath ).fileName() == "live.log" );
+                    REQUIRE( readLines( result.outputPath ) == expected );
+                    REQUIRE( result.summary.packets == packets.size() );
+                    REQUIRE_FALSE( result.summary.endsInsideRecord );
+                }
+            }
+        }
+    }
+}
+
+SCENARIO( "A stream's format is decided by its header, without waiting for more",
+          "[capture_source]" )
+{
+    const auto packets = somePackets();
+    const auto pcap = pcapOf( packets );
+    Pcapng le;
+    const auto pcapngHead = le.shb() + le.idb( DltEthernet, 9 );
+    const auto preamble = text( "tcpdump: listening on eth0, link-type EN10MB\n" );
+    const std::pair<const char*, Bytes> heads[] = {
+        { "a pcap's global header", Bytes( pcap.begin(), pcap.begin() + 24 ) },
+        { "a pcapng's section header and interface", pcapngHead },
+        { "a pcap's global header behind tcpdump's stderr",
+          preamble + Bytes( pcap.begin(), pcap.begin() + 24 ) },
+    };
+    for ( const auto& [ what, head ] : heads ) {
+        GIVEN( std::string( "a writer that has sent " ) + what + " and pauses" )
+        {
+            Pipe pipe;
+            pipe.write( head );
+            std::atomic_bool stop{ false };
+            std::atomic_bool done{ false };
+            auto guard = watchdog( stop, done );
+            FdSource source( pipe.readEnd(), &stop );
+            HeadSource headSource( source );
+
+            WHEN( "the reader is chosen and opened" )
+            {
+                const auto reader = makeCaptureReader( headSource );
+                const bool opened = reader->open();
+                done = true;
+                guard.join();
+
+                THEN( "it opens on the header alone, and reads the packets once they come" )
+                {
+                    REQUIRE_FALSE( stop );
+                    REQUIRE( opened );
+                    REQUIRE( reader->linkTypes() == std::vector<uint32_t>{ DltEthernet } );
+
+                    if ( head == pcapngHead ) {
+                        Bytes rest;
+                        uint64_t ts = 1000000000000;
+                        for ( const auto& p : packets ) {
+                            rest = rest + le.epb( 0, ts++, p );
+                        }
+                        pipe.write( rest );
+                        REQUIRE( reader->precision() == TimePrecision::Nanoseconds );
+                    }
+                    else {
+                        pipe.write( Bytes( pcap.begin() + 24, pcap.end() ) );
+                    }
+                    pipe.closeWrite();
+                    PacketRecord pkt;
+                    size_t count = 0;
+                    while ( reader->next( pkt ) ) {
+                        ++count;
+                    }
+                    REQUIRE( count == packets.size() );
+                    REQUIRE_FALSE( reader->truncated() );
+                }
+            }
+            done = true;
+            if ( guard.joinable() ) {
+                guard.join();
+            }
+        }
+    }
+
+    GIVEN( "a writer that has sent bytes that are no capture, and pauses" )
+    {
+        Pipe pipe;
+        pipe.write( Bytes( 30, 0xFF ) );
+        std::atomic_bool stop{ false };
+        std::atomic_bool done{ false };
+        auto guard = watchdog( stop, done );
+        FdSource source( pipe.readEnd(), &stop );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path(), &stop );
+        done = true;
+        guard.join();
+
+        THEN( "the conversion fails at once: not a capture" )
+        {
+            REQUIRE_FALSE( stop );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.contains( "Not a valid pcap or pcapng file" ) );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "Stopping a stream that sends nothing ends the wait within 100 ms", "[capture_source]" )
+{
+    GIVEN( "a pipe that has sent a pcap header and then nothing" )
+    {
+        Pipe pipe;
+        pipe.write( pcapOf( {} ) );
+        std::atomic_bool cancel{ false };
+        Clock::time_point cancelledAt;
+        std::thread canceller( [ &cancel, &cancelledAt ] {
+            std::this_thread::sleep_for( milliseconds( 300 ) );
+            cancelledAt = Clock::now();
+            cancel = true;
+        } );
+
+        WHEN( "the conversion waiting for the first packet is cancelled" )
+        {
+            FdSource source( pipe.readEnd(), &cancel );
+            QTemporaryDir out;
+            const auto result
+                = convertStream( source, QStringLiteral( "live" ), out.path(), &cancel );
+            const auto returnedAt = Clock::now();
+            canceller.join();
+
+            THEN( "it returns within 100 ms of the request, Cancelled, leaving nothing" )
+            {
+                REQUIRE( returnedAt - cancelledAt < milliseconds( 100 ) );
+                REQUIRE( source.stopped() );
+                REQUIRE( result.status == ConversionResult::Status::Cancelled );
+                REQUIRE( QDir( out.path() ).isEmpty() );
+            }
+        }
+        if ( canceller.joinable() ) {
+            canceller.join();
+        }
+    }
+
+    GIVEN( "a pipe that has sent nothing at all" )
+    {
+        Pipe pipe;
+        std::atomic_bool stop{ false };
+        Clock::time_point stoppedAt;
+        std::thread stopper( [ &stop, &stoppedAt ] {
+            std::this_thread::sleep_for( milliseconds( 200 ) );
+            stoppedAt = Clock::now();
+            stop = true;
+        } );
+        FdSource source( pipe.readEnd(), &stop );
+        uint8_t byte = 0;
+        const auto got = source.read( &byte, 1 );
+        const auto returnedAt = Clock::now();
+        stopper.join();
+
+        THEN( "a read returns nothing within 100 ms of the stop, and stays ended" )
+        {
+            REQUIRE( got == 0 );
+            REQUIRE( returnedAt - stoppedAt < milliseconds( 100 ) );
+            REQUIRE( source.stopped() );
+            REQUIRE( source.error().empty() );
+            pipe.write( text( "late" ) );
+            REQUIRE( source.read( &byte, 1 ) == 0 );
+        }
+    }
+}
+
+SCENARIO( "A stream stopped before its header came was stopped, not failed", "[capture_source]" )
+{
+    GIVEN( "a pipe that has sent nothing, and Stop already pressed" )
+    {
+        Pipe pipe;
+        std::atomic_bool stop{ true };
+        FdSource source( pipe.readEnd(), &stop );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+
+        THEN( "the conversion ends Stopped, without an error, leaving nothing" )
+        {
+            REQUIRE( source.stopped() );
+            REQUIRE( result.status == ConversionResult::Status::Stopped );
+            REQUIRE( result.error.isEmpty() );
+            REQUIRE( result.outputPath.isEmpty() );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+
+    GIVEN( "a pipe that has sent part of a pcap header, then Stop" )
+    {
+        Pipe pipe;
+        const auto header = pcapOf( {} );
+        pipe.write( Bytes( header.begin(), header.begin() + 10 ) );
+        std::atomic_bool stop{ false };
+        // Whether the bytes are read before the stop or not, the header is
+        // incomplete: the outcome is the same.
+        auto stopper = std::thread( [ &stop ] {
+            std::this_thread::sleep_for( milliseconds( 200 ) );
+            stop = true;
+        } );
+        FdSource source( pipe.readEnd(), &stop );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+        stopper.join();
+
+        THEN( "the conversion ends Stopped, leaving nothing" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Stopped );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+
+    GIVEN( "Stop and Cancel both pressed before the header came" )
+    {
+        Pipe pipe;
+        std::atomic_bool cancel{ true };
+        FdSource source( pipe.readEnd(), &cancel );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path(), &cancel );
+
+        THEN( "Cancel wins" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Cancelled );
+        }
+    }
+
+    GIVEN( "a pipe closed by its writer before any header" )
+    {
+        Pipe pipe;
+        pipe.closeWrite();
+        FdSource source( pipe.readEnd() );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+
+        THEN( "that is no capture: the conversion fails" )
+        {
+            REQUIRE_FALSE( source.stopped() );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+        }
+    }
+}
+
+SCENARIO( "The end of a stream ends its capture", "[capture_source]" )
+{
+    const auto packets = somePackets();
+    const auto pcap = pcapOf( packets );
+
+    GIVEN( "a stream closed in the middle of its third record" )
+    {
+        const auto cuts = recordCuts( packets );
+        Pipe pipe;
+        auto writer = writeInChunks(
+            pipe,
+            Bytes( pcap.begin(), pcap.begin() + static_cast<std::ptrdiff_t>( cuts[ 2 ] + 20 ) ),
+            7 );
+        FdSource source( pipe.readEnd() );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+        writer.join();
+
+        THEN( "the two whole records are converted, and the capture reported cut off" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.packets == 2 );
+            REQUIRE( result.summary.endsInsideRecord );
+            REQUIRE( readLines( result.outputPath ).size() == 3 ); // header + 2 packets
+        }
+    }
+
+    GIVEN( "a stream closed before a whole header" )
+    {
+        Pipe pipe;
+        pipe.write( Bytes( pcap.begin(), pcap.begin() + 10 ) );
+        pipe.closeWrite();
+        FdSource source( pipe.readEnd() );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+
+        THEN( "it fails as too small to be a capture" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.contains( "too small" ) );
+        }
+    }
+
+    GIVEN( "a stream of text that never reaches a header" )
+    {
+        Pipe pipe;
+        pipe.write(
+            text( "tcpdump: eth0: You don't have permission to capture on that device\n" ) );
+        pipe.closeWrite();
+        FdSource source( pipe.readEnd() );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+
+        THEN( "it fails: not a capture" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.contains( "Not a valid pcap or pcapng file" ) );
+        }
+    }
+}
+
+SCENARIO( "A process's stdout is read as a stream", "[capture_source]" )
+{
+    const auto capture = pcapOf( somePackets() );
+    QTemporaryDir dir;
+    const auto path = dir.filePath( QStringLiteral( "in.pcap" ) );
+    writeFile( path, capture );
+
+    GIVEN( "a process that writes a capture in two parts with a pause, and exits" )
+    {
+        QProcess process;
+        process.start( QStringLiteral( "/bin/sh" ),
+                       { QStringLiteral( "-c" ),
+                         QStringLiteral( "head -c 30 \"$1\"; sleep 0.2; tail -c +31 \"$1\"" ),
+                         QStringLiteral( "sh" ), path } );
+        DeviceSource source( process );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "live" ), out.path() );
+        process.waitForFinished();
+
+        THEN( "it gives the lines of the file" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( readLines( result.outputPath ) == linesFromFile( capture ) );
+        }
+    }
+
+    GIVEN( "a process that writes nothing for seconds" )
+    {
+        QProcess process;
+        process.start( QStringLiteral( "/bin/sleep" ), { QStringLiteral( "5" ) } );
+        REQUIRE( process.waitForStarted() );
+        std::atomic_bool stop{ false };
+        Clock::time_point stoppedAt;
+        std::thread stopper( [ &stop, &stoppedAt ] {
+            std::this_thread::sleep_for( milliseconds( 200 ) );
+            stoppedAt = Clock::now();
+            stop = true;
+        } );
+        DeviceSource source( process, &stop );
+        uint8_t byte = 0;
+        const auto got = source.read( &byte, 1 );
+        const auto returnedAt = Clock::now();
+        stopper.join();
+        process.kill();
+        process.waitForFinished();
+
+        THEN( "a stop ends the wait within 100 ms" )
+        {
+            REQUIRE( got == 0 );
+            REQUIRE( source.stopped() );
+            REQUIRE( returnedAt - stoppedAt < milliseconds( 100 ) );
+        }
+    }
+}
+
+#endif // Q_OS_UNIX
