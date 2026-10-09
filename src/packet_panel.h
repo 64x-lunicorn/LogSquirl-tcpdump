@@ -35,6 +35,9 @@
  * Its Stream tab shows the content of the shown packet's conversation
  * (Follow stream content, StreamContentView) once the user asks for it: by
  * the panel's button or Plugins > tcpdump > Follow stream content.
+ *
+ * Below the tabs, the Conversations table (conversation_table.h) lists the
+ * streams of the capture in front, from its Capture Summary.
  */
 
 #pragma once
@@ -63,6 +66,7 @@ class QTreeWidgetItem;
 namespace tcpdump {
 
 class StreamContentView;
+class ConversationTable;
 
 /// The hex dump of @p bytes, 16 to a line: the offset, the bytes in hex in
 /// two groups of 8, then as ASCII, '.' for a byte that is not printable.
@@ -127,6 +131,12 @@ public:
         return streamView_;
     }
 
+    /// The Conversations table of the capture in front.
+    ConversationTable* conversationTable() const
+    {
+        return conversations_;
+    }
+
 protected:
     void showEvent( QShowEvent* event ) override;
     void hideEvent( QHideEvent* event ) override;
@@ -148,6 +158,7 @@ private:
     StreamContentView* streamView_ = nullptr;
     QTreeWidget* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
+    ConversationTable* conversations_ = nullptr;
     QTimer timer_;
 
     std::shared_ptr<const CaptureIndex> index_;

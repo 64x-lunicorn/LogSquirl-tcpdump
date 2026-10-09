@@ -22,6 +22,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     packet_layers_test.cpp
     capture_index_test.cpp
+    packet_export_test.cpp
     link_layers_test.cpp
     socks_test.cpp
     tls_test.cpp
@@ -38,9 +39,11 @@ add_executable(logsquirl_tcpdump_tests
     plugin_test.cpp
     sidebarwidget_test.cpp
     packet_panel_test.cpp
+    conversation_table_test.cpp
     follow_stream_test.cpp
     stream_content_test.cpp
     regex_lab_test.cpp
+    display_filter_test.cpp
     corpus_test.cpp
     conversion_options_test.cpp
     settings_test.cpp
@@ -51,6 +54,7 @@ add_executable(logsquirl_tcpdump_tests
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
+    conversations_test.cpp
     stream_labels_test.cpp
     tcp_analysis_test.cpp
     tcp_options_test.cpp
@@ -107,12 +111,16 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/byte_stream_orderer.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_reassembly.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
+        "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/export_dialog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/conversation_table.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
@@ -120,6 +128,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/stream_content.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_content_view.cpp"
         "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"
+        "${CMAKE_SOURCE_DIR}/src/display_filter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/display_filter_dialog.cpp"
 )
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format

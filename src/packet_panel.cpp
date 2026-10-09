@@ -24,6 +24,7 @@
 
 #include "packet_panel.h"
 
+#include "conversation_table.h"
 #include "plugin.h"
 #include "regex_lab.h"
 #include "stream_content_view.h"
@@ -195,14 +196,20 @@ PacketPanel::PacketPanel( QWidget* parent )
         }
     } );
 
-    // The packet's layers and bytes, and the content of its stream.
+    // The packet's layers and bytes, and the content of its stream; below
+    // them, whichever tab is shown, the capture's Conversations table.
     tabs_ = new QTabWidget;
     tabs_->setObjectName( "packetTabs" );
     tabs_->addTab( splitter, "Packet" );
     streamView_ = new StreamContentView;
     streamView_->setObjectName( "streamView" );
     tabs_->addTab( streamView_, "Stream" );
-    layout->addWidget( tabs_, 1 );
+    auto* outer = new QSplitter( Qt::Vertical );
+    outer->addWidget( tabs_ );
+    conversations_ = new ConversationTable;
+    conversations_->setObjectName( "conversationTable" );
+    outer->addWidget( conversations_ );
+    layout->addWidget( outer, 1 );
 
     connect( tree_, &QTreeWidget::currentItemChanged, this,
              [ this ]( QTreeWidgetItem* item ) { highlight( item ); } );

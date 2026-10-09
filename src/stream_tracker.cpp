@@ -53,9 +53,30 @@ Stream StreamTracker::track( const PacketRecord& pkt )
         return { kUnnumbered, nullptr };
     }
     const auto next = static_cast<int>( conversations.states.size() );
-    conversations.ids.emplace( std::move( key ), next );
+    const auto added = conversations.ids.emplace( std::move( key ), next ).first;
+    conversations.keys.push_back( &added->first );
     conversations.states.emplace_back();
     return { next, &conversations.states.back(), direction };
+}
+
+StreamEndpoints StreamTracker::endpoints( Transport transport, int id ) const
+{
+    const auto& conversations = transport == Transport::Tcp ? tcp_ : udp_;
+    StreamEndpoints ends;
+    if ( id < 0 || static_cast<size_t>( id ) >= conversations.keys.size() ) {
+        return ends;
+    }
+    // "address:port|address:port", direction 0's source first; an IPv6
+    // address holds ':' too, so the port is after the last one.
+    const auto& key = *conversations.keys[ static_cast<size_t>( id ) ];
+    const auto bar = key.find( '|' );
+    const std::string halves[ 2 ] = { key.substr( 0, bar ), key.substr( bar + 1 ) };
+    for ( size_t d = 0; d < 2; ++d ) {
+        const auto colon = halves[ d ].rfind( ':' );
+        ends.address[ d ] = halves[ d ].substr( 0, colon );
+        ends.port[ d ] = static_cast<uint16_t>( std::stoul( halves[ d ].substr( colon + 1 ) ) );
+    }
+    return ends;
 }
 
 } // namespace tcpdump

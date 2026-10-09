@@ -132,6 +132,7 @@ private:
 
 /// The summary of a converted capture, from what was collected on the way.
 CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
+                          const StreamLabels& labels, const ConversationStats& conversations,
                           const CaptureReader& reader, size_t maxStreams )
 {
     // The packets' link-layer types first, then any the capture declares
@@ -166,6 +167,10 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     }
     summary.handshakes = stats.initialRtts.count();
     summary.medianInitialRttNs = stats.medianInitialRttNs();
+    summary.conversations = std::make_shared<const std::vector<Conversation>>(
+        conversations.conversations( tracker, labels, stats.firstTimeSec, stats.firstTimeNsec ) );
+    summary.otherStreamPackets = conversations.otherPackets();
+    summary.otherStreamBytes = conversations.otherBytes();
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
@@ -177,11 +182,13 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
 }
 
 /// The summary of a capture still being converted, from a copy of what was
-/// collected so far: the conversion goes on with @p stats as they are.
+/// collected so far: the conversion goes on with @p stats and
+/// @p conversations as they are.
 CaptureSummary summariseSoFar( const CaptureStats& stats, const StreamTracker& tracker,
+                               const StreamLabels& labels, const ConversationStats& conversations,
                                const CaptureReader& reader, size_t maxStreams )
 {
-    return summarise( CaptureStats( stats ), tracker, reader, maxStreams );
+    return summarise( CaptureStats( stats ), tracker, labels, conversations, reader, maxStreams );
 }
 
 /// A Failed result with @p error.
@@ -313,6 +320,7 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
+    ConversationStats conversations;
     TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
@@ -340,7 +348,8 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
             return;
         }
         LiveSnapshot snapshot;
-        snapshot.summary = summariseSoFar( stats, tracker, reader, options.maxStreams );
+        snapshot.summary
+            = summariseSoFar( stats, tracker, labels, conversations, reader, options.maxStreams );
         snapshot.elapsed
             = std::chrono::duration_cast<std::chrono::milliseconds>( lastSnapshot - started );
         snapshot.rawBytes = liveInput->bytesRead();
@@ -391,6 +400,7 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
         labels.apply( pkt, stream );
+        conversations.add( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
@@ -463,7 +473,8 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     if ( live ) {
         result.rawPath = QFileInfo( raw.fileName() ).absoluteFilePath();
     }
-    result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
+    result.summary = summarise( std::move( stats ), tracker, labels, conversations, reader,
+                                options.maxStreams );
     index->setCaptureFile( live ? result.rawPath : inputPath );
     result.index = std::move( index );
     outputDir.setAutoRemove( false );

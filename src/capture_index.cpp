@@ -192,6 +192,7 @@ bool CaptureCursor::read( uint32_t number, CapturedPacket& packet )
     packet.byteSwapped = reader_->byteSwapped();
     packet.recordOffset = reader_->recordOffset();
     packet.recordLength = reader_->recordLength();
+    packet.headers = reader_->headers();
     return true;
 }
 

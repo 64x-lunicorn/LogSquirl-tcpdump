@@ -242,7 +242,12 @@ each packet the reader also tells where its record lies (`recordOffset()`,
 `recordLength()`: the pcap record header or the pcapng block, header and
 all), its bytes as dissected (`packetBytes()`, at most
 `kMaxDissectedBytes`) and the byte order they were read in
-(`byteSwapped()`).
+(`byteSwapped()`). `headers()` tells the records a file of that packet
+needs ahead of it (`CaptureHeaders`: the format and `RecordSpan`s): a
+pcap's global header, or a pcapng section's header block and the interface
+description blocks declared in it so far, in order, so that an interface ID
+is an index into them. The pcapng reader keeps those spans in its
+`SectionState`, so a reader resumed at a checkpoint tells them too.
 
 #### The Capture Source seam (`capture_source.h/cpp`)
 A capture need not be a file: a pipe, a FIFO, a socket or a capture
@@ -868,10 +873,11 @@ addresses as "other endpoints".
 Memory therefore grows with the conversations and addresses in a capture,
 not with its size, and both are capped, so a port scan or a busy NAT cannot
 exhaust it. By default the caps are 1,000,000 streams and 100,000
-addresses, roughly 150 MB and 10 MB; the options (`settings.h`,
+addresses, roughly 150 MB (and 70 MB more for the Conversations table's
+counts) and 10 MB; the options (`settings.h`,
 *Advanced* in the dialog) let the user raise each up to tenfold
 (`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
-addresses, roughly 1.5 GB and 100 MB) or lower it to 1. The summary says
+addresses, roughly 2.2 GB and 100 MB) or lower it to 1. The summary says
 when a cap was hit.
 
 #### The Log Format (`formats/tcpdump_log.json`)
@@ -1216,20 +1222,90 @@ export, conversation statistics):
   `reassembly.pcap` and `mixed.pcap` through the `FakeHost` and compares
   the export with the payloads its script wrote.
 
+- **The Conversations table** (`conversations.h/cpp`, pure C++;
+  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter
+  next to the Stream Tracker, counts each numbered stream after the Stream
+  Labels ran (`add(pkt, stream)`): packets and wire bytes per direction,
+  its earliest and latest packet, the direction of its first packet (end
+  A is that packet's source) and its last label byte, 64 bytes per stream.
+  Packets of `kUnnumbered` streams are counted together, so the stream cap
+  bounds the table. `conversations()` takes the table as it stands, a
+  `Conversation` per stream, TCP's first: the ends come from
+  `StreamTracker::endpoints()`, which parses the stream's key (the tracker
+  keeps a pointer to each key, 8 bytes per stream), the protocol from
+  `StreamLabels::name()`. The Converter puts it into
+  `CaptureSummary::conversations` as a `shared_ptr<const vector>`, with
+  `otherStreamPackets`/`otherStreamBytes`: a snapshot never changes, a new
+  one (a live capture's) is a new vector, and a tab switch copies nothing.
+  `ConversationTable` (below the Packet Panel's tabs) shows it through
+  `ConversationModel`, which sorts an index vector by any column (ties by
+  transport and stream) and keeps the *Other streams* row last.
+  `SidebarWidget::showSummaryFor()` hands it the summary in front;
+  `SidebarWidget::updateSummary()` replaces a capture's summary and shows
+  it if in front, the table keeping its sort and selected conversation; a
+  live capture's snapshots come through it, each taken by
+  `summariseSoFar()` from copies of the `CaptureStats` and the table as it
+  stands, so the conversion goes on with them unchanged.
+  A click or *Filter on this conversation* opens the Regex Lab ("Filter")
+  with `conversationPattern()`, the Follow stream pattern built from the
+  row's stream number, addresses and ports.
+
+- **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
+  `exportPackets(index, numbers, path, cancel, progress)` sorts the
+  numbers, reads them with one `CaptureCursor` in one pass, and copies each
+  packet's record (`recordOffset`/`recordLength`) from the capture file
+  byte for byte through a `QSaveFile`, which appears only when complete, so
+  a cancel or a failure leaves nothing. Ahead of a packet go the records
+  of its `CapturedPacket::headers` not written yet: a pcap's global header
+  once; for a pcapng, its section's header block when the section changes
+  (its section length set to -1, "unknown") and the section's interface
+  description blocks as they are declared, all of them, in order, so that
+  the packet block's interface ID stays valid without changing the block.
+  A pcapng is thus exported as a pcapng, never converted to a pcap; other
+  blocks (name resolution, interface statistics, custom) are not exported.
+  Nothing is written from what was dissected. Writing over the capture
+  itself is refused. `parsePacketSet()` reads packet lines (their No.) and
+  numbers and ranges ("1-5, 9") and counts what names no packet;
+  `packetLinesOf()` reads packet lines only, as the selection holds them;
+  `formatPacketRanges()` writes numbers back as ranges.
+  `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
+  packets…) reads the selection with `get_selected_log_lines`, whose
+  `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
+  selected) is carried in the `ExportRequest`; the `ExportConfirmer`
+  (`setExportConfirmer()` for tests) shows the `ExportDialog`, where the
+  user may change the numbers or paste lines copied in LogSquirl, then a
+  save dialog. The host offers no call for the lines of a Filtered View
+  or a search, so selecting them there (or pasting them) is the way to
+  export a filtered view. The export runs on `exportPool_`, a thread of
+  its own, with a `QProgressDialog` whose Cancel sets the flag the export
+  checks between packets; as for a conversion, a cancel wins over an
+  export that was done when it came. The notification after the export
+  repeats a truncation that limited it.
+
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details or Follow stream content entry and no polling; the panel says what
-it needs.
+details, Export packets or Follow stream content entry and no polling; the
+panel says what it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
 it against its line and an in-memory parse, and that its layers stay
 within its bytes; `packet_layers_test.cpp` checks layer and field names,
 values and offsets on built packets; `packet_panel_test.cpp` drives the
 panel through the `FakeHost` (scripted selection, active file, call count
-of `get_selected_log_lines`).
+of `get_selected_log_lines`). `conversations_test.cpp` checks the counts
+on built packets and that every row's pattern finds exactly its packets in
+every corpus text; `conversation_table_test.cpp` drives the table (sorting
+by every column, clicks, the stream cap's row, snapshot updates) through
+the `FakeHost`. `packet_export_test.cpp` exports every other packet of
+every corpus capture, read with a checkpoint every 3 packets, re-reads the
+export and compares each record byte for byte and each packet's fields
+with the capture's; it checks that a pcapng export of packets of two
+sections and interfaces keeps them, progress, cancel and failure, and
+drives Export packets… and the `ExportDialog` through the `FakeHost`.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entries (Open pcap…, and Packet details, Follow stream content and
+the menu entries (Open pcap…, and Packet details, Export packets…, Display
+filter…, Follow stream content and
 Follow stream where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
@@ -1301,6 +1377,42 @@ the applied one or the cancel, under the feature's name ("Filter: …").
 each corpus capture, converted in every `LineLayout`, against the columns of
 its lines;
 `sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
+
+#### Display filters (`display_filter.h/cpp`, `display_filter_dialog.h/cpp`)
+`Plugins → tcpdump → Display filter…`, offered on a host with `regexLab`,
+calls `openDisplayFilter()`: a `DisplayFilterDialog` translates the text on
+every change with `displayFilterPattern()`, shows a rejection as "Column N:
+reason" below the field and enables *Open in Regex Lab* only for a valid
+filter; the filter accepted is logged and offered again next time, its
+pattern opened with `openRegexLab()` ("Display filter").
+`parseDisplayFilter()` is a tokenizer and a recursive-descent parser
+(`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
+as a `FilterError` with its index into the filter. Unsupported syntax
+(strings, slices, sets, `contains`, `matches`, `xor`, `=`, `&`, `===`) is
+rejected by the tokenizer, unknown fields, wrong operators and bad values
+(an IPv6 address for `ip.addr`, a port above 65535, two fields) by the
+parser; an address is stored as the column shows it (`formatIpv4()`,
+`formatIpv6()`, an IPv4 network masked to its prefix).
+`filterPattern()` makes each test a pattern from the start of the line:
+`upToSourcePattern()` without its `^`, Source and Destination, Protocol
+and Length, and for a port or stream the start of Info as Follow stream
+reads it (MAC columns, tunnels, `[TCP …]` markers, then `a → b` followed
+by `[` for TCP or `Len=` for UDP, which tells the transport). A filter of
+one test is `^` and that pattern; otherwise each test is a lookahead,
+`&&` their sequence, `||` an alternation of them and `!` a negative
+lookahead, with a lookahead for a packet line first when a negation alone
+could select another line. `!=` is the field present and no value equal,
+as in Wireshark. Numbers compared with `<`, `>`, `<=`, `>=` and IPv4
+networks become exact ranges by `numberRangePattern()`, digit by digit,
+without leading zeros. The patterns need PCRE2's lookaheads, so they are
+for the Regex Lab and searches only (LogSquirl runs a pattern Vectorscan
+rejects with Qt's engine), never for `presets/`. `display_filter_test.cpp`
+checks a table of filters on hand-made lines, a table of rejections with
+their positions, every number range up to 30,000, and, for every corpus
+text in every `LineLayout`, a list of filters plus filters on the values
+the lines have against a reference evaluation of the `FilterExpression`
+over each line's columns, read with the Log Format's regex and Info word
+by word; it drives the dialog and the menu entry through the `FakeHost`.
 
 #### The plugin API header
 `include/logsquirl_plugin_api.h` is the host's

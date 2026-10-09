@@ -62,12 +62,16 @@ add_library(logsquirl_tcpdump SHARED
     src/byte_stream_orderer.cpp
     src/tcp_reassembly.cpp
     src/capture_stats.cpp
+    src/conversations.cpp
     src/capture_file.cpp
     src/capture_index.cpp
+    src/packet_export.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/settings.cpp
     src/configdialog.cpp
+    src/export_dialog.cpp
+    src/conversation_table.cpp
     src/packet_panel.cpp
     src/live_capture.cpp
     src/sidebarwidget.cpp
@@ -75,6 +79,8 @@ add_library(logsquirl_tcpdump SHARED
     src/stream_content.cpp
     src/stream_content_view.cpp
     src/regex_lab.cpp
+    src/display_filter.cpp
+    src/display_filter_dialog.cpp
 )
 
 # Qt MOC needs to know about our Q_OBJECT classes

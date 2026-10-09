@@ -327,6 +327,16 @@ SCENARIO( "A live capture's summary comes in snapshots, and the final one is the
                 REQUIRE( snapshots.back().summary.packets <= packets.size() );
             }
 
+            THEN( "each snapshot holds the Conversations table so far: a stream per datagram" )
+            {
+                for ( const auto& snapshot : run.snapshots() ) {
+                    REQUIRE( snapshot.summary.conversations );
+                    REQUIRE( snapshot.summary.conversations->size() == snapshot.summary.packets );
+                }
+                REQUIRE( result.summary.conversations );
+                REQUIRE( result.summary.conversations->size() == packets.size() );
+            }
+
             THEN( "the raw file next to the text is what the writer sent, byte for byte" )
             {
                 REQUIRE( QFileInfo( result.rawPath ).absolutePath()

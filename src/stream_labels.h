@@ -74,6 +74,9 @@ public:
      */
     void apply( PacketRecord& pkt, const Stream& stream );
 
+    /// The protocol a StreamState::label byte numbers; empty for 0, none.
+    const std::string& name( uint8_t label ) const;
+
 private:
     /// The labels by their number less one.
     std::vector<std::string> labels_;
