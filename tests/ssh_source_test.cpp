@@ -157,7 +157,12 @@ SCENARIO( "The SSH source runs ssh with BatchMode, a connect timeout and no tty"
 {
     QTemporaryDir dir;
     SshPrograms where;
+#ifdef Q_OS_WIN
+    // Windows tells a program by its extension.
+    where.installed = { dir.filePath( "ssh.exe" ) };
+#else
     where.installed = { dir.filePath( "ssh" ) };
+#endif
     where.config = dir.filePath( "config" );
 
     WHEN( "there is no ssh" )
