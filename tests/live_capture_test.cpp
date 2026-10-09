@@ -303,8 +303,6 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
     }
 }
 
-#endif
-
 SCENARIO( "A live capture with a ring buffer keeps the newest packets in its tab",
           "[live_capture]" )
 {
@@ -391,6 +389,8 @@ SCENARIO( "A live capture with a ring buffer keeps the newest packets in its tab
         }
     }
 }
+
+#endif
 
 SCENARIO( "A live capture whose source fails keeps its tab and says why", "[live_capture]" )
 {
