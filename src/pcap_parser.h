@@ -70,12 +70,18 @@ struct PcapGlobalHeader {
 
 // ── Link-layer types (subset of libpcap DLT_ constants) ─────────────────
 
-constexpr uint32_t DltNull = 0;        ///< BSD loopback
-constexpr uint32_t DltEthernet = 1;    ///< Ethernet
-constexpr uint32_t DltRaw = 101;       ///< Raw IP (no link-layer header)
-constexpr uint32_t DltLoop = 108;      ///< OpenBSD loopback (family in network byte order)
-constexpr uint32_t DltLinuxSll = 113;  ///< Linux cooked capture v1
-constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
+constexpr uint32_t DltNull = 0;             ///< BSD loopback
+constexpr uint32_t DltEthernet = 1;         ///< Ethernet
+constexpr uint32_t DltPpp = 9;              ///< PPP, with or without HDLC-like framing
+constexpr uint32_t DltPppSerial = 50;       ///< PPP in HDLC-like framing, or Cisco HDLC
+constexpr uint32_t DltPppEther = 51;        ///< PPPoE, without the Ethernet header
+constexpr uint32_t DltRaw = 101;            ///< Raw IP (no link-layer header)
+constexpr uint32_t DltCiscoHdlc = 104;      ///< Cisco HDLC
+constexpr uint32_t DltIeee80211 = 105;      ///< IEEE 802.11 wireless LAN
+constexpr uint32_t DltLoop = 108;           ///< OpenBSD loopback (family in network byte order)
+constexpr uint32_t DltLinuxSll = 113;       ///< Linux cooked capture v1
+constexpr uint32_t DltIeee80211Radio = 127; ///< IEEE 802.11 behind a Radiotap header
+constexpr uint32_t DltLinuxSll2 = 276;      ///< Linux cooked capture v2
 
 /// The display name of a link-layer type ("Ethernet", "Linux SLL2", …), or
 /// its number for one this parser does not know.
@@ -98,11 +104,34 @@ constexpr uint16_t EthertypeArp = 0x0806;
 constexpr uint16_t EthertypeVlan = 0x8100;       ///< 802.1Q customer tag
 constexpr uint16_t EthertypeQinQ = 0x88A8;       ///< 802.1ad service tag
 constexpr uint16_t EthertypeQinQLegacy = 0x9100; ///< Pre-standard QinQ tag
+constexpr uint16_t EthertypePppoeDiscovery = 0x8863;
+constexpr uint16_t EthertypePppoeSession = 0x8864;
 
 constexpr uint8_t IpProtoIcmp = 1;
 constexpr uint8_t IpProtoTcp = 6;
 constexpr uint8_t IpProtoUdp = 17;
 constexpr uint8_t IpProtoIcmpv6 = 58;
+
+// ── Tunnels ──────────────────────────────────────────────────────────────
+
+constexpr uint8_t IpProtoIpip = 4;       ///< IPv4 encapsulated in IP (RFC 2003)
+constexpr uint8_t IpProtoIpv6Encap = 41; ///< IPv6 encapsulated in IP (RFC 4213, 6in4)
+constexpr uint8_t IpProtoGre = 47;       ///< Generic Routing Encapsulation (RFC 2784)
+/// GRE's protocol type for an Ethernet frame (NVGRE, gretap).
+constexpr uint16_t EthertypeTransparentBridging = 0x6558;
+constexpr uint16_t kVxlanPort = 4789; ///< VXLAN's UDP destination port (RFC 7348)
+
+/// Tunnels unwrapped at most, one inside the other; a packet nested deeper
+/// is described as the tunnel that was not unwrapped.
+constexpr size_t kMaxTunnels = 4;
+
+/// A tunnel a packet was carried through: what Info names it, and the
+/// addresses of the packet that carried it, the tunnel's endpoints.
+struct Tunnel {
+    std::string name;  ///< "VXLAN VNI 100", "GRE", "GRE key=0x0000002A", "IPv6-in-IPv4"
+    std::string srcIp; ///< Outer source address
+    std::string dstIp; ///< Outer destination address
+};
 
 // ── Parsed packet ────────────────────────────────────────────────────────
 
@@ -191,6 +220,12 @@ struct PacketRecord {
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
+
+    /// The tunnels the packet was carried through, outermost first, at most
+    /// kMaxTunnels.  Everything above (addresses, ports, protocol, info)
+    /// then describes the innermost packet, as Wireshark's columns do; the
+    /// Packet Formatter names the tunnels before info.
+    std::vector<Tunnel> tunnels;
 };
 
 /**

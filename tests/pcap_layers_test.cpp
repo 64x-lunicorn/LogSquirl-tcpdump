@@ -648,9 +648,10 @@ SCENARIO( "Protocols the Parser does not dissect are shown by name", "[pcap_pars
     {
         auto pkt = parseOne( eth( EthertypeVlan, vlanTag( 7, 0x8864, body ) ) );
 
-        THEN( "it is shown as PPPoE session" )
+        THEN( "it is shown as PPPoE session, empty as it is" )
         {
             REQUIRE( pkt.protocol == "PPPoES" );
+            REQUIRE( pkt.info == "Truncated PPP header" );
         }
     }
 

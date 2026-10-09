@@ -53,9 +53,16 @@ struct CaptureStats {
     uint64_t cutPackets = 0;
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
-    /// Packets per IP address, for at most maxEndpoints addresses, so that a
-    /// scan of many addresses cannot exhaust memory.
+    /// Packets per IP address in the Source or Destination column, i.e. of
+    /// the packet a line shows, the innermost of a tunnelled one.  Together
+    /// with tunnelEndpointPackets for at most maxEndpoints addresses, so
+    /// that a scan of many addresses cannot exhaust memory.
     std::map<std::string, uint64_t> endpointPackets;
+    /// Packets per address of a tunnel's endpoints, the outer packets a
+    /// tunnelled one was carried in: each packet once per address, however
+    /// many of its tunnels the address ends.  No column of the line shows
+    /// them, so they are kept apart from endpointPackets.
+    std::map<std::string, uint64_t> tunnelEndpointPackets;
     /// Packets counted for addresses beyond maxEndpoints.
     uint64_t otherEndpointPackets = 0;
     size_t maxEndpoints = kMaxEndpoints;
@@ -96,7 +103,7 @@ struct CaptureStats {
     double durationSeconds() const;
 
 private:
-    void countEndpoint( const std::string& address );
+    void countEndpoint( std::map<std::string, uint64_t>& counts, const std::string& address );
 };
 
 } // namespace tcpdump

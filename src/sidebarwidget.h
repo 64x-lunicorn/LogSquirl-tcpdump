@@ -46,7 +46,8 @@ namespace tcpdump {
 
 /// The capture summary shown in the sidebar, as rich text.  With
 /// @p filterLinks, each endpoint and protocol listed is a link that
-/// SidebarWidget opens in the Regex Lab as a filter.
+/// SidebarWidget opens in the Regex Lab as a filter.  A tunnel's endpoints
+/// are listed apart and never a link: no column of a line shows them.
 QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
                      bool filterLinks = false );
 

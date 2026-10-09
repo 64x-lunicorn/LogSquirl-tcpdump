@@ -90,6 +90,23 @@ inline Bytes vlanTag( uint16_t vlanId, uint16_t innerEtherType, const Bytes& pay
     return b + payload;
 }
 
+/** A PPPoE header with @p code for session 0x1234 around @p payload. */
+inline Bytes pppoe( uint8_t code, const Bytes& payload, int length = -1 )
+{
+    Bytes b{ 0x11, code };
+    putBE16( b, code == 0 ? 0x1234 : 0 );
+    putBE16( b, static_cast<uint16_t>( length >= 0 ? length : payload.size() ) );
+    return b + payload;
+}
+
+/** A PPPoE session frame carrying PPP @p protocol, without address and control. */
+inline Bytes pppoeSession( uint16_t protocol, const Bytes& payload )
+{
+    Bytes b;
+    putBE16( b, protocol );
+    return pppoe( 0x00, b + payload );
+}
+
 struct Ipv4Options {
     int totalLength = -1;  ///< -1: header + payload; otherwise this value.
     uint16_t fragment = 0; ///< Flags and fragment offset (in 8-byte units).
@@ -178,6 +195,43 @@ inline Bytes udp( uint16_t srcPort, uint16_t dstPort, const Bytes& payload = {},
     putBE16( b, dstPort );
     putBE16( b, static_cast<uint16_t>( length >= 0 ? length : 8 + payload.size() ) );
     putBE16( b, 0 );
+    return b + payload;
+}
+
+/** A VXLAN header with VNI @p vni (I flag set) around the Ethernet @p frame. */
+inline Bytes vxlan( uint32_t vni, const Bytes& frame, uint8_t flags = 0x08 )
+{
+    Bytes b{ flags, 0, 0, 0 };
+    putBE32( b, vni << 8 );
+    return b + frame;
+}
+
+struct GreOptions {
+    bool checksum = false; ///< C bit: checksum and reserved field.
+    bool key = false;      ///< K bit: the key field, keyValue.
+    bool sequence = false; ///< S bit: a sequence number.
+    bool routing = false;  ///< R bit (RFC 1701 source routing).
+    uint8_t version = 0;   ///< 1 for PPTP's enhanced GRE.
+    uint32_t keyValue = 42;
+};
+
+/** A GRE header of @p protocolType (an EtherType) around @p payload. */
+inline Bytes gre( uint16_t protocolType, const Bytes& payload, const GreOptions& o = {} )
+{
+    Bytes b;
+    putBE16( b, static_cast<uint16_t>( ( o.checksum ? 0x8000 : 0 ) | ( o.routing ? 0x4000 : 0 )
+                                       | ( o.key ? 0x2000 : 0 ) | ( o.sequence ? 0x1000 : 0 )
+                                       | o.version ) );
+    putBE16( b, protocolType );
+    if ( o.checksum || o.routing ) {
+        putBE32( b, 0 ); // checksum, offset
+    }
+    if ( o.key ) {
+        putBE32( b, o.keyValue );
+    }
+    if ( o.sequence ) {
+        putBE32( b, 7 );
+    }
     return b + payload;
 }
 

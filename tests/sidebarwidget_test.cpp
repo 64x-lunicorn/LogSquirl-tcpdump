@@ -762,6 +762,41 @@ SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary lists a tunnel's endpoints apart, without a filter", "[sidebar]" )
+{
+    GIVEN( "a capture whose packets were carried through tunnels" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.endpointPackets[ "10.1.0.10" ] = 4;
+        summary.tunnelEndpointPackets[ "192.0.2.1" ] = 4;
+        summary.tunnelEndpointPackets[ "<img src=x>" ] = 1;
+
+        THEN( "they are listed under Tunnel endpoints, after the endpoints, as plain text" )
+        {
+            const auto html = tcpdump::summaryHtml( "tunnels.pcap", 100, summary, true );
+            REQUIRE( html.contains( "<b>Endpoints</b> (1 unique)" ) );
+            REQUIRE( html.contains( "<b>Tunnel endpoints</b> (2 unique)<br>192.0.2.1: 4 pkts" ) );
+            REQUIRE( html.contains( "&lt;img src=x&gt;: 1 pkts" ) );
+            REQUIRE( html.indexOf( "<b>Endpoints</b>" ) < html.indexOf( "<b>Tunnel endpoints" ) );
+            REQUIRE( html.contains( "endpoint/10.1.0.10" ) );
+            REQUIRE_FALSE( html.contains( "192.0.2.1\"" ) );
+            REQUIRE_FALSE( html.contains( "endpoint/192.0.2.1" ) );
+        }
+    }
+
+    GIVEN( "a capture without tunnels" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.endpointPackets[ "10.1.0.10" ] = 4;
+
+        THEN( "there is no such group" )
+        {
+            REQUIRE_FALSE( tcpdump::summaryHtml( "plain.pcap", 100, summary, true )
+                               .contains( "Tunnel endpoints" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary says what was cut", "[sidebar]" )
 {
     GIVEN( "a capture that was cut off" )

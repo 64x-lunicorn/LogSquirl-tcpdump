@@ -71,8 +71,8 @@ enum class TimeColumns {
 struct LineLayout {
     TimeColumns timeColumns = TimeColumns::Both;
     /// Source MAC and Destination MAC between Length and Info, "-" for a
-    /// packet without them (one not on Ethernet).  Info is the rest of the
-    /// line to a Log Format, so they are read as its start.
+    /// packet without them (one not on Ethernet or 802.11).  Info is the
+    /// rest of the line to a Log Format, so they are read as its start.
     bool macColumns = false;
 };
 

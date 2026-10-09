@@ -136,6 +136,26 @@ SCENARIO( "Follow stream matches exactly the lines of a packet's stream", "[foll
         }
     }
 
+    GIVEN( "tunnelled TCP and UDP streams of the same numbers between the same hosts" )
+    {
+        // Info starts with the tunnels, "VXLAN VNI 100 | 50000 → 8080 …":
+        // the ports after them are the inner packet's.  Streams 0 and 1 are
+        // both a TCP and a UDP conversation of 10.1.0.10 and 10.2.0.20,
+        // stream 2 of 2001:db8:1::10 and 2001:db8:2::20.
+        const auto lines = corpusLines( "tunnels.txt" );
+
+        THEN( "each line finds its own conversation, in whichever tunnel" )
+        {
+            REQUIRE( followed( lines, 1 ) == std::set<int>{ 1, 2, 3, 4 } );
+            REQUIRE( followed( lines, 2 ) == std::set<int>{ 1, 2, 3, 4 } );
+            REQUIRE( followed( lines, 7 ) == std::set<int>{ 7 } );
+            REQUIRE( followed( lines, 8 ) == std::set<int>{ 8 } );
+            REQUIRE( followed( lines, 10 ) == std::set<int>{ 10 } );
+            REQUIRE( followed( lines, 11 ) == std::set<int>{ 11 } );
+            REQUIRE( followed( lines, 13 ) == std::set<int>{ 13 } );
+        }
+    }
+
     GIVEN( "every line of every corpus text" )
     {
         const QDir dir( QStringLiteral( TCPDUMP_CORPUS_DIR ) );

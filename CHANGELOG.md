@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
+  without checksum, key and sequence number, carrying IPv4, IPv6 or an
+  Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by
+  the packet inside, as Wireshark shows it: Source, Destination, Protocol
+  and Info are the inner packet's, and Info names the tunnels first,
+  outermost first: `VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240`,
+  `GRE key=0x0000002A | 53053 → 53 Len=32 | Standard query …`,
+  `IPv6-in-IPv4 | …`. Streams are keyed by the inner addresses and ports,
+  whichever tunnel carries them; the Capture Summary lists the tunnel
+  endpoints apart, under *Tunnel endpoints* and without a filter link, as
+  no column shows their addresses. The highlighters and filters in
+  `presets/` read a tunnelled packet's Info past the tunnels (a SYN in
+  VXLAN is a *TCP SYN/FIN*), and Follow stream follows the inner
+  conversation. At most 4 tunnels are unwrapped, a
+  deeper one is described as such (`IPv4-in-IPv4 not dissected: more than
+  4 nested tunnels`). Before, such packets were shown as UDP to port 4789
+  (`VXLAN`), `GRE`, `IPIP` or `6in4` between the tunnel endpoints. GRE
+  carrying other protocols, PPTP's enhanced GRE among them, is still shown
+  as GRE, now with its protocol type.
+- **Wi-Fi, PPP and PPPoE link layers.** Captures from a Wi-Fi monitor
+  interface (802.11, with or without a Radiotap header) and from PPP links
+  (PPP with or without HDLC-like framing, Cisco HDLC, PPPoE) are dissected
+  to their IP packets, in pcap and per interface in pcapng. 802.11
+  management and control frames are named as Wireshark names them, with
+  their sequence number and, where the frame carries one, the SSID: `Beacon
+  frame, SN=1000, FN=0, BI=100, SSID="HomeNet"`, `Probe Request, SN=1,
+  FN=0, SSID=Wildcard (Broadcast)`, `Authentication`, `Association
+  Request`, `Deauthentication`, `Request-to-send`, `Acknowledgement`; their
+  Source and Destination are MAC addresses. Data frames reach IPv4, IPv6
+  and ARP through LLC/SNAP; protected (encrypted) ones show as `QoS Data,
+  SN=6, FN=0, Protected`. The Radiotap header's length is honoured, its
+  extended present bitmaps walked, and a frame check sequence it announces
+  cut off. PPP control protocols are named with their message: `LCP
+  Configuration Request`, `IPCP Configuration Ack`, `PAP
+  Authenticate-Request` (no credentials shown), `CHAP Challenge`; PPPoE
+  discovery with its stage, `Active Discovery Offer (PADO)
+  AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
+  type` on every line, and PPPoE frames only their EtherType.
+
+### Fixed
+- An Ethernet frame carried in VXLAN or GRE is dissected as one on the
+  wire: a PPPoE session frame inside is unwrapped to its IP packet, a
+  discovery message named, where before they showed as `PPPoES` /
+  `PPPoED` with `EtherType 0x8864` / `0x8863` (#67).
+
 ## [0.3.0] — 2026-10-09
 
 ### Added
