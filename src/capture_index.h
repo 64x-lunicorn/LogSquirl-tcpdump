@@ -268,19 +268,42 @@ public:
         return error_;
     }
 
+    /// Keep the record of each packet read, as it lies in the file, so that
+    /// it can be copied without reading the file again (Export packets):
+    /// of a gzip-compressed capture, decompressing it again.
+    void keepRecords( bool keep )
+    {
+        keepRecords_ = keep;
+    }
+
+    /// The record of the packet read last, header and all; empty when it
+    /// was not kept: keepRecords() is off, it is longer than
+    /// kMaxKeptRecord, or the reader had read part of it before.
+    ByteView recordBytes() const;
+
+    /// The longest record kept.
+    static constexpr size_t kMaxKeptRecord = 16 * 1024 * 1024;
+
 private:
+    class RecordingSource;
     /// Open the file @p part again, at @p checkpoint (in it) if there is one.
     bool reopen( const CapturePart& part, const ReaderCheckpoint* checkpoint );
     void close();
 
     std::shared_ptr<const CaptureIndex> index_;
     std::unique_ptr<CaptureFile> file_;
+    /// Between the file and the reader: keeps what the reader reads.
+    std::unique_ptr<RecordingSource> recording_;
     std::unique_ptr<HeadSource> headSource_;
     std::unique_ptr<CaptureReader> reader_;
     /// The file reader_ reads, and the packets of the capture before it.
     QString readerPath_;
     uint32_t readerPacketsBefore_ = 0;
     QString error_;
+    bool keepRecords_ = false;
+    /// Where the record of the packet read last lies, if it was kept.
+    uint64_t recordOffset_ = 0;
+    uint64_t recordLength_ = 0;
 };
 
 } // namespace tcpdump

@@ -537,6 +537,10 @@ SCENARIO( "The packets of a gzip-compressed capture are read back and exported",
                 REQUIRE( gzExport.status == ExportResult::Status::Exported );
                 REQUIRE( gzExport.format == plainExport.format );
                 REQUIRE( fileBytes( gzOut ) == fileBytes( plainOut ) );
+                // The records are copied as the cursor read them: the
+                // capture is decompressed once, not again to copy them.
+                REQUIRE( gzExport.recordsReadAgain == 0 );
+                REQUIRE( plainExport.recordsReadAgain == 0 );
                 REQUIRE( captureFormatOf( gzPath ) == captureFormatOf( plainPath ) );
             }
         }

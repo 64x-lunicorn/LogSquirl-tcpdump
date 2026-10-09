@@ -182,6 +182,7 @@ SCENARIO( "Exported packets are the capture's records, byte for byte", "[packet_
             REQUIRE( result.status == ExportResult::Status::Exported );
             REQUIRE( result.packets == expected.size() );
             REQUIRE( result.format == captureFormatOf( capture ) );
+            REQUIRE( result.recordsReadAgain == 0 );
 
             THEN( "the export holds exactly those records, in order, as they are in the capture" )
             {

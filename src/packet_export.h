@@ -137,6 +137,9 @@ struct ExportResult {
     Status status = Status::Failed;
     QString error;
     uint32_t packets = 0; ///< Packets written.
+    /// Packet records read from the capture file a second time, as the
+    /// cursor that found them could not keep them; 0 as a rule.
+    uint32_t recordsReadAgain = 0;
     CaptureFormat format = CaptureFormat::Pcap;
 };
 

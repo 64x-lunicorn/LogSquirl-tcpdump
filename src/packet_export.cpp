@@ -334,6 +334,10 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const Pac
 
     ExportResult result;
     CaptureCursor cursor( index );
+    // The cursor keeps each record it reads, which is copied from there:
+    // the capture is read (and decompressed) once.  The file is opened
+    // again only for the headers, and a record the cursor could not keep.
+    cursor.keepRecords( true );
     RecordCopier copier( output );
     CapturedPacket packet;
     bool headerWritten = false;
@@ -355,15 +359,19 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const Pac
                 return failed(
                     QStringLiteral( "Packet %1: %2" ).arg( number ).arg( cursor.error() ) );
             }
-            if ( !capture || capturePath != packet.file ) {
+            // The capture file, opened when a record is to be copied from it.
+            const auto source = [ & ] {
+                if ( capture && capturePath == packet.file ) {
+                    return true;
+                }
                 capture = std::make_unique<CaptureFile>();
                 if ( !capture->open( packet.file, problem, index->gzipAccessPoints() ) ) {
-                    output.cancelWriting();
-                    return failed( problem );
+                    return false;
                 }
                 capturePath = packet.file;
                 copier.setSource( capture->source() );
-            }
+                return true;
+            };
             const auto& headers = packet.headers;
             if ( headers.records.empty() ) {
                 output.cancelWriting();
@@ -384,6 +392,10 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const Pac
             for ( ; headersOfIt < headers.records.size(); ++headersOfIt ) {
                 const bool sectionHeader
                     = headers.format == CaptureFormat::Pcapng && headersOfIt == 0;
+                if ( !source() ) {
+                    output.cancelWriting();
+                    return failed( problem );
+                }
                 if ( !copier.copy( headers.records[ headersOfIt ], sectionHeader ) ) {
                     output.cancelWriting();
                     return failed( copier.error() );
@@ -391,9 +403,26 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const Pac
             }
             headerWritten = true;
 
-            if ( !copier.copy( { packet.recordOffset, packet.recordLength } ) ) {
-                output.cancelWriting();
-                return failed( copier.error() );
+            const auto record = cursor.recordBytes();
+            if ( record.data && record.size == packet.recordLength ) {
+                const auto length = static_cast<qint64>( record.size );
+                if ( output.write( reinterpret_cast<const char*>( record.data ), length )
+                     != length ) {
+                    output.cancelWriting();
+                    return failed( QStringLiteral( "The export cannot be written: %1" )
+                                       .arg( output.errorString() ) );
+                }
+            }
+            else {
+                ++result.recordsReadAgain;
+                if ( !source() ) {
+                    output.cancelWriting();
+                    return failed( problem );
+                }
+                if ( !copier.copy( { packet.recordOffset, packet.recordLength } ) ) {
+                    output.cancelWriting();
+                    return failed( copier.error() );
+                }
             }
             ++result.packets;
 

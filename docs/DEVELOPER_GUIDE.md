@@ -2156,11 +2156,16 @@ export, conversation statistics):
   row's stream number, addresses and ports.
 
 - **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
-  `exportPackets(index, numbers, path, cancel, progress)` sorts the
-  numbers, reads them with one `CaptureCursor` in one pass, and copies each
-  packet's record (`recordOffset`/`recordLength`) from the capture file
-  byte for byte through a `QSaveFile`, which appears only when complete, so
-  a cancel or a failure leaves nothing. Ahead of a packet go the records
+  `exportPackets(index, numbers, path, cancel, progress)` reads the
+  packets with one `CaptureCursor` in one pass and writes each packet's
+  record byte for byte through a `QSaveFile`, which appears only when
+  complete, so a cancel or a failure leaves nothing. The cursor keeps the
+  record it read (`keepRecords()`, `recordBytes()`: its `RecordingSource`
+  between the file and the reader keeps what the reader reads after the
+  record before, at most `kMaxKeptRecord`, 16 MiB), so the capture is read,
+  and a gzip one decompressed, once; only the headers, and a record it
+  could not keep (`ExportResult::recordsReadAgain`), are copied from the
+  file opened again (`recordOffset`/`recordLength`). Ahead of a packet go the records
   of its `CapturedPacket::headers` not written yet: a pcap's global header
   once; for a pcapng, its section's header block when the section changes
   (its section length set to -1, "unknown") and the section's interface
