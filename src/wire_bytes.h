@@ -21,7 +21,7 @@
  * @file wire_bytes.h
  * @brief Reading and formatting the fields of a packet, as they lie on the wire.
  *
- * Shared by the pcap Parser and the Payload Describer.  The capture readers
+ * Shared by the pcap Parser, its ICMP dissection and the Payload Describer.  The capture readers
  * also read the fields of their file with it, in the byte order the file was
  * written in.  Pure C++.
  */
@@ -78,6 +78,15 @@ inline std::string formatIpv4( const uint8_t* p )
 {
     char buf[ 16 ];
     std::snprintf( buf, sizeof( buf ), "%u.%u.%u.%u", p[ 0 ], p[ 1 ], p[ 2 ], p[ 3 ] );
+    return buf;
+}
+
+/// A MAC address as six lowercase hexadecimal pairs, `00:11:22:33:44:55`.
+inline std::string formatMac( const uint8_t* p )
+{
+    char buf[ 18 ];
+    std::snprintf( buf, sizeof( buf ), "%02x:%02x:%02x:%02x:%02x:%02x", p[ 0 ], p[ 1 ], p[ 2 ],
+                   p[ 3 ], p[ 4 ], p[ 5 ] );
     return buf;
 }
 

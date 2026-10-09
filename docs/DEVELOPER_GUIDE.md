@@ -35,9 +35,15 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
   length fields, falling back to the captured bytes for TSO/GSO lengths of 0;
   fragments after the first are not parsed as TCP/UDP
 - Dissects transport layer (TCP, UDP, ICMP, ICMPv6); a TCP header shorter
-  than 20 bytes is flagged and yields no payload
+  than 20 bytes is flagged and yields no payload. ICMP and ICMPv6 messages
+  are described by `icmp.h/cpp` (see below)
 - Hands a TCP or UDP payload with its ports to the Payload Describer, and
   appends the description it gets back to the transport summary after ` | `
+- Names an IP protocol or EtherType it does not dissect further from the
+  name tables (`IGMP`, `ESP`, `LLDP`, `PPPoES`), keeping the number in the
+  Info column (`Protocol 2`, `EtherType 0x88CC`); one without a name stays
+  numeric, `IP(200)` or `ETH(0x1234)`. An Ethernet type field of 1500 or
+  less is the length of an IEEE 802.3 frame, shown as `LLC`
 
 `PcapngReader` reads pcapng captures block by block and hands each packet
 to the same dissection (`dissectPacket()`):
@@ -58,6 +64,38 @@ to the same dissection (`dissectPacket()`):
 - `if_tsoffset` is not applied: times are relative to the first packet
 
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
+
+#### ICMP and ICMPv6 (`icmp.h/cpp`)
+Pure C++. `describeIcmp()` and `describeIcmpv6()` turn a message of at
+least its 8-byte header into Info. Type and code names follow Wireshark's
+(RFC 792, RFC 4443, RFC 4861), in sentence case; a type without a name is
+`Type=42 Code=1`, a code without one `(code=99)`. One form throughout:
+the type's name, the code's name in parentheses, then `key=value` fields,
+then what the message is about.
+
+| Message | Info |
+|---|---|
+| Echo, timestamp, information and address mask queries | `Echo (ping) request id=0x1234, seq=7` (id in hexadecimal, seq in decimal, both read big-endian) |
+| Destination unreachable, time exceeded, parameter problem, source quench | `Destination unreachable (Port unreachable) for 10.0.0.1:51234 → 192.168.1.5:53 UDP` |
+| Fragmentation needed | `Destination unreachable (Fragmentation needed, mtu=1400) for …` |
+| Redirect | `Redirect (Redirect for host) gateway=10.0.0.254 for …` |
+| ICMPv6 errors | `Time exceeded (Hop limit exceeded in transit) for …`, `Packet too big mtu=1280 for [2001:db8::1]:40000 → [2001:db8::2]:443 TCP` |
+| Router solicitation | `Router solicitation from 00:11:22:33:44:55` |
+| Router advertisement | `Router advertisement (M, O, prf=high) lifetime=1800s from 00:11:22:33:44:55`: flags M, O, H, P, and the router preference unless medium |
+| Neighbor solicitation | `Neighbor solicitation for fe80::2 from 00:11:22:33:44:55` |
+| Neighbor advertisement | `Neighbor advertisement fe80::2 (rtr, sol, ovr) is at 00:11:22:33:44:55` |
+
+The ` for …` of an error message describes the packet it quotes, which
+`dissectQuotedPacket()` (`pcap_parser.h`) dissects with the same IPv4 and
+IPv6 parsers as every packet, extension headers and fragments included, but
+reads of its transport only the ports of a TCP or UDP header, the first 4 of
+the 8 bytes a router quotes, and never a packet the quote itself quotes. The
+protocol is `ipProtocolName()`'s; IPv6 addresses with a port are bracketed.
+A quote without its whole IP header adds nothing, one without the ports
+shows the addresses alone. The quote and the neighbor discovery options are
+whatever the sender put there: every field is checked against the captured
+bytes, an option of length 0 or running past them ends the walk. The ports
+of a quote are not the message's own: ICMP keeps the stream `-`.
 
 #### The reader seam
 Everything past the reader (Converter, Stream Tracker, TCP Analysis, Packet Formatter, `CaptureStats`)
@@ -94,11 +132,115 @@ description, or no match. It is the only module that knows which
 application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
-- TCP: TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in
-  the right direction, on proxy ports), then the port hint
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, then NMEA and the port hint
-- The port hint, the last entry of both tables, names well-known ports
-  (SSH, FTP, ADB, etc.) and previews the payload: printable ASCII, other
+- TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, NMEA 0183, SOCKS4/5
+  (only messages of the exact shape, in the right direction, on proxy
+  ports), then the port hint
+- HTTP: a request is its request line with the Host header's value put
+  before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
+  path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
+  its status line, then `, Content-Type: …` and `, Content-Length: …` when
+  it has them, `HTTP/1.1 200 OK, Content-Type: text/html, Content-Length:
+  1234`. The request or status line always comes first. A header counts
+  only in the header section (before the empty line), on a whole line the
+  segment holds up to its line feed, its name in any case; its value is
+  shown without the blanks around it, escaped and cut like every field.
+  SSDP (UDP 1900) is described the same way
+- HTTP/2: the connection preface, `PRI * HTTP/2.0`, is labelled `HTTP2`
+  and described as `Magic`, then the frames behind it in the segment. A
+  frame is named with its type and stream, `HEADERS[1]`, Wireshark's way,
+  up to four in a segment, then `…`. A frame header must keep the rules of
+  its type (a known type, a stream for DATA, HEADERS and the like, stream 0
+  for SETTINGS, PING and GOAWAY, the fixed length of PING, RST_STREAM,
+  PRIORITY and WINDOW_UPDATE, no more than the default maximum frame size
+  of 16384 bytes, the reserved bit unset), or the bytes are taken for no
+  frames. HPACK header blocks are not decoded; HTTP/2 over TLS is TLS
+- TLS: every record of a segment and every handshake message of a record
+  is named, in order, up to four, then `…`; a ClientHello adds its server
+  name, the highest version it offers (`supported_versions`, GREASE aside,
+  else its own) and its ALPN protocols, a ServerHello the version chosen.
+  `FieldReader` reads the fields: a read that does not fit fails, and a length
+  that claims more than there is yields what there is, so a record cut by
+  the snaplen or the segment is described as far as it goes. A version is
+  named only if known: a cut hello whose extensions end before a
+  `supported_versions` would have shown gets none
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, QUIC, then NMEA and
+  the port hint
+- DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
+  and the transaction id, then the address and the client's MAC (an
+  Ethernet `chaddr`) and the host name (option 12, cut like every field),
+  `DHCP Offer - Transaction ID 0x3903f326, 192.168.1.50 for
+  00:11:22:33:44:55`, `DHCP Discover - Transaction ID 0x3903f326 from
+  00:11:22:33:44:55, Host Name: laptop`. The address is the one the server
+  assigns (`yiaddr`), else the one requested (option 50), else the one the
+  client holds (`ciaddr`). Options are walked within the message: pads
+  skipped, up to the end option; an option whose length runs past the
+  message ends the walk, one of the wrong length is ignored. An overload
+  option (52) in the options field makes the file and sname fields be
+  walked too, in that order, but not overload again. Without the magic
+  cookie (or option 53) a message is BOOTP, `Boot Request` or `Boot Reply`
+- DHCPv6 (UDP 546, 547): the message type, the transaction id and the
+  client's DUID (option 1) in hexadecimal, `Solicit XID: 0x1a2b3c CID:
+  000100011c39cf88001122334455`, as Wireshark writes it; a relay message
+  names its link address and the message it relays (option 9), up to 8
+  relays deep, `Relay-forw L: 2001:db8::1, Solicit XID: …`
+- NTP (UDP 123): version and mode as Wireshark writes them, then the
+  stratum, with the reference identifier of a primary server or a
+  kiss-o'-death code, `NTP Version 4, server, stratum 1 (GPS)`; a client
+  request's stratum, 0 as a rule, is left out unless set. Control and
+  private messages (modes 6 and 7) show their version and mode alone. A
+  packet of another version, or shorter than the 48-byte header, is `NTP`
+  by its port alone. DNS, mDNS, SSDP, NTP, DHCP and DHCPv6 are named by
+  their ports, not guessed: the label sticks to the stream
+- DNS: described like Wireshark, `Standard query response 0x1a2b A
+  www.example.com CNAME example.com A 93.184.216.34`: the operation, the
+  transaction id, the first question's type and name, a response code
+  other than "no error" (`[NXDOMAIN]`), then the answers' types and data
+  (addresses, names, MX, SRV and TXT data; other types by name alone), up
+  to four; answers not listed, beyond the cap or cut off, are counted,
+  `… (6 answers)`. Names are put together from their compression pointers
+  within the message: a pointer must point before itself, so a chain of
+  them always ends; a pointer forward, to itself or beyond the message, a
+  reserved label type or a name over 255 bytes fails the name, and with it
+  the rest of the message. A name or TXT data is shown up to the field cap
+  (120 bytes). Over TCP every message is behind a 2-byte length; the
+  messages a segment begins with are described in order, up to four, the
+  last as far as the segment holds it. A segment that begins inside a
+  message (its header implausible: an unknown opcode, the Z bit set or more
+  than one question) is `DNS` by its port alone
+- QUIC: by its bytes, not its port. A datagram is QUIC if it begins with a
+  long header (header form and fixed bit set) of a version the describer
+  knows: v1, v2 (RFC 9369, whose packet types are numbered differently) or
+  draft-22 to draft-34 (`0xff0000xx`; older drafts had another header), or
+  with a Version Negotiation packet (version 0) that lists one of them. It
+  is described from its public header, `Initial, Version 1,
+  DCID=8394c8f03e515708, SCID=0a0b0c0d`: the packets coalesced in the
+  datagram, in order, up to four, then `…`, a short header among them as
+  `Protected Payload`, then the version and connection IDs of the first;
+  a Version Negotiation packet lists the versions offered. Everything
+  behind the header is encrypted, the server name of an Initial too (it
+  would take deriving the Initial keys). A short header carries no version
+  and its connection ID no length: by its bytes alone it is not QUIC, and
+  UDP 443 is still only the port hint `HTTPS`
+- `describeInStream()`, run by the Converter after the Stream Tracker, looks
+  at a packet again with its stream's state: it records in the stream's
+  `QuicConnection` that a long header was seen and how long the connection
+  ID its sender chose is, and labels the stream's short header packets
+  (fixed bit, no long header bit, long enough for header protection) QUIC,
+  `Protected Payload, DCID=…`, replacing the description after the
+  ` | ` separator (`kDescriptionSeparator`). Likewise it records in
+  `StreamState::http2` that a TCP stream began with the HTTP/2 preface,
+  and labels the stream's later segments `HTTP2` when they begin with
+  frame headers, naming the frames whose header lies in the kept bytes.
+  A segment that begins inside a frame (its first bytes no plausible
+  header) is not described again: segments are not reassembled, and the
+  Stream Labels make it an `HTTP2` `Continuation`. A packet labelled here
+  counts as recognised (`PacketRecord::protocolRecognised`), so its label
+  sticks to the stream. For this the parser keeps the
+  first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
+  `PacketRecord::payloadHead`
+- The port hint, the last entry of both tables, names the service of a
+  well-known port from the name tables, the source port's before the
+  destination port's, and previews the payload: printable ASCII, other
   bytes as dots, at most 200 characters; predominantly binary payloads get
   none. Its label is a guess (`PayloadDescription::guessed`), which the
   parser passes on as `PacketRecord::protocolRecognised` false, so that it
@@ -110,6 +252,18 @@ preview and its caps. A description is finalised as one line before it
 leaves the describer, so one packet is always one line whatever a detector
 forgot to escape.
 
+#### The name tables (`protocol_names.h/cpp`)
+Pure C++, names only: `ipProtocolName()` for IP protocol numbers,
+`etherTypeName()` for EtherTypes, `servicePortName()` for the service a
+port is assigned to on TCP or on UDP; each answers `nullptr` for a number
+it does not know, and the caller keeps the numeric form. A name is one
+word, without spaces, as the Protocol column and the Log Format need it.
+A service is listed with the transports it runs over (`kTcp`, `kUdp`,
+`kBoth`), so that TFTP is named on UDP 69 but not on TCP 69. The tables
+name what nothing dissects; a detector that recognises a protocol by its
+port or content (DNS, NTP, DHCP, DHCPv6) runs before the port hint and decides
+alone, and may take its name from the table to keep the two in step.
+
 ### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
@@ -120,7 +274,7 @@ its packets (`PacketFormatter` takes the reader's `precision()`;
 not rounded.
 
 The widths are a minimum: a value as wide as its column, or wider (packet
-1,000,000, `ETH(0x88CC)`), is still followed by a space, and an empty value
+1,000,000, `MPLS-in-IP`), is still followed by a space, and an empty value
 (Source and Destination of a packet without addresses) is shown as `-`, so
 that a line always splits into its columns at runs of spaces. The Log
 Format relies on it.
@@ -176,9 +330,12 @@ packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
 pointer. Every field added costs memory once per numbered stream: today a
 `TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
-and the stream's label, one byte, so 72 bytes per stream with the
-alignment, some 72 MB at the stream cap. A UDP stream pays
-for it too, as both transports share `StreamState`.
+the Payload Describer's `QuicConnection` (whether a QUIC long header was
+seen, and the connection ID length of each direction), 3 bytes, whether a
+TCP stream began with the HTTP/2 preface, 1 byte, and the stream's label,
+1 byte, so 72 bytes per stream with the alignment, some 72 MB at the stream
+cap. A UDP stream pays for the TCP fields too and a TCP stream for the QUIC
+ones, as both transports share `StreamState`.
 
 `analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
 by the Converter after the Stream Tracker, shows a TCP segment's `Seq=` and
@@ -226,7 +383,9 @@ that starts a record) and `HTTPS` (the port's guess for one in the middle
 of a record), an HTTP body on port 8080 shows `HTTP-Alt`, on port 3000
 `TCP`. `StreamLabels` (pure C++), owned by the Converter next to the Stream
 Tracker, puts that right after the fact: `apply()` runs on every packet
-after the Stream Tracker and the TCP Analysis. The first label a detector
+after the Stream Tracker, the TCP Analysis and `describeInStream()`, so the
+QUIC short headers and HTTP/2 frames that only their stream makes
+recognisable count as recognised too. The first label a detector
 recognised on a stream (`PacketRecord::protocolRecognised`) sticks to it;
 a later packet that no detector recognises takes it, and if it carries
 payload, its description becomes `Continuation`, followed by the preview
@@ -337,7 +496,8 @@ puts it there too.
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
 its stream and the TCP Analysis show its numbers relative and mark it,
-lets the Stream Labels name it by its stream's protocol, counts its markers
+lets the Payload Describer look at it again in its stream and the Stream
+Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
@@ -414,8 +574,11 @@ An application protocol is one detector function plus one table entry in
    own. A precedence case (a payload two detectors could claim) is a test
    of the table order, and belongs there too.
 
-A new link or network layer, in contrast, is parsed in `pcap_parser.cpp`
-and tested with the frame builders in `tests/pcapbuilder.h`.
+A protocol that only needs a name, a well-known port, IP protocol number or
+EtherType, is one line in the tables of `protocol_names.cpp`, with a check
+in `tests/protocol_names_test.cpp`. A new link or network layer, in
+contrast, is parsed in `pcap_parser.cpp` and tested with the frame builders
+in `tests/pcapbuilder.h`.
 
 ## Testing
 
@@ -431,12 +594,20 @@ through the Payload Describer with a payload alone. `tests/corpus` holds capture
 convert to (`corpus_test.cpp`); run the tests with `TCPDUMP_UPDATE_CORPUS=1`
 to rewrite that text after an intended change of the output, and review the
 difference. The pcapng corpus capture, `interfaces.pcapng`, is made up byte
-for byte by `tests/make_pcapng_corpus.py`, and `tcp-analysis.pcap`, a TCP
-connection that shows every analysis marker, by
+for byte by `tests/make_pcapng_corpus.py`; `tls.pcap` holds real TLS 1.3 and
+1.2 handshakes, which `tests/make_tls_corpus.py` runs through Python's
+`ssl` module in memory and frames in made-up TCP segments; `dns.pcap`
+holds DNS over UDP and TCP, encoded with name compression by
+`tests/make_dns_corpus.py`; `tcp-analysis.pcap`, a TCP
+connection that shows every analysis marker, is written by
 `tests/make_tcp_analysis_corpus.py`: a real lossy capture would need root
 for a lossy link (tc netem) and differ from run to run. `stream-labels.pcap`,
 streams whose protocol sticks and a new connection that forgets it, is
-written by `tests/make_stream_labels_corpus.py`. The pcapng unit tests build their
+written by `tests/make_stream_labels_corpus.py`. `icmp.pcap`, ICMP and
+ICMPv6 echoes, error messages with their quoted packets and neighbor
+discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
+lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
+by `tests/make_dhcp_ntp_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in

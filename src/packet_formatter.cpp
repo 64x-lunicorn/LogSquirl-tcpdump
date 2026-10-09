@@ -30,6 +30,7 @@
 
 #include "packet_formatter.h"
 
+#include "payload_describer.h"
 #include "stream_labels.h"
 #include "tcp_analysis.h"
 
@@ -234,6 +235,7 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
     for ( auto pkt : packets ) {
         const auto stream = tracker.track( pkt );
         analyseTcp( pkt, stream );
+        describeInStream( pkt, stream );
         labels.apply( pkt, stream );
         lines.push_back( formatter.format( pkt, stream.id ) );
     }

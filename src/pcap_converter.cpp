@@ -26,6 +26,7 @@
 
 #include "capture_reader.h"
 #include "packet_formatter.h"
+#include "payload_describer.h"
 #include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
@@ -261,6 +262,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         }
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
+        describeInStream( pkt, stream );
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {

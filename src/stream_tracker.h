@@ -39,6 +39,14 @@ namespace tcpdump {
 constexpr int kNoStream = -1;   ///< Stream column "-": the packet has no TCP or UDP header.
 constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
 
+/// What the Payload Describer knows about a QUIC connection on a UDP stream.
+struct QuicConnection {
+    bool seen = false; ///< A QUIC long header was seen on the stream.
+    /// The length of the destination connection ID of short headers sent
+    /// in each direction, indexed by Stream::direction; -1 while unknown.
+    int8_t dcidLength[ 2 ] = { -1, -1 };
+};
+
 /**
  * What is known about one direction of a TCP stream: what the TCP Analysis
  * needs to show relative numbers and to classify the next segment, the
@@ -87,14 +95,19 @@ struct TcpDirection {
  * What is known about one stream, kept for as long as the capture is read.
  *
  * Modules that follow a conversation over its packets (the TCP Analysis,
- * the Stream Labels, …) keep their fields here, and read and update them
- * through the Stream the tracker hands out.  Every byte added here is paid
- * once per numbered stream, see kMaxStreams.  A new TCP connection on the
- * same addresses and ports (see analyseTcp()) starts from a fresh state.
+ * the Payload Describer, the Stream Labels, …) keep their fields here, and
+ * read and update them through the Stream the tracker hands out.  Every
+ * byte added here is paid once per numbered stream, see kMaxStreams: 72
+ * bytes today, the two TcpDirections and the alignment taking most.  A new
+ * TCP connection on the same addresses and ports (see analyseTcp()) starts
+ * from a fresh state, its HTTP/2 flag and label with it.
  */
 struct StreamState {
     /// TCP only: each direction, indexed by Stream::direction.
     TcpDirection tcp[ 2 ];
+    QuicConnection quic; ///< UDP only.
+    /// TCP only: the stream began with the HTTP/2 connection preface.
+    bool http2 = false;
     /// The protocol a detector recognised on the stream, as StreamLabels
     /// numbers it; 0 while none has.
     uint8_t label = 0;

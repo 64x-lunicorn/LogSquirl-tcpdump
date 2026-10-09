@@ -472,13 +472,13 @@ SCENARIO( "Parsing an ICMP Echo Request", "[pcap_parser]" )
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "the protocol is ICMP and info shows Echo request" )
+            THEN( "the protocol is ICMP and info shows the echo request with its id and seq" )
             {
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "ICMP" );
                 REQUIRE_FALSE( result.packets[ 0 ].transport );
-                REQUIRE( result.packets[ 0 ].info.find( "Echo request" ) != std::string::npos );
+                REQUIRE( result.packets[ 0 ].info == "Echo (ping) request id=0x0001, seq=1" );
                 REQUIRE( result.packets[ 0 ].srcIp == "10.0.0.1" );
                 REQUIRE( result.packets[ 0 ].dstIp == "10.0.0.2" );
             }

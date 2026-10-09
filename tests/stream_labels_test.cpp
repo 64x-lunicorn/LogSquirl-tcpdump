@@ -27,6 +27,7 @@
 
 #include <cstring>
 
+#include "payload_describer.h"
 #include "pcapbuilder.h"
 #include "stream_labels.h"
 #include "stream_tracker.h"
@@ -65,7 +66,7 @@ Bytes datagram( uint16_t server, const Bytes& payload )
 }
 
 /// The packets after the Converter's steps, in order: Stream Tracker, TCP
-/// Analysis, Stream Labels.
+/// Analysis, the Payload Describer in the stream, Stream Labels.
 std::vector<PacketRecord> labelled( const std::vector<Bytes>& frames,
                                     StreamTracker tracker = StreamTracker() )
 {
@@ -75,6 +76,7 @@ std::vector<PacketRecord> labelled( const std::vector<Bytes>& frames,
     for ( auto& pkt : packets ) {
         const auto stream = tracker.track( pkt );
         analyseTcp( pkt, stream );
+        describeInStream( pkt, stream );
         labels.apply( pkt, stream );
     }
     return packets;
@@ -108,7 +110,7 @@ SCENARIO( "A protocol a detector recognised sticks to the stream", "[stream_labe
         THEN( "the request is HTTP by its content" )
         {
             REQUIRE( packets[ 0 ].protocol == "HTTP" );
-            REQUIRE( descriptionOf( packets[ 0 ] ) == "GET / HTTP/1.1" );
+            REQUIRE( descriptionOf( packets[ 0 ] ) == "GET x/ HTTP/1.1" );
         }
         THEN( "a bare ACK carries the label, without a description" )
         {
@@ -164,6 +166,36 @@ SCENARIO( "A protocol a detector recognised sticks to the stream", "[stream_labe
             REQUIRE( packets[ 2 ].protocol == "TLS" );
             REQUIRE( packets[ 3 ].protocol == "TLS" );
             REQUIRE( descriptionOf( packets[ 3 ] ) == "Continuation" );
+        }
+    }
+
+    GIVEN( "TLS on port 8443, whose port hint is HTTPS-Alt, from its handshake to its end" )
+    {
+        const Bytes clientHello{ 0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00 };
+        const Bytes encrypted{ 0x8a, 0x13, 0xf0, 0x42, 0x99, 0x00, 0x7e, 0xc1 };
+        const auto hello = clientHello.size();
+        const auto packets = labelled( {
+            segment( 8443, false, kSyn, 0, 0 ),
+            segment( 8443, true, kSyn | kAck, 0, 1 ),
+            segment( 8443, false, kAck, 1, 1 ),
+            segment( 8443, false, kPshAck, 1, 1, clientHello ),
+            segment( 8443, true, kAck, 1, 1 + hello ),
+            segment( 8443, true, kPshAck, 1, 1 + hello, encrypted ),
+            segment( 8443, false, kAck | 0x01, 1 + hello, 1 + encrypted.size() ),
+        } );
+
+        THEN( "the handshake before the hello is the port's guess, an HTTPS one" )
+        {
+            for ( size_t i = 0; i < 3; ++i ) {
+                REQUIRE( packets[ i ].protocol == "HTTPS-Alt" );
+            }
+        }
+        THEN( "every packet from the hello on is TLS" )
+        {
+            for ( size_t i = 3; i < packets.size(); ++i ) {
+                REQUIRE( packets[ i ].protocol == "TLS" );
+            }
+            REQUIRE( descriptionOf( packets[ 5 ] ) == "Continuation" );
         }
     }
 
@@ -253,6 +285,34 @@ SCENARIO( "A protocol a detector recognised sticks to the stream", "[stream_labe
         {
             REQUIRE( packets[ 1 ].protocol == "HTTP" );
             REQUIRE( packets[ 2 ].protocol == "TCP" );
+        }
+    }
+}
+
+SCENARIO( "What the Payload Describer recognises in a stream sticks too", "[stream_labels]" )
+{
+    GIVEN( "an HTTP/2 connection on a port without a hint: the preface, a frame, then a "
+           "segment in the middle of a frame" )
+    {
+        const auto preface = text( "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" );
+        // A SETTINGS frame without settings: length 0, type 4, stream 0.
+        const Bytes settings{ 0, 0, 0, 4, 0, 0, 0, 0, 0 };
+        const auto packets = labelled( {
+            segment( 3000, false, kPshAck, 1, 1, preface ),
+            segment( 3000, true, kPshAck, 1, 1 + preface.size(), settings ),
+            segment( 3000, true, kPshAck, 1 + settings.size(), 1 + preface.size(), kBody ),
+        } );
+
+        THEN( "the frame, which only its stream makes HTTP2, is described as such" )
+        {
+            REQUIRE( packets[ 1 ].protocol == "HTTP2" );
+            REQUIRE( packets[ 1 ].protocolRecognised );
+            REQUIRE( descriptionOf( packets[ 1 ] ) == "SETTINGS[0]" );
+        }
+        THEN( "the segment in the middle of a frame is an HTTP2 continuation" )
+        {
+            REQUIRE( packets[ 2 ].protocol == "HTTP2" );
+            REQUIRE( descriptionOf( packets[ 2 ] ).rfind( "Continuation", 0 ) == 0 );
         }
     }
 }

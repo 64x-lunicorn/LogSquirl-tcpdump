@@ -38,6 +38,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -111,6 +112,10 @@ enum class Transport { Tcp, Udp };
 /// Separates the transport summary in Info from the description of the payload.
 constexpr const char* kDescriptionSeparator = " | ";
 
+/// Payload bytes a PacketRecord keeps: enough for a QUIC long header's
+/// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
+constexpr size_t kPayloadHeadBytes = 48;
+
 /// Represents a single parsed network packet.
 struct PacketRecord {
     uint32_t number = 0; ///< 1-based packet index
@@ -159,9 +164,15 @@ struct PacketRecord {
 
     uint32_t payloadLen = 0; ///< Application payload bytes
 
+    /// The first captured bytes of the TCP or UDP payload, payloadHeadLen
+    /// of them, for the Payload Describer to look at again once the packet's
+    /// stream is known (describeInStream).
+    std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
+    size_t payloadHeadLen = 0;
     /// A detector of the Payload Describer recognised the TCP or UDP payload
-    /// and named protocol, rather than the ports suggesting it.  Such a
-    /// label sticks to the packet's stream (StreamLabels).
+    /// and named protocol, rather than the ports suggesting it, by the
+    /// payload alone or in its stream (describeInStream).  Such a label
+    /// sticks to the packet's stream (StreamLabels).
     bool protocolRecognised = false;
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
@@ -194,6 +205,18 @@ std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window );
  */
 void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* data,
                     size_t len );
+
+/**
+ * Dissect the IP packet an ICMP or ICMPv6 error message quotes into @p pkt,
+ * with the network parsers that dissect every packet: its addresses, its IP
+ * protocol and name (`protocol`, from ipProtocolName()), and the ports of a
+ * TCP or UDP header (`transport`), of which 4 bytes suffice, as a router
+ * quotes only 8.  Nothing past the ports is read, nor a packet the quote
+ * itself quotes.  Without the whole IP header, @p pkt keeps no address.
+ *
+ * @param data  The quoted bytes, @p len of them, an IPv4 or IPv6 header first.
+ */
+void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len );
 
 // ── Parser ───────────────────────────────────────────────────────────────
 
