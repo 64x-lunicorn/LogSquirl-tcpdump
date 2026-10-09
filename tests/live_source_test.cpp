@@ -80,7 +80,7 @@ SCENARIO( "Live Source Kinds are registered in one place, in order, by id", "[li
         FakeSourceKind kind;
         LiveChoice choice;
         REQUIRE_FALSE( kind.validate( choice ).isEmpty() );
-        choice.interface = "fake0";
+        choice.networkInterface = "fake0";
         REQUIRE( kind.validate( choice ).isEmpty() );
     }
 }
@@ -120,15 +120,15 @@ SCENARIO( "A live capture is named after its device and interface", "[live_sourc
 {
     LiveChoice choice;
     REQUIRE( liveCaptureName( choice ) == "live" );
-    choice.interface = "en0";
+    choice.networkInterface = "en0";
     REQUIRE( liveCaptureName( choice ) == "en0" );
     choice.device = "emulator-5554";
     REQUIRE( liveCaptureName( choice ) == "emulator-5554-en0" );
     choice.device = "root@host:2222";
-    choice.interface = "\\Device\\NPF_{1234}";
+    choice.networkInterface = "\\Device\\NPF_{1234}";
     REQUIRE( liveCaptureName( choice ) == "root_host_2222-_Device_NPF__1234_" );
     choice.device.clear();
-    choice.interface = "..";
+    choice.networkInterface = "..";
     REQUIRE( liveCaptureName( choice ) == "_.." );
 }
 

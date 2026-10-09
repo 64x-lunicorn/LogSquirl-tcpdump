@@ -308,7 +308,7 @@ ProcessCommand LocalSourceKind::command( const LiveChoice& choice ) const
     command.program = found.path.isEmpty() ? QStringLiteral( "dumpcap" ) : found.path;
     command.name = found.isDumpcap || found.path.isEmpty() ? QStringLiteral( "dumpcap" )
                                                            : QStringLiteral( "tcpdump" );
-    command.arguments = { QStringLiteral( "-i" ), choice.interface, QStringLiteral( "-s" ),
+    command.arguments = { QStringLiteral( "-i" ), choice.networkInterface, QStringLiteral( "-s" ),
                           QString::number( choice.snaplen ) };
     if ( command.name == QStringLiteral( "dumpcap" ) ) {
         // -q: no packet counts on stderr; pcapng, dumpcap's own, to stdout.

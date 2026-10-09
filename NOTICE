@@ -19,3 +19,18 @@ against the LogSquirl Plugin SDK without taking on GPL obligations.
     Copyright (C) 2026 LogSquirl Contributors
 
 The full MIT permission notice is reproduced in the header file itself.
+
+Third-party component: Mbed TLS
+-------------------------------
+
+The plugin's library contains parts of Mbed TLS 3.6.7 (its AES, GCM,
+ChaCha20-Poly1305, SHA-1/SHA-2, HMAC and HKDF code), which the build
+fetches from its release (CMakeLists.txt) and links in statically, for the
+TLS decryption.  Mbed TLS is dual-licensed under the Apache License 2.0 or
+the GNU General Public License version 2 or later; this plugin takes it
+under the GPL-2.0-or-later, which combines with its own GPL-3.0-or-later.
+The sources and the full license texts are those of the release:
+https://github.com/Mbed-TLS/mbedtls/releases/tag/mbedtls-3.6.7
+
+    SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
+    Copyright The Mbed TLS Contributors

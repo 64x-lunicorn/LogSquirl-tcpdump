@@ -887,7 +887,8 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
              QString( "Live capture from %1, interface %2, filter \"%3\", "
                       "snaplen %4" )
                  .arg( kind->displayName(),
-                       choice.interface.isEmpty() ? "(default)" : choice.interface, choice.filter )
+                       choice.networkInterface.isEmpty() ? "(default)" : choice.networkInterface,
+                       choice.filter )
                  .arg( choice.snaplen ) );
     return true;
 }
@@ -1291,6 +1292,18 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
                         .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         }
         html += "<br>";
+    }
+
+    // TLS decryption, with a key log: what it decrypted, or why it could not
+    if ( summary.tlsSessionsDecrypted ) {
+        html += "<b>TLS decryption</b><br>";
+        if ( !summary.keyLogError.empty() ) {
+            html += QString( "<i>%1</i><br>" )
+                        .arg( QString::fromStdString( summary.keyLogError ).toHtmlEscaped() );
+        }
+        html += QString( "Sessions decrypted: %1<br><br>" )
+                    .arg( QLocale().toString(
+                        static_cast<qulonglong>( *summary.tlsSessionsDecrypted ) ) );
     }
 
     // Top IPs
