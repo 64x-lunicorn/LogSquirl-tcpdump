@@ -286,6 +286,60 @@ stream as `convertPcap()` converts a file, into `<name>.log`, without
 progress, as a stream has no size. Regular files keep their own path:
 `convertPcap()` opens them as `FileSource` with size-based progress.
 
+#### The Process Source (`process_source.h/cpp`)
+A capture program (tcpdump, dumpcap, adb, ssh, an extcap, a user's
+command) writes its capture to stdout and its complaints to stderr. A
+`ProcessSource` runs one, given as a `ProcessCommand` (program, argument
+list, optional display name), and is the `StreamSource` over its stdout,
+read through a `DeviceSource`:
+
+- **Separate channels.** The `QProcess` keeps stdout and stderr apart
+  (stdin is the null device): text after a pcap header would corrupt the
+  stream. stderr is drained after every wait slice and split by
+  `StderrLines` into lines (UTF-8, line ends dropped, blank lines skipped,
+  a line without end handed on at 4096 bytes), each handed to the source's
+  `onLine` callback on the reading thread, and the last
+  `StderrLines::kKept` (10) are kept. The callback runs on the worker
+  thread; whoever shows the lines in the log (`hostLog`) or the sidebar
+  posts them to the UI thread.
+- **No shell.** The program gets its arguments as a list, each one
+  argument, untouched (spaces, quotes, `$( )`, `;`). A custom command opts
+  into the shell explicitly with `ProcessCommand::shell( commandLine )`
+  (`/bin/sh -c`, or `cmd.exe /d /s /c` on Windows), named by its first word.
+- **Thread.** The source starts the program when it is constructed and
+  owns it on that thread, which needs no event loop: build it on the
+  worker thread that converts the stream.
+- **The end.** The stream ends when the program has exited (stdout closing
+  alone does not end it while the program runs) or on the stop flag. A
+  program that could not be started, exited with a code other than 0 or
+  crashed breaks the stream off, so `convertStream()` ends Failed with
+  `Cannot start <name>: …`, `<name> exited with code N:` or
+  `<name> crashed (exit code N):` followed by its last stderr lines. A
+  program ended on purpose (`terminate()`, `terminateCaptureProcesses()`)
+  did not fail.
+- **Ending it.** On Unix the program runs in a process group of its own
+  (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
+  group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
+  (2 s), and returns when the group is gone (a second more at most, for a
+  process of another user, as behind sudo, that cannot be killed). On
+  Windows the program is put in a job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` right after it starts (what it
+  starts later is in the job too), and `terminate()` terminates the job;
+  closing the job's last handle, even as LogSquirl crashes, kills what is
+  left. The destructor terminates.
+- **Stop.** The stop flag ends the stream, not the program: the
+  conversion finalises (Converted), then the caller terminates the source,
+  or destroys it.
+- **No orphans.** Every started source's group is enrolled in a registry;
+  `terminateCaptureProcesses()` ends them all, from any thread, and
+  `logsquirl_plugin_shutdown()` calls it after deleting the sidebar
+  widget, so no capture program outlives LogSquirl or a disabled plugin.
+
+The tests (`tests/process_source_test.cpp`) run fake capture programs,
+shell scripts that write a synthetic pcap to stdout and text to stderr,
+exit with an error, crash, start a child and ignore SIGTERM; they need a
+Unix shell, so on Windows only the stderr splitting is run.
+
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
 ports and the transport, and returns a protocol label and a one-line
@@ -848,7 +902,8 @@ through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
 open; the plugin notes `QCoreApplication::aboutToQuit` and removes the
-temporary files only in the first case. `logsquirl_plugin_configure()`,
+temporary files only in the first case. In both, it ends every capture program
+still running (`terminateCaptureProcesses()`, *The Process Source*). `logsquirl_plugin_configure()`,
 which LogSquirl calls for **Configure…** in Plugin Management with its main
 window as the parent, runs the `ConfigDialog` modally and saves the options
 when it is accepted; `hostConfigDir()` is the directory, empty without a

@@ -54,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   within 100 ms of Stop or Cancel, and the stream closing ends the capture,
   a record cut off there reported as such. The live sources to come plug
   into it; converting a file is unchanged.
+- **Process Source.** A capture program (tcpdump, dumpcap, adb, ssh, an
+  extcap, a custom command) is run with its stdout as the capture stream
+  and its stderr kept apart, handed on line by line and the last lines
+  kept, so that "permission denied" or "no such device" can be shown. It
+  is started from an argument list, never through a shell, unless a custom
+  command opts into one. A program that cannot be started, exits with a
+  code other than 0 or crashes ends the capture with a message naming it,
+  the code and its last stderr lines. Ending it ends its whole process
+  group: SIGTERM, then SIGKILL after 2 s; on Windows it runs in a job
+  object that is terminated. Shutting the plugin down, as LogSquirl quits
+  or the plugin is disabled, ends every capture program still running.
 
 ### Fixed
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the

@@ -154,6 +154,8 @@ protected:
     bool available() override;
 
 private:
+    friend class ProcessSource; // reads its stdout through one
+
     QIODevice& device_;
 };
 

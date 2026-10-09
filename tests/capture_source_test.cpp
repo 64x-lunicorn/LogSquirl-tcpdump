@@ -36,6 +36,7 @@
 #include "capture_source.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
+#include "stream_capture.h"
 
 #include <QDir>
 #include <QFile>
@@ -153,45 +154,6 @@ std::thread watchdog( std::atomic_bool& stop, const std::atomic_bool& done,
             stop = true;
         }
     } );
-}
-
-QStringList readLines( const QString& path )
-{
-    QFile file( path );
-    REQUIRE( file.open( QIODevice::ReadOnly | QIODevice::Text ) );
-    auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
-    if ( !lines.isEmpty() && lines.last().isEmpty() ) {
-        lines.removeLast();
-    }
-    return lines;
-}
-
-/// The lines convertPcap() writes for @p capture as a file.
-QStringList linesFromFile( const Bytes& capture )
-{
-    QTemporaryDir dir;
-    const auto path = dir.filePath( QStringLiteral( "capture.pcap" ) );
-    QFile file( path );
-    REQUIRE( file.open( QIODevice::WriteOnly ) );
-    file.write( reinterpret_cast<const char*>( capture.data() ),
-                static_cast<qint64>( capture.size() ) );
-    file.close();
-    const auto result = convertPcap( path, dir.path() );
-    REQUIRE( result.status == ConversionResult::Status::Converted );
-    return readLines( result.outputPath );
-}
-
-/// A conversation over TCP and a DNS-like datagram: enough for streams,
-/// analysis and descriptions to show in the lines.
-std::vector<Bytes> somePackets()
-{
-    return {
-        eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 80, {}, 5, 0x02, 100 ) ) ),
-        eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 80, text( "GET / HTTP/1.1\r\n\r\n" ), 5,
-                                                   0x18, 101, 1 ) ) ),
-        eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 5353, 9999, text( "hello stream" ) ) ) ),
-        eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 80, {}, 5, 0x11, 119, 1 ) ) ),
-    };
 }
 
 Bytes somePcapng()
@@ -475,12 +437,7 @@ SCENARIO( "A process's stdout is read as a stream", "[capture_source]" )
     const auto capture = pcapOf( somePackets() );
     QTemporaryDir dir;
     const auto path = dir.filePath( QStringLiteral( "in.pcap" ) );
-    {
-        QFile file( path );
-        REQUIRE( file.open( QIODevice::WriteOnly ) );
-        file.write( reinterpret_cast<const char*>( capture.data() ),
-                    static_cast<qint64>( capture.size() ) );
-    }
+    writeFile( path, capture );
 
     GIVEN( "a process that writes a capture in two parts with a pause, and exits" )
     {
