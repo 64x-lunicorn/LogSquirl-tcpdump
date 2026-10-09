@@ -343,7 +343,8 @@ decompressed, and every offset (`ReaderCheckpoint::offset`,
 returns the bytes from there, so a capture of any size takes that much
 memory plus a 64 KiB input buffer. A file of several members (`cat a.gz
 b.gz`) reads as one capture; bytes after a complete member that start no
-other one are ignored, as `gzip -d` ignores trailing garbage. A stream that
+other one (its magic `1f 8b` and deflate's method 8, looked at across the
+input's chunks) are ignored, as `gzip -d` ignores trailing garbage. A stream that
 ends inside a member, or whose data zlib rejects (a bad block, a CRC or
 length that does not match), ends there: `cutOff()` and `error()` ("the
 gzip stream is cut off", "the gzip data is corrupt (…)"). The Converter

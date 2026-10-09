@@ -94,6 +94,18 @@ private:
     MemorySource memory_;
 };
 
+/// A CountingSource that hands out at most one byte per read, as a slow
+/// pipe may.
+class TrickleSource : public CountingSource {
+public:
+    using CountingSource::CountingSource;
+
+    size_t read( uint8_t* dst, size_t n ) override
+    {
+        return CountingSource::read( dst, std::min<size_t>( n, 1 ) );
+    }
+};
+
 /// Everything @p source returns, read @p chunk bytes at a time.
 QByteArray readAll( ByteSource& source, size_t chunk )
 {
@@ -220,6 +232,37 @@ SCENARIO( "A gzip stream is decompressed on the fly", "[gzip]" )
         THEN( "they are ignored, as gzip ignores trailing garbage" )
         {
             REQUIRE( readAll( gzip, 4096 ) == data );
+            REQUIRE_FALSE( gzip.cutOff() );
+        }
+    }
+
+    GIVEN( "a stream followed by garbage that begins as a member does, but not all of its "
+           "magic and method" )
+    {
+        const auto garbage
+            = GENERATE( QByteArray( "\x1f" ), QByteArray( "\x1f\x8b" ), QByteArray( "\x1f junk" ),
+                        QByteArray( "\x1f\x8bjunk" ), QByteArray( "\x1f\x8b\x07junk" ) );
+        const auto compressed = gzipped( data ) + garbage;
+        CountingSource input( compressed );
+        GzipSource gzip( input );
+
+        THEN( "it is ignored too, not reported as corrupt" )
+        {
+            REQUIRE( readAll( gzip, 4096 ) == data );
+            REQUIRE_FALSE( gzip.cutOff() );
+            REQUIRE( gzip.error().empty() );
+        }
+    }
+
+    GIVEN( "members and trailing garbage from a source that hands out one byte at a time" )
+    {
+        const auto compressed = gzipped( data, 3 ) + QByteArray( "\x1f\x8bjunk" );
+        TrickleSource input( compressed );
+        GzipSource gzip( input );
+
+        THEN( "every member is read, the garbage ignored" )
+        {
+            REQUIRE( readAll( gzip, 65536 ) == data );
             REQUIRE_FALSE( gzip.cutOff() );
         }
     }

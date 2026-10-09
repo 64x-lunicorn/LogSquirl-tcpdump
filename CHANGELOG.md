@@ -540,6 +540,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as that message, where before it was not SIP at all; a keep-alive alone
   on port 5060 is `Keep-alive (ping)` (double CRLF) or `Keep-alive (pong)`
   (#107).
+- **gzip trailing garbage.** Bytes after a gzip member that begin with
+  `0x1f` but are no member (no `1f 8b` magic and deflate method) are now
+  ignored as gzip ignores trailing garbage, where before the capture was
+  reported cut off as corrupt; the check looks across the input's chunks
+  (#108).
 
 ## [0.3.0] — 2026-10-09
 
