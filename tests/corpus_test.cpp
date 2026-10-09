@@ -27,6 +27,8 @@
  * cut-off records.  After an intended change of the output, run the tests
  * with TCPDUMP_UPDATE_CORPUS=1 to rewrite the .txt files, and review the
  * difference.  interfaces.pcapng is written by tests/make_pcapng_corpus.py.
+ * Captures of real loopback traffic, recorded by tests/make_real_corpus.sh,
+ * stay uncommitted in tests/corpus/local and are converted too when present.
  * The malformed-*.pcap files, mutated captures from fuzzing,
  * must merely be read to their end.
  */
@@ -49,6 +51,19 @@ QString corpusDir()
     return QStringLiteral( TCPDUMP_CORPUS_DIR );
 }
 
+// The committed captures, then those in the local corpus of real captures
+// if there is one.
+QFileInfoList corpusCaptures()
+{
+    const QStringList patterns{ "*.pcap", "*.pcapng" };
+    auto captures = QDir( corpusDir() ).entryInfoList( patterns, QDir::Files, QDir::Name );
+    const QDir local( corpusDir() + QStringLiteral( "/local" ) );
+    if ( local.exists() ) {
+        captures += local.entryInfoList( patterns, QDir::Files, QDir::Name );
+    }
+    return captures;
+}
+
 QByteArray readText( const QString& path )
 {
     QFile file( path );
@@ -60,24 +75,22 @@ QByteArray readText( const QString& path )
 
 SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
 {
-    const QDir dir( corpusDir() );
-    const auto captures = dir.entryList( { "*.pcap", "*.pcapng" }, QDir::Files, QDir::Name );
-    REQUIRE( captures.size() >= 3 );
+    REQUIRE( QDir( corpusDir() ).entryList( { "*.pcap", "*.pcapng" }, QDir::Files ).size() >= 3 );
 
     QTemporaryDir out;
     REQUIRE( out.isValid() );
     const bool update = qEnvironmentVariableIsSet( "TCPDUMP_UPDATE_CORPUS" );
 
-    for ( const auto& capture : captures ) {
-        const auto name = QFileInfo( capture ).completeBaseName();
-        const auto expectedPath = dir.filePath( name + ".txt" );
+    for ( const auto& capture : corpusCaptures() ) {
+        const auto name = capture.completeBaseName();
+        const auto expectedPath = capture.dir().filePath( name + ".txt" );
         if ( name.startsWith( "malformed-" ) || ( !QFile::exists( expectedPath ) && !update ) ) {
             continue;
         }
 
         GIVEN( "the capture " + name.toStdString() )
         {
-            const auto result = convertPcap( dir.filePath( capture ), out.path() );
+            const auto result = convertPcap( capture.filePath(), out.path() );
             REQUIRE( result.status == ConversionResult::Status::Converted );
             const auto outPath = result.outputPath;
 

@@ -309,3 +309,39 @@ blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in
 `tests/fakehost.h`.
+
+### Real captures
+
+Captures taken from a real network stack let the Parser, the Payload
+Describer and the Packet Formatter see what tcpdump actually writes: TCP
+options, a real handshake and teardown, real TLS records, a real DNS exchange,
+real ICMP. They are **never committed**: `tests/make_real_corpus.sh` records
+them into `tests/corpus/local`, which git ignores, and the corpus and Log
+Format tests convert and read them too when that directory exists. They hold
+only traffic between local processes on the loopback interface (`lo0` on
+macOS, link type `NULL`; `lo` on Linux), 127.0.0.1 to 127.0.0.1, and are each
+a few KB. The script needs root for tcpdump:
+
+```bash
+sudo bash tests/make_real_corpus.sh              # all four
+sudo bash tests/make_real_corpus.sh real-ping    # just the named ones
+TCPDUMP_UPDATE_CORPUS=1 build/tests/logsquirl_tcpdump_tests "[corpus]"
+```
+
+Each capture is one `tcpdump -i lo0 -s <snaplen> -U -w <name>.pcap
+<filter>` around one client command against a server the script starts:
+
+| Capture | Filter | Snaplen | Server | Client |
+|---------|--------|---------|--------|--------|
+| `real-http` | `tcp port 8080` | 262144 | `python3 -m http.server 8080 --bind 127.0.0.1` serving a one-line `index.html` | `curl -s -o /dev/null http://127.0.0.1:8080/index.html` |
+| `real-dns` | `udp port 53` | 262144 | a dozen lines of Python on 127.0.0.1:53 answering every query with `192.0.2.80` | `dig +tries=1 +time=2 +noedns @127.0.0.1 example.org A` |
+| `real-ping` | `icmp` | 262144 | the kernel | `ping -c 2 127.0.0.1` |
+| `real-tls` | `tcp port 8443` | 512 | `openssl s_server -quiet -accept 127.0.0.1:8443 -www` with a throw-away self-signed certificate for `localhost` | `curl -sk --resolve localhost:8443:127.0.0.1 -o /dev/null https://localhost:8443/` |
+
+The TLS capture keeps 512 bytes of each packet, enough for the whole
+ClientHello with its SNI and ALPN; larger records are cut. The macOS firewall
+in stealth mode drops echo requests even on loopback; the script switches
+stealth mode off while it records `real-ping` and back on afterwards. A
+recording keeps the time, client ports and sequence numbers of its moment, so
+a new recording changes every line of its text: review it against
+`tcpdump -nn -vv -r tests/corpus/local/<name>.pcap` before relying on it.
