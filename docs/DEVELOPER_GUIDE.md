@@ -300,7 +300,8 @@ ends before it. Keep the pointer the host passed: never copy `*api`.
 `get_selected_log_lines`, and `followStreamPattern()` turns it into a
 pattern for `open_regex_lab` (with Match case); the Lab's answer, the
 applied pattern or a cancel, is logged. The line is read with the Log
-Format's regex, which `follow_stream.cpp` repeats: keep the two the same.
+Format's regex, which `packetLineRegex()` in `regex_lab.cpp` repeats;
+`logformat_test.cpp` fails when the two differ.
 The pattern requires the line's stream number, its two addresses and the
 two ports at the start of a TCP or UDP Info (markers in brackets may come
 first), each pair in either order. The Stream column alone is not enough:

@@ -29,6 +29,7 @@
 
 #include "follow_stream.h"
 #include "plugin.h"
+#include "regex_lab.h"
 
 #include <QRegularExpression>
 #include <QStringList>
@@ -39,17 +40,6 @@ namespace {
 
 /// The arrow between the ports in the Info column.
 const QString kArrow = QString::fromUtf8( " \xe2\x86\x92 " );
-
-/// A packet line, as formats/tcpdump_log.json reads it: keep the two the
-/// same.  The tests read every corpus line with it.
-const QRegularExpression& packetLineRegex()
-{
-    static const QRegularExpression regex(
-        R"(^(?<number>\d++) ++(?<stream>\d++|[-?]) ++(?<timestamp>[+-]?\d{4,}-\d{2}-\d{2} )"
-        R"(\d{2}:\d{2}:\d{2}\.\d++Z) ++(?<time>-?\d++\.\d++) ++(?<source>\S++) ++)"
-        R"((?<destination>\S++) ++(?<protocol>\S++) ++(?<length>\d++) ++(?<body>.*)$)" );
-    return regex;
-}
 
 /// The ports at the start of a TCP or UDP packet's Info, "50000 → 80", which
 /// markers in brackets may precede.

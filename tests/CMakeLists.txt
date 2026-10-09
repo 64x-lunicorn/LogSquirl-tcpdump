@@ -66,6 +66,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
+        "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"
 )
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format
