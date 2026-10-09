@@ -45,6 +45,25 @@ namespace tcpdump {
 
 namespace {
 
+/// The bytes dissectPacket() is dissecting on this thread, from which the
+/// payload's offset is taken (PacketRecord::payloadOffset); empty outside it.
+thread_local ByteView tDissected;
+
+/// Sets tDissected for the time a packet is dissected.
+class Dissecting {
+public:
+    Dissecting( const uint8_t* data, size_t len )
+    {
+        tDissected = { data, len };
+    }
+    ~Dissecting()
+    {
+        tDissected = {};
+    }
+    Dissecting( const Dissecting& ) = delete;
+    Dissecting& operator=( const Dissecting& ) = delete;
+};
+
 // ── Byte-order helpers ───────────────────────────────────────────────────
 
 /// Read a int32 in the file's byte order.
@@ -71,6 +90,13 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
 {
     pkt.payloadHeadLen = std::min( len, kPayloadHeadBytes );
     std::copy_n( payload, pkt.payloadHeadLen, pkt.payloadHead.begin() );
+    const auto at = reinterpret_cast<uintptr_t>( payload );
+    const auto begin = reinterpret_cast<uintptr_t>( tDissected.data );
+    if ( tDissected.data != nullptr && at >= begin && at - begin <= tDissected.size
+         && len <= tDissected.size - ( at - begin ) ) {
+        pkt.payloadOffset = static_cast<uint32_t>( at - begin );
+        pkt.payloadCaptured = static_cast<uint32_t>( len );
+    }
     const auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
     if ( !described.label.empty() ) {
         pkt.protocol = described.label;
@@ -615,6 +641,7 @@ void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len )
 void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
                     size_t pktRemaining )
 {
+    const Dissecting dissecting( pktData, pktRemaining );
     uint16_t etherType = 0;
     const uint8_t* networkData = nullptr;
     size_t networkRemaining = 0;
@@ -917,6 +944,15 @@ size_t CaptureReader::read( uint8_t* dst, size_t n )
     }
     bytesRead_ += got;
     return got;
+}
+
+ByteView CaptureReader::payloadOf( const PacketRecord& pkt ) const
+{
+    if ( pkt.payloadCaptured == 0 || pkt.payloadOffset > packet_.size()
+         || pkt.payloadCaptured > packet_.size() - pkt.payloadOffset ) {
+        return {};
+    }
+    return { packet_.data() + pkt.payloadOffset, pkt.payloadCaptured };
 }
 
 bool CaptureReader::skip( uint64_t n )

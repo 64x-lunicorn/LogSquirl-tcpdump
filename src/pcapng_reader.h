@@ -130,7 +130,6 @@ private:
     bool havePacketBlock_ = false; ///< pendingBlock_ is a packet block read up to its body.
     BlockHeader pendingBlock_;
     std::string problem_; ///< Why the last block could not be read; empty at the end.
-    std::vector<uint8_t> packet_;
     bool open_ = false;
     uint32_t packetCount_ = 0;
 };

@@ -87,6 +87,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
         options.previewChars = 50;
         options.maxStreams = 1234;
         options.maxEndpoints = 567;
+        options.reassemblyMegabytes = 8;
         ConfigDialog dialog( options );
 
         THEN( "its controls show them" )
@@ -99,6 +100,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE_FALSE( child<QSpinBox>( dialog, "previewChars" )->isEnabled() );
             REQUIRE( child<QSpinBox>( dialog, "maxStreams" )->value() == 1234 );
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->value() == 567 );
+            REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->value() == 8 );
             REQUIRE( dialog.options().layout.timeColumns == TimeColumns::AbsoluteOnly );
             REQUIRE( dialog.options().previewChars == 50 );
         }
@@ -118,6 +120,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             child<QSpinBox>( dialog, "previewChars" )->setValue( 80 );
             child<QSpinBox>( dialog, "maxStreams" )->setValue( 2000 );
             child<QSpinBox>( dialog, "maxEndpoints" )->setValue( 3000 );
+            child<QSpinBox>( dialog, "reassemblyMegabytes" )->setValue( 128 );
 
             THEN( "the dialog's options are the new ones" )
             {
@@ -129,6 +132,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( edited.previewChars == 80 );
                 REQUIRE( edited.maxStreams == 2000 );
                 REQUIRE( edited.maxEndpoints == 3000 );
+                REQUIRE( edited.reassemblyMegabytes == 128 );
             }
         }
 
@@ -148,6 +152,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( restored.previewChars == defaults.previewChars );
                 REQUIRE( restored.maxStreams == defaults.maxStreams );
                 REQUIRE( restored.maxEndpoints == defaults.maxEndpoints );
+                REQUIRE( restored.reassemblyMegabytes == defaults.reassemblyMegabytes );
             }
         }
     }
@@ -164,6 +169,8 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                      == static_cast<int>( kMaxStreamCap ) );
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->maximum()
                      == static_cast<int>( kMaxEndpointCap ) );
+            REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->maximum()
+                     == static_cast<int>( kMaxReassemblyMegabytes ) );
         }
     }
 }

@@ -98,7 +98,8 @@ struct TcpDirection {
  * the Payload Describer, the Stream Labels, …) keep their fields here, and
  * read and update them through the Stream the tracker hands out.  Every
  * byte added here is paid once per numbered stream, see kMaxStreams: 72
- * bytes today, the two TcpDirections and the alignment taking most.  A new
+ * bytes today, the two TcpDirections taking most, and 2 bytes are left
+ * before the alignment adds 8.  A new
  * TCP connection on the same addresses and ports (see analyseTcp()) starts
  * from a fresh state, its HTTP/2 flag and label with it.
  */
@@ -111,6 +112,11 @@ struct StreamState {
     /// The protocol a detector recognised on the stream, as StreamLabels
     /// numbers it; 0 while none has.
     uint8_t label = 0;
+    /// TCP only: what the TCP Reassembly knows of each direction d, whose
+    /// bytes it keeps apart (tcp_reassembly.h): bit 1 << d, it holds some;
+    /// bit 4 << d, it let them go for lack of memory, which the direction's
+    /// next segment says.
+    uint8_t reassembly = 0;
 };
 
 /// The stream a packet belongs to.

@@ -95,13 +95,18 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     // Memory caps
     maxStreams_ = countBox( "maxStreams", kMinCap, kMaxStreamCap );
     maxEndpoints_ = countBox( "maxEndpoints", kMinCap, kMaxEndpointCap );
+    reassemblyMegabytes_ = countBox( "reassemblyMegabytes", kMinCap, kMaxReassemblyMegabytes );
+    reassemblyMegabytes_->setSuffix( QStringLiteral( " MB" ) );
     auto* advanced = new QGroupBox( QStringLiteral( "Advanced" ) );
     auto* advancedLayout = new QFormLayout( advanced );
     advancedLayout->addRow( QStringLiteral( "Streams numbered at most:" ), maxStreams_ );
     advancedLayout->addRow( QStringLiteral( "Endpoints counted at most:" ), maxEndpoints_ );
-    auto* capsNote = new QLabel(
-        QStringLiteral( "<small>The caps bound the memory a conversion takes; later streams show "
-                        "stream ?, later endpoints are counted together.</small>" ) );
+    advancedLayout->addRow( QStringLiteral( "TCP reassembly memory at most:" ),
+                            reassemblyMegabytes_ );
+    auto* capsNote = new QLabel( QStringLiteral(
+        "<small>The caps bound the memory a conversion takes; later streams show stream ?, "
+        "later endpoints are counted together, and a message reassembly cannot hold is marked "
+        "[reassembly limit].</small>" ) );
     capsNote->setWordWrap( true );
     advancedLayout->addRow( capsNote );
 
@@ -139,6 +144,7 @@ void ConfigDialog::showOptions( const ConversionOptions& options )
     previewChars_->setValue( static_cast<int>( options.previewChars ) );
     maxStreams_->setValue( static_cast<int>( options.maxStreams ) );
     maxEndpoints_->setValue( static_cast<int>( options.maxEndpoints ) );
+    reassemblyMegabytes_->setValue( static_cast<int>( options.reassemblyMegabytes ) );
 }
 
 ConversionOptions ConfigDialog::options() const
@@ -150,6 +156,7 @@ ConversionOptions ConfigDialog::options() const
     options.previewChars = static_cast<size_t>( previewChars_->value() );
     options.maxStreams = static_cast<size_t>( maxStreams_->value() );
     options.maxEndpoints = static_cast<size_t>( maxEndpoints_->value() );
+    options.reassemblyMegabytes = static_cast<size_t>( reassemblyMegabytes_->value() );
     return options;
 }
 

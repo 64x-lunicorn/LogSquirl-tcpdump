@@ -411,10 +411,21 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "HTTP", { 2, 3 } },
               { "ICMP", { 7, 20 } },
           } },
+        { "reassembly.txt",
+          {
+              // the late, retransmitted and overlapping segments, the lost one
+              { "TCP problems", { 28, 29, 30, 32, 39 } },
+              { "TCP SYN/FIN", { 1, 2, 8, 9, 17, 18, 24, 25, 34, 35 } },
+              { "TLS", { 4, 5, 6, 7, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39 } },
+              { "TCP handshakes", { 1, 2, 8, 9, 17, 18, 24, 25, 34, 35 } },
+              { "TCP errors", { 28, 29, 30, 32, 39 } },
+              { "DNS", { 17, 18, 19, 20, 21, 22, 23 } },
+              { "HTTP", { 12, 15 } }, // the request and the response, where they complete
+          } },
         { "stream-labels.txt",
           {
               { "TCP SYN/FIN", { 1, 2, 10, 11, 13, 14 } },
-              { "TLS", { 16, 17, 18 } }, // a Continuation and a bare ACK too
+              { "TLS", { 16, 17, 18 } }, // a segment of the hello and a bare ACK too
               { "TCP handshakes", { 1, 2, 10, 11, 13, 14 } },
               { "HTTP", { 4, 6 } }, // not the Continuation of the body
           } },

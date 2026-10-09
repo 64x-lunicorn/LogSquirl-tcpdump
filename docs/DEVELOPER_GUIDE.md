@@ -478,9 +478,12 @@ pointer. Every field added costs memory once per numbered stream: today a
 `TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
 the Payload Describer's `QuicConnection` (whether a QUIC long header was
 seen, and the connection ID length of each direction), 3 bytes, whether a
-TCP stream began with the HTTP/2 preface, 1 byte, and the stream's label,
-1 byte, so 72 bytes per stream with the alignment, some 72 MB at the stream
-cap. A UDP stream pays for the TCP fields too and a TCP stream for the QUIC
+TCP stream began with the HTTP/2 preface, 1 byte, the stream's label,
+1 byte, and what the TCP Reassembly knows of each direction, 1 byte, so 72
+bytes per stream with the alignment (2 bytes are still free before it adds
+8), some 72 MB at the stream cap. A module that needs more than a few bytes
+for some streams only, as the TCP Reassembly does for its buffers, keeps
+them in a bounded table of its own and a bit or two here. A UDP stream pays for the TCP fields too and a TCP stream for the QUIC
 ones, as both transports share `StreamState`.
 
 `analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
@@ -549,6 +552,80 @@ one byte of `StreamState`, a number into the capture's table of labels seen
 (at most 255 stick). A new TCP connection on the same addresses and ports
 (a SYN that the TCP Analysis finds starts one) resets the stream's whole
 `StreamState`, the label with it.
+
+#### TCP Reassembly (`tcp_reassembly.h/cpp`)
+The describer sees one segment at a time, so a TLS record, an HTTP header
+section or a DNS-over-TCP message that spans segments used to be named, cut,
+by its first segment and as `Continuation` by the rest. `TcpReassembly`
+(pure C++), owned by the Converter next to the Stream Tracker, puts such a
+message together: `apply()` runs on every packet after
+`describeInStream()` and before the Stream Labels, with the segment's
+captured payload, which the reader hands out
+(`CaptureReader::payloadOf()`, a view into its buffer valid until the next
+packet; the parser records where the payload lies,
+`PacketRecord::payloadOffset` and `payloadCaptured`, and keeps no copy
+beyond the 48-byte `payloadHead`).
+
+Which bytes make a message is the describer's to say:
+`tcpMessageExtent()` (`payload_describer.h`) asks the framers of
+`kTcpFramers`, in the order of their detectors, how many bytes the message
+at the start of some bytes takes: a TLS record (5 + its length, at most
+2^14 + 2048), a DNS message behind its 2-byte length (port 53), an HTTP/1.x
+header section up to its empty line (the body is not held: a segment of
+body begins no message and is described as it is). A framer answers more
+than it was given while the message is incomplete (one more when its header
+does not say how many) and nothing when no message of its protocol begins
+there; once a stream's first message is framed, only its protocol is tried.
+
+Per direction, a segment of whole messages, or of none a framer knows, keeps
+its own description and costs nothing. A segment that ends in the first
+part of one is described as `[TCP segment of a reassembled PDU]` (labelled
+with the message's protocol, recognised, so the label sticks) and the bytes
+from the message's start are held; whole messages before it in the segment
+are described alone. The segment that completes it is described by
+`describePayload()` from all held bytes, followed by `[reassembled from k
+segments]`, and `apply()` returns those bytes (`ReassembledMessages`) for
+a module that wants the whole messages. Bytes are taken in sequence order:
+a segment ahead of the held bytes is held apart (at most
+`kMaxEarlySegments`, 32) and also described as a segment of the message,
+then appended once the bytes before it come; a segment whose bytes were
+all taken (a retransmission) is left as it is, and the part of one that
+overlaps them is dropped. A segment that begins a message is only taken
+for one if no later bytes of its direction have been seen
+(`TcpDirection::nextSeq`), so a retransmission after the message ended
+starts nothing. A gap ends the message, its bytes dropped, and reassembly
+starts again at the next segment that begins one: the other direction
+acknowledges bytes past the held ones (the capture lost them), a segment
+was cut at the snaplen, or more segments came early than are held.
+
+The memory budget: a direction holds at most `kStreamLimit` (64 KiB),
+counting its buffer's capacity and the segments that came early; all
+directions together at most the global limit, `kDefaultMemoryLimit` (64
+MiB) or the option *TCP reassembly memory at most*
+(`ConversionOptions::reassemblyMegabytes`, 1 to 1,024 MiB), counting
+`kEntryOverhead` (128 bytes) for each held direction and
+`kEarlySegmentOverhead` (32) for each segment held apart. On top of that,
+the messages the last segment completed are kept until the next one (at
+most a direction's limit). A message longer than a direction's limit, or
+one that outgrows it, is not held: its segment keeps its own description,
+followed by `[reassembly limit]`. When the global limit would be passed,
+the directions used longest ago are let go (`std::list` order, O(1)) and
+their next segment carries the marker; the direction being added to is
+never let go for itself. A direction is let go on its FIN, both on a SYN
+(a handshake, perhaps a new connection on the same ports, whose
+`StreamState` the TCP Analysis resets) or an RST; streams past the stream
+cap have no state and are never held. In `StreamState::reassembly`, bit
+`1 << d` says direction d holds bytes, so that the table is looked up only
+then, and bit `4 << d` that it was let go. HTTP/2 streams are not
+reassembled. Conversion of a file and of a capture still being written
+go through the same loop, so both are reassembled alike.
+
+To frame a new protocol's messages, write `frameName( payload, len )`
+(returning `std::optional<size_t>` as above) in its `describe_name.cpp`,
+declare it in `describe_common.h` and add `{ "Label", nameFrame }` to
+`kTcpFramers`; its detector then sees whole messages on the completing
+segment. Tests go in `tests/tcp_reassembly_test.cpp`, with the Converter's
+steps run over a capture built with the frame builders.
 
 #### TCP analysis markers
 `analyseTcp()` then classifies the segment as Wireshark's TCP analysis does
@@ -701,8 +778,9 @@ share a base name), and `cmake --install` puts them there too.
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
 its stream and the TCP Analysis show its numbers relative and mark it,
-lets the Payload Describer look at it again in its stream and the Stream
-Labels name it by its stream's protocol, counts its markers
+lets the Payload Describer look at it again in its stream, the TCP
+Reassembly describe a message that spans segments where it completes, and
+the Stream Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
@@ -720,8 +798,8 @@ that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`,
-the payload preview (`preview`, `previewChars`) and the stream and endpoint
-caps. The defaults write the text of `tests/corpus`; any other choice is
+the payload preview (`preview`, `previewChars`), the stream and endpoint
+caps and the TCP Reassembly's memory (`reassemblyMegabytes`). The defaults write the text of `tests/corpus`; any other choice is
 tested by deriving its text from that one, not by more committed text.
 
 ### Settings and configuration dialog (`settings.h/cpp`, `configdialog.h/cpp`)
@@ -731,7 +809,7 @@ tested by deriving its text from that one, not by more committed text.
 (`get_config_dir`, part of the API since 26.10). A value that is missing or
 not one reads as its default, a number out of range as the nearest allowed:
 the preview 1 to `kMaxPreviewChars`, the caps `kMinCap` to ten times their
-default. `ConfigDialog` shows and edits the options and says that an open
+default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB). `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
@@ -927,7 +1005,10 @@ and IP-in-IP tunnels, nested and nested too deep, by
 `tests/make_tunnels_corpus.py`; `wifi.pcap`, a station joining an access
 point behind Radiotap headers, and `ppp.pcapng`, a PPPoE session from
 discovery to teardown, PPP in HDLC-like framing and Cisco HDLC on three
-interfaces, by `tests/make_link_layers_corpus.py`. The link layers' tests,
+interfaces, by `tests/make_link_layers_corpus.py`; `reassembly.pcap`, a
+ClientHello over 3 segments, HTTP split in its headers, a DNS-over-TCP answer
+over 2 segments, segments out of order, retransmitted, overlapping and
+lost, by `tests/make_reassembly_corpus.py`. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
