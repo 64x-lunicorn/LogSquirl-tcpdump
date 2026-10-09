@@ -931,3 +931,7 @@ license. See [NOTICE](NOTICE) for details.
 
 The plugin links in parts of Mbed TLS (Apache-2.0 or GPL-2.0-or-later,
 taken under the GPL) for the TLS decryption; see [NOTICE](NOTICE).
+
+Every release package carries LICENSE and NOTICE. NOTICE names the
+corresponding source: this repository at the release's tag, and the exact
+zlib and Mbed TLS archives the build fetches, by URL and SHA-256.

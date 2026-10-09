@@ -24,9 +24,13 @@ zlib
 ----
 
 The plugin decompresses gzip-compressed captures with zlib 1.3.1
-(https://zlib.net), which the build fetches from
-https://github.com/madler/zlib/releases (pinned by its SHA-256) and links
-in statically.  zlib is released under the zlib license:
+(https://zlib.net), which the build fetches and links in statically.  Its
+source is the release archive
+
+    https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+    SHA-256 9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+
+zlib is released under the zlib license:
 
     SPDX-License-Identifier: Zlib
 
@@ -60,8 +64,25 @@ fetches from its release (CMakeLists.txt) and links in statically, for the
 TLS decryption.  Mbed TLS is dual-licensed under the Apache License 2.0 or
 the GNU General Public License version 2 or later; this plugin takes it
 under the GPL-2.0-or-later, which combines with its own GPL-3.0-or-later.
-The sources and the full license texts are those of the release:
-https://github.com/Mbed-TLS/mbedtls/releases/tag/mbedtls-3.6.7
+Its source, with its full license texts, is the release archive
+
+    https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+    SHA-256 a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
+
+built with the configuration third_party/mbedtls_config.h of this plugin.
 
     SPDX-License-Identifier: Apache-2.0 OR GPL-2.0-or-later
     Copyright The Mbed TLS Contributors
+
+Corresponding source
+--------------------
+
+A release package of the plugin (logsquirl-tcpdump-<version>-<platform>.zip)
+carries this NOTICE and LICENSE.  Its corresponding source is the plugin's
+source at the release's tag, v<version>, at
+https://github.com/64x-lunicorn/LogSquirl-tcpdump (also the "Source code"
+archives of the release there), with the build scripts that fetch and
+build zlib and Mbed TLS, and the two archives above, which the build checks
+by their SHA-256.  Should either archive no longer be available at its
+address, ask for it in the plugin's issue tracker, and it will be provided
+for as long as that release is distributed.

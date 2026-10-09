@@ -1,6 +1,8 @@
 {
   "host_ref": "v26.11.0-beta1",
   "package_files": [
+    "LICENSE",
+    "NOTICE",
     "formats/tcpdump_log.json",
     "presets/tcpdump_highlighter.conf",
     "presets/tcpdump_filter.conf"

@@ -184,12 +184,14 @@ target_sources(logsquirl_tcpdump_tests
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format
 # that reads that text, for logformat_test.cpp, and the highlighter set and
-# filter group that colour and filter it, for presets_test.cpp
+# filter group that colour and filter it, for presets_test.cpp; the build
+# and NOTICE, for plugininfo_test.cpp
 target_compile_definitions(logsquirl_tcpdump_tests
     PRIVATE
         TCPDUMP_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
         TCPDUMP_FORMAT_FILE="${CMAKE_SOURCE_DIR}/formats/tcpdump_log.json"
         TCPDUMP_PRESETS_DIR="${CMAKE_SOURCE_DIR}/presets"
+        TCPDUMP_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
 # ── Register with CTest ──────────────────────────────────────────────────

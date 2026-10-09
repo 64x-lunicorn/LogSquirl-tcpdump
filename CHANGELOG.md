@@ -533,6 +533,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0. The conversion now stops with packet 4,294,967,295, and the summary
   says the rest was not converted; a live capture stops there, as at a
   stop condition, with a notification (#128)
+- **Licence files in the release packages.** The packages now carry
+  LICENSE and NOTICE; NOTICE names the corresponding source of the
+  plugin, zlib and Mbed TLS (each archive by URL and SHA-256).
 
 ## [0.3.0] — 2026-10-09
 

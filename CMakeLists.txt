@@ -231,6 +231,9 @@ set(PLUGIN_INSTALL_DIR
 
 install(TARGETS logsquirl_tcpdump LIBRARY DESTINATION "${PLUGIN_INSTALL_DIR}")
 install(FILES   plugin.json               DESTINATION "${PLUGIN_INSTALL_DIR}")
+# The licence and where the source of what is linked in is (NOTICE), as the
+# release packages carry them (.github/plugin-ci.json).
+install(FILES   LICENSE NOTICE            DESTINATION "${PLUGIN_INSTALL_DIR}")
 # The Log Format of the converted text, next to the library; LogSquirl reads
 # it only from its formats directory, where the user copies it (README).
 install(FILES   formats/tcpdump_log.json  DESTINATION "${PLUGIN_INSTALL_DIR}")
