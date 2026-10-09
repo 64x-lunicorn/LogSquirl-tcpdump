@@ -433,8 +433,14 @@ SCENARIO( "A message split over segments is described once, where it completes",
         {
             REQUIRE( lines[ 3 ].description == "Application Data" );
             REQUIRE( lines[ 4 ].description == "Application Data" );
-            REQUIRE( lines[ 4 ].segments == 0 );
             REQUIRE( reassembly.memoryUsed() == 0 );
+        }
+
+        THEN( "each hands out its own message, as the TLS Decryption reads them" )
+        {
+            REQUIRE( lines[ 3 ].completed == record );
+            REQUIRE( lines[ 4 ].completed == record );
+            REQUIRE( lines[ 4 ].segments == 1 );
         }
     }
 }

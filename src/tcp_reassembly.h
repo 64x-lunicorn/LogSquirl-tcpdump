@@ -46,10 +46,11 @@ constexpr const char* kReassemblyLimit = "[reassembly limit]";
 
 /// The messages a segment completed, as the TCP Reassembly put them together.
 struct ReassembledMessages {
-    /// The messages, from the start of the first to the end of the last; empty
-    /// when the segment completed none that began in an earlier one, or
-    /// left part of its last one to a later one.  Valid until the next call
-    /// of TcpReassembly::apply().
+    /// The whole messages the segment completed, in sequence order, from the
+    /// start of the first to the end of the last (and bytes behind them none
+    /// of the protocol's), whether they began in an earlier segment or in
+    /// this one; empty when it completed none, came early, was sent before
+    /// or was cut.  Valid until the next call of TcpReassembly::apply().
     ByteView bytes;
     /// Segments the first message was put together from; 1 when it lies in
     /// the segment.

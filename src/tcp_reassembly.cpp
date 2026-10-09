@@ -268,7 +268,8 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     }
     const auto walk = walkMessages( payload.data, payload.size, pkt, first.framer );
     if ( walk.incomplete.framer == 0 ) {
-        return {}; // whole messages: the parser described them
+        // Whole messages: the parser described them.
+        return { { payload.data, walk.end }, 1 };
     }
 
     const auto key = keyOf( stream, stream.direction );
