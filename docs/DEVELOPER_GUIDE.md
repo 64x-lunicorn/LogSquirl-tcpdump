@@ -432,12 +432,22 @@ read through a `DeviceSource`:
   (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
   group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
   (2 s), and returns when the group is gone (a second more at most, for a
-  process of another user, as behind sudo, that cannot be killed). On
-  Windows the program is put in a job object with
-  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` right after it starts (what it
-  starts later is in the job too), and `terminate()` terminates the job;
+  process of another user, as behind sudo, that cannot be killed). A
+  group is never signalled with a pid of 0 or less (`kill(-0)` would
+  signal LogSquirl's own group). On Windows the program is started
+  suspended (`CREATE_SUSPENDED`, through the CreateProcess modifier, which
+  also hands over Qt's `PROCESS_INFORMATION`), put in a job object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and only then resumed, so that
+  nothing it starts escapes the job; `terminate()` terminates the job, and
   closing the job's last handle, even as LogSquirl crashes, kills what is
-  left. The destructor terminates.
+  left. A job that cannot be created, set up or assigned is reported as a
+  stderr line, and ending the program then terminates its process tree
+  (children first, as `taskkill /T`). The destructor terminates.
+- **Shared.** `startProcess( process, command, group, timeout )` and
+  `endProcessGroup( group, leader, grace )` are how every capture program
+  and every listing (`runListing()`) is started and ended: one place for
+  the channels, the null stdin (or `ProcessCommand::stdinPipe`), the
+  console window, the group or job, the shell and the batch-file check.
 - **Stop.** The stop flag ends the stream, not the program: the
   conversion finalises (Converted), then the caller terminates the source,
   or destroys it. A Stop, or a shutdown, before the capture header has come

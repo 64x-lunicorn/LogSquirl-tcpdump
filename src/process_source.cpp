@@ -40,6 +40,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+// After windows.h, which it needs.
+#include <tlhelp32.h>
 #else
 #include <cerrno>
 #include <csignal>
@@ -127,20 +129,51 @@ void StderrLines::complete( const QByteArray& bytes )
     }
 }
 
+// ── Batch files ──────────────────────────────────────────────────────────
+
+QString batchArgumentProblem( const ProcessCommand& command )
+{
+    if ( command.viaShell ) {
+        return {}; // the user's own command line for the shell
+    }
+    const auto suffix = QFileInfo( command.program ).suffix().toLower();
+    if ( suffix != QLatin1String( "bat" ) && suffix != QLatin1String( "cmd" ) ) {
+        return {};
+    }
+    static const QString kRead = QStringLiteral( "%!^&|<>()\"" );
+    for ( const auto& argument : command.arguments ) {
+        for ( const auto c : argument ) {
+            if ( kRead.contains( c ) || c.category() == QChar::Other_Control ) {
+                return QStringLiteral( "%1 is a batch file, which cmd.exe runs: it would read the "
+                                       "%2 in the argument %3 as its own syntax. Leave out "
+                                       "%, !, ^, &, |, <, >, (, ), \" and line breaks." )
+                    .arg( command.displayName(),
+                          c.category() == QChar::Other_Control ? QStringLiteral( "line break" )
+                                                               : QStringLiteral( "'%1'" ).arg( c ),
+                          argument.left( 80 ) );
+            }
+        }
+    }
+    return {};
+}
+
 // ── Process groups ───────────────────────────────────────────────────────
 
-/**
- * A program and what it started, ended together: a process group whose id
- * is the program's pid, or a Windows job object.  `ended` is set by whoever
- * ends it first, before any signal, so that the program's exit is not taken
- * for a failure.
- */
 struct ProcessGroup {
 #ifdef Q_OS_WIN
     HANDLE job = nullptr;
+    /// The program, for alive() and ending its tree without a job.
+    HANDLE process = nullptr;
+    DWORD pid = 0;
+    /// Qt's PROCESS_INFORMATION of the program started suspended, set by
+    /// the CreateProcess modifier; read once, right after the start.
+    Q_PROCESS_INFORMATION* started = nullptr;
 
     ~ProcessGroup()
     {
+        if ( process ) {
+            CloseHandle( process );
+        }
         if ( job ) {
             CloseHandle( job ); // kills what is left: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         }
@@ -169,15 +202,59 @@ void withdraw( const std::shared_ptr<ProcessGroup>& group )
     registry.erase( std::remove( registry.begin(), registry.end(), group ), registry.end() );
 }
 
+#ifdef Q_OS_WIN
+
+/// Why the last Windows call failed, as a message.
+QString lastWindowsError()
+{
+    return QStringLiteral( "Windows error %1" ).arg( GetLastError() );
+}
+
+/// The processes whose parent is @p root, and theirs, as a snapshot sees them.
+std::vector<DWORD> descendantsOf( DWORD root )
+{
+    std::vector<DWORD> found;
+    const HANDLE snapshot = CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
+    if ( snapshot == INVALID_HANDLE_VALUE ) {
+        return found;
+    }
+    std::vector<std::pair<DWORD, DWORD>> all; // pid, parent
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    for ( bool more = Process32FirstW( snapshot, &entry ); more;
+          more = Process32NextW( snapshot, &entry ) ) {
+        all.emplace_back( entry.th32ProcessID, entry.th32ParentProcessID );
+    }
+    CloseHandle( snapshot );
+    std::vector<DWORD> parents{ root };
+    while ( !parents.empty() ) {
+        const auto parent = parents.back();
+        parents.pop_back();
+        for ( const auto& [ pid, ppid ] : all ) {
+            if ( ppid == parent && pid != root
+                 && std::find( found.begin(), found.end(), pid ) == found.end() ) {
+                found.push_back( pid );
+                parents.push_back( pid );
+            }
+        }
+    }
+    return found;
+}
+
+#endif
+
 /// Whether any process of @p group is still there.
 bool alive( const ProcessGroup& group )
 {
 #ifdef Q_OS_WIN
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info{};
-    return group.job
-           && QueryInformationJobObject( group.job, JobObjectBasicAccountingInformation, &info,
-                                         sizeof info, nullptr )
-           && info.ActiveProcesses > 0;
+    if ( group.job ) {
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info{};
+        return QueryInformationJobObject( group.job, JobObjectBasicAccountingInformation, &info,
+                                          sizeof info, nullptr )
+               && info.ActiveProcesses > 0;
+    }
+    // Without a job: the program itself.
+    return group.process && WaitForSingleObject( group.process, 0 ) == WAIT_TIMEOUT;
 #else
     // EPERM: there is one, run by another user (behind sudo).
     return group.id > 0 && ( ::kill( -group.id, 0 ) == 0 || errno == EPERM );
@@ -191,8 +268,24 @@ void signalGroup( const ProcessGroup& group, bool hard )
     Q_UNUSED( hard ); // a console program has no request to end
     if ( group.job ) {
         TerminateJobObject( group.job, 1 );
+        return;
+    }
+    if ( group.pid == 0 ) {
+        return;
+    }
+    // Without a job: the program's tree, children first, as taskkill /T.
+    const auto children = descendantsOf( group.pid );
+    for ( auto pid = children.rbegin(); pid != children.rend(); ++pid ) {
+        if ( HANDLE child = OpenProcess( PROCESS_TERMINATE, FALSE, *pid ) ) {
+            TerminateProcess( child, 1 );
+            CloseHandle( child );
+        }
+    }
+    if ( group.process ) {
+        TerminateProcess( group.process, 1 );
     }
 #else
+    // Never 0 or less: kill(-0) would signal LogSquirl's own group.
     if ( group.id > 0 ) {
         ::kill( -group.id, hard ? SIGKILL : SIGTERM );
     }
@@ -216,21 +309,133 @@ bool waitUntilGone( const ProcessGroup& group, QProcess* leader, Clock::time_poi
     return !alive( group );
 }
 
-/// End @p group: SIGTERM, and SIGKILL after the grace; see ProcessSource::terminate().
-void endGroup( ProcessGroup& group, QProcess* leader )
+} // namespace
+
+std::shared_ptr<ProcessGroup> newProcessGroup()
+{
+    return std::make_shared<ProcessGroup>();
+}
+
+ProcessStart startProcess( QProcess& process, const ProcessCommand& command, ProcessGroup& group,
+                           std::chrono::milliseconds timeout )
+{
+    ProcessStart start;
+    // stdout is the capture (or the listing), and nothing else may get into it.
+    process.setProcessChannelMode( QProcess::SeparateChannels );
+    process.setReadChannel( QProcess::StandardOutput );
+    // Nothing to answer a prompt with: a program that asks fails at once.
+    if ( !command.stdinPipe ) {
+        process.setStandardInputFile( QProcess::nullDevice() );
+    }
+    if ( command.discardStdout ) {
+        process.setStandardOutputFile( QProcess::nullDevice() );
+    }
+#ifdef Q_OS_WIN
+    if ( const auto refused = batchArgumentProblem( command ); !refused.isEmpty() ) {
+        start.error = refused;
+        return start;
+    }
+    // A job that ends what the program starts, even as LogSquirl crashes
+    // (its last handle closed kills what is in it).
+    group.job = CreateJobObjectW( nullptr, nullptr );
+    if ( group.job ) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if ( !SetInformationJobObject( group.job, JobObjectExtendedLimitInformation, &limits,
+                                       sizeof limits ) ) {
+            start.warning = QStringLiteral( "Cannot set up a job object for %1 (%2)" )
+                                .arg( command.displayName(), lastWindowsError() );
+            CloseHandle( group.job );
+            group.job = nullptr;
+        }
+    }
+    else {
+        start.warning = QStringLiteral( "Cannot create a job object for %1 (%2)" )
+                            .arg( command.displayName(), lastWindowsError() );
+    }
+    // No console window; suspended until it is in the job, so that nothing
+    // it starts escapes it.
+    const bool suspended = group.job != nullptr;
+    process.setCreateProcessArgumentsModifier(
+        [ &group, suspended ]( QProcess::CreateProcessArguments* args ) {
+            args->flags |= CREATE_NO_WINDOW;
+            if ( suspended ) {
+                args->flags |= CREATE_SUSPENDED;
+                group.started = args->processInformation;
+            }
+        } );
+    if ( command.viaShell ) {
+        process.setProgram( qEnvironmentVariable( "COMSPEC", QStringLiteral( "cmd.exe" ) ) );
+        process.setNativeArguments( QStringLiteral( "/d /s /c \"%1\"" ).arg( command.program ) );
+    }
+#else
+    // A group of its own, which ending it ends as a whole.  setpgid() is
+    // async-signal-safe, as the child requires.
+    process.setChildProcessModifier( [] { ::setpgid( 0, 0 ); } );
+    if ( command.viaShell ) {
+        process.setProgram( QStringLiteral( "/bin/sh" ) );
+        process.setArguments( { QStringLiteral( "-c" ), command.program } );
+    }
+#endif
+    if ( !command.viaShell ) {
+        process.setProgram( command.program );
+        process.setArguments( command.arguments );
+    }
+    process.start();
+    start.started = process.waitForStarted( static_cast<int>( timeout.count() ) );
+#ifdef Q_OS_WIN
+    if ( suspended && group.started && group.started->hProcess ) {
+        // Created, if not started (it is suspended): put it in the job and
+        // let it run, or end it.
+        if ( !AssignProcessToJobObject( group.job, group.started->hProcess ) ) {
+            start.warning = QStringLiteral( "Cannot put %1 in a job object (%2): ending it may "
+                                            "leave what it started running" )
+                                .arg( command.displayName(), lastWindowsError() );
+            CloseHandle( group.job );
+            group.job = nullptr;
+        }
+        if ( ResumeThread( group.started->hThread ) == static_cast<DWORD>( -1 ) ) {
+            TerminateProcess( group.started->hProcess, 1 );
+            start.started = false;
+            start.error = QStringLiteral( "Cannot start %1: it could not be resumed (%2)" )
+                              .arg( command.displayName(), lastWindowsError() );
+        }
+    }
+    group.started = nullptr;
+#endif
+    if ( !start.started ) {
+        if ( start.error.isEmpty() ) {
+            start.error = QStringLiteral( "Cannot start %1: %2" )
+                              .arg( command.displayName(), process.errorString() );
+        }
+        process.kill();
+        process.waitForFinished( 1000 );
+        return start;
+    }
+    const auto pid = process.processId();
+#ifdef Q_OS_WIN
+    group.pid = static_cast<DWORD>( pid );
+    group.process = OpenProcess(
+        SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, group.pid );
+#else
+    // A program that has exited already has been reaped: its pid is 0.
+    group.id = pid > 0 ? static_cast<pid_t>( pid ) : 0;
+#endif
+    return start;
+}
+
+void endProcessGroup( ProcessGroup& group, QProcess* leader, std::chrono::milliseconds grace )
 {
     if ( !group.ended.exchange( true ) ) {
-        signalGroup( group, false );
+        signalGroup( group, grace.count() == 0 );
     }
-    if ( waitUntilGone( group, leader, Clock::now() + ProcessSource::kTerminateGrace ) ) {
+    if ( waitUntilGone( group, leader, Clock::now() + grace ) ) {
         return;
     }
     signalGroup( group, true );
     // A process of another user cannot be killed: give up on it after a second.
     waitUntilGone( group, leader, Clock::now() + milliseconds( 1000 ) );
 }
-
-} // namespace
 
 void terminateCaptureProcesses()
 {
@@ -246,7 +451,7 @@ void terminateCaptureProcesses()
         }
     }
     for ( const auto& group : running ) {
-        endGroup( *group, nullptr );
+        endProcessGroup( *group, nullptr, ProcessSource::kTerminateGrace );
     }
 }
 
@@ -257,64 +462,20 @@ ProcessSource::ProcessSource( const ProcessCommand& command, const std::atomic_b
     : StreamSource( stop )
     , name_( command.displayName() )
     , process_( std::make_unique<QProcess>() )
-    , group_( std::make_shared<ProcessGroup>() )
+    , group_( newProcessGroup() )
     , stderr_( std::move( onLine ) )
 {
-    // stdout is the capture, and nothing else may get into it.
-    process_->setProcessChannelMode( QProcess::SeparateChannels );
-    process_->setReadChannel( QProcess::StandardOutput );
-    process_->setStandardInputFile( QProcess::nullDevice() );
-    if ( command.discardStdout ) {
-        process_->setStandardOutputFile( QProcess::nullDevice() );
-    }
-#ifdef Q_OS_WIN
-    // A console program gets no console window.
-    process_->setCreateProcessArgumentsModifier(
-        []( QProcess::CreateProcessArguments* args ) { args->flags |= CREATE_NO_WINDOW; } );
-    if ( command.viaShell ) {
-        process_->setProgram( qEnvironmentVariable( "COMSPEC", QStringLiteral( "cmd.exe" ) ) );
-        process_->setNativeArguments( QStringLiteral( "/d /s /c \"%1\"" ).arg( command.program ) );
-    }
-#else
-    // A group of its own, which Stop ends as a whole.  setpgid() is
-    // async-signal-safe, as the child requires.
-    process_->setChildProcessModifier( [] { ::setpgid( 0, 0 ); } );
-    if ( command.viaShell ) {
-        process_->setProgram( QStringLiteral( "/bin/sh" ) );
-        process_->setArguments( { QStringLiteral( "-c" ), command.program } );
-    }
-#endif
-    if ( !command.viaShell ) {
-        process_->setProgram( command.program );
-        process_->setArguments( command.arguments );
-    }
-    process_->start();
-    started_ = process_->waitForStarted();
+    const auto start = startProcess( *process_, command, *group_, kStartTimeout );
+    started_ = start.started;
     if ( started_ ) {
         pid_ = process_->processId();
-#ifdef Q_OS_WIN
-        // Assigned once it runs, so what it starts from now on is in the job
-        // too; closing the job's last handle, even as LogSquirl crashes,
-        // kills whatever is left in it.
-        group_->job = CreateJobObjectW( nullptr, nullptr );
-        if ( group_->job ) {
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject( group_->job, JobObjectExtendedLimitInformation, &limits,
-                                     sizeof limits );
-            if ( HANDLE handle = OpenProcess( PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE,
-                                              static_cast<DWORD>( pid_ ) ) ) {
-                AssignProcessToJobObject( group_->job, handle );
-                CloseHandle( handle );
-            }
-        }
-#else
-        group_->id = static_cast<pid_t>( pid_ );
-#endif
         enroll( group_ );
+        if ( !start.warning.isEmpty() ) {
+            stderr_.append( ( start.warning + QLatin1Char( '\n' ) ).toUtf8() );
+        }
     }
     else {
-        startError_ = process_->errorString();
+        startError_ = start.error;
     }
     stdout_ = std::make_unique<DeviceSource>( *process_ );
 }
@@ -343,7 +504,7 @@ QStringList ProcessSource::lastStderrLines() const
 void ProcessSource::terminate()
 {
     if ( started_ ) {
-        endGroup( *group_, process_.get() );
+        endProcessGroup( *group_, process_.get(), kTerminateGrace );
         drainStderr();
     }
 }
@@ -428,7 +589,7 @@ std::string ProcessSource::writerSaid()
 QString ProcessSource::failure() const
 {
     if ( !started_ ) {
-        return QStringLiteral( "Cannot start %1: %2" ).arg( name_, startError_ );
+        return startError_;
     }
     if ( group_->ended ) {
         return {}; // ended on purpose

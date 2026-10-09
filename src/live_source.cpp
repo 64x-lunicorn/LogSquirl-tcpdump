@@ -39,13 +39,6 @@
 #include <mutex>
 #include <vector>
 
-#ifdef Q_OS_WIN
-#include <windows.h>
-#else
-#include <signal.h>
-#include <unistd.h>
-#endif
-
 namespace tcpdump {
 
 QString LiveSourceKind::validate( const LiveChoice& choice ) const
@@ -153,23 +146,6 @@ thread_local std::shared_ptr<const std::atomic_bool> scopeCancel;
 /// How often a listing looks whether it was cancelled.
 constexpr int kCancelPollMs = 20;
 
-/// Kill @p process and, on Unix, every process of its group.
-void killListing( QProcess& process )
-{
-#ifndef Q_OS_WIN
-    // Again until the group is gone: a process forking as the first
-    // signal comes may leave a child that did not get it.
-    const auto group = -static_cast<pid_t>( process.processId() );
-    QElapsedTimer killing;
-    killing.start();
-    while ( ::kill( group, SIGKILL ) == 0 && killing.elapsed() < 1000 ) {
-        process.waitForFinished( 10 );
-    }
-#endif
-    process.kill();
-    process.waitForFinished( 1000 );
-}
-
 } // namespace
 
 ListingCancelScope::ListingCancelScope( std::shared_ptr<const std::atomic_bool> cancel )
@@ -215,34 +191,13 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
     }
 
     QProcess process;
-    process.setProcessChannelMode( QProcess::SeparateChannels );
-    // Nothing to answer a prompt with: a program that asks fails at once.
-    process.setStandardInputFile( QProcess::nullDevice() );
-#ifdef Q_OS_WIN
-    process.setCreateProcessArgumentsModifier(
-        []( QProcess::CreateProcessArguments* args ) { args->flags |= CREATE_NO_WINDOW; } );
-    if ( command.viaShell ) {
-        process.setProgram( qEnvironmentVariable( "COMSPEC", QStringLiteral( "cmd.exe" ) ) );
-        process.setNativeArguments( QStringLiteral( "/d /s /c \"%1\"" ).arg( command.program ) );
-    }
-#else
     // A group of its own, so that a timeout ends what it started too.
-    process.setChildProcessModifier( [] { ::setpgid( 0, 0 ); } );
-    if ( command.viaShell ) {
-        process.setProgram( QStringLiteral( "/bin/sh" ) );
-        process.setArguments( { QStringLiteral( "-c" ), command.program } );
-    }
-#endif
-    if ( !command.viaShell ) {
-        process.setProgram( command.program );
-        process.setArguments( command.arguments );
-    }
+    const auto group = newProcessGroup();
     QElapsedTimer clock;
     clock.start();
-    process.start();
-    if ( !process.waitForStarted( static_cast<int>( timeout.count() ) ) ) {
-        output.error = QStringLiteral( "Cannot start %1: %2" )
-                           .arg( command.displayName(), process.errorString() );
+    const auto start = startProcess( process, command, *group, timeout );
+    if ( !start.started ) {
+        output.error = start.error;
         return output;
     }
     // In slices, to see a cancel in time.
@@ -254,7 +209,7 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
         finished = finished || process.state() == QProcess::NotRunning;
     }
     if ( !finished ) {
-        killListing( process );
+        endProcessGroup( *group, &process, std::chrono::milliseconds( 0 ) );
         output.error
             = cancelled()
                   ? QStringLiteral( "Listing with %1 cancelled" ).arg( command.displayName() )

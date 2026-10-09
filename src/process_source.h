@@ -69,6 +69,10 @@ struct ProcessCommand {
     /// FIFO the plugin made): stdout goes to the null device, and the
     /// stream is not read from it (see ProcessSource::waitForEnd()).
     bool discardStdout = false;
+    /// stdin is a pipe held open until the program is ended, rather than
+    /// the null device: for ssh, whose remote command ends tcpdump on the
+    /// server when its stdin closes (ssh_source.h).
+    bool stdinPipe = false;
 
     /// A custom command line run by the system's shell (/bin/sh -c, or
     /// cmd.exe /c on Windows), for a user who wants pipes or quoting: the
@@ -129,6 +133,8 @@ class ProcessSource : public StreamSource {
 public:
     /// How long a program has to end on SIGTERM before it is killed.
     static constexpr std::chrono::milliseconds kTerminateGrace{ 2000 };
+    /// How long a program may take to start.
+    static constexpr std::chrono::milliseconds kStartTimeout{ 30000 };
 
     /// @param stop    If set, ends the stream (Stop or Cancel); must outlive
     ///                the source.  The program runs on until terminate() or
@@ -198,6 +204,56 @@ private:
     QString startError_; ///< Why it could not be started.
     qint64 pid_ = 0;
 };
+
+/**
+ * Why @p command may not be run as it is, or empty if it may.  A batch file
+ * (.bat, .cmd) is run by cmd.exe on Windows, which reads its arguments
+ * again, quotes or not: a '%', '!', '^', '&', '|', '<', '>', '(', ')', '"'
+ * or a line break in one could run a command (BatBadBut).  Such arguments
+ * are refused, not escaped: cmd.exe has no quoting that holds for all of
+ * them.  A program that is no batch file passes, whatever its arguments.
+ */
+QString batchArgumentProblem( const ProcessCommand& command );
+
+/**
+ * A program and what it started, ended together: a process group whose id
+ * is the program's pid, or a Windows job object the program is in from its
+ * first instruction (it is started suspended, put in the job, then
+ * resumed).  Where no job can be had, ending it ends the program's process
+ * tree instead.  `ended` is set by whoever ends it first, before any
+ * signal, so that the program's exit is not taken for a failure.
+ */
+struct ProcessGroup;
+
+/// What startProcess() did.
+struct ProcessStart {
+    bool started = false;
+    QString error; ///< Why it was not started; empty if it was.
+    /// Why its group (job) could not be made, though it runs: ending it
+    /// may then leave what it started; empty if all is well.
+    QString warning;
+};
+
+/**
+ * Start @p command in @p process, in @p group, as every capture program and
+ * listing is started: stdout and stderr apart, stdin the null device (or a
+ * pipe held open, ProcessCommand::stdinPipe), no console window, through
+ * the system's shell only if ProcessCommand::viaShell, a batch file refused
+ * if cmd.exe would read its arguments (batchArgumentProblem(), on Windows).
+ * Waits at most @p timeout for it to start.
+ */
+ProcessStart startProcess( QProcess& process, const ProcessCommand& command, ProcessGroup& group,
+                           std::chrono::milliseconds timeout );
+
+/// A group for startProcess(), its program not yet started.
+std::shared_ptr<ProcessGroup> newProcessGroup();
+
+/// End @p group: SIGTERM, and SIGKILL to what is left after @p grace (0:
+/// SIGKILL at once); on Windows the job, or the process tree, is
+/// terminated.  Reaps @p leader, the program, if it is given (on the
+/// thread it belongs to).  Does nothing for a group whose program was not
+/// started.
+void endProcessGroup( ProcessGroup& group, QProcess* leader, std::chrono::milliseconds grace );
 
 /// End every capture program that is running (ProcessSource::terminate()),
 /// whichever thread reads it; returns when all are gone.  Called when the

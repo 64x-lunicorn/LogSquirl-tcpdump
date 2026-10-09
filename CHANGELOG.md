@@ -489,6 +489,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- Live capture programs: a listing that timed out just as its program
+  ended could send SIGKILL to LogSquirl's own process group (`kill(-0)`);
+  a group is now never signalled without a pid. On Windows a capture
+  program is started suspended and put in its job object before it runs,
+  so nothing it starts escapes Stop; a job that cannot be made is reported,
+  and Stop then ends the program's process tree. Capture programs and
+  listings share one start and end (#103).
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the
   wire: a PPPoE session frame inside is unwrapped to its IP packet, a
   discovery message named, where before they showed as `PPPoES` /
