@@ -56,59 +56,6 @@ using std::chrono::milliseconds;
 
 namespace {
 
-/// A pipe; either end is closed at most once, and when it goes.
-class Pipe {
-public:
-    Pipe()
-    {
-        REQUIRE( ::pipe( fds_ ) == 0 );
-    }
-    ~Pipe()
-    {
-        closeRead();
-        closeWrite();
-    }
-    Pipe( const Pipe& ) = delete;
-    Pipe& operator=( const Pipe& ) = delete;
-
-    int readEnd() const
-    {
-        return fds_[ 0 ];
-    }
-
-    /// Write all of @p bytes.
-    void write( const Bytes& bytes ) const
-    {
-        size_t done = 0;
-        while ( done < bytes.size() ) {
-            const auto n = ::write( fds_[ 1 ], bytes.data() + done, bytes.size() - done );
-            if ( n <= 0 ) {
-                return; // the reader is gone
-            }
-            done += static_cast<size_t>( n );
-        }
-    }
-
-    void closeWrite()
-    {
-        if ( fds_[ 1 ] >= 0 ) {
-            ::close( fds_[ 1 ] );
-            fds_[ 1 ] = -1;
-        }
-    }
-
-    void closeRead()
-    {
-        if ( fds_[ 0 ] >= 0 ) {
-            ::close( fds_[ 0 ] );
-            fds_[ 0 ] = -1;
-        }
-    }
-
-private:
-    int fds_[ 2 ] = { -1, -1 };
-};
-
 /// Writes @p capture into @p pipe in chunks of @p chunk bytes (0: the
 /// records as they are, @p cuts), pausing now and then, then closes it.
 std::thread writeInChunks( Pipe& pipe, Bytes capture, size_t chunk, std::vector<size_t> cuts = {} )

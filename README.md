@@ -134,6 +134,26 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 10. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
+### Live capture
+
+A capture read from a running source (a capture program's output, a pipe)
+is converted while it runs:
+
+- Its tab opens, following the file, as soon as the first packet has come,
+  and its packet list grows as packets arrive: lines appear within 100 ms.
+  A capture that ends without a packet opens no tab and says so
+- The sidebar shows packets, bytes, packets/s and the elapsed time (a
+  stream has no size, so there is no percentage), and the Capture Summary
+  of the capture's tab updates about once a second
+- **Stop** ends the capture and finalises it within a second: the summary
+  is then the one converting the saved capture would give
+- The capture's bytes are kept unchanged next to its text, as
+  `<name>.pcap` or `<name>.pcapng`. Both live in the private temporary
+  directory, removed when LogSquirl quits: **Save capture…** in the sidebar
+  copies the raw capture elsewhere, to convert again or open in Wireshark
+- If the source fails, e.g. the capture program exits with an error, the
+  sidebar and a notification say why, and what was captured so far stays
+
 ### Options
 
 **Plugins → Plugin Management…**, **Configure…** on the plugin's card,

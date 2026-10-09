@@ -84,6 +84,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group: SIGTERM, then SIGKILL after 2 s; on Windows it runs in a job
   object that is terminated. Shutting the plugin down, as LogSquirl quits
   or the plugin is disabled, ends every capture program still running.
+- **Live conversion.** A capture read from a stream is converted while it
+  runs: its packet lines are flushed before every wait for more and at
+  least every 100 ms, and its tab opens, following the file, as soon as
+  the header and the first packet line are in it (so LogSquirl recognises
+  the Log Format and shows the table view); a capture that ends without
+  packets opens no tab and says so. The sidebar shows packets, bytes,
+  packets/s and the elapsed time instead of a percentage, and the Capture
+  Summary of the capture's tab follows snapshots, at most one a second.
+  **Stop** ends the capture within a second and finalises it: the last
+  lines flushed, the summary final, the same as converting the saved
+  capture gives. The bytes read are kept unchanged next to the text, as
+  `<name>.pcap` or `<name>.pcapng`, and **Save capture…** in the sidebar
+  copies them out of the temporary directory, to convert again or open in
+  Wireshark. A source that fails (a capture program that exits with an
+  error) ends with its message and keeps what was captured.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section or a

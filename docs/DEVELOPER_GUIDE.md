@@ -896,7 +896,8 @@ the Stream Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. `convertStream()` does the same for a capture
-read from a stream (*The Capture Source seam*), without progress. The file, `<name>.log`, is created with
+read from a stream (*The Capture Source seam*), without progress but live
+(see *Live conversion* below). The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three
@@ -909,6 +910,42 @@ failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
+
+#### Live conversion
+`convertStream()` converts live: a `LiveInput` between the stream and the
+reader writes every byte read, unchanged, to the raw capture next to the
+text (`<name>.pcap`, or `<name>.pcapng` when the reader is a
+`PcapngReader`; `ConversionResult::rawPath`); the bytes read before the
+output directory exists, the header the format is told by, are kept until
+it does. Before every read that would wait (`ByteSource::ready()` is
+false), it flushes the text and the raw file, so a line is readable as soon
+as the stream pauses; a stream that never pauses is flushed at least every
+`kLiveFlushInterval` (100 ms). A `LiveObserver` is told on the converting
+thread: `firstPacket( logPath, rawPath )` once, after the header and the
+first packet line are flushed (LogSquirl recognises a Log Format once, at
+the first load with lines, LogSquirl#794, so the tab must not open on the
+header alone), and `snapshot( LiveSnapshot )` with the first packet and
+then at most every `kLiveSnapshotInterval` (1 s): the summary so far
+(`summariseSoFar()`, from a copy of the statistics), the time since the
+start and the bytes read. So that a burst's last packets are not left out
+until the next packet, the wait before a read sleeps until the snapshot's
+turn while the stream stays idle (a stop turns `ready()` on). The stream
+stopping (Stop) ends Converted with the final summary, which equals that of
+converting the raw file (tested); Cancel removes both files. A stream that
+breaks off with an error after its first packet ends Failed with the
+message *and* `outputPath`, `rawPath` and the summary of what was captured;
+before a packet, it leaves nothing behind, as before.
+
+`LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
+own and posts what it is told to its own (the UI) thread as signals:
+`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
+`finished( ConversionResult )`. The source is made on the worker by a
+`SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
+ProcessCommand )` for a capture program), as a `ProcessSource` must be.
+`stop()` sets the source's stop flag, `cancel()` also the cancel flag. The
+outcome is posted before the source is destroyed, so a program that takes
+up to `kTerminateGrace` to end does not delay it; the destructor stops and
+waits for the worker.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`,
 the payload preview (`preview`, `previewChars`), the stream and endpoint
@@ -956,6 +993,22 @@ Qt UI that provides:
   is being read the label keeps saying so. The summaries are lost when the
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
+
+A live capture, `startLiveCapture( name, SourceFactory )`, runs in a
+`LiveCapture`. On `readyToOpen` the sidebar keeps the capture's entry under
+its text file and calls `open_file( path, follow = 1 )` on the UI thread
+(LogSquirl#796); snapshots replace the entry's summary through
+`updateSummary( textPath, summary )`, which redraws it if its tab is in
+front, and update a label with packets, bytes, packets/s (as of the
+snapshot) and the elapsed time (ticked by a 1 s timer) in place of the
+progress bar. **Stop** calls `stopLiveCapture()`. At the end the final
+summary replaces the last snapshot; a capture without packets has its files
+removed and a notification; a failed one keeps its entry with the error
+shown above the summary. **Save capture…**, shown for a tab whose capture
+has a raw file, copies it where `setSaveChooser()`'s dialog says. stderr
+lines go to the host's log. Opening a file and a live capture exclude each
+other; the `LiveCapture` is kept until the next one starts, since its
+worker may still be ending the capture program.
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome

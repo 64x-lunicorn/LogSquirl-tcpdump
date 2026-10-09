@@ -28,6 +28,7 @@
 #include "capture_source.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
+#include "pcapng_reader.h"
 #include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
@@ -42,6 +43,8 @@
 #include <algorithm>
 #include <exception>
 #include <new>
+#include <thread>
+#include <tuple>
 
 #ifdef Q_OS_UNIX
 #include <cerrno>
@@ -81,6 +84,85 @@ public:
 
 private:
     QFile& file_;
+};
+
+/**
+ * The input of a live conversion: reads the stream, and writes every byte
+ * read, unchanged, to the raw capture.  The bytes read before the raw file
+ * exists (the header the format is told by) are kept until it is attached.
+ * Before every read that would wait for the stream, it calls beforeWait, so
+ * that the Converter makes what it wrote readable first.
+ */
+class LiveInput : public ByteSource {
+public:
+    LiveInput( ByteSource& stream, std::function<void()> beforeWait )
+        : stream_( stream )
+        , beforeWait_( std::move( beforeWait ) )
+    {
+    }
+
+    size_t read( uint8_t* dst, size_t n ) override
+    {
+        if ( n > 0 && !stream_.ready() ) {
+            beforeWait_();
+        }
+        const auto got = stream_.read( dst, n );
+        bytesRead_ += got;
+        keep( dst, got );
+        return got;
+    }
+
+    // skip() reads, so what is skipped is kept too.
+
+    bool ready() override
+    {
+        return stream_.ready();
+    }
+
+    /// Write the bytes read so far, and from now on every byte read, to
+    /// @p raw.  False if they cannot be written.
+    bool attach( QFile& raw )
+    {
+        raw_ = &raw;
+        keep( pending_.data(), pending_.size() );
+        pending_.clear();
+        pending_.shrink_to_fit();
+        return !failed_;
+    }
+
+    /// Whether every byte read could be written to the raw file.
+    bool failed() const
+    {
+        return failed_;
+    }
+
+    /// Bytes read from the stream so far.
+    uint64_t bytesRead() const
+    {
+        return bytesRead_;
+    }
+
+private:
+    void keep( const uint8_t* data, size_t n )
+    {
+        if ( n == 0 ) {
+            return;
+        }
+        if ( !raw_ ) {
+            pending_.insert( pending_.end(), data, data + n );
+        }
+        else if ( raw_->write( reinterpret_cast<const char*>( data ), static_cast<qint64>( n ) )
+                  != static_cast<qint64>( n ) ) {
+            failed_ = true;
+        }
+    }
+
+    ByteSource& stream_;
+    std::function<void()> beforeWait_;
+    std::vector<uint8_t> pending_;
+    QFile* raw_ = nullptr;
+    bool failed_ = false;
+    uint64_t bytesRead_ = 0;
 };
 
 /// The summary of a converted capture, from what was collected on the way.
@@ -125,6 +207,14 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
         summary.otherEndpointPackets = stats.otherEndpointPackets;
     }
     return summary;
+}
+
+/// The summary of a capture still being converted, from a copy of what was
+/// collected so far: the conversion goes on with @p stats as they are.
+CaptureSummary summariseSoFar( const CaptureStats& stats, const StreamTracker& tracker,
+                               const CaptureReader& reader, size_t maxStreams )
+{
+    return summarise( CaptureStats( stats ), tracker, reader, maxStreams );
 }
 
 /// The message for a path that is not a regular file.
@@ -210,18 +300,32 @@ std::optional<ConversionResult> streamFailure( const ByteSource& input )
                        .arg( QString::fromStdString( stream->error() ) ) );
 }
 
+using Clock = std::chrono::steady_clock;
+
 /**
  * The conversion of the capture in @p input, named @p name; whatever it
  * throws, the caller turns into Failed.  @p inputSize is the input's size
  * for progress, 0 for a stream, whose size is unknown and which reports
- * none.
+ * none.  With @p live, the input is a stream converted live (convertStream()).
  */
 ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_t inputSize,
                                  const QString& outputRoot, const std::atomic_bool* cancel,
                                  const std::function<void( int )>& progress,
-                                 const ConversionOptions& options )
+                                 const ConversionOptions& options, const LiveObserver* live )
 {
-    HeadSource source( input );
+    const auto started = Clock::now();
+    // What to do before a wait for the stream, once there is output.
+    std::function<void()> beforeWait;
+    std::optional<LiveInput> liveInput;
+    if ( live ) {
+        liveInput.emplace( input, [ &beforeWait ] {
+            if ( beforeWait ) {
+                beforeWait();
+            }
+        } );
+    }
+
+    HeadSource source( liveInput ? static_cast<ByteSource&>( *liveInput ) : input );
     const auto capture = makeCaptureReader( source ); // pcap or pcapng, by the first block
     CaptureReader& reader = *capture;                 // the rest sees the capture through the seam
     if ( !reader.open() ) {
@@ -260,6 +364,25 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_
                && output.write( "\n", 1 ) == 1;
     };
 
+    // A live capture's bytes, as they were read, next to its text.
+    QFile raw;
+    auto rawFailed = [ &raw ] {
+        return failed(
+            QStringLiteral( "Cannot write the raw capture: %1" ).arg( raw.errorString() ) );
+    };
+    if ( live ) {
+        const bool pcapng = dynamic_cast<const PcapngReader*>( &reader ) != nullptr;
+        raw.setFileName( outputDir.filePath(
+            baseName + ( pcapng ? QStringLiteral( ".pcapng" ) : QStringLiteral( ".pcap" ) ) ) );
+        if ( !raw.open( QIODevice::WriteOnly | QIODevice::NewOnly ) ) {
+            return rawFailed();
+        }
+        raw.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
+        if ( !liveInput->attach( raw ) ) {
+            return rawFailed();
+        }
+    }
+
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
@@ -270,7 +393,52 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_
         return writeFailed();
     }
 
+    // Live: what was written is made readable before every wait and at
+    // least every kLiveFlushInterval; snapshots go out with the first packet
+    // and then at most every kLiveSnapshotInterval.
+    auto lastFlush = started;
+    auto lastSnapshot = started;
+    bool flushFailed = false;
+    bool snapshotDue = false; ///< Packets came since the last snapshot.
+    auto flush = [ & ] {
+        lastFlush = Clock::now();
+        if ( !output.flush() || ( live && !raw.flush() ) ) {
+            flushFailed = true;
+        }
+    };
+    auto sendSnapshot = [ & ] {
+        lastSnapshot = Clock::now();
+        snapshotDue = false;
+        if ( !live->snapshot ) {
+            return;
+        }
+        LiveSnapshot snapshot;
+        snapshot.summary = summariseSoFar( stats, tracker, reader, options.maxStreams );
+        snapshot.elapsed
+            = std::chrono::duration_cast<std::chrono::milliseconds>( lastSnapshot - started );
+        snapshot.rawBytes = liveInput->bytesRead();
+        live->snapshot( snapshot );
+    };
+    if ( live ) {
+        beforeWait = [ & ] {
+            flush();
+            if ( !snapshotDue || !live->snapshot ) {
+                return;
+            }
+            // The packets of a burst would wait for the next packet to be
+            // in a snapshot: while the stream has nothing new, wait for the
+            // snapshot's turn instead.  ready() also turns on a stop.
+            while ( !liveInput->ready() && Clock::now() - lastSnapshot < kLiveSnapshotInterval ) {
+                std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+            }
+            if ( Clock::now() - lastSnapshot >= kLiveSnapshotInterval ) {
+                sendSnapshot();
+            }
+        };
+    }
+
     int lastPermille = -1;
+    bool firstPacket = true;
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
         if ( cancel && cancel->load() ) {
@@ -288,6 +456,34 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }
+        if ( live ) {
+            snapshotDue = true;
+            const auto now = Clock::now();
+            if ( firstPacket ) {
+                // The header and this line are in the file before it is opened.
+                flush();
+                if ( !flushFailed && live->firstPacket ) {
+                    live->firstPacket( QFileInfo( output.fileName() ).absoluteFilePath(),
+                                       QFileInfo( raw.fileName() ).absoluteFilePath() );
+                }
+                sendSnapshot();
+            }
+            else {
+                if ( now - lastFlush >= kLiveFlushInterval ) {
+                    flush();
+                }
+                if ( now - lastSnapshot >= kLiveSnapshotInterval ) {
+                    sendSnapshot();
+                }
+            }
+            if ( flushFailed ) {
+                return writeFailed();
+            }
+            if ( liveInput->failed() ) {
+                return rawFailed();
+            }
+        }
+        firstPacket = false;
         if ( progress && inputSize > 0 ) {
             const auto permille = static_cast<int>(
                 std::min<uint64_t>( reader.bytesRead() * 1000 / inputSize, 1000 ) );
@@ -297,17 +493,36 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_
             }
         }
     }
-    if ( auto broken = streamFailure( input ) ) {
+    beforeWait = nullptr;
+
+    auto broken = streamFailure( input );
+    // A live capture that broke off keeps what was captured, once there is
+    // a packet to show.
+    if ( broken && ( !live || stats.packets == 0 ) ) {
         return std::move( *broken );
     }
     if ( !output.flush() ) {
         return writeFailed();
     }
     output.close();
+    if ( live ) {
+        if ( liveInput->failed() || !raw.flush() ) {
+            return rawFailed();
+        }
+        raw.close();
+    }
 
     ConversionResult result;
-    result.status = ConversionResult::Status::Converted;
+    if ( broken ) {
+        result = std::move( *broken );
+    }
+    else {
+        result.status = ConversionResult::Status::Converted;
+    }
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
+    if ( live ) {
+        result.rawPath = QFileInfo( raw.fileName() ).absoluteFilePath();
+    }
     result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
     outputDir.setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );
@@ -344,15 +559,28 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
         FileSource file( input );
         const auto size = static_cast<uint64_t>( std::max<qint64>( input.size(), 1 ) );
         return convertOrThrow( file, QFileInfo( inputPath ).completeBaseName(), size, outputRoot,
-                               cancel, progress, options );
+                               cancel, progress, options, nullptr );
     } );
 }
 
 ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
-                                const std::atomic_bool* cancel, const ConversionOptions& options )
+                                const std::atomic_bool* cancel, const ConversionOptions& options,
+                                const LiveObserver& live )
 {
-    return failedOnException(
-        [ & ] { return convertOrThrow( source, name, 0, outputRoot, cancel, {}, options ); } );
+    return failedOnException( [ & ] {
+        return convertOrThrow( source, name, 0, outputRoot, cancel, {}, options, &live );
+    } );
+}
+
+bool CaptureSummary::operator==( const CaptureSummary& other ) const
+{
+    auto fields = []( const CaptureSummary& s ) {
+        return std::tie( s.packets, s.bytes, s.durationSeconds, s.firstTimeUtc, s.lastTimeUtc,
+                         s.linkTypeNames, s.protocolPackets, s.protocolBytes, s.endpointPackets,
+                         s.tunnelEndpointPackets, s.tcpMarkers, s.cutPackets, s.endsInsideRecord,
+                         s.streamCap, s.otherEndpointPackets );
+    };
+    return fields( *this ) == fields( other );
 }
 
 ConversionResult applyCancelRequest( ConversionResult result, const std::atomic_bool* cancel )

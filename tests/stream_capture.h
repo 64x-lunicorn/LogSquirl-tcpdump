@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include "capture_source.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 
@@ -35,7 +36,14 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include <algorithm>
+#include <chrono>
+#include <string>
 #include <vector>
+
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 namespace tcpdump_test {
 
@@ -87,5 +95,92 @@ inline std::vector<Bytes> somePackets()
              ipv4( tcpdump::IpProtoTcp, tcp( 40000, 80, {}, 5, 0x11, 119, 1 ) ) ),
     };
 }
+
+/// A StreamSource that hands out its bytes, then breaks off with an error.
+class BreakingSource : public tcpdump::StreamSource {
+public:
+    BreakingSource( Bytes bytes, std::string error )
+        : bytes_( std::move( bytes ) )
+        , failure_( std::move( error ) )
+    {
+    }
+
+protected:
+    std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds ) override
+    {
+        if ( at_ == bytes_.size() ) {
+            error_ = failure_;
+            return 0;
+        }
+        n = std::min( n, bytes_.size() - at_ );
+        std::copy_n( bytes_.begin() + static_cast<std::ptrdiff_t>( at_ ), n, dst );
+        at_ += n;
+        return static_cast<std::ptrdiff_t>( n );
+    }
+    bool available() override
+    {
+        return true;
+    }
+
+private:
+    Bytes bytes_;
+    std::string failure_;
+    size_t at_ = 0;
+};
+
+#ifdef Q_OS_UNIX
+/// A pipe; either end is closed at most once, and when it goes.
+class Pipe {
+public:
+    Pipe()
+    {
+        REQUIRE( ::pipe( fds_ ) == 0 );
+    }
+    ~Pipe()
+    {
+        closeRead();
+        closeWrite();
+    }
+    Pipe( const Pipe& ) = delete;
+    Pipe& operator=( const Pipe& ) = delete;
+
+    int readEnd() const
+    {
+        return fds_[ 0 ];
+    }
+
+    /// Write all of @p bytes.
+    void write( const Bytes& bytes ) const
+    {
+        size_t done = 0;
+        while ( done < bytes.size() ) {
+            const auto n = ::write( fds_[ 1 ], bytes.data() + done, bytes.size() - done );
+            if ( n <= 0 ) {
+                return; // the reader is gone
+            }
+            done += static_cast<size_t>( n );
+        }
+    }
+
+    void closeWrite()
+    {
+        if ( fds_[ 1 ] >= 0 ) {
+            ::close( fds_[ 1 ] );
+            fds_[ 1 ] = -1;
+        }
+    }
+
+    void closeRead()
+    {
+        if ( fds_[ 0 ] >= 0 ) {
+            ::close( fds_[ 0 ] );
+            fds_[ 0 ] = -1;
+        }
+    }
+
+private:
+    int fds_[ 2 ] = { -1, -1 };
+};
+#endif
 
 } // namespace tcpdump_test
