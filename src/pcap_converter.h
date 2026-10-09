@@ -25,6 +25,8 @@
 #pragma once
 
 #include "capture_stats.h"
+#include "packet_formatter.h"
+#include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
@@ -102,9 +104,15 @@ struct ConversionResult {
     CaptureSummary summary; ///< What was converted, when Converted.
 };
 
-/// Settings of a conversion.  The defaults are the plugin's; a test lowers
-/// the caps to see them reached on a small capture.
+/// Settings of a conversion, as the user chose them in the configuration
+/// dialog (settings.h).  The defaults write the text the Log Format is made
+/// for; a test lowers the caps to see them reached on a small capture.
 struct ConversionOptions {
+    /// The time columns and whether the MAC columns are shown.
+    LineLayout layout;
+    /// Characters of a payload preview at most, kMaxPreviewChars at most;
+    /// 0 leaves the preview out.
+    size_t previewChars = kMaxPreviewChars;
     /// Conversations to number at most; later ones show stream "?".
     size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
@@ -123,7 +131,7 @@ struct ConversionOptions {
  * @param cancel    If set, checked between packets; stops the conversion.
  * @param progress  If set, called with the share of the input read so far,
  *                  in per mille, whenever that changes.
- * @param options   The memory caps; the defaults unless a test lowers them.
+ * @param options   The columns, the preview and the memory caps.
  */
 ConversionResult convertPcap( const QString& inputPath, const QString& outputRoot,
                               const std::atomic_bool* cancel = nullptr,

@@ -174,6 +174,9 @@ struct PacketRecord {
     /// payload alone or in its stream (describeInStream).  Such a label
     /// sticks to the packet's stream (StreamLabels).
     bool protocolRecognised = false;
+    /// Info ends in a preview of the payload's text this many bytes long,
+    /// after kDescriptionSeparator; 0 without one (limitPreview()).
+    size_t previewBytes = 0;
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")

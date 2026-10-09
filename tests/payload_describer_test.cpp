@@ -486,3 +486,100 @@ SCENARIO( "The describer tells a recognised label from a port's guess", "[descri
         }
     }
 }
+
+SCENARIO( "The describer says which description is a preview", "[describer]" )
+{
+    GIVEN( "a payload nobody recognises" )
+    {
+        THEN( "its description is a preview" )
+        {
+            REQUIRE(
+                describe( Transport::Udp, text( "hello" ), kUnknownSrc, kUnknownDst ).preview );
+        }
+    }
+
+    GIVEN( "a payload a detector recognises" )
+    {
+        THEN( "its description is none" )
+        {
+            REQUIRE_FALSE(
+                describe( Transport::Tcp, text( "GET / HTTP/1.1\r\n\r\n" ), kUnknownSrc, 80 )
+                    .preview );
+        }
+    }
+
+    GIVEN( "a binary payload, which gets no preview" )
+    {
+        THEN( "there is no preview either" )
+        {
+            REQUIRE_FALSE(
+                describe( Transport::Udp, Bytes( 20, 0x00 ), kUnknownSrc, kUnknownDst ).preview );
+        }
+    }
+}
+
+SCENARIO( "A payload preview is cut to the length chosen, or left out", "[describer]" )
+{
+    const std::string ellipsis = "\xe2\x80\xa6";
+    PacketRecord pkt;
+
+    auto withPreview = [ & ]( const std::string& summary, const std::string& preview ) {
+        pkt.info = summary + kDescriptionSeparator + preview;
+        pkt.previewBytes = preview.size();
+    };
+
+    GIVEN( "a packet whose Info ends in a preview of 11 characters" )
+    {
+        withPreview( "5000 \xe2\x86\x92 5001 Len=11", "hello world" );
+
+        THEN( "a length of 11 or more leaves it" )
+        {
+            limitPreview( pkt, 11 );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11 | hello world" );
+            limitPreview( pkt, kMaxPreviewChars );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11 | hello world" );
+        }
+
+        THEN( "a length of 5 cuts it, with an ellipsis" )
+        {
+            limitPreview( pkt, 5 );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11 | hello" + ellipsis );
+            REQUIRE( pkt.previewBytes == 5 + ellipsis.size() );
+        }
+
+        THEN( "a length of 0 leaves it out, and its separator" )
+        {
+            limitPreview( pkt, 0 );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11" );
+            REQUIRE( pkt.previewBytes == 0 );
+        }
+    }
+
+    GIVEN( "a preview the describer already cut" )
+    {
+        withPreview( "Len=1000", std::string( kMaxPreviewChars, 'x' ) + ellipsis );
+
+        THEN( "a shorter length cuts it again, with one ellipsis" )
+        {
+            limitPreview( pkt, 3 );
+            REQUIRE( pkt.info == "Len=1000 | xxx" + ellipsis );
+        }
+
+        THEN( "the full length leaves it" )
+        {
+            limitPreview( pkt, kMaxPreviewChars );
+            REQUIRE( pkt.info == "Len=1000 | " + std::string( kMaxPreviewChars, 'x' ) + ellipsis );
+        }
+    }
+
+    GIVEN( "a packet without a preview" )
+    {
+        pkt.info = "80 \xe2\x86\x92 5000 Len=18 | GET / HTTP/1.1";
+
+        THEN( "nothing changes" )
+        {
+            limitPreview( pkt, 0 );
+            REQUIRE( pkt.info == "80 \xe2\x86\x92 5000 Len=18 | GET / HTTP/1.1" );
+        }
+    }
+}

@@ -42,6 +42,10 @@
 
 namespace tcpdump {
 
+/// Longest payload preview, in characters, before it is cut with an
+/// ellipsis; limitPreview() cuts it shorter.
+constexpr size_t kMaxPreviewChars = 200;
+
 /// What the describer knows about a payload.
 struct PayloadDescription {
     std::string label;       ///< Protocol name ("TLS", "HTTP", …); empty: unknown.
@@ -50,6 +54,9 @@ struct PayloadDescription {
     /// recognised in the payload: a guess, which does not stick to the
     /// stream (StreamLabels).
     bool guessed = false;
+    /// The description is a preview of the payload's text, no detector
+    /// having recognised it: printable ASCII, a dot for every other byte.
+    bool preview = false;
 };
 
 /**
@@ -83,5 +90,16 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
  * left as they are.
  */
 void describeInStream( PacketRecord& pkt, const Stream& stream );
+
+/**
+ * Cut the payload preview @p pkt's Info ends in (PacketRecord::previewBytes)
+ * to its first @p maxChars characters, followed by an ellipsis, so that a
+ * shorter preview can be chosen than the describer's kMaxPreviewChars; with
+ * @p maxChars 0, leave it out, and the separator before it.  A preview no
+ * longer than that, and a packet without one, are left as they are.  Run on
+ * a packet as the reader hands it out, before anything else touches its
+ * Info.
+ */
+void limitPreview( PacketRecord& pkt, size_t maxChars );
 
 } // namespace tcpdump

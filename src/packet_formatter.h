@@ -41,6 +41,10 @@
  * Length is the length on the wire (PacketRecord::originalLen).  A packet
  * captured shorter than that, cut at the snaplen, ends its Info with
  * "[cut to N bytes]", N the bytes captured.
+ *
+ * That is the default Line Layout, the one the Log Format is made for.  A
+ * Line Layout may leave out one of the time columns, or add Source MAC and
+ * Destination MAC after Destination.
  */
 
 #pragma once
@@ -53,6 +57,23 @@
 #include <vector>
 
 namespace tcpdump {
+
+/// Which of the two time columns a packet line has.
+enum class TimeColumns {
+    Both,         ///< UTC Time and Time, the default.
+    AbsoluteOnly, ///< UTC Time only.
+    RelativeOnly, ///< Time only: the line has no timestamp then.
+};
+
+/// The columns of a packet line that can be chosen.  The defaults are the
+/// layout the Log Format, and every highlighter and filter made for it,
+/// expects.
+struct LineLayout {
+    TimeColumns timeColumns = TimeColumns::Both;
+    /// Source MAC and Destination MAC after Destination, "-" for a packet
+    /// without them (one not on Ethernet).
+    bool macColumns = false;
+};
 
 /**
  * A time as an ISO 8601 date and time in UTC, e.g.
@@ -77,10 +98,12 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
  *                      or kNoStream or kUnnumbered.
  * @param precision     The capture's finest precision: the time is shown to
  *                      the nanosecond or to the microsecond.
+ * @param layout        The columns to show.
  * @return Formatted line.
  */
 std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, TimePrecision precision = TimePrecision::Microseconds );
+                              int streamId, TimePrecision precision = TimePrecision::Microseconds,
+                              const LineLayout& layout = {} );
 
 /**
  * Formats the packets of one capture, one at a time and in capture order,
@@ -94,8 +117,11 @@ public:
     /// @param precision   The finest precision the capture announces: every
     ///                    time is shown with its decimals, so that the time
     ///                    columns line up and no packet's time is cut.
-    explicit PacketFormatter( TimePrecision precision = TimePrecision::Microseconds )
+    /// @param layout      The columns to show.
+    explicit PacketFormatter( TimePrecision precision = TimePrecision::Microseconds,
+                              const LineLayout& layout = {} )
         : precision_( precision )
+        , layout_( layout )
     {
     }
 
@@ -108,6 +134,7 @@ public:
 
 private:
     TimePrecision precision_;
+    LineLayout layout_;
     bool haveBase_ = false;
     int64_t baseTimeSec_ = 0;
     uint32_t baseTimeNsec_ = 0;

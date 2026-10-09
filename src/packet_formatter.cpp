@@ -54,6 +54,21 @@ size_t utcTimeWidth( TimePrecision precision )
     return precision == TimePrecision::Nanoseconds ? 32 : 29;
 }
 
+/// Width of a MAC address column: the address and two spaces.
+constexpr size_t kMacWidth = 19;
+
+/// Whether @p layout shows the UTC Time column.
+bool showsUtcTime( const LineLayout& layout )
+{
+    return layout.timeColumns != TimeColumns::RelativeOnly;
+}
+
+/// Whether @p layout shows the relative Time column.
+bool showsTime( const LineLayout& layout )
+{
+    return layout.timeColumns != TimeColumns::AbsoluteOnly;
+}
+
 /// The proleptic Gregorian date @p days after 1970-01-01, for any day of the
 /// int64_t range; Howard Hinnant's civil_from_days.
 struct CivilDate {
@@ -157,7 +172,7 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
 }
 
 std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, TimePrecision precision )
+                              int streamId, TimePrecision precision, const LineLayout& layout )
 {
     // Time relative to the first packet; negative for an earlier packet.
     // Packet times are never before 1970, so the seconds' difference fits.
@@ -175,12 +190,20 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
     writeColumn( oss, streamStr, 8 );
     // Each packet's own wall-clock time, also for one recorded before the
     // first packet, whose relative time is negative
-    writeColumn( oss, formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision ),
-                 utcTimeWidth( precision ) );
-    writeColumn( oss, formatRelativeTime( deltaSec, deltaNsec, precision ),
-                 timeWidth( precision ) );
+    if ( showsUtcTime( layout ) ) {
+        writeColumn( oss, formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision ),
+                     utcTimeWidth( precision ) );
+    }
+    if ( showsTime( layout ) ) {
+        writeColumn( oss, formatRelativeTime( deltaSec, deltaNsec, precision ),
+                     timeWidth( precision ) );
+    }
     writeColumn( oss, pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp, 40 );
     writeColumn( oss, pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp, 40 );
+    if ( layout.macColumns ) {
+        writeColumn( oss, pkt.srcMac, kMacWidth );
+        writeColumn( oss, pkt.dstMac, kMacWidth );
+    }
     writeColumn( oss, pkt.protocol, 10 );
     // The length on the wire, as Wireshark's Length column; a packet cut at
     // the snaplen says in Info how much of it was captured, so that a reader
@@ -199,10 +222,18 @@ std::string PacketFormatter::header() const
     std::ostringstream hdr;
     writeColumn( hdr, "No.", 7 );
     writeColumn( hdr, "Stream", 8 );
-    writeColumn( hdr, "UTC Time", utcTimeWidth( precision_ ) );
-    writeColumn( hdr, "Time", timeWidth( precision_ ) );
+    if ( showsUtcTime( layout_ ) ) {
+        writeColumn( hdr, "UTC Time", utcTimeWidth( precision_ ) );
+    }
+    if ( showsTime( layout_ ) ) {
+        writeColumn( hdr, "Time", timeWidth( precision_ ) );
+    }
     writeColumn( hdr, "Source", 40 );
     writeColumn( hdr, "Destination", 40 );
+    if ( layout_.macColumns ) {
+        writeColumn( hdr, "Source MAC", kMacWidth );
+        writeColumn( hdr, "Destination MAC", kMacWidth );
+    }
     writeColumn( hdr, "Protocol", 10 );
     writeColumn( hdr, "Length", 7 );
     hdr << "Info";
@@ -216,7 +247,7 @@ std::string PacketFormatter::format( const PacketRecord& pkt, int streamId )
         baseTimeSec_ = pkt.timestampSec;
         baseTimeNsec_ = pkt.timestampNsec;
     }
-    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_ );
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_, layout_ );
 }
 
 std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )

@@ -246,7 +246,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
-    PacketFormatter formatter( reader.precision() );
+    PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }
@@ -260,6 +260,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
+        limitPreview( pkt, options.previewChars );
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );

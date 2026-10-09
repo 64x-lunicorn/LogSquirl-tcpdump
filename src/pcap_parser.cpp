@@ -76,6 +76,7 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
     pkt.protocolRecognised = !described.label.empty() && !described.guessed;
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
+        pkt.previewBytes = described.preview ? described.description.size() : 0;
     }
 }
 
