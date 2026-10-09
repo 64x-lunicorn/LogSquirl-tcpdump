@@ -200,7 +200,7 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
             THEN( "the summary covers every packet, and nothing was cut" )
             {
                 REQUIRE( result.summary.packets == 3 );
-                REQUIRE( result.summary.linkType == DltEthernet );
+                REQUIRE( result.summary.linkTypeName == "Ethernet" );
                 REQUIRE( result.summary.protocolPackets.at( "UDP" ) == 3 );
                 REQUIRE( result.summary.endpointPackets.at( "192.168.1.1" ) == 3 );
                 REQUIRE_FALSE( result.summary.endsInsideRecord );
@@ -298,6 +298,38 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
                 = convertPcap( dir.filePath( "missing.pcap" ), dir.filePath( "x.log" ) );
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE_FALSE( result.error.isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    const std::vector<std::pair<uint32_t, std::string>> names{
+        { DltNull, "BSD Loopback" },
+        { DltEthernet, "Ethernet" },
+        { DltRaw, "Raw IP" },
+        { DltLoop, "OpenBSD Loopback" },
+        { DltLinuxSll, "Linux SLL" },
+        { DltLinuxSll2, "Linux SLL2" },
+        { 147, "147" }, // DLT_USER0: unknown here, shown as its number
+    };
+
+    for ( const auto& [ linkType, name ] : names ) {
+        GIVEN( "a capture of link-layer type " + std::to_string( linkType ) )
+        {
+            const auto input = writeFile( dir, QString( "link-%1.pcap" ).arg( linkType ),
+                                          pcapOf( { udpPacket( 1 ) }, linkType ) );
+
+            THEN( "the summary calls it " + name )
+            {
+                const auto result = convertPcap(
+                    input, dir.filePath( QString( "link-%1.log" ).arg( linkType ) ) );
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.linkTypeName == name );
+            }
         }
     }
 }

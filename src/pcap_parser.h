@@ -68,6 +68,10 @@ constexpr uint32_t DltLoop = 108;      ///< OpenBSD loopback (family in network 
 constexpr uint32_t DltLinuxSll = 113;  ///< Linux cooked capture v1
 constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
 
+/// The display name of a link-layer type ("Ethernet", "Linux SLL2", …), or
+/// its number for one this parser does not know.
+std::string linkTypeName( uint32_t linkType );
+
 // ── Ethernet / IP / TCP / UDP constants ──────────────────────────────────
 
 constexpr uint16_t EthertypeIpv4 = 0x0800;

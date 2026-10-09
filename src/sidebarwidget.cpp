@@ -322,32 +322,6 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
 {
     const double duration = summary.durationSeconds;
 
-    // Link type name
-    QString linkName;
-    switch ( summary.linkType ) {
-    case 0:
-        linkName = "BSD Loopback";
-        break;
-    case 1:
-        linkName = "Ethernet";
-        break;
-    case 101:
-        linkName = "Raw IP";
-        break;
-    case 108:
-        linkName = "OpenBSD Loopback";
-        break;
-    case 113:
-        linkName = "Linux SLL";
-        break;
-    case 276:
-        linkName = "Linux SLL2";
-        break;
-    default:
-        linkName = QString::number( summary.linkType );
-        break;
-    }
-
     // Packets per second
     QString ppsStr = "-";
     if ( duration > 0.0 ) {
@@ -368,7 +342,8 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
-    html += QString( "Link type: %1<br>" ).arg( linkName );
+    html += QString( "Link type: %1<br>" )
+                .arg( QString::fromStdString( summary.linkTypeName ).toHtmlEscaped() );
     if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }

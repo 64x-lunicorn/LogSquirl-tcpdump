@@ -79,7 +79,7 @@ CaptureSummary summarise( CaptureStats&& stats, const PacketFormatter& formatter
     summary.packets = stats.packets;
     summary.bytes = stats.bytes;
     summary.durationSeconds = stats.durationSeconds();
-    summary.linkType = reader.header().network;
+    summary.linkTypeName = linkTypeName( reader.header().network );
     summary.protocolPackets = std::move( stats.protocolPackets );
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );

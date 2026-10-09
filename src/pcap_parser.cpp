@@ -581,6 +581,28 @@ size_t findPcapHeader( const uint8_t* data, size_t size, std::string& error )
 
 } // anonymous namespace
 
+// ── Link-layer types ─────────────────────────────────────────────────────
+
+std::string linkTypeName( uint32_t linkType )
+{
+    switch ( linkType ) {
+    case DltNull:
+        return "BSD Loopback";
+    case DltEthernet:
+        return "Ethernet";
+    case DltRaw:
+        return "Raw IP";
+    case DltLoop:
+        return "OpenBSD Loopback";
+    case DltLinuxSll:
+        return "Linux SLL";
+    case DltLinuxSll2:
+        return "Linux SLL2";
+    default:
+        return std::to_string( linkType );
+    }
+}
+
 // ── TCP flags ────────────────────────────────────────────────────────────
 
 std::string formatTcpFlags( uint8_t flags )

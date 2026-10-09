@@ -50,7 +50,7 @@ struct CaptureSummary {
     uint64_t packets = 0;
     uint64_t bytes = 0;           ///< Captured bytes of all packets.
     double durationSeconds = 0.0; ///< Between the earliest and the latest packet.
-    uint32_t linkType = 0;        ///< The capture's link-layer type (DLT_*).
+    std::string linkTypeName;     ///< The capture's link-layer type by name, or number.
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
     /// Packets per IP address, for every address that was counted.
