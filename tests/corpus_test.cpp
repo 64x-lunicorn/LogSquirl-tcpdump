@@ -117,7 +117,7 @@ SCENARIO( "Malformed captures are read to their end", "[corpus]" )
             THEN( "it converts, as far as its records go" )
             {
                 REQUIRE( result.status == ConversionResult::Status::Converted );
-                REQUIRE( ( result.stats.packets > 0 || result.truncated ) );
+                REQUIRE( ( result.summary.packets > 0 || result.summary.endsInsideRecord ) );
             }
         }
     }

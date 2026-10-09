@@ -71,6 +71,28 @@ private:
     QFile& file_;
 };
 
+/// The summary of a converted capture, from what was collected on the way.
+CaptureSummary summarise( CaptureStats&& stats, const PacketFormatter& formatter,
+                          const PcapReader& reader, size_t maxStreams )
+{
+    CaptureSummary summary;
+    summary.packets = stats.packets;
+    summary.bytes = stats.bytes;
+    summary.durationSeconds = stats.durationSeconds();
+    summary.linkType = reader.header().network;
+    summary.protocolPackets = std::move( stats.protocolPackets );
+    summary.protocolBytes = std::move( stats.protocolBytes );
+    summary.endpointPackets = std::move( stats.endpointPackets );
+    summary.endsInsideRecord = reader.truncated();
+    if ( formatter.streamLimitReached() ) {
+        summary.streamCap = maxStreams;
+    }
+    if ( stats.endpointLimitReached() ) {
+        summary.otherEndpointPackets = stats.otherEndpointPackets;
+    }
+    return summary;
+}
+
 /// The message for a path that is not a regular file.
 QString notRegular( const QString& path )
 {
@@ -141,7 +163,8 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
                               const ConversionOptions& options )
 {
     ConversionResult result;
-    result.stats.maxEndpoints = options.maxEndpoints;
+    CaptureStats stats;
+    stats.maxEndpoints = options.maxEndpoints;
 
     QFile input;
     if ( !openRegularFile( inputPath, input, result.error ) ) {
@@ -153,7 +176,6 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
         result.error = QString::fromStdString( reader.error() );
         return result;
     }
-    result.header = reader.header();
 
     QFile output( outputPath );
     // Never write into an existing file or through a link planted in its place.
@@ -176,7 +198,7 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
                && output.write( "\n", 1 ) == 1;
     };
 
-    PacketFormatter formatter( result.header.nanoseconds, options.maxStreams );
+    PacketFormatter formatter( reader.header().nanoseconds, options.maxStreams );
     if ( !writeLine( formatter.header() ) ) {
         return fail(
             QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
@@ -191,7 +213,7 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
-        result.stats.add( pkt );
+        stats.add( pkt );
         if ( !writeLine( formatter.format( pkt ) ) ) {
             return fail(
                 QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
@@ -216,8 +238,7 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
     }
     output.close();
 
-    result.truncated = reader.truncated();
-    result.streamLimitReached = formatter.streamLimitReached();
+    result.summary = summarise( std::move( stats ), formatter, reader, options.maxStreams );
     result.status = ConversionResult::Status::Converted;
     return result;
 }

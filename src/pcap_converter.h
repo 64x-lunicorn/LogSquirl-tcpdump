@@ -31,9 +31,40 @@
 #include <QString>
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
+#include <map>
+#include <optional>
+#include <string>
 
 namespace tcpdump {
+
+/**
+ * What the Converter knows about a converted capture, in the shape the
+ * sidebar shows it: the counts and breakdowns, and what was cut.
+ *
+ * "What was cut" is three facts, each standing on its own with the number
+ * that applies, so that the sidebar prints what it is told.
+ */
+struct CaptureSummary {
+    uint64_t packets = 0;
+    uint64_t bytes = 0;           ///< Captured bytes of all packets.
+    double durationSeconds = 0.0; ///< Between the earliest and the latest packet.
+    uint32_t linkType = 0;        ///< The capture's link-layer type (DLT_*).
+    std::map<std::string, uint64_t> protocolPackets;
+    std::map<std::string, uint64_t> protocolBytes;
+    /// Packets per IP address, for every address that was counted.
+    std::map<std::string, uint64_t> endpointPackets;
+
+    /// The capture ends in the middle of a record, which is not shown.
+    bool endsInsideRecord = false;
+    /// Set when conversations past the stream cap went unnumbered and show
+    /// stream "?" in the log: the cap, i.e. how many were numbered.
+    std::optional<uint64_t> streamCap;
+    /// Set when addresses past the endpoint cap went uncounted: the packets
+    /// of all those addresses together.
+    std::optional<uint64_t> otherEndpointPackets;
+};
 
 /// Outcome of convertPcap().
 struct ConversionResult {
@@ -45,10 +76,7 @@ struct ConversionResult {
 
     Status status = Status::Failed;
     QString error;
-    PcapGlobalHeader header;
-    CaptureStats stats;
-    bool truncated = false;          ///< The capture ends in the middle of a packet.
-    bool streamLimitReached = false; ///< Some conversations have no stream number.
+    CaptureSummary summary; ///< What was converted, when Converted.
 };
 
 /// Settings of a conversion.  The defaults are the plugin's; a test lowers

@@ -30,7 +30,6 @@
  */
 
 #include "sidebarwidget.h"
-#include "packet_formatter.h"
 #include "pcap_converter.h"
 #include "plugin.h"
 #include "tempdirs.h"
@@ -286,11 +285,11 @@ void SidebarWidget::finishConversion( const QString& filePath, const QString& ou
         g_state.api->open_file( g_state.handle, outPath.toUtf8().constData(), 0 );
     }
 
-    summaryLabel_->setText(
-        summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(), result ) );
+    summaryLabel_->setText( summaryHtml( QFileInfo( filePath ).fileName(),
+                                         QFileInfo( filePath ).size(), result.summary ) );
 
     hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 packets from %2" ).arg( result.stats.packets ).arg( filePath ) );
+             QString( "Opened %1 packets from %2" ).arg( result.summary.packets ).arg( filePath ) );
 }
 
 namespace {
@@ -319,14 +318,13 @@ byCount( const std::map<std::string, uint64_t>& counts )
 
 } // namespace
 
-QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionResult& result )
+QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary )
 {
-    const auto& stats = result.stats;
-    const double duration = stats.durationSeconds();
+    const double duration = summary.durationSeconds;
 
     // Link type name
     QString linkName;
-    switch ( result.header.network ) {
+    switch ( summary.linkType ) {
     case 0:
         linkName = "BSD Loopback";
         break;
@@ -346,14 +344,14 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
         linkName = "Linux SLL2";
         break;
     default:
-        linkName = QString::number( result.header.network );
+        linkName = QString::number( summary.linkType );
         break;
     }
 
     // Packets per second
     QString ppsStr = "-";
     if ( duration > 0.0 ) {
-        auto pps = static_cast<double>( stats.packets ) / duration;
+        auto pps = static_cast<double>( summary.packets ) / duration;
         ppsStr = QString::number( pps, 'f', 0 );
     }
 
@@ -366,22 +364,22 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
     // General stats
     html += QString( "<b>Overview</b><br>" );
     html += QString( "Packets: <b>%1</b><br>" )
-                .arg( QLocale().toString( static_cast<qulonglong>( stats.packets ) ) );
+                .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
     html += QString( "Link type: %1<br>" ).arg( linkName );
-    if ( result.truncated ) {
+    if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }
     html += "<br>";
 
     // Protocol breakdown
     html += "<b>Protocols</b><br>";
-    for ( const auto& [ proto, count ] : byCount( stats.protocolPackets ) ) {
-        const auto bytes = stats.protocolBytes.at( proto );
+    for ( const auto& [ proto, count ] : byCount( summary.protocolPackets ) ) {
+        const auto bytes = summary.protocolBytes.at( proto );
         const auto pct
-            = static_cast<double>( count ) / static_cast<double>( stats.packets ) * 100.0;
+            = static_cast<double>( count ) / static_cast<double>( summary.packets ) * 100.0;
         html += QString( "%1: %2 (%3%, %4)<br>" )
                     .arg( QString::fromStdString( proto ).toHtmlEscaped() )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
@@ -392,10 +390,10 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
 
     // Top IPs
     html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
-                .arg( stats.endpointLimitReached() ? "more than " : "" )
-                .arg( stats.endpointPackets.size() );
+                .arg( summary.otherEndpointPackets ? "more than " : "" )
+                .arg( summary.endpointPackets.size() );
     int shown = 0;
-    for ( const auto& [ ip, count ] : byCount( stats.endpointPackets ) ) {
+    for ( const auto& [ ip, count ] : byCount( summary.endpointPackets ) ) {
         if ( shown >= 8 )
             break;
         html += QString( "%1: %2 pkts<br>" )
@@ -403,16 +401,15 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const ConversionR
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }
-    if ( stats.endpointLimitReached() ) {
+    if ( summary.otherEndpointPackets ) {
         html += QString( "Other endpoints: %1 pkts<br>" )
                     .arg( QLocale().toString(
-                        static_cast<qulonglong>( stats.otherEndpointPackets ) ) );
+                        static_cast<qulonglong>( *summary.otherEndpointPackets ) ) );
     }
-    if ( result.streamLimitReached ) {
+    if ( summary.streamCap ) {
         html += QString( "<br><i>More than %1 conversations: later ones show stream ? in the "
                          "log.</i><br>" )
-                    .arg( QLocale().toString(
-                        static_cast<qulonglong>( PacketFormatter::kMaxStreams ) ) );
+                    .arg( QLocale().toString( static_cast<qulonglong>( *summary.streamCap ) ) );
     }
 
     return html;

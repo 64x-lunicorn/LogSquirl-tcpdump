@@ -197,10 +197,15 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
                 REQUIRE( readLines( output ) == expected );
             }
 
-            THEN( "the statistics cover every packet" )
+            THEN( "the summary covers every packet, and nothing was cut" )
             {
-                REQUIRE( result.stats.packets == 3 );
-                REQUIRE( result.header.network == DltEthernet );
+                REQUIRE( result.summary.packets == 3 );
+                REQUIRE( result.summary.linkType == DltEthernet );
+                REQUIRE( result.summary.protocolPackets.at( "UDP" ) == 3 );
+                REQUIRE( result.summary.endpointPackets.at( "192.168.1.1" ) == 3 );
+                REQUIRE_FALSE( result.summary.endsInsideRecord );
+                REQUIRE_FALSE( result.summary.streamCap );
+                REQUIRE_FALSE( result.summary.otherEndpointPackets );
             }
 
             THEN( "progress rises to 1000 per mille" )
@@ -227,8 +232,14 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
     GIVEN( "a capture of three conversations between four addresses" )
     {
         auto segmentFrom = []( uint8_t lastOctet, uint16_t srcPort ) {
-            Ipv4Options addresses;
+            Ipv4Options addresses; // 10.0.0.<lastOctet> → 10.0.0.1
+            for ( auto* address : { addresses.src, addresses.dst } ) {
+                address[ 0 ] = 10;
+                address[ 1 ] = 0;
+                address[ 2 ] = 0;
+            }
             addresses.src[ 3 ] = lastOctet;
+            addresses.dst[ 3 ] = 1;
             return eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( srcPort, 80 ), addresses ) );
         };
         const auto input = writeFile(
@@ -243,11 +254,13 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
             options.maxEndpoints = 1;
             const auto result = convertPcap( input, output, nullptr, {}, options );
 
-            THEN( "the result says that both caps were reached" )
+            THEN( "the summary says that both caps were reached, and by how much" )
             {
                 REQUIRE( result.status == ConversionResult::Status::Converted );
-                REQUIRE( result.streamLimitReached );
-                REQUIRE( result.stats.endpointLimitReached() );
+                REQUIRE( result.summary.streamCap == 1 );
+                // One address was counted; the other five address occurrences were not.
+                REQUIRE( result.summary.endpointPackets.size() == 1 );
+                REQUIRE( result.summary.otherEndpointPackets == 5 );
             }
         }
 
@@ -257,8 +270,8 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
 
             THEN( "neither cap is reached" )
             {
-                REQUIRE_FALSE( result.streamLimitReached );
-                REQUIRE_FALSE( result.stats.endpointLimitReached() );
+                REQUIRE_FALSE( result.summary.streamCap );
+                REQUIRE_FALSE( result.summary.otherEndpointPackets );
             }
         }
     }
