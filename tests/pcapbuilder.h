@@ -181,6 +181,43 @@ inline Bytes udp( uint16_t srcPort, uint16_t dstPort, const Bytes& payload = {},
     return b + payload;
 }
 
+/** A VXLAN header with VNI @p vni (I flag set) around the Ethernet @p frame. */
+inline Bytes vxlan( uint32_t vni, const Bytes& frame, uint8_t flags = 0x08 )
+{
+    Bytes b{ flags, 0, 0, 0 };
+    putBE32( b, vni << 8 );
+    return b + frame;
+}
+
+struct GreOptions {
+    bool checksum = false; ///< C bit: checksum and reserved field.
+    bool key = false;      ///< K bit: the key field, keyValue.
+    bool sequence = false; ///< S bit: a sequence number.
+    bool routing = false;  ///< R bit (RFC 1701 source routing).
+    uint8_t version = 0;   ///< 1 for PPTP's enhanced GRE.
+    uint32_t keyValue = 42;
+};
+
+/** A GRE header of @p protocolType (an EtherType) around @p payload. */
+inline Bytes gre( uint16_t protocolType, const Bytes& payload, const GreOptions& o = {} )
+{
+    Bytes b;
+    putBE16( b, static_cast<uint16_t>( ( o.checksum ? 0x8000 : 0 ) | ( o.routing ? 0x4000 : 0 )
+                                       | ( o.key ? 0x2000 : 0 ) | ( o.sequence ? 0x1000 : 0 )
+                                       | o.version ) );
+    putBE16( b, protocolType );
+    if ( o.checksum || o.routing ) {
+        putBE32( b, 0 ); // checksum, offset
+    }
+    if ( o.key ) {
+        putBE32( b, o.keyValue );
+    }
+    if ( o.sequence ) {
+        putBE32( b, 7 );
+    }
+    return b + payload;
+}
+
 /** A pcap record to put into a file. */
 struct Record {
     Bytes data;

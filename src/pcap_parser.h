@@ -104,6 +104,27 @@ constexpr uint8_t IpProtoTcp = 6;
 constexpr uint8_t IpProtoUdp = 17;
 constexpr uint8_t IpProtoIcmpv6 = 58;
 
+// ── Tunnels ──────────────────────────────────────────────────────────────
+
+constexpr uint8_t IpProtoIpip = 4;       ///< IPv4 encapsulated in IP (RFC 2003)
+constexpr uint8_t IpProtoIpv6Encap = 41; ///< IPv6 encapsulated in IP (RFC 4213, 6in4)
+constexpr uint8_t IpProtoGre = 47;       ///< Generic Routing Encapsulation (RFC 2784)
+/// GRE's protocol type for an Ethernet frame (NVGRE, gretap).
+constexpr uint16_t EthertypeTransparentBridging = 0x6558;
+constexpr uint16_t kVxlanPort = 4789; ///< VXLAN's UDP destination port (RFC 7348)
+
+/// Tunnels unwrapped at most, one inside the other; a packet nested deeper
+/// is described as the tunnel that was not unwrapped.
+constexpr size_t kMaxTunnels = 4;
+
+/// A tunnel a packet was carried through: what Info names it, and the
+/// addresses of the packet that carried it, the tunnel's endpoints.
+struct Tunnel {
+    std::string name;  ///< "VXLAN VNI 100", "GRE", "GRE key=0x0000002A", "IPv6-in-IPv4"
+    std::string srcIp; ///< Outer source address
+    std::string dstIp; ///< Outer destination address
+};
+
 // ── Parsed packet ────────────────────────────────────────────────────────
 
 /// The transport a packet's payload was carried by.
@@ -191,6 +212,12 @@ struct PacketRecord {
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
+
+    /// The tunnels the packet was carried through, outermost first, at most
+    /// kMaxTunnels.  Everything above (addresses, ports, protocol, info)
+    /// then describes the innermost packet, as Wireshark's columns do; the
+    /// Packet Formatter names the tunnels before info.
+    std::vector<Tunnel> tunnels;
 };
 
 /**

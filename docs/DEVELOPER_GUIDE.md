@@ -34,6 +34,8 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
   destination options and AH headers, ARP); bounds transport data by the IP
   length fields, falling back to the captured bytes for TSO/GSO lengths of 0;
   fragments after the first are not parsed as TCP/UDP
+- Unwraps VXLAN, GRE and IP-in-IP tunnels to the packet inside, at most
+  `kMaxTunnels` (4) deep (see *Tunnels* below)
 - Dissects transport layer (TCP, UDP, ICMP, ICMPv6); a TCP header shorter
   than 20 bytes is flagged and yields no payload. ICMP and ICMPv6 messages
   are described by `icmp.h/cpp` (see below)
@@ -96,6 +98,51 @@ shows the addresses alone. The quote and the neighbor discovery options are
 whatever the sender put there: every field is checked against the captured
 bytes, an option of length 0 or running past them ends the walk. The ports
 of a quote are not the message's own: ICMP keeps the stream `-`.
+
+#### Tunnels
+A tunnelled packet is shown as Wireshark's columns show it: by the packet
+inside. Source, Destination, Protocol, the ports and Info come from the
+innermost packet; Info starts with the tunnels it came through, outermost
+first, each followed by ` | `:
+
+| Tunnel | Recognised by | Named |
+|---|---|---|
+| VXLAN (RFC 7348), an Ethernet frame inside | UDP destination port 4789, at least the 8-byte header | `VXLAN VNI 100`, `VXLAN` without the I flag |
+| GRE (RFC 2784/2890) carrying IPv4, IPv6 or Ethernet (0x6558, NVGRE, gretap) | IP protocol 47, version 0, no source routing | `GRE`, `GRE key=0x0000002A` with a key; checksum and sequence number are skipped |
+| IP-in-IP | IP protocol 4 with an IPv4 header inside, 41 with an IPv6 header | `IPv4-in-IPv4`, `IPv6-in-IPv4`, `IPv4-in-IPv6`, `IPv6-in-IPv6` |
+
+`VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240`; nested:
+`VXLAN VNI 100 | GRE | Echo (ping) request id=0x4e03, seq=1`. An Ethernet
+frame inside (VXLAN, GRE's transparent bridging) has its VLAN tags
+stripped and its MAC addresses replace the outer frame's, so a non-IP frame
+inside (ARP, LLDP) is shown by its own addresses; `parseCarried()` dissects
+its EtherType as `dissectPacket()` does for the outer frame.
+
+Entering a tunnel (`enterTunnel()`) moves the outer packet's addresses into
+a `Tunnel` record in `PacketRecord::tunnels`, its name with them, and clears
+the transport fields for the packet inside. The tunnels are kept apart
+from `info`: the TCP Analysis inserts its markers at the start of `info`,
+the Stream Labels and `describeInStream()` look for its first ` | `, and
+both must find the inner packet's description there. The Packet Formatter
+writes the names before `info` (`GRE | [TCP Retransmission] …`). The
+Capture Summary counts the outer addresses as endpoints too; its protocol
+breakdown counts the inner protocol. The Stream Tracker keys a tunnelled
+packet by its inner addresses and ports alone, as Wireshark's `tcp.stream`
+does: a conversation is one stream whichever tunnel, VNI or GRE key carries
+it, and also when part of it is seen outside the tunnel.
+
+At most `kMaxTunnels` (4) tunnels are unwrapped; a fifth is left as the
+packet that carries it, named and described as such: `IPIP`, `IPv4-in-IPv4
+not dissected: more than 4 nested tunnels` (a VXLAN one stays the UDP
+datagram, with its stream). Not unwrapped, and shown as the GRE packet with
+the outer addresses: GRE carrying any other protocol type (`GRE, protocol
+type 0x88BE`), PPTP's enhanced GRE carrying PPP (`GRE version 1, protocol
+type 0x880B`, to come with the PPP dissection) and RFC 1701 source routing.
+A tunnel header cut short is `Truncated GRE header` or, for VXLAN, the UDP
+datagram it would be; a packet inside cut short is described as truncated
+by its own parser, after the tunnel's name. A packet an ICMP error quotes
+is never unwrapped: its quote shows the tunnel's endpoints and protocol
+(`for 10.0.0.1 → 10.0.0.2 GRE`). Geneve and VXLAN-GPE are not unwrapped.
 
 #### The reader seam
 Everything past the reader (Converter, Stream Tracker, TCP Analysis, Packet Formatter, `CaptureStats`)
@@ -360,7 +407,8 @@ stream: those the parser read a TCP or UDP header of (`PacketRecord::transport`
 is set) and that share addresses and ports, in either direction. TCP and
 UDP are numbered independently, each from 0, as Wireshark's `tcp.stream`
 and `udp.stream` are; the column shows the number alone, the Protocol
-column says which transport it belongs to. ICMP, ICMPv6, ARP, IP fragments
+column says which transport it belongs to. A tunnelled packet is keyed by
+the addresses and ports of the packet inside (see *Tunnels*). ICMP, ICMPv6, ARP, IP fragments
 after the first and every other packet without TCP/UDP ports show `-`. At
 most `StreamTracker::kMaxStreams` (1,000,000) conversations, both transports
 together, are numbered; packets of later ones show `?`.
@@ -688,7 +736,9 @@ written by `tests/make_stream_labels_corpus.py`. `icmp.pcap`, ICMP and
 ICMPv6 echoes, error messages with their quoted packets and neighbor
 discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
 lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
-by `tests/make_dhcp_ntp_corpus.py`. The pcapng unit tests build their
+by `tests/make_dhcp_ntp_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
+and IP-in-IP tunnels, nested and nested too deep, by
+`tests/make_tunnels_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too, in every `LineLayout`.
