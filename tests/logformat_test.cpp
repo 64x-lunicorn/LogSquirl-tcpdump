@@ -35,6 +35,7 @@
 
 #include "packet_formatter.h"
 #include "pcap_converter.h"
+#include "regex_lab.h"
 
 #include <QDate>
 #include <QDateTime>
@@ -476,6 +477,12 @@ SCENARIO( "The Log Format defines one column per packet line field", "[logformat
             REQUIRE( ( kind == "integer" || kind == "float" ) == ( name == "length" ) );
             REQUIRE_FALSE( values.value( name ).toObject().value( "hidden" ).toBool() );
         }
+    }
+
+    THEN( "the plugin reads packet lines with the same regex, for its Regex Lab patterns" )
+    {
+        REQUIRE( format.patterns.size() == 1 );
+        REQUIRE( packetLineRegex().pattern() == format.patterns.first() );
     }
 
     THEN( "its sample lines match it" )

@@ -40,6 +40,8 @@
 using tcpdump_test::FakeHost;
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
+extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
+                                         size_t api_size );
 extern "C" void logsquirl_plugin_shutdown( void );
 
 SCENARIO( "messages reach the host as UTF-8", "[hostapi]" )
@@ -115,6 +117,112 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
             }
 
             logsquirl_plugin_shutdown();
+        }
+    }
+}
+
+SCENARIO( "the plugin follows the tab in front for its lifetime", "[plugin]" )
+{
+    GIVEN( "a host" )
+    {
+        FakeHost host;
+
+        WHEN( "the plugin is initialised" )
+        {
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+
+            THEN( "it registers for the host's active-file notifications" )
+            {
+                REQUIRE( host.hasActiveFileCallback() );
+            }
+
+            AND_WHEN( "it is shut down and the host still reports a tab switch" )
+            {
+                logsquirl_plugin_shutdown();
+
+                THEN( "nothing happens" )
+                {
+                    REQUIRE_NOTHROW( host.activateFile( "/tmp/some.log" ) );
+                    REQUIRE( host.logs.filter( "failed" ).isEmpty() );
+                }
+            }
+
+            logsquirl_plugin_shutdown();
+        }
+    }
+}
+
+SCENARIO( "the plugin learns the later host functions from the table size", "[plugin]" )
+{
+    GIVEN( "a host of LogSquirl 26.11 or later, with the full table" )
+    {
+        FakeHost host;
+
+        WHEN( "it initialises the plugin through init_ex" )
+        {
+            REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+
+            THEN( "the plugin knows the Regex Lab, Go to line and the selected lines" )
+            {
+                const auto& caps = tcpdump::g_state.hostCapabilities;
+                REQUIRE( caps.regexLab );
+                REQUIRE( caps.goToLogLine );
+                REQUIRE( caps.selectedLogLines );
+            }
+
+            AND_WHEN( "the plugin is shut down" )
+            {
+                logsquirl_plugin_shutdown();
+
+                THEN( "it no longer knows any of them" )
+                {
+                    REQUIRE( tcpdump::g_state.hostCapabilities == tcpdump::HostCapabilities{} );
+                }
+            }
+
+            logsquirl_plugin_shutdown();
+        }
+
+        WHEN( "it initialises the plugin through the old init" )
+        {
+            REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
+
+            THEN( "the plugin assumes the base table and knows none of them" )
+            {
+                REQUIRE( tcpdump::g_state.hostCapabilities == tcpdump::HostCapabilities{} );
+            }
+
+            logsquirl_plugin_shutdown();
+        }
+    }
+
+    GIVEN( "a host older than LogSquirl 26.11, with the base table" )
+    {
+        FakeHost host( LOGSQUIRL_HOST_API_BASE_SIZE );
+
+        WHEN( "it initialises the plugin through init_ex" )
+        {
+            REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+
+            THEN( "the plugin knows none of the later functions" )
+            {
+                REQUIRE( tcpdump::g_state.hostCapabilities == tcpdump::HostCapabilities{} );
+            }
+
+            logsquirl_plugin_shutdown();
+        }
+    }
+
+    GIVEN( "a table that ends inside a later function's pointer" )
+    {
+        const size_t size = offsetof( LogSquirlHostApi, go_to_log_line ) + 1;
+
+        THEN( "only the functions it holds whole count" )
+        {
+            const auto caps = tcpdump::HostCapabilities::of( size );
+            REQUIRE( caps.regexLab );
+            REQUIRE_FALSE( caps.goToLogLine );
+            REQUIRE_FALSE( caps.selectedLogLines );
         }
     }
 }

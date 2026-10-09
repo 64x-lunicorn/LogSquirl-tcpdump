@@ -24,7 +24,15 @@
  * A FakeHost installs itself into g_state for its lifetime: the plugin
  * gets a private, empty config directory (so tests never read or write
  * real settings), and every log message, notification, open_file()
- * request and menu entry is recorded for the test to inspect.
+ * request and menu entry is recorded for the test to inspect.  A test
+ * brings a file's tab to the front with activateFile(), which calls the
+ * plugin's active-file callback as LogSquirl does on a tab switch.
+ *
+ * It presents itself as a host of LogSquirl 26.11 or later, whose table holds
+ * the Regex Lab, Go to line and the selected Log Lines, or, constructed with
+ * LOGSQUIRL_HOST_API_BASE_SIZE, as an older host whose table ends before
+ * them: their pointers are then null, so a plugin that calls one crashes the
+ * test.
  */
 
 #pragma once
@@ -40,6 +48,8 @@
 #include <QTemporaryDir>
 #include <QThread>
 
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <stdexcept>
 
@@ -63,8 +73,34 @@ public:
         }
     };
 
-    FakeHost()
+    /** A Regex Lab the plugin opened. */
+    struct RegexLab {
+        QString pattern;
+        int flags;
+        LogSquirlRegexLabCallbackFn callback;
+        void* userData;
+
+        /** The user applies @p appliedPattern. */
+        void apply( const QString& appliedPattern, int appliedFlags = 0 ) const
+        {
+            callback( userData, LOGSQUIRL_REGEX_LAB_APPLIED, appliedPattern.toUtf8().constData(),
+                      appliedFlags );
+        }
+
+        /** The user cancels the Lab. */
+        void cancel() const
+        {
+            callback( userData, LOGSQUIRL_REGEX_LAB_CANCELLED, nullptr, 0 );
+        }
+    };
+
+    /**
+     * A host whose table is @p apiSize bytes long: the whole table by
+     * default, LOGSQUIRL_HOST_API_BASE_SIZE for a host older than 26.11.
+     */
+    explicit FakeHost( std::size_t apiSize = sizeof( LogSquirlHostApi ) )
         : configDirUtf8_( configDir_.path().toUtf8() )
+        , apiSize_( apiSize )
     {
         api_.api_version = LOGSQUIRL_PLUGIN_API_VERSION;
         api_.log_message = []( void* handle, int, const char* message ) {
@@ -96,15 +132,78 @@ public:
         };
         api_.unregister_sidebar_tab
             = []( void* handle, void* widget ) { self( handle )->sidebarTabs.removeAll( widget ); };
+        api_.get_active_file_path
+            = []( void* handle ) { return self( handle )->activeFileUtf8_.constData(); };
+        api_.register_active_file_callback
+            = []( void* handle, void ( *callback )( void*, const char* ), void* userData ) {
+                  // One per plugin: a later registration replaces it, as in LogSquirl.
+                  self( handle )->activeFileCallback_ = callback;
+                  self( handle )->activeFileUserData_ = userData;
+              };
+
+        // Added later: only a table long enough holds them.
+        if ( LOGSQUIRL_HOST_API_HAS( apiSize_, open_regex_lab ) ) {
+            api_.open_regex_lab = []( void* handle, const char* pattern, int flags,
+                                      LogSquirlRegexLabCallbackFn callback, void* userData ) {
+                if ( !callback ) {
+                    return 1;
+                }
+                self( handle )->regexLabs.append(
+                    { QString::fromUtf8( pattern ), flags, callback, userData } );
+                return 0;
+            };
+        }
+        if ( LOGSQUIRL_HOST_API_HAS( apiSize_, go_to_log_line ) ) {
+            api_.go_to_log_line = []( void* handle, std::uint64_t lineNumber ) {
+                if ( lineNumber == 0 ) {
+                    return static_cast<int>( LOGSQUIRL_LOG_LINES_OUT_OF_RANGE );
+                }
+                self( handle )->wentToLines.append( lineNumber );
+                return static_cast<int>( LOGSQUIRL_LOG_LINES_OK );
+            };
+        }
+        if ( LOGSQUIRL_HOST_API_HAS( apiSize_, get_selected_log_lines ) ) {
+            api_.get_selected_log_lines = []( void* handle, const char** text, std::size_t* length,
+                                              std::size_t* lineCount ) {
+                auto* host = self( handle );
+                if ( !text ) {
+                    return static_cast<int>( LOGSQUIRL_LOG_LINES_INVALID_ARGUMENT );
+                }
+                *text = nullptr;
+                if ( length ) {
+                    *length = 0;
+                }
+                if ( lineCount ) {
+                    *lineCount = 0;
+                }
+                if ( host->selectionResult < 0 ) {
+                    return host->selectionResult;
+                }
+                if ( host->selectedLines.isEmpty() ) {
+                    return static_cast<int>( LOGSQUIRL_LOG_LINES_NO_SELECTION );
+                }
+                host->selectedUtf8_ = host->selectedLines.join( '\n' ).toUtf8();
+                *text = host->selectedUtf8_.constData();
+                if ( length ) {
+                    *length = static_cast<std::size_t>( host->selectedUtf8_.size() );
+                }
+                if ( lineCount ) {
+                    *lineCount = static_cast<std::size_t>( host->selectedLines.size() );
+                }
+                return host->selectionResult;
+            };
+        }
 
         tcpdump::g_state.api = &api_;
         tcpdump::g_state.handle = this;
+        tcpdump::g_state.hostCapabilities = tcpdump::HostCapabilities::of( apiSize_ );
     }
 
     ~FakeHost()
     {
         tcpdump::g_state.api = nullptr;
         tcpdump::g_state.handle = nullptr;
+        tcpdump::g_state.hostCapabilities = {};
         tcpdump::g_state.tempRoot.clear();
     }
 
@@ -120,6 +219,25 @@ public:
     {
         logsquirl_plugin_shutdown();
         menuActions.clear();
+    }
+
+    /**
+     * Bring the tab of @p filePath to the front, or, with an empty path, a
+     * tab that holds no Log File: the plugin's active-file callback, if it
+     * registered one, is called with the path.
+     */
+    void activateFile( const QString& filePath )
+    {
+        activeFileUtf8_ = filePath.toUtf8();
+        if ( activeFileCallback_ ) {
+            activeFileCallback_( activeFileUserData_, activeFileUtf8_.constData() );
+        }
+    }
+
+    /** Whether the plugin registered an active-file callback. */
+    bool hasActiveFileCallback() const
+    {
+        return activeFileCallback_ != nullptr;
     }
 
     /** The plugin's config directory (empty until a test writes to it). */
@@ -140,10 +258,22 @@ public:
     /** Make log_message() throw for a message containing this text. */
     QString failLogContaining;
 
-    /** The host API table, to pass to logsquirl_plugin_init(). */
+    QList<RegexLab> regexLabs;        ///< Opened through open_regex_lab(), in order.
+    QList<std::uint64_t> wentToLines; ///< Line numbers passed to go_to_log_line().
+    QStringList selectedLines;        ///< What get_selected_log_lines() returns.
+    /** get_selected_log_lines()'s result when lines are selected, or a negative one to fail. */
+    int selectionResult = LOGSQUIRL_LOG_LINES_OK;
+
+    /** The host API table, to pass to logsquirl_plugin_init() or _init_ex(). */
     const LogSquirlHostApi* api() const
     {
         return &api_;
+    }
+
+    /** The size of the table, to pass to logsquirl_plugin_init_ex(). */
+    std::size_t apiSize() const
+    {
+        return apiSize_;
     }
 
 private:
@@ -154,6 +284,11 @@ private:
 
     QTemporaryDir configDir_;
     QByteArray configDirUtf8_;
+    QByteArray selectedUtf8_;   ///< The text get_selected_log_lines() last returned.
+    QByteArray activeFileUtf8_; ///< The file in the tab in front; empty: none.
+    void ( *activeFileCallback_ )( void* userData, const char* filePath ) = nullptr;
+    void* activeFileUserData_ = nullptr;
+    std::size_t apiSize_;
     LogSquirlHostApi api_{};
 };
 
