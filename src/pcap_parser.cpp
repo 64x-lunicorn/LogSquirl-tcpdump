@@ -29,7 +29,9 @@
 
 #include "pcap_parser.h"
 
+#include "icmp.h"
 #include "payload_describer.h"
+#include "protocol_names.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
@@ -52,41 +54,90 @@ int32_t readS32( const uint8_t* p, bool swap )
     return result;
 }
 
-// ── MAC address formatting ───────────────────────────────────────────────
-
-std::string formatMac( const uint8_t* p )
-{
-    char buf[ 18 ];
-    std::snprintf( buf, sizeof( buf ), "%02x:%02x:%02x:%02x:%02x:%02x", p[ 0 ], p[ 1 ], p[ 2 ],
-                   p[ 3 ], p[ 4 ], p[ 5 ] );
-    return buf;
-}
+/// The largest value of an Ethernet type field that is the length of an
+/// IEEE 802.3 frame rather than an EtherType.
+constexpr uint16_t kMax8023Length = 1500;
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
-/// Separates the transport summary from the description of the payload.
-constexpr const char* kDescriptionSeparator = " | ";
-
 /// Ask the describer what the @p len captured payload bytes are: its label
 /// becomes the packet's protocol, its description follows the transport
-/// summary in @p oss.
+/// summary in @p oss.  The first bytes are kept in @p pkt for when its
+/// stream is known.
 void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport transport,
                         const uint8_t* payload, size_t len )
 {
+    pkt.payloadHeadLen = std::min( len, kPayloadHeadBytes );
+    std::copy_n( payload, pkt.payloadHeadLen, pkt.payloadHead.begin() );
     const auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
     if ( !described.label.empty() ) {
         pkt.protocol = described.label;
     }
+    pkt.protocolRecognised = !described.label.empty() && !described.guessed;
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
+        pkt.previewBytes = described.preview ? described.description.size() : 0;
+    }
+}
+
+/// The shift count of the window scale option among the TCP options at
+/// @p options, @p len bytes of them; unset without one.  The options are
+/// walked as Wireshark does: a NOP takes one byte, the end of options or an
+/// option whose length is bogus or runs past them ends the walk.
+std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
+{
+    constexpr uint8_t kEndOfOptions = 0;
+    constexpr uint8_t kNop = 1;
+    constexpr uint8_t kWindowScale = 3;
+    size_t at = 0;
+    while ( at < len && options[ at ] != kEndOfOptions ) {
+        if ( options[ at ] == kNop ) {
+            ++at;
+            continue;
+        }
+        if ( at + 1 >= len || options[ at + 1 ] < 2 || at + options[ at + 1 ] > len ) {
+            break;
+        }
+        if ( options[ at ] == kWindowScale && options[ at + 1 ] == 3 ) {
+            return options[ at + 2 ];
+        }
+        at += options[ at + 1 ];
+    }
+    return std::nullopt;
+}
+
+/// The name of @p pkt's IP protocol, or its number as `IP(200)`.
+std::string ipProtocolLabel( const PacketRecord& pkt )
+{
+    const auto* name = ipProtocolName( pkt.ipProtocol );
+    return name ? name : "IP(" + std::to_string( pkt.ipProtocol ) + ")";
+}
+
+/// The transport layer of a packet quoted in an ICMP error: its protocol's
+/// name and the ports of a TCP or UDP header, the first 4 of the 8 bytes a
+/// router quotes.  Nothing else of it is read.
+void parseQuotedTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+{
+    pkt.protocol = ipProtocolLabel( pkt );
+    if ( ( pkt.ipProtocol == IpProtoTcp || pkt.ipProtocol == IpProtoUdp ) && remaining >= 4 ) {
+        pkt.transport = pkt.ipProtocol == IpProtoTcp ? Transport::Tcp : Transport::Udp;
+        pkt.srcPort = readBE16( data );
+        pkt.dstPort = readBE16( data + 2 );
     }
 }
 
 /// Parse the transport layer from the @p remaining captured bytes at
 /// @p data.  @p wireLen is its length on the wire according to the IP
 /// header, more than @p remaining if the capture was cut at the snaplen.
-void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, size_t wireLen )
+/// Of a @p quoted packet, only protocol and ports are read
+/// (parseQuotedTransport).
+void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, size_t wireLen,
+                     bool quoted )
 {
+    if ( quoted ) {
+        parseQuotedTransport( pkt, data, remaining );
+        return;
+    }
     wireLen = std::max( wireLen, remaining );
     if ( pkt.ipProtocol == IpProtoTcp && remaining >= 20 ) {
         pkt.protocol = "TCP";
@@ -99,12 +150,13 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         pkt.tcpWindow = readBE16( data + 14 );
 
         const auto dataOffset = static_cast<size_t>( data[ 12 ] >> 4 ) * 4;
+        pkt.tcpHeaderLen = static_cast<uint8_t>( dataOffset );
 
         // Build base TCP info line
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
-            << formatTcpFlags( pkt.tcpFlags ) << " Seq=" << pkt.tcpSeq << " Ack=" << pkt.tcpAck
-            << " Win=" << pkt.tcpWindow;
+            << formatTcpFlags( pkt.tcpFlags ) << " "
+            << formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck, pkt.tcpWindow );
 
         // A header shorter than its 20 fixed bytes is malformed: where the
         // payload starts is unknown, so none is taken, like Wireshark.
@@ -113,6 +165,8 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
             pkt.info = oss.str();
             return;
         }
+
+        pkt.tcpWindowShift = tcpWindowShiftOf( data + 20, std::min( dataOffset, remaining ) - 20 );
 
         // Len is the payload on the wire, as Wireshark shows it; only the
         // captured part of it can be looked at.
@@ -146,61 +200,15 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     }
     else if ( pkt.ipProtocol == IpProtoIcmp && remaining >= 8 ) {
         pkt.protocol = "ICMP";
-        auto type = data[ 0 ];
-        auto code = data[ 1 ];
-
-        std::ostringstream oss;
-        switch ( type ) {
-        case 0:
-            oss << "Echo reply";
-            break;
-        case 3:
-            oss << "Destination unreachable (code=" << static_cast<int>( code ) << ")";
-            break;
-        case 8:
-            oss << "Echo request";
-            break;
-        case 11:
-            oss << "Time exceeded";
-            break;
-        default:
-            oss << "Type=" << static_cast<int>( type ) << " Code=" << static_cast<int>( code );
-            break;
-        }
-        pkt.info = oss.str();
+        pkt.info = describeIcmp( data, remaining );
     }
     else if ( pkt.ipProtocol == IpProtoIcmpv6 && remaining >= 8 ) {
         pkt.protocol = "ICMPv6";
-        auto type = data[ 0 ];
-
-        std::ostringstream oss;
-        switch ( type ) {
-        case 128:
-            oss << "Echo request";
-            break;
-        case 129:
-            oss << "Echo reply";
-            break;
-        case 133:
-            oss << "Router solicitation";
-            break;
-        case 134:
-            oss << "Router advertisement";
-            break;
-        case 135:
-            oss << "Neighbor solicitation";
-            break;
-        case 136:
-            oss << "Neighbor advertisement";
-            break;
-        default:
-            oss << "Type=" << static_cast<int>( type );
-            break;
-        }
-        pkt.info = oss.str();
+        pkt.info = describeIcmpv6( data, remaining );
     }
     else {
-        pkt.protocol = "IP(" + std::to_string( pkt.ipProtocol ) + ")";
+        // A protocol not dissected further: its name, if it has one.
+        pkt.protocol = ipProtocolLabel( pkt );
         pkt.info = "Protocol " + std::to_string( pkt.ipProtocol );
     }
 }
@@ -220,7 +228,7 @@ void describeFragment( PacketRecord& pkt, const char* ipVersion, uint8_t protoco
 
 // ── Parse IPv4 header ────────────────────────────────────────────────────
 
-void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool quoted = false )
 {
     if ( remaining < 20 ) {
         pkt.protocol = "IPv4";
@@ -260,12 +268,12 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         return;
     }
 
-    parseTransport( pkt, data + ihl, capturedLen - ihl, totalLen - ihl );
+    parseTransport( pkt, data + ihl, capturedLen - ihl, totalLen - ihl, quoted );
 }
 
 // ── Parse IPv6 header ────────────────────────────────────────────────────
 
-void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
+void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool quoted = false )
 {
     if ( remaining < 40 ) {
         pkt.protocol = "IPv6";
@@ -313,7 +321,7 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining )
             break;
         default: // The upper-layer protocol, or one this parser does not walk
             pkt.ipProtocol = next;
-            parseTransport( pkt, data + offset, end - offset, wireEnd - offset );
+            parseTransport( pkt, data + offset, end - offset, wireEnd - offset, quoted );
             return;
         }
 
@@ -373,6 +381,19 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 }
 
 } // anonymous namespace
+
+void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len )
+{
+    if ( len == 0 ) {
+        return;
+    }
+    if ( data[ 0 ] >> 4 == 4 ) {
+        parseIpv4( pkt, data, len, true );
+    }
+    else if ( data[ 0 ] >> 4 == 6 ) {
+        parseIpv6( pkt, data, len, true );
+    }
+}
 
 void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
                     size_t pktRemaining )
@@ -471,10 +492,17 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         else if ( etherType == EthertypeArp ) {
             parseArp( pkt, networkData, networkRemaining );
         }
+        else if ( etherType <= kMax8023Length && linkType == DltEthernet ) {
+            // An IEEE 802.3 frame: the field is the length of its LLC data
+            pkt.protocol = "LLC";
+            pkt.info = "802.3 frame, length " + std::to_string( etherType );
+        }
         else {
+            // An EtherType not dissected further: its name, if it has one.
             char hex[ 8 ];
             std::snprintf( hex, sizeof( hex ), "%04X", etherType );
-            pkt.protocol = std::string( "ETH(0x" ) + hex + ")";
+            const auto* name = etherTypeName( etherType );
+            pkt.protocol = name ? name : std::string( "ETH(0x" ) + hex + ")";
             pkt.info = std::string( "EtherType 0x" ) + hex;
         }
     }
@@ -593,6 +621,12 @@ std::string formatTcpFlags( uint8_t flags )
         result += "none";
     result += "]";
     return result;
+}
+
+std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window )
+{
+    return "Seq=" + std::to_string( seq ) + " Ack=" + std::to_string( ack )
+           + " Win=" + std::to_string( window );
 }
 
 // ── Byte sources ─────────────────────────────────────────────────────────

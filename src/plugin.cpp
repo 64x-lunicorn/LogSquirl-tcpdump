@@ -28,7 +28,7 @@
  *                                     create sidebar tab
  *   - logsquirl_plugin_init()       → init_ex() with the base table size
  *   - logsquirl_plugin_shutdown()   → tear down widget, clear state
- *   - logsquirl_plugin_configure()  → (no-op for now)
+ *   - logsquirl_plugin_configure()  → the configuration dialog
  *
  * PLUGIN LIFECYCLE
  * ────────────────
@@ -43,16 +43,22 @@
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
+ *   Plugins > Plugin Management > Configure… calls configure(), which
+ *   shows the options and saves them in the plugin's configuration
+ *   directory; the next conversion reads them.
  *   4. Host calls shutdown() — we unregister + delete the widget; the
  *      host removes the menu entry when it unloads the plugin.
  */
 
 #include "plugin.h"
+#include "configdialog.h"
 #include "follow_stream.h"
+#include "settings.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
 
 #include <QCoreApplication>
+#include <QDir>
 
 #include <exception>
 
@@ -75,6 +81,16 @@ void hostLog( int level, const QString& message )
     if ( g_state.api && g_state.handle ) {
         g_state.api->log_message( g_state.handle, level, message.toUtf8().constData() );
     }
+}
+
+QString hostConfigDir()
+{
+    if ( g_state.api && g_state.handle && g_state.api->get_config_dir ) {
+        if ( const char* dir = g_state.api->get_config_dir( g_state.handle ) ) {
+            return QString::fromUtf8( dir );
+        }
+    }
+    return {};
 }
 
 void hostNotify( const QString& message )
@@ -281,10 +297,25 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
     tcpdump::g_state.initialised = false;
 }
 
-/// Configuration dialog (not implemented yet).
-LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* /* parent_widget */ )
+/// Configuration dialog: shows the conversion options saved in the plugin's
+/// configuration directory, and saves them there when accepted.
+LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
 {
-    // No configuration needed for this plugin yet.
+    guarded( "configuring", [ parent_widget ] {
+        const auto configDir = tcpdump::hostConfigDir();
+        tcpdump::ConfigDialog dialog( tcpdump::loadConversionOptions( configDir ),
+                                      static_cast<QWidget*>( parent_widget ) );
+        if ( dialog.exec() != QDialog::Accepted ) {
+            return;
+        }
+        if ( !tcpdump::saveConversionOptions( configDir, dialog.options() ) ) {
+            const auto message
+                = QStringLiteral( "The tcpdump options could not be saved in %1" )
+                      .arg( QDir::toNativeSeparators( tcpdump::settingsFilePath( configDir ) ) );
+            tcpdump::hostLog( LOGSQUIRL_LOG_ERROR, message );
+            tcpdump::hostNotify( message );
+        }
+    } );
 }
 
 } // extern "C"

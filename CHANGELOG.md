@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Port 8443 is `HTTPS-Alt`.** The port hint named TCP 8443 `HTTP-Alt`,
+  like 8080, although it is the usual alternative HTTPS port (IANA's
+  `pcsync-https`): the handshake of a TLS connection to 8443, before its
+  Client Hello, said `HTTP-Alt`. It now says `HTTPS-Alt`, and from the
+  Client Hello on the stream is `TLS`, as on 443; 8080 stays `HTTP-Alt`.
+- **The TCP window is shown scaled.** Once both SYNs of a connection
+  carried the window scale option, `Win=` is the window shifted by the
+  sender's scale, as Wireshark calculates it (`Win=408320` rather than
+  `Win=6380` on macOS, which scales by 64), and the TCP analysis markers
+  compare that window, as Wireshark's do. SYNs, connections where only
+  one side offered scaling and streams captured after their handshake, whose
+  scale is unknown, show the window as sent, as Wireshark does. A shift
+  beyond 14 counts as 14. No more memory per stream.
+
 ### Added
 - **Highlighter set and filter group.** `presets/tcpdump_highlighter.conf`
   colours the packet list in the spirit of Wireshark's default colouring
@@ -16,8 +31,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predefined filters *TCP handshakes*, *TCP errors*, *DNS*, *HTTP*, *TLS*,
   *ICMP* and *ARP*. Both are imported once in LogSquirl (README,
   *Highlighters and filters*); their patterns read the columns, so a word in
-  a payload's text never matches. The release archives do not carry them
-  yet (#58); `cmake --install` installs them next to the library.
+  a payload's text never matches. The release archives carry them next to
+  the library, as `cmake --install` installs them.
+- **Options dialog.** **Configure…** on the plugin's card in **Plugins →
+  Plugin Management…** opens the plugin's options: the time columns (UTC
+  time and time since the first packet, UTC time only, or time since the
+  first packet only), MAC addresses as columns (`Source MAC` and
+  `Destination MAC` before Info), the payload preview on or off and its
+  length up to 200 characters, and, under *Advanced*, the stream and
+  endpoint caps. They are kept in `settings.ini` in the plugin's
+  configuration directory and read when a capture is opened; a capture
+  already open keeps the options it was converted with. The defaults write
+  the packet list as before. The Log Format also reads the lines of the
+  other time and MAC choices, a missing time column left empty, the MAC
+  addresses as the start of Info; README's *Options* says which choices
+  change the columns that highlighters and filters may rely on.
+- **DHCP, DHCPv6 and NTP described.** DHCP Info names the message type as
+  Wireshark does, with the transaction id, the address assigned, requested
+  or held and the client's MAC, and the host name the client sends: `DHCP
+  Offer - Transaction ID 0x3903f326, 192.168.1.50 for 00:11:22:33:44:55`,
+  `DHCP Discover - Transaction ID 0x3903f326 from 00:11:22:33:44:55, Host
+  Name: laptop`; messages without a DHCP message type are `Boot Request`
+  or `Boot Reply`. Options are walked within the message, pads, the end
+  option and overloaded file and sname fields included; a length that runs
+  past the message ends the walk. DHCPv6 (546/547) names its message type,
+  transaction id and client DUID, `Solicit XID: 0x1a2b3c CID: 0001…`, and
+  relay messages the link and the message they carry; it is now `DHCPv6`
+  by its port, as DHCP is, rather than a port guess with a preview of the
+  bytes. NTP shows version, mode and stratum, `NTP Version 4, server,
+  stratum 2`, with the reference of a primary server or a kiss-o'-death
+  code, `stratum 1 (GPS)`. Before, DHCP and NTP lines had no description.
+- **ICMP and ICMPv6 in full.** Info names messages in Wireshark's words. An
+  echo shows its identifier and sequence number, so request and reply pair
+  up: `Echo (ping) request id=0x1234, seq=7` (before: `Echo request`); so do
+  timestamp, information and address mask queries. Destination unreachable,
+  time exceeded, parameter problem and redirect name their code and the
+  packet they quote, dissected with the same IP parsers: `Destination
+  unreachable (Port unreachable) for 10.0.0.1:51234 → 192.168.1.5:53 UDP`,
+  `Time exceeded (TTL exceeded in transit) for …`, with the next hop's MTU
+  of a fragmentation needed and the gateway of a redirect (before:
+  `Destination unreachable (code=3)`, `Time exceeded`). ICMPv6 names its
+  error codes the same way, `Packet too big mtu=1280 for …`, a neighbor
+  solicitation or advertisement its target, flags and link-layer address,
+  `Neighbor advertisement fe80::2 (rtr, sol, ovr) is at 00:11:22:33:44:55`,
+  a router advertisement its flags and lifetime, `Router advertisement (M,
+  O) lifetime=1800s`, and multicast listener messages by name (before:
+  `Type=143`). A quote cut short shows what it holds; it is never read past
+  the captured bytes.
+- **HTTP names the host, the content type and length.** A request line
+  shows the Host header's value before its path, `GET
+  example.com/index.html HTTP/1.1`, when the header is in the segment; a
+  response adds its Content-Type and Content-Length when it has them,
+  `HTTP/1.1 200 OK, Content-Type: text/html, Content-Length: 1234`. The
+  request or status line still comes first, and header values are escaped
+  and cut like every field. SSDP responses gain the same headers.
+- **HTTP/2 in clear text.** The connection preface is labelled `HTTP2`,
+  `Magic, SETTINGS[0], WINDOW_UPDATE[0]`, and the segments that follow on
+  its stream, in both directions, are `HTTP2` when they begin with frame
+  headers, each frame named with its type and stream, `HEADERS[1],
+  DATA[1]`. Header blocks are not decoded, and a segment that begins inside
+  a frame is left as it was.
+- **DNS reads like Wireshark's.** A query shows its transaction id, query
+  type and name, `Standard query 0x1a2b A www.example.com`; a response adds
+  its answers with their data, `Standard query response 0x1a2b A
+  www.example.com CNAME example.com A 93.184.216.34`, with names put
+  together from their compression pointers. Addresses, names (CNAME, PTR,
+  NS, SOA), MX, SRV and TXT data are shown, other record types by name, up
+  to four answers, then `…` and the count. NOTIFY and UPDATE are named, and
+  `[NXDOMAIN]`, `[SERVFAIL]`, `[REFUSED]` and the other response codes stay.
+  A pointer that loops, points forward or beyond the message ends the
+  description there, never reading past the payload.
+- **DNS over TCP.** Segments to or from TCP port 53 that begin with a DNS
+  message behind its 2-byte length are labelled `DNS` and described like
+  DNS over UDP; several messages in one segment are listed in order.
+- **QUIC on UDP.** A datagram that begins with a QUIC long header of v1, v2
+  or a draft version is labelled `QUIC` and described from its public
+  header, `Initial, Version 1, DCID=8394c8f03e515708, SCID=0a0b0c0d`: the
+  packet types of the datagram in order (Initial, 0-RTT, Handshake, Retry,
+  Protected Payload), the version and the connection IDs. A Version
+  Negotiation packet lists the versions the server offers. The short header
+  packets that follow on the same stream are `QUIC` too, `Protected
+  Payload, DCID=…`, with the connection ID the other side chose. Port 443
+  alone does not make a datagram QUIC; the server name is out of reach, as
+  it is encrypted even in the Initial.
+- **TLS hellos name the server, the version and ALPN.** A ClientHello line
+  shows the server name the client asks for, the highest version it offers
+  and its application protocols, `Client Hello, SNI=example.com, TLS 1.3,
+  ALPN=h2,http/1.1`; an extension the hello lacks is left out. A
+  ServerHello shows the version chosen, `Server Hello, TLS 1.3`. A segment
+  holding several records, or a record several handshake messages, lists
+  them in order, `Server Hello, TLS 1.3, Change Cipher Spec, Application
+  Data`, up to four, then `…`; a handshake record after Change Cipher Spec
+  is an `Encrypted Handshake Message`. A record cut by the snaplen or the
+  segment is described as far as it was captured, never read beyond.
+- **Names for IP protocols, EtherTypes and more ports.** A packet that is not
+  dissected further shows its protocol's name instead of a number: `IGMP`
+  instead of `IP(2)`, and likewise GRE, ESP, AH, OSPF, PIM, VRRP, L2TP, SCTP
+  and others; `LLDP` instead of `ETH(0x88CC)`, and likewise PPPoE discovery
+  and session (`PPPoED`, `PPPoES`), MPLS, 802.1X (`EAPOL`), PTP, Wake-on-LAN
+  (`WOL`) and others. The number stays in the Info column, and an unknown
+  one keeps its numeric form. An IEEE 802.3 frame, whose type field is a
+  length, shows as `LLC`. The port hint learns SNMP, Syslog, TFTP,
+  STUN/TURN, WireGuard, LLMNR, NBNS, DHCPv6, RTSP, LDAP, SMB, RDP, VNC,
+  Kerberos and some sixty more services.
+- **The protocol sticks to the stream.** Once a detector has recognised a
+  TCP or UDP stream's protocol (TLS, HTTP, SOCKS, NMEA, …), its later
+  packets carry the same label in the Protocol column, also those no
+  detector recognises: a segment in the middle of a TLS record or an HTTP
+  body, a bare ACK. A segment with payload is described as `Continuation`,
+  followed by its preview when it has text. A port's guess (`HTTPS`,
+  `HTTP-Alt`) never sticks and gives way to the first recognised protocol;
+  a new connection on the same addresses and ports starts without a label.
+  So filtering by Protocol finds the whole conversation, and the protocol
+  breakdown in the Capture Summary counts it whole. Each numbered stream
+  takes 8 bytes more memory.
+- **TCP analysis markers.** TCP lines carry Wireshark's expert markers at
+  the start of Info, in its words and order: `[TCP Retransmission]`,
+  `[TCP Fast Retransmission]`, `[TCP Spurious Retransmission]`,
+  `[TCP Out-Of-Order]`, `[TCP Previous segment not captured]`,
+  `[TCP Dup ACK n#m]`, `[TCP Window Update]`, `[TCP ZeroWindow]`,
+  `[TCP ZeroWindowProbe]`, `[TCP ZeroWindowProbeAck]`, `[TCP Keep-Alive]`
+  and `[TCP Keep-Alive ACK]`, by Wireshark's rules as far as a few numbers
+  per direction of a stream allow (the Developer Guide lists the limits).
+  The Capture Summary counts the segments per marker under *Analysis*. Each
+  numbered stream takes 48 bytes more memory, some 48 MB at the stream cap.
+- **Relative TCP sequence and acknowledgement numbers.** `Seq=` and `Ack=`
+  in Info count from the start of each direction of a TCP stream, as
+  Wireshark shows them by default: the SYN is `Seq=0`, the first byte of
+  data `Seq=1`. A stream captured mid-way counts from its first segment seen
+  (`Seq=1 Ack=1`), the numbers go on counting when the sequence numbers wrap
+  past 2^32, and a new connection on the same addresses and ports starts
+  afresh. A segment without the ACK flag shows `Ack=0`. Streams past the
+  stream cap keep the numbers as they are.
 - **pcapng captures.** Files saved by Wireshark (its default format) or by
   macOS's `tcpdump -P` open like a pcap, in either byte order and with several
   sections. Each packet is dissected with the link type of the interface it
@@ -36,9 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field, the Δt column, *Go to timestamp*, time-range search limits and the
   Chart Panel's templates (packets per second, bytes over time); README's
   *Log Format* section says how. The first sidebar summary after the plugin
-  is loaded links to that section. The release archives do not carry the
-  file yet, as the shared CI cannot pack extra files (#58); `cmake --install`
-  installs it next to the library.
+  is loaded links to that section. The release archives carry the file next
+  to the library, as does `cmake --install`.
 - **Absolute UTC time column.** Every packet line shows the packet's
   wall-clock time in UTC, `2026-10-09 08:41:12.123456Z` (nine decimals for a
   nanosecond capture), in a `UTC Time` column before the relative `Time`, so
@@ -77,6 +221,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `logsquirl_plugin_init`, learning from the host's table size whether it
   offers the Regex Lab, *Go to line* and the selected log lines. Nothing
   visible changes yet; it still loads into LogSquirl 26.03 and later.
+- **DNS descriptions in Wireshark's words.** `Query example.com` is now
+  `Standard query 0x1234 A example.com`, and `Response example.com (1
+  answers)` lists the answer instead of counting it in a wrong plural; a
+  count is left only for answers not listed, `(1 answer)`, `(6 answers)`.
+  `[RCODE=2]` and the like are named, `[SERVFAIL]`.
+- **The port hint knows the transport.** A well-known port names its
+  service only on the transport the service runs over: TCP 3306 is MySQL,
+  UDP 3306 is unnamed; UDP 69 is TFTP, TCP 69 is unnamed. Before, a port
+  named the same service on TCP and UDP.
 - **IPv6 addresses in RFC 5952 form.** IPv6 addresses are shown as Wireshark
   shows them: lowercase hexadecimal, the longest run of zero groups (the
   leftmost on a tie, never a single group) collapsed to `::`, so `fe80::1`

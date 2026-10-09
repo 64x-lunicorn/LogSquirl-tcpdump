@@ -573,3 +573,98 @@ SCENARIO( "Every column of a packet line is separated from the next", "[packet_f
         }
     }
 }
+
+SCENARIO( "The line layout chooses the time columns and adds the MAC columns",
+          "[packet_formatter]" )
+{
+    PacketRecord pkt;
+    pkt.number = 2;
+    pkt.timestampSec = 1760000000; // 2025-10-09 08:53:20 UTC
+    pkt.timestampNsec = 500000000;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+    pkt.srcMac = "00:11:22:33:44:55";
+    pkt.dstMac = "66:77:88:99:aa:bb";
+    pkt.protocol = "UDP";
+    pkt.capturedLen = pkt.originalLen = 60;
+    pkt.info = "443 \xe2\x86\x92 80 Len=18";
+    const std::string utc = "2025-10-09 08:53:20.500000Z  ";
+    const std::string time = "0.500000       ";
+    const std::string addresses
+        = "192.168.1.1" + std::string( 29, ' ' ) + "10.0.0.1" + std::string( 32, ' ' );
+    const std::string rest = "UDP       60     " + pkt.info;
+
+    auto lineWith = [ & ]( LineLayout layout ) {
+        PacketFormatter formatter( TimePrecision::Microseconds, layout );
+        PacketRecord first = pkt;
+        first.timestampNsec = 0;
+        formatter.format( first, 0 );
+        return formatter.format( pkt, 0 );
+    };
+    auto headerWith = [ & ]( LineLayout layout ) {
+        return PacketFormatter( TimePrecision::Microseconds, layout ).header();
+    };
+
+    GIVEN( "the default layout" )
+    {
+        THEN( "both time columns are shown, and no MAC columns" )
+        {
+            REQUIRE( lineWith( {} ) == "2      0       " + utc + time + addresses + rest );
+            REQUIRE( headerWith( {} ).find( "UTC Time" ) != std::string::npos );
+            REQUIRE( headerWith( {} ).find( "MAC" ) == std::string::npos );
+        }
+    }
+
+    GIVEN( "the absolute time only" )
+    {
+        const LineLayout layout{ TimeColumns::AbsoluteOnly, false };
+
+        THEN( "the Time column is left out" )
+        {
+            REQUIRE( lineWith( layout ) == "2      0       " + utc + addresses + rest );
+            REQUIRE( headerWith( layout ).rfind( "No.    Stream  UTC Time", 0 ) == 0 );
+            REQUIRE( headerWith( layout ).find( "Time", 15 + 8 ) == std::string::npos );
+        }
+    }
+
+    GIVEN( "the relative time only" )
+    {
+        const LineLayout layout{ TimeColumns::RelativeOnly, false };
+
+        THEN( "the UTC Time column is left out" )
+        {
+            REQUIRE( lineWith( layout ) == "2      0       " + time + addresses + rest );
+            REQUIRE( headerWith( layout ).rfind( "No.    Stream  Time ", 0 ) == 0 );
+            REQUIRE( headerWith( layout ).find( "UTC" ) == std::string::npos );
+        }
+    }
+
+    GIVEN( "the MAC columns" )
+    {
+        const LineLayout layout{ TimeColumns::Both, true };
+
+        THEN( "Source MAC and Destination MAC come before Info" )
+        {
+            REQUIRE( lineWith( layout )
+                     == "2      0       " + utc + time + addresses + "UDP       60     "
+                            + "00:11:22:33:44:55  66:77:88:99:aa:bb  " + pkt.info );
+            const auto header = headerWith( layout );
+            REQUIRE( header.find( "Length" ) < header.find( "Source MAC" ) );
+            REQUIRE( header.find( "Source MAC" ) < header.find( "Destination MAC" ) );
+            REQUIRE( header.find( "Destination MAC" ) < header.find( "Info" ) );
+        }
+
+        AND_WHEN( "the packet has no MAC addresses" )
+        {
+            pkt.srcMac.clear();
+            pkt.dstMac.clear();
+
+            THEN( "they show -" )
+            {
+                REQUIRE( lineWith( layout ).find( "60     -" + std::string( 18, ' ' ) + "-"
+                                                  + std::string( 18, ' ' ) + "443" )
+                         != std::string::npos );
+            }
+        }
+    }
+}

@@ -39,13 +39,19 @@ have the log open in.
 
 | Reads the capture | Shows the story |
 | :--- | :--- |
-| **pcap and pcapng files.** `.pcap`, `.pcapng`, `.cap`, `.dmp`, both endiannesses, microsecond and nanosecond timestamps, with a text preamble scan for `adb exec-out tcpdump` output. pcapng captures from Wireshark or macOS's `tcpdump -P` may mix interfaces of different link types and timestamp resolutions, and hold several sections. Read packet by packet in the background, so multi-GB captures work and can be cancelled. | **Wireshark-style columns.** No., Stream, UTC Time (`2026-10-09 08:41:12.123456Z`, the packet's wall-clock time in UTC), Time (since the first packet), Source, Destination, Protocol, Length (on the wire), Info — TCP flags in bracket notation; a packet cut at the snaplen is marked `[cut to N bytes]`. |
-| **Protocol dissection.** IPv4, IPv6 with its extension headers, TCP, UDP, ICMP, ICMPv6 and ARP; IP fragments after the first are shown as such. | **Conversations, not packets.** TCP and UDP stream numbers from addresses and ports, so both directions filter together; numbered per transport like Wireshark's `tcp.stream` and `udp.stream`, other packets show `-`. |
-| **Application layers.** TLS handshakes, HTTP requests and responses, DNS with domain names, NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials. | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
-| **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback (DLT_NULL, DLT_LOOP); stacked 802.1Q and QinQ tags stripped transparently. | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second and file size. |
+| **pcap and pcapng files.** `.pcap`, `.pcapng`, `.cap`, `.dmp`, both endiannesses, microsecond and nanosecond timestamps, with a text preamble scan for `adb exec-out tcpdump` output. pcapng captures from Wireshark or macOS's `tcpdump -P` may mix interfaces of different link types and timestamp resolutions, and hold several sections. Read packet by packet in the background, so multi-GB captures work and can be cancelled. | **Wireshark-style columns.** No., Stream, UTC Time (`2026-10-09 08:41:12.123456Z`, the packet's wall-clock time in UTC), Time (since the first packet), Source, Destination, Protocol, Length (on the wire), Info — TCP flags in bracket notation, sequence and acknowledgement numbers relative to the start of each direction as in Wireshark (the SYN is `Seq=0`), the window scaled once both SYNs negotiated window scaling, and Wireshark's TCP analysis markers at the start of Info in its words — `[TCP Retransmission]`, `[TCP Fast Retransmission]`, `[TCP Dup ACK 7#1]`, `[TCP Out-Of-Order]`, `[TCP ZeroWindow]`, `[TCP Keep-Alive]` and more — so highlighters and filters written for Wireshark carry over; a packet cut at the snaplen is marked `[cut to N bytes]`. |
+| **Protocol dissection.** IPv4, IPv6 with its extension headers, TCP, UDP, ICMP, ICMPv6 and ARP; IP fragments after the first are shown as such. ICMP and ICMPv6 in Wireshark's words: echoes with their id and seq (`Echo (ping) request id=0x1234, seq=7`), error messages with their code and the packet they quote (`Destination unreachable (Port unreachable) for 10.0.0.1:51234 → 192.168.1.5:53 UDP`), neighbor discovery with its target, link-layer address and flags. | **Conversations, not packets.** TCP and UDP stream numbers from addresses and ports, so both directions filter together; numbered per transport like Wireshark's `tcp.stream` and `udp.stream`, other packets show `-`. Once a stream's protocol is recognised (TLS, HTTP, …), every later packet of it carries that Protocol label, those in the middle of a record or body described as `Continuation`. |
+| **Application layers.** TLS records, every one in a segment, with the server name (SNI), version and ALPN of a hello, QUIC packets on UDP with their type, version and connection IDs (short headers known from their connection's long headers), HTTP requests with their host and responses with their content type and length, HTTP/2 (cleartext) by its connection preface and the frames that follow, with their types and streams, DNS queries and responses with their transaction id, query type and answers, over UDP and TCP, DHCP messages with their type, transaction id, client MAC, address and host name (`DHCP Offer - Transaction ID 0x3903f326, 192.168.1.50 for 00:11:22:33:44:55`), DHCPv6 messages with their type and client DUID, NTP packets with their version, mode and stratum (`NTP Version 4, server, stratum 2`), NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials. | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
+| **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback (DLT_NULL, DLT_LOOP); stacked 802.1Q and QinQ tags stripped transparently. | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second, file size and the TCP analysis markers per kind. |
 
-Port-based hints cover SSH, FTP, SMTP, IMAP, MySQL, PostgreSQL, Redis, MongoDB,
-MQTT, AMQP, Kafka, ADB and twenty more.
+Packets that are not dissected further are named, not numbered: IP protocols
+such as IGMP, GRE, ESP, AH, OSPF, PIM, VRRP, L2TP and SCTP, and EtherTypes such
+as LLDP, PPPoE discovery and session, MPLS, 802.1X (EAPOL), PTP and Wake-on-LAN;
+an unknown one keeps its number, `IP(200)` or `ETH(0x1234)`. Port-based hints
+name about a hundred TCP and UDP services: SSH, FTP, SMTP, IMAP, SNMP, Syslog,
+TFTP, STUN/TURN, WireGuard, LLMNR, NBNS, DHCPv6, RTSP, LDAP, SMB, RDP, VNC,
+Kerberos, MySQL, PostgreSQL, Redis, MongoDB, MQTT, AMQP, Kafka, ADB and more,
+each only on the transport it runs over.
 
 ## Install
 
@@ -66,6 +72,13 @@ and unpack it into LogSquirl's plugin directory:
 | macOS    | `~/Library/Application Support/logsquirl/plugins/io.github.logsquirl.tcpdump/` |
 | Linux    | `~/.local/share/logsquirl/plugins/io.github.logsquirl.tcpdump/` |
 | Windows  | `%APPDATA%/logsquirl/plugins/io.github.logsquirl.tcpdump/` |
+
+The archive also holds, next to the library, `tcpdump_log.json`, the
+[Log Format](#log-format) for the converted packet list, and
+`tcpdump_highlighter.conf` and `tcpdump_filter.conf`, the [highlighter set
+and filter group](#highlighters-and-filters). LogSquirl loads none of them
+from there: copy the Log Format into its formats directory and import the
+other two, as described below.
 
 ### From source
 
@@ -118,14 +131,51 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 10. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
+### Options
+
+**Plugins → Plugin Management…**, **Configure…** on the plugin's card,
+opens its options:
+
+| Option | Default | Choices |
+|--------|---------|---------|
+| Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
+| Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet |
+| Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
+| Streams numbered at most (Advanced) | 1,000,000 | 1 to 10,000,000; later streams show `?` |
+| Endpoints counted at most (Advanced) | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
+
+They are kept in `settings.ini` in the plugin's configuration directory
+(`plugin_config/io.github.logsquirl.tcpdump` beside LogSquirl's plugin
+directory) and read when a capture is opened: a capture already open keeps
+the options it was converted with; open it again to apply new ones.
+
+The defaults write the packet list shown under [Example Output](#example-output),
+which the Log Format and every highlighter and filter written for it expect.
+Two options change the column layout:
+
+- **Time**: a line has one time column fewer. The [Log Format](#log-format)
+  still reads it, leaving the missing column empty: with the UTC time only,
+  `time` is empty; with the time since the first packet only, `timestamp`
+  is empty, so the line has no timestamp, and Δt, Go to timestamp, time
+  ranges and the Chart Panel's rates are lost. A highlighter or filter
+  that counts columns, or expects a time where the other one was, no
+  longer matches.
+- **Show MAC addresses as columns**: the two MAC columns come right before
+  Info, so the Log Format reads them as the start of `body`; the other
+  columns stay where they are. A highlighter or filter anchored at the
+  start of Info no longer matches.
+
+The payload preview and the caps change only what Info says or which
+streams are numbered, not the columns.
+
 ### Log Format
 
 LogSquirl recognises the packet list as a log with fields once it has the
 plugin's Log Format definition, [`formats/tcpdump_log.json`](formats/tcpdump_log.json)
 (lnav-compatible, like LogSquirl's built-in formats). It is a one-time copy:
 
-1. Get `tcpdump_log.json` from the [`formats`](formats/) folder of this
-   repository, or of the release's source code archive
+1. Take `tcpdump_log.json` from the release archive (it lies next to the
+   library), or from the [`formats`](formats/) folder of this repository
 2. In LogSquirl, open **Options → Log Formats**, click **Open Formats
    Folder…** and copy the file there. The folder is
 
@@ -162,8 +212,8 @@ tell whether the format is installed.
 
 Two files in the [`presets`](presets/) folder colour and filter the packet
 list much as Wireshark's default colouring rules and display filters do. Get
-them from this repository or the release's source code archive and import
-each once:
+them from the release archive, where they lie next to the library, or from
+this repository, and import each once:
 
 - **Highlighter set** [`tcpdump_highlighter.conf`](presets/tcpdump_highlighter.conf):
   **Highlighters → Configure highlighters…**, *Import*, **OK**, then switch
@@ -211,8 +261,10 @@ No.    Stream  UTC Time                     Time           Source               
 2      0       2026-10-09 08:41:12.123956Z  0.000500       10.0.0.1                                192.168.1.100                           TCP       54     54321 → 443 [SYN, ACK] Seq=0 Ack=1 Win=65535
 3      0       2026-10-09 08:41:12.124456Z  0.001000       192.168.1.100                           10.0.0.1                                TCP       54     443 → 54321 [ACK] Seq=1 Ack=1 Win=65535
 4      0       2026-10-09 08:41:12.173456Z  0.050000       192.168.1.100                           10.0.0.1                                DNS       72     53 → 12345 Len=34
-5      -       2026-10-09 08:41:12.223456Z  0.100000       192.168.1.100                           10.0.0.1                                ICMP      74     Echo request
+5      -       2026-10-09 08:41:12.223456Z  0.100000       192.168.1.100                           10.0.0.1                                ICMP      74     Echo (ping) request id=0x0001, seq=1
 6      0       2026-10-09 08:41:12.243456Z  0.120000       10.0.0.1                                192.168.1.100                           TCP       1514   54321 → 443 [ACK] Seq=1 Ack=1 Win=65535 Len=1460 [cut to 96 bytes]
+7      0       2026-10-09 08:41:12.243956Z  0.120500       192.168.1.100                           10.0.0.1                                TCP       54     443 → 54321 [ACK] Seq=1 Ack=1461 Win=65535
+8      0       2026-10-09 08:41:12.244456Z  0.121000       192.168.1.100                           10.0.0.1                                TCP       54     [TCP Dup ACK 7#1] 443 → 54321 [ACK] Seq=1 Ack=1461 Win=65535
 ```
 
 ## Prerequisites

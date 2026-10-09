@@ -441,9 +441,10 @@ SCENARIO( "Stacked VLAN tags are stripped", "[pcap_parser]" )
     {
         auto pkt = parseOne( eth( EthertypeVlan, Bytes{ 0x00 } ) );
 
-        THEN( "it is shown by its EtherType, without reading past the frame" )
+        THEN( "it is shown as the tag, without reading past the frame" )
         {
-            REQUIRE( pkt.protocol == "ETH(0x8100)" );
+            REQUIRE( pkt.protocol == "VLAN" );
+            REQUIRE( pkt.info == "EtherType 0x8100" );
         }
     }
 
@@ -585,6 +586,181 @@ SCENARIO( "Len is taken from the IP header when the capture was cut at the snapl
         {
             REQUIRE( result.packets.size() == 1 );
             REQUIRE( result.packets[ 0 ].srcPort == 0 );
+        }
+    }
+}
+
+SCENARIO( "Protocols the Parser does not dissect are shown by name", "[pcap_parser]" )
+{
+    auto parseOne = []( const Bytes& frame ) {
+        auto result = parse( pcapOf( { frame } ) );
+        REQUIRE( result.packets.size() == 1 );
+        return result.packets[ 0 ];
+    };
+    const Bytes body( 8, 0 );
+
+    GIVEN( "an IGMP message over IPv4" )
+    {
+        auto pkt = parseOne( eth( EthertypeIpv4, ipv4( 2, body ) ) );
+
+        THEN( "it is shown as IGMP, with its number in the Info column" )
+        {
+            REQUIRE( pkt.protocol == "IGMP" );
+            REQUIRE( pkt.info == "Protocol 2" );
+            REQUIRE( pkt.srcIp == "192.168.1.1" );
+        }
+    }
+
+    GIVEN( "an ESP packet over IPv6" )
+    {
+        auto pkt = parseOne( eth( EthertypeIpv6, ipv6( 50, body ) ) );
+
+        THEN( "it is shown as ESP" )
+        {
+            REQUIRE( pkt.protocol == "ESP" );
+            REQUIRE( pkt.info == "Protocol 50" );
+        }
+    }
+
+    GIVEN( "an IP protocol number nobody assigned" )
+    {
+        auto pkt = parseOne( eth( EthertypeIpv4, ipv4( 200, body ) ) );
+
+        THEN( "it keeps the numeric form" )
+        {
+            REQUIRE( pkt.protocol == "IP(200)" );
+            REQUIRE( pkt.info == "Protocol 200" );
+        }
+    }
+
+    GIVEN( "an LLDP frame" )
+    {
+        auto pkt = parseOne( eth( 0x88CC, body ) );
+
+        THEN( "it is shown as LLDP, with its EtherType in the Info column" )
+        {
+            REQUIRE( pkt.protocol == "LLDP" );
+            REQUIRE( pkt.info == "EtherType 0x88CC" );
+        }
+    }
+
+    GIVEN( "a PPPoE session frame behind a VLAN tag" )
+    {
+        auto pkt = parseOne( eth( EthertypeVlan, vlanTag( 7, 0x8864, body ) ) );
+
+        THEN( "it is shown as PPPoE session" )
+        {
+            REQUIRE( pkt.protocol == "PPPoES" );
+        }
+    }
+
+    GIVEN( "an EtherType nobody assigned" )
+    {
+        auto pkt = parseOne( eth( 0x1234, body ) );
+
+        THEN( "it keeps the numeric form" )
+        {
+            REQUIRE( pkt.protocol == "ETH(0x1234)" );
+            REQUIRE( pkt.info == "EtherType 0x1234" );
+        }
+    }
+
+    GIVEN( "an IEEE 802.3 frame, whose type field is a length" )
+    {
+        auto pkt = parseOne( eth( 0x0026, body ) );
+
+        THEN( "it is shown as LLC, with its length" )
+        {
+            REQUIRE( pkt.protocol == "LLC" );
+            REQUIRE( pkt.info == "802.3 frame, length 38" );
+        }
+    }
+}
+
+SCENARIO( "A packet tells whether a detector recognised its protocol", "[pcap_parser]" )
+{
+    GIVEN( "an HTTP request, a payload on a hinted port and a segment without payload" )
+    {
+        const auto result = parse( pcapOf( {
+            eth( EthertypeIpv4,
+                 ipv4( IpProtoTcp, tcp( 40000, 8080, text( "GET / HTTP/1.1\r\n" ) ) ) ),
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 8080, text( "body" ) ) ) ),
+            eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 40000, 40001 ) ) ),
+        } ) );
+        REQUIRE( result.packets.size() == 3 );
+
+        THEN( "only the request's protocol was recognised" )
+        {
+            REQUIRE( result.packets[ 0 ].protocolRecognised );
+            REQUIRE( result.packets[ 1 ].protocol == "HTTP-Alt" );
+            REQUIRE_FALSE( result.packets[ 1 ].protocolRecognised );
+            REQUIRE_FALSE( result.packets[ 2 ].protocolRecognised );
+        }
+    }
+}
+
+SCENARIO( "The window scale option of a TCP header is read", "[pcap_parser]" )
+{
+    /// A SYN whose header carries @p options after its 20 fixed bytes,
+    /// NOP-padded to a whole number of words.
+    auto parseSyn = []( Bytes options ) {
+        while ( options.size() % 4 != 0 ) {
+            options.push_back( 1 );
+        }
+        auto header = tcp( 40000, 80, {}, static_cast<uint8_t>( 5 + options.size() / 4 ), 0x02 );
+        std::copy( options.begin(), options.end(), header.begin() + 20 );
+        auto result = parse( pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoTcp, header ) ) } ) );
+        REQUIRE( result.packets.size() == 1 );
+        return result.packets[ 0 ];
+    };
+
+    GIVEN( "the options of a macOS SYN: MSS, NOP, window scale 6, NOPs, timestamps, SACK "
+           "permitted, end of options" )
+    {
+        auto pkt = parseSyn(
+            { 2, 4, 0x3F, 0xD8, 1, 3, 3, 6, 1, 1, 8, 10, 0, 0, 0, 1, 0, 0, 0, 0, 4, 2, 0 } );
+
+        THEN( "the shift is taken from it, as sent" )
+        {
+            REQUIRE( pkt.tcpWindowShift == 6 );
+        }
+    }
+
+    GIVEN( "a shift beyond 14" )
+    {
+        THEN( "it is kept as sent; the TCP Analysis caps it" )
+        {
+            REQUIRE( parseSyn( { 3, 3, 15 } ).tcpWindowShift == 15 );
+        }
+    }
+
+    GIVEN( "a header without the option, with the option after the end of options, or behind "
+           "one whose length is bogus" )
+    {
+        THEN( "no shift is read" )
+        {
+            REQUIRE_FALSE( parseSyn( {} ).tcpWindowShift );
+            REQUIRE_FALSE( parseSyn( { 2, 4, 0x05, 0xB4 } ).tcpWindowShift );
+            REQUIRE_FALSE( parseSyn( { 0, 3, 3, 6 } ).tcpWindowShift );
+            REQUIRE_FALSE( parseSyn( { 8, 0, 3, 3, 6 } ).tcpWindowShift );
+            REQUIRE_FALSE( parseSyn( { 3, 4, 6, 0 } ).tcpWindowShift );
+        }
+    }
+
+    GIVEN( "a window scale option cut off by the end of the header" )
+    {
+        auto header = tcp( 40000, 80, {}, 6, 0x02 );
+        header[ 20 ] = 1;
+        header[ 21 ] = 1;
+        header[ 22 ] = 1;
+        header[ 23 ] = 3;
+        auto result = parse(
+            pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoTcp, header + Bytes{ 3, 6 } ) ) } ) );
+
+        THEN( "no shift is read from the payload" )
+        {
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE_FALSE( result.packets[ 0 ].tcpWindowShift );
         }
     }
 }

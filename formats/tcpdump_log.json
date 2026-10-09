@@ -2,12 +2,12 @@
     "$schema": "https://lnav.org/schemas/format-v1.schema.json",
     "logsquirl_tcpdump_log": {
         "title": "tcpdump / pcap Viewer packet list",
-        "description": "The packet list the tcpdump / pcap Viewer plugin converts a capture to: one line per packet with its number, stream, UTC time, time since the first packet, source, destination, protocol, length on the wire and info.",
+        "description": "The packet list the tcpdump / pcap Viewer plugin converts a capture to: one line per packet with its number, stream, UTC time, time since the first packet, source, destination, protocol, length on the wire and info. Either time column may be left out in the plugin's configuration, and is empty then; MAC columns the configuration adds start the info.",
         "url": "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format",
         "multiline": false,
         "regex": {
             "packet": {
-                "pattern": "^(?<number>\\d++) ++(?<stream>\\d++|[-?]) ++(?<timestamp>[+-]?\\d{4,}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d++Z) ++(?<time>-?\\d++\\.\\d++) ++(?<source>\\S++) ++(?<destination>\\S++) ++(?<protocol>\\S++) ++(?<length>\\d++) ++(?<body>.*)$"
+                "pattern": "^(?<number>\\d++) ++(?<stream>\\d++|[-?]) ++(?:(?<timestamp>[+-]?\\d{4,}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d++Z) ++)?(?:(?<time>-?\\d++\\.\\d++) ++)?(?<source>\\S++) ++(?<destination>\\S++) ++(?<protocol>\\S++) ++(?<length>\\d++) ++(?<body>.*)$"
             }
         },
         "timestamp-field": "timestamp",
@@ -27,7 +27,7 @@
             },
             "time": {
                 "kind": "string",
-                "description": "Seconds since the first packet of the capture, negative for an earlier one"
+                "description": "Seconds since the first packet of the capture, negative for an earlier one; empty when the plugin is configured to show the UTC time only"
             },
             "source": {
                 "kind": "string",
@@ -56,10 +56,13 @@
                 "line": "1      0       2026-10-09 08:41:12.123456Z  0.000000       192.168.1.100                           10.0.0.1                                TCP       54     443 → 54321 [SYN] Seq=0 Ack=0 Win=65535"
             },
             {
-                "line": "5      -       2026-10-09 08:41:12.223456Z  0.100000       fe80::1                                 fe80::2                                 ICMPv6    70     Type=143"
+                "line": "5      -       2026-10-09 08:41:12.223456Z  0.100000       fe80::1                                 fe80::2                                 ICMPv6    70     Multicast listener report v2"
             },
             {
                 "line": "3      1       2023-11-14 22:13:21.000000005Z  1.000000004       fe80::1                                 fe80::2                                 UDP       52     7000 → 7001 Len=0"
+            },
+            {
+                "line": "8      0       2025-10-09 08:53:20.031500Z  0.031500       10.0.0.2                                10.0.0.1                                HTTP      54     [TCP Dup ACK 7#1] 80 → 40000 [ACK] Seq=1 Ack=101 Win=65535"
             }
         ]
     }

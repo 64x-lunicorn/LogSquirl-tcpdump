@@ -83,6 +83,10 @@ extern PluginState g_state;
 /// The host decodes the message as UTF-8.
 void hostLog( int level, const QString& message );
 
+/// The plugin's configuration directory, as the host names it; empty
+/// without a host.
+QString hostConfigDir();
+
 /// Show a host notification (no-op if not initialised).
 /// The host decodes the message as UTF-8.
 void hostNotify( const QString& message );

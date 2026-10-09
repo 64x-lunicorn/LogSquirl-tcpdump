@@ -1,3 +1,8 @@
 {
-  "host_ref": "v26.11.0"
+  "host_ref": "v26.11.0",
+  "package_files": [
+    "formats/tcpdump_log.json",
+    "presets/tcpdump_highlighter.conf",
+    "presets/tcpdump_filter.conf"
+  ]
 }

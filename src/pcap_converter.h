@@ -25,6 +25,8 @@
 #pragma once
 
 #include "capture_stats.h"
+#include "packet_formatter.h"
+#include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
@@ -36,6 +38,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tcpdump {
@@ -62,6 +65,9 @@ struct CaptureSummary {
     std::map<std::string, uint64_t> protocolBytes;
     /// Packets per IP address, for every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
+    /// TCP segments per analysis marker ("TCP Retransmission", …), for the
+    /// kinds that occur, in the order of TcpMarker.
+    std::vector<std::pair<std::string, uint64_t>> tcpMarkers;
 
     /// Packets captured shorter than on the wire, cut at the snaplen; their
     /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
@@ -98,9 +104,16 @@ struct ConversionResult {
     CaptureSummary summary; ///< What was converted, when Converted.
 };
 
-/// Settings of a conversion.  The defaults are the plugin's; a test lowers
-/// the caps to see them reached on a small capture.
+/// Settings of a conversion, as the user chose them in the configuration
+/// dialog (settings.h).  The defaults write the text the Log Format is made
+/// for; a test lowers the caps to see them reached on a small capture.
 struct ConversionOptions {
+    /// The time columns and whether the MAC columns are shown.
+    LineLayout layout;
+    /// Whether a payload no detector recognises is previewed as text.
+    bool preview = true;
+    /// Characters of a payload preview at most, kMaxPreviewChars at most.
+    size_t previewChars = kMaxPreviewChars;
     /// Conversations to number at most; later ones show stream "?".
     size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
@@ -119,7 +132,7 @@ struct ConversionOptions {
  * @param cancel    If set, checked between packets; stops the conversion.
  * @param progress  If set, called with the share of the input read so far,
  *                  in per mille, whenever that changes.
- * @param options   The memory caps; the defaults unless a test lowers them.
+ * @param options   The columns, the preview and the memory caps.
  */
 ConversionResult convertPcap( const QString& inputPath, const QString& outputRoot,
                               const std::atomic_bool* cancel = nullptr,

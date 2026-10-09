@@ -28,6 +28,8 @@
 
 namespace tcpdump {
 
+static_assert( sizeof( StreamState ) <= 72, "A stream's state is paid once per numbered stream" );
+
 Stream StreamTracker::track( const PacketRecord& pkt )
 {
     if ( !pkt.transport ) {
@@ -38,11 +40,13 @@ Stream StreamTracker::track( const PacketRecord& pkt )
     // Order the endpoints, so that both directions find the same key.
     auto epA = pkt.srcIp + ":" + std::to_string( pkt.srcPort );
     auto epB = pkt.dstIp + ":" + std::to_string( pkt.dstPort );
-    auto key = ( epA < epB ) ? ( epA + "|" + epB ) : ( epB + "|" + epA );
+    const unsigned direction = ( epB < epA ) ? 1 : 0;
+    auto key = direction == 0 ? ( epA + "|" + epB ) : ( epB + "|" + epA );
 
     const auto known = conversations.ids.find( key );
     if ( known != conversations.ids.end() ) {
-        return { known->second, &conversations.states[ static_cast<size_t>( known->second ) ] };
+        return { known->second, &conversations.states[ static_cast<size_t>( known->second ) ],
+                 direction };
     }
     if ( tcp_.ids.size() + udp_.ids.size() >= maxStreams_ ) {
         limitReached_ = true;
@@ -51,7 +55,7 @@ Stream StreamTracker::track( const PacketRecord& pkt )
     const auto next = static_cast<int>( conversations.states.size() );
     conversations.ids.emplace( std::move( key ), next );
     conversations.states.emplace_back();
-    return { next, &conversations.states.back() };
+    return { next, &conversations.states.back(), direction };
 }
 
 } // namespace tcpdump

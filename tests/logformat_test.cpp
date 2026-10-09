@@ -26,22 +26,27 @@
  * order, and its timestamp read by the rules of LogSquirl's TimestampReader
  * (src/logformat/src/timestampreader.cpp), ported below for the directives
  * the format may use.  Every line of every corpus text, header excluded,
- * must match and yield the columns the line shows.
+ * must match and yield the columns the line shows, also in the other Line
+ * Layouts the configuration dialog offers: a time column a line does not
+ * have is empty, and the MAC columns are read as the start of Info.
  */
 
 #include <catch2/catch.hpp>
 
 #include "packet_formatter.h"
+#include "pcap_converter.h"
 #include "regex_lab.h"
 
 #include <QDate>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QTemporaryDir>
 #include <QTime>
 #include <QTimeZone>
 
@@ -332,16 +337,21 @@ std::optional<QDateTime> parseTimestamp( const QStringList& formats, QStringView
 
 /// A packet line's columns, split as a reader splits them, independently of
 /// the format's regex: at runs of spaces, UTC Time being two of them (date
-/// and time of day) and Info the rest of the line.
+/// and time of day) and Info the rest of the line, the MAC columns of a
+/// Line Layout with them included.  A time column the line's Line Layout
+/// leaves out is empty.
 struct Columns {
     QString number, stream, utcTime, time, source, destination, protocol, length, info;
 };
 
-std::optional<Columns> splitColumns( const QString& line )
+std::optional<Columns> splitColumns( const QString& line, const LineLayout& layout = {} )
 {
+    const bool utc = layout.timeColumns != TimeColumns::RelativeOnly;
+    const bool relative = layout.timeColumns != TimeColumns::AbsoluteOnly;
+    const int count = 6 + ( utc ? 2 : 0 ) + ( relative ? 1 : 0 );
     QStringList parts;
     qsizetype pos = 0;
-    for ( int i = 0; i < 9; ++i ) {
+    for ( int i = 0; i < count; ++i ) {
         const auto end = line.indexOf( ' ', pos );
         if ( end < 0 ) {
             return std::nullopt;
@@ -352,9 +362,23 @@ std::optional<Columns> splitColumns( const QString& line )
             ++pos;
         }
     }
-    return Columns{ parts[ 0 ], parts[ 1 ], parts[ 2 ] + ' ' + parts[ 3 ],
-                    parts[ 4 ], parts[ 5 ], parts[ 6 ],
-                    parts[ 7 ], parts[ 8 ], line.mid( pos ) };
+    Columns columns;
+    columns.info = line.mid( pos );
+    auto next = [ &parts ] { return parts.takeFirst(); };
+    columns.number = next();
+    columns.stream = next();
+    if ( utc ) {
+        columns.utcTime = next();
+        columns.utcTime += ' ' + next();
+    }
+    if ( relative ) {
+        columns.time = next();
+    }
+    columns.source = next();
+    columns.destination = next();
+    columns.protocol = next();
+    columns.length = next();
+    return columns;
 }
 
 /// The format's match of @p line, the first of its patterns that matches.
@@ -370,13 +394,14 @@ QRegularExpressionMatch matchLine( const LogFormat& format, const QString& line 
     return {};
 }
 
-/// Checks that the format reads @p line into the columns it shows.
-void requireFields( const LogFormat& format, const QString& line )
+/// Checks that the format reads @p line, written in @p layout, into the
+/// columns it shows.
+void requireFields( const LogFormat& format, const QString& line, const LineLayout& layout = {} )
 {
     INFO( "line: " << line.toStdString() );
     const auto match = matchLine( format, line );
     REQUIRE( match.hasMatch() );
-    const auto columns = splitColumns( line );
+    const auto columns = splitColumns( line, layout );
     REQUIRE( columns );
     REQUIRE( match.captured( "number" ) == columns->number );
     REQUIRE( match.captured( "stream" ) == columns->stream );
@@ -387,6 +412,11 @@ void requireFields( const LogFormat& format, const QString& line )
     REQUIRE( match.captured( "protocol" ) == columns->protocol );
     REQUIRE( match.captured( "length" ) == columns->length );
     REQUIRE( match.captured( format.bodyField ) == columns->info );
+    if ( layout.macColumns ) {
+        static const QRegularExpression macs(
+            "^(?:[0-9a-f]{2}(?::[0-9a-f]{2}){5}|-) +(?:[0-9a-f]{2}(?::[0-9a-f]{2}){5}|-) " );
+        REQUIRE( macs.match( columns->info ).hasMatch() );
+    }
 }
 
 QStringList namedGroups( const QString& pattern )
@@ -468,14 +498,18 @@ SCENARIO( "The Log Format defines one column per packet line field", "[logformat
 SCENARIO( "The Log Format reads every line of every corpus text", "[logformat][corpus]" )
 {
     const auto format = loadFormat();
-    const QDir dir( QStringLiteral( TCPDUMP_CORPUS_DIR ) );
-    const auto texts = dir.entryList( { "*.txt" }, QDir::Files, QDir::Name );
+    const QDir committed( QStringLiteral( TCPDUMP_CORPUS_DIR ) );
+    auto texts = committed.entryInfoList( { "*.txt" }, QDir::Files, QDir::Name );
     REQUIRE( texts.size() >= 2 );
+    // Real captures stay uncommitted in tests/corpus/local; their text is read too when present.
+    if ( const QDir local( committed.filePath( "local" ) ); local.exists() ) {
+        texts += local.entryInfoList( { "*.txt" }, QDir::Files, QDir::Name );
+    }
 
     for ( const auto& text : texts ) {
-        GIVEN( "the corpus text " + text.toStdString() )
+        GIVEN( "the corpus text " + text.fileName().toStdString() )
         {
-            QFile file( dir.filePath( text ) );
+            QFile file( text.filePath() );
             REQUIRE( file.open( QIODevice::ReadOnly | QIODevice::Text ) );
             auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
             if ( lines.last().isEmpty() ) {
@@ -514,6 +548,50 @@ SCENARIO( "The Log Format reads every line of every corpus text", "[logformat][c
                     const auto elapsedMs = static_cast<double>( first->msecsTo( *timestamp ) );
                     REQUIRE( std::abs( elapsedMs - match.captured( "time" ).toDouble() * 1000.0 )
                              < 1.0 );
+                }
+            }
+        }
+    }
+}
+
+SCENARIO( "The Log Format reads the corpus in every Line Layout", "[logformat][corpus]" )
+{
+    const auto format = loadFormat();
+    const QDir committed( QStringLiteral( TCPDUMP_CORPUS_DIR ) );
+    const QStringList patterns{ "*.pcap", "*.pcapng" };
+    auto captures = committed.entryInfoList( patterns, QDir::Files, QDir::Name );
+    if ( const QDir local( committed.filePath( "local" ) ); local.exists() ) {
+        captures += local.entryInfoList( patterns, QDir::Files, QDir::Name );
+    }
+    QTemporaryDir out;
+    REQUIRE( out.isValid() );
+
+    for ( const auto timeColumns :
+          { TimeColumns::Both, TimeColumns::AbsoluteOnly, TimeColumns::RelativeOnly } ) {
+        for ( const bool macColumns : { false, true } ) {
+            ConversionOptions options;
+            options.layout = { timeColumns, macColumns };
+            for ( const auto& capture : captures ) {
+                if ( capture.fileName().startsWith( "malformed-" ) ) {
+                    continue;
+                }
+                INFO( "capture " << capture.fileName().toStdString() << ", time columns "
+                                 << static_cast<int>( timeColumns ) << ", MAC columns "
+                                 << macColumns );
+                const auto result
+                    = convertPcap( capture.filePath(), out.path(), nullptr, {}, options );
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                QFile file( result.outputPath );
+                REQUIRE( file.open( QIODevice::ReadOnly | QIODevice::Text ) );
+                const auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
+                REQUIRE_FALSE( matchLine( format, lines.first() ).hasMatch() );
+                for ( qsizetype i = 1; i < lines.size() && !lines[ i ].isEmpty(); ++i ) {
+                    requireFields( format, lines[ i ], options.layout );
+                    if ( timeColumns != TimeColumns::RelativeOnly ) {
+                        REQUIRE( parseTimestamp(
+                            format.timestampFormats,
+                            matchLine( format, lines[ i ] ).captured( format.timestampField ) ) );
+                    }
                 }
             }
         }

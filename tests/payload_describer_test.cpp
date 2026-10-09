@@ -121,11 +121,11 @@ SCENARIO( "The describer names a TCP payload from its bytes and ports alone", "[
     {
         const auto request = text( "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n" );
 
-        THEN( "the label is HTTP and the description is the request line" )
+        THEN( "the label is HTTP and the description is the request line with the host" )
         {
             const auto described = describe( Transport::Tcp, request, 53248, 80 );
             REQUIRE( described.label == "HTTP" );
-            REQUIRE( described.description == "GET /index.html HTTP/1.1" );
+            REQUIRE( described.description == "GET example.com/index.html HTTP/1.1" );
         }
     }
 
@@ -133,11 +133,11 @@ SCENARIO( "The describer names a TCP payload from its bytes and ports alone", "[
     {
         const auto response = text( "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n" );
 
-        THEN( "the description is the status line" )
+        THEN( "the description is the status line with the content length" )
         {
             const auto described = describe( Transport::Tcp, response, 80, 53248 );
             REQUIRE( described.label == "HTTP" );
-            REQUIRE( described.description == "HTTP/1.1 404 Not Found" );
+            REQUIRE( described.description == "HTTP/1.1 404 Not Found, Content-Length: 0" );
         }
     }
 
@@ -231,7 +231,7 @@ SCENARIO( "The describer names a UDP payload from its bytes and ports alone", "[
             THEN( "the label is DNS and the description names the query" )
             {
                 REQUIRE( described.label == "DNS" );
-                REQUIRE( described.description == "Query example.com" );
+                REQUIRE( described.description == "Standard query 0x0001 A example.com" );
             }
         }
     }
@@ -294,6 +294,45 @@ SCENARIO( "A payload nobody recognises is previewed as text", "[describer]" )
     }
 }
 
+SCENARIO( "A payload nobody recognises is named by its well-known port", "[describer]" )
+{
+    const auto payload = text( "some payload" );
+
+    GIVEN( "a UDP datagram to the SNMP port" )
+    {
+        THEN( "the label is SNMP and the payload is previewed" )
+        {
+            const auto described = describe( Transport::Udp, payload, kUnknownSrc, 161 );
+            REQUIRE( described.label == "SNMP" );
+            REQUIRE( described.description == "some payload" );
+        }
+    }
+
+    GIVEN( "a TCP segment from the RDP port" )
+    {
+        THEN( "the label is RDP" )
+        {
+            REQUIRE( describe( Transport::Tcp, payload, 3389, kUnknownDst ).label == "RDP" );
+        }
+    }
+
+    GIVEN( "a TCP segment to the port of a UDP-only service" )
+    {
+        THEN( "it gets no label" )
+        {
+            REQUIRE( describe( Transport::Tcp, payload, kUnknownSrc, 69 ).label.empty() );
+        }
+    }
+
+    GIVEN( "a source port that names nothing and a destination port that does" )
+    {
+        THEN( "the destination port names it" )
+        {
+            REQUIRE( describe( Transport::Udp, payload, kUnknownSrc, 514 ).label == "Syslog" );
+        }
+    }
+}
+
 SCENARIO( "Payload text is capped", "[describer]" )
 {
     GIVEN( "1000 bytes of text" )
@@ -348,7 +387,7 @@ SCENARIO( "A description never breaks the one-line-per-packet format", "[describ
 
     const std::vector<Case> cases{
         { "a DNS name with a newline and an escape character", Transport::Udp, dns, 40000, 53,
-          "DNS", "Query a\\x0Ab\\x1Bc.com" },
+          "DNS", "Standard query 0x1234 A a\\x0Ab\\x1Bc.com" },
         { "an HTTP request line with a control character", Transport::Tcp,
           text( "GET /\x1b[2J HTTP/1.1\r\n\r\n" ), 40000, 80, "HTTP", "GET /\\x1B[2J HTTP/1.1" },
         { "an SSDP response with a control character", Transport::Udp,
@@ -379,7 +418,7 @@ SCENARIO( "A description never breaks the one-line-per-packet format", "[describ
         { "an mDNS name with a carriage return", Transport::Udp,
           Bytes{ 0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
               + Bytes{ 2, 'a', '\r', 5, 'l', 'o', 'c', 'a', 'l', 0, 0, 1, 0, 1 },
-          5353, 5353, "mDNS", "Query a\\x0D.local" },
+          5353, 5353, "mDNS", "Standard query 0x1234 A a\\x0D.local" },
         { "a payload of two lines of text", Transport::Tcp,
           text( "first line of the payload\r\nsecond line of the payload\n" ), kUnknownSrc,
           kUnknownDst, "", "first line of the payload..second line of the payload." },
@@ -396,6 +435,151 @@ SCENARIO( "A description never breaks the one-line-per-packet format", "[describ
                 REQUIRE( isOneLine( described.description ) );
                 REQUIRE( contains( described.description, c.expectedText ) );
             }
+        }
+    }
+}
+
+SCENARIO( "The describer tells a recognised label from a port's guess", "[describer]" )
+{
+    GIVEN( "a payload a detector recognises" )
+    {
+        THEN( "its label is no guess, also on a port with a hint" )
+        {
+            const auto described
+                = describe( Transport::Tcp, text( "GET / HTTP/1.1\r\n" ), 50000, 8080 );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE_FALSE( described.guessed );
+        }
+    }
+
+    GIVEN( "a payload no detector recognises, on a port with a hint" )
+    {
+        THEN( "the port's label is a guess" )
+        {
+            const auto described = describe( Transport::Tcp, text( "{\"id\": 1}" ), 50000, 8080 );
+            REQUIRE( described.label == "HTTP-Alt" );
+            REQUIRE( described.guessed );
+        }
+    }
+
+    GIVEN( "a TLS segment no detector recognises, on the alternative HTTPS port 8443" )
+    {
+        THEN( "the port's guess is HTTPS-Alt, not HTTP-Alt" )
+        {
+            const Bytes encrypted{ 0x8a, 0x13, 0xf0, 0x42, 0x99, 0x00, 0x7e, 0xc1 };
+            const auto toServer = describe( Transport::Tcp, encrypted, 50000, 8443 );
+            const auto toClient = describe( Transport::Tcp, encrypted, 8443, 50000 );
+            REQUIRE( toServer.label == "HTTPS-Alt" );
+            REQUIRE( toServer.guessed );
+            REQUIRE( toClient.label == "HTTPS-Alt" );
+        }
+    }
+
+    GIVEN( "a payload no detector recognises, on ports without a hint" )
+    {
+        THEN( "there is no label to guess" )
+        {
+            const auto described
+                = describe( Transport::Tcp, text( "{\"id\": 1}" ), kUnknownSrc, kUnknownDst );
+            REQUIRE( described.label.empty() );
+            REQUIRE_FALSE( described.guessed );
+        }
+    }
+}
+
+SCENARIO( "The describer says which description is a preview", "[describer]" )
+{
+    GIVEN( "a payload nobody recognises" )
+    {
+        THEN( "its description is a preview" )
+        {
+            REQUIRE(
+                describe( Transport::Udp, text( "hello" ), kUnknownSrc, kUnknownDst ).preview );
+        }
+    }
+
+    GIVEN( "a payload a detector recognises" )
+    {
+        THEN( "its description is none" )
+        {
+            REQUIRE_FALSE(
+                describe( Transport::Tcp, text( "GET / HTTP/1.1\r\n\r\n" ), kUnknownSrc, 80 )
+                    .preview );
+        }
+    }
+
+    GIVEN( "a binary payload, which gets no preview" )
+    {
+        THEN( "there is no preview either" )
+        {
+            REQUIRE_FALSE(
+                describe( Transport::Udp, Bytes( 20, 0x00 ), kUnknownSrc, kUnknownDst ).preview );
+        }
+    }
+}
+
+SCENARIO( "A payload preview is cut to the length chosen, or left out", "[describer]" )
+{
+    const std::string ellipsis = "\xe2\x80\xa6";
+    PacketRecord pkt;
+
+    auto withPreview = [ & ]( const std::string& summary, const std::string& preview ) {
+        pkt.info = summary + kDescriptionSeparator + preview;
+        pkt.previewBytes = preview.size();
+    };
+
+    GIVEN( "a packet whose Info ends in a preview of 11 characters" )
+    {
+        withPreview( "5000 \xe2\x86\x92 5001 Len=11", "hello world" );
+
+        THEN( "a length of 11 or more leaves it" )
+        {
+            limitPreview( pkt, 11 );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11 | hello world" );
+            limitPreview( pkt, kMaxPreviewChars );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11 | hello world" );
+        }
+
+        THEN( "a length of 5 cuts it, with an ellipsis" )
+        {
+            limitPreview( pkt, 5 );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11 | hello" + ellipsis );
+            REQUIRE( pkt.previewBytes == 5 + ellipsis.size() );
+        }
+
+        THEN( "a length of 0 leaves it out, and its separator" )
+        {
+            limitPreview( pkt, 0 );
+            REQUIRE( pkt.info == "5000 \xe2\x86\x92 5001 Len=11" );
+            REQUIRE( pkt.previewBytes == 0 );
+        }
+    }
+
+    GIVEN( "a preview the describer already cut" )
+    {
+        withPreview( "Len=1000", std::string( kMaxPreviewChars, 'x' ) + ellipsis );
+
+        THEN( "a shorter length cuts it again, with one ellipsis" )
+        {
+            limitPreview( pkt, 3 );
+            REQUIRE( pkt.info == "Len=1000 | xxx" + ellipsis );
+        }
+
+        THEN( "the full length leaves it" )
+        {
+            limitPreview( pkt, kMaxPreviewChars );
+            REQUIRE( pkt.info == "Len=1000 | " + std::string( kMaxPreviewChars, 'x' ) + ellipsis );
+        }
+    }
+
+    GIVEN( "a packet without a preview" )
+    {
+        pkt.info = "80 \xe2\x86\x92 5000 Len=18 | GET / HTTP/1.1";
+
+        THEN( "nothing changes" )
+        {
+            limitPreview( pkt, 0 );
+            REQUIRE( pkt.info == "80 \xe2\x86\x92 5000 Len=18 | GET / HTTP/1.1" );
         }
     }
 }

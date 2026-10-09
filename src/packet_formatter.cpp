@@ -30,6 +30,10 @@
 
 #include "packet_formatter.h"
 
+#include "payload_describer.h"
+#include "stream_labels.h"
+#include "tcp_analysis.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <sstream>
@@ -48,6 +52,21 @@ size_t timeWidth( TimePrecision precision )
 size_t utcTimeWidth( TimePrecision precision )
 {
     return precision == TimePrecision::Nanoseconds ? 32 : 29;
+}
+
+/// Width of a MAC address column: the address and two spaces.
+constexpr size_t kMacWidth = 19;
+
+/// Whether @p layout shows the UTC Time column.
+bool showsUtcTime( const LineLayout& layout )
+{
+    return layout.timeColumns != TimeColumns::RelativeOnly;
+}
+
+/// Whether @p layout shows the relative Time column.
+bool showsTime( const LineLayout& layout )
+{
+    return layout.timeColumns != TimeColumns::AbsoluteOnly;
 }
 
 /// The proleptic Gregorian date @p days after 1970-01-01, for any day of the
@@ -153,7 +172,7 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
 }
 
 std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, TimePrecision precision )
+                              int streamId, TimePrecision precision, const LineLayout& layout )
 {
     // Time relative to the first packet; negative for an earlier packet.
     // Packet times are never before 1970, so the seconds' difference fits.
@@ -171,10 +190,14 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
     writeColumn( oss, streamStr, 8 );
     // Each packet's own wall-clock time, also for one recorded before the
     // first packet, whose relative time is negative
-    writeColumn( oss, formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision ),
-                 utcTimeWidth( precision ) );
-    writeColumn( oss, formatRelativeTime( deltaSec, deltaNsec, precision ),
-                 timeWidth( precision ) );
+    if ( showsUtcTime( layout ) ) {
+        writeColumn( oss, formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision ),
+                     utcTimeWidth( precision ) );
+    }
+    if ( showsTime( layout ) ) {
+        writeColumn( oss, formatRelativeTime( deltaSec, deltaNsec, precision ),
+                     timeWidth( precision ) );
+    }
     writeColumn( oss, pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp, 40 );
     writeColumn( oss, pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp, 40 );
     writeColumn( oss, pkt.protocol, 10 );
@@ -182,6 +205,12 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
     // the snaplen says in Info how much of it was captured, so that a reader
     // knows why its description stops short.
     writeColumn( oss, std::to_string( pkt.originalLen ), 7 );
+    // Before Info, which a Log Format reads as the rest of the line: the
+    // MAC addresses are read as its start, the other columns as ever.
+    if ( layout.macColumns ) {
+        writeColumn( oss, pkt.srcMac, kMacWidth );
+        writeColumn( oss, pkt.dstMac, kMacWidth );
+    }
     oss << pkt.info;
     if ( pkt.capturedLen < pkt.originalLen ) {
         oss << ( pkt.info.empty() ? "" : " " ) << "[cut to " << pkt.capturedLen << " bytes]";
@@ -195,12 +224,20 @@ std::string PacketFormatter::header() const
     std::ostringstream hdr;
     writeColumn( hdr, "No.", 7 );
     writeColumn( hdr, "Stream", 8 );
-    writeColumn( hdr, "UTC Time", utcTimeWidth( precision_ ) );
-    writeColumn( hdr, "Time", timeWidth( precision_ ) );
+    if ( showsUtcTime( layout_ ) ) {
+        writeColumn( hdr, "UTC Time", utcTimeWidth( precision_ ) );
+    }
+    if ( showsTime( layout_ ) ) {
+        writeColumn( hdr, "Time", timeWidth( precision_ ) );
+    }
     writeColumn( hdr, "Source", 40 );
     writeColumn( hdr, "Destination", 40 );
     writeColumn( hdr, "Protocol", 10 );
     writeColumn( hdr, "Length", 7 );
+    if ( layout_.macColumns ) {
+        writeColumn( hdr, "Source MAC", kMacWidth );
+        writeColumn( hdr, "Destination MAC", kMacWidth );
+    }
     hdr << "Info";
     return hdr.str();
 }
@@ -212,7 +249,7 @@ std::string PacketFormatter::format( const PacketRecord& pkt, int streamId )
         baseTimeSec_ = pkt.timestampSec;
         baseTimeNsec_ = pkt.timestampNsec;
     }
-    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_ );
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId, precision_, layout_ );
 }
 
 std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
@@ -223,12 +260,17 @@ std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& pack
     }
     PacketFormatter formatter( finest );
     StreamTracker tracker;
+    StreamLabels labels;
     std::vector<std::string> lines;
     lines.reserve( packets.size() + 1 );
     lines.push_back( formatter.header() );
 
-    for ( const auto& pkt : packets ) {
-        lines.push_back( formatter.format( pkt, tracker.track( pkt ).id ) );
+    for ( auto pkt : packets ) {
+        const auto stream = tracker.track( pkt );
+        analyseTcp( pkt, stream );
+        describeInStream( pkt, stream );
+        labels.apply( pkt, stream );
+        lines.push_back( formatter.format( pkt, stream.id ) );
     }
     return lines;
 }

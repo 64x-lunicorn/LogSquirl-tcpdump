@@ -26,7 +26,10 @@
 
 #include "capture_reader.h"
 #include "packet_formatter.h"
+#include "payload_describer.h"
+#include "stream_labels.h"
 #include "stream_tracker.h"
+#include "tcp_analysis.h"
 #include "tempdirs.h"
 
 #include <QDir>
@@ -105,6 +108,12 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     summary.protocolPackets = std::move( stats.protocolPackets );
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );
+    for ( size_t i = 0; i < kTcpMarkerKinds; ++i ) {
+        if ( stats.tcpMarkers[ i ] > 0 ) {
+            summary.tcpMarkers.emplace_back( tcpMarkerName( static_cast<TcpMarker>( i ) ),
+                                             stats.tcpMarkers[ i ] );
+        }
+    }
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
@@ -236,7 +245,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
-    PacketFormatter formatter( reader.precision() );
+    StreamLabels labels;
+    PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }
@@ -250,8 +260,12 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
-        stats.add( pkt );
+        limitPreview( pkt, options.preview ? options.previewChars : 0 );
         const auto stream = tracker.track( pkt );
+        stats.addTcpMarkers( analyseTcp( pkt, stream ) );
+        describeInStream( pkt, stream );
+        labels.apply( pkt, stream );
+        stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }
