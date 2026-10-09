@@ -19,7 +19,7 @@
 
 /**
  * @file pcapbuilder.h
- * @brief Compact builders for synthetic packets and pcap files, for tests.
+ * @brief Compact builders for synthetic packets, pcap and pcapng files, for tests.
  *
  * Each layer function wraps a payload in one protocol header, so a packet
  * reads inside out: eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 1, 2 ) ) ).
@@ -238,6 +238,111 @@ inline Bytes pcapOf( const std::vector<Bytes>& packets, uint32_t linkType = tcpd
     o.linkType = linkType;
     return pcapFile( records, o );
 }
+
+// ── pcapng ───────────────────────────────────────────────────────────────
+
+/// pcapng block types.
+constexpr uint32_t kShb = 0x0A0D0D0A; ///< Section Header Block
+constexpr uint32_t kIdb = 1;          ///< Interface Description Block
+constexpr uint32_t kSpb = 3;          ///< Simple Packet Block
+constexpr uint32_t kNrb = 4;          ///< Name Resolution Block
+constexpr uint32_t kIsb = 5;          ///< Interface Statistics Block
+constexpr uint32_t kEpb = 6;          ///< Enhanced Packet Block
+
+/**
+ * Writes the blocks of a pcapng section in one byte order; a file is their
+ * concatenation: Pcapng le; le.shb() + le.idb( DltEthernet ) + le.epb( 0, 1, frame ).
+ */
+struct Pcapng {
+    bool bigEndian = false;
+
+    void put16( Bytes& b, uint16_t v ) const
+    {
+        bigEndian ? putBE16( b, v ) : putLE16( b, v );
+    }
+
+    void put32( Bytes& b, uint32_t v ) const
+    {
+        bigEndian ? putBE32( b, v ) : putLE32( b, v );
+    }
+
+    /// A block of @p type around @p body, padded to 32 bits; @p totalLength
+    /// -1 means its real length, in both length fields.
+    Bytes block( uint32_t type, Bytes body, int64_t totalLength = -1 ) const
+    {
+        body.resize( ( body.size() + 3 ) / 4 * 4, 0 );
+        const auto length = totalLength >= 0 ? static_cast<uint32_t>( totalLength )
+                                             : static_cast<uint32_t>( body.size() + 12 );
+        Bytes b;
+        put32( b, type );
+        put32( b, length );
+        b = b + body;
+        put32( b, length );
+        return b;
+    }
+
+    /// A Section Header Block of version @p major.1, with unknown section length.
+    Bytes shb( uint16_t major = 1 ) const
+    {
+        Bytes body;
+        put32( body, 0x1A2B3C4D );
+        put16( body, major );
+        put16( body, 0 );
+        put32( body, 0xFFFFFFFF ); // section length -1: not given
+        put32( body, 0xFFFFFFFF );
+        return block( kShb, body );
+    }
+
+    /// An option: code, length, value padded to 32 bits.
+    Bytes option( uint16_t code, const Bytes& value ) const
+    {
+        Bytes b;
+        put16( b, code );
+        put16( b, static_cast<uint16_t>( value.size() ) );
+        b = b + value;
+        b.resize( ( b.size() + 3 ) / 4 * 4, 0 );
+        return b;
+    }
+
+    /// An Interface Description Block; @p tsresol is if_tsresol's byte,
+    /// -1 for none (microseconds).  An if_name option comes first.
+    Bytes idb( uint32_t linkType, int tsresol = -1, uint32_t snaplen = 262144 ) const
+    {
+        Bytes body;
+        put16( body, static_cast<uint16_t>( linkType ) );
+        put16( body, 0 );
+        put32( body, snaplen );
+        body = body + option( 2, text( "eth0" ) );
+        if ( tsresol >= 0 ) {
+            body = body + option( 9, { static_cast<uint8_t>( tsresol ) } );
+        }
+        return block( kIdb, body + option( 0, {} ) );
+    }
+
+    /// An Enhanced Packet Block; @p capturedLen -1 means the size of @p data.
+    Bytes epb( uint32_t interfaceId, uint64_t timestamp, const Bytes& data,
+               int64_t capturedLen = -1 ) const
+    {
+        Bytes body;
+        put32( body, interfaceId );
+        put32( body, static_cast<uint32_t>( timestamp >> 32 ) );
+        put32( body, static_cast<uint32_t>( timestamp & 0xFFFFFFFF ) );
+        put32( body, capturedLen >= 0 ? static_cast<uint32_t>( capturedLen )
+                                      : static_cast<uint32_t>( data.size() ) );
+        put32( body, static_cast<uint32_t>( data.size() ) );
+        body = body + data;
+        body.resize( ( body.size() + 3 ) / 4 * 4, 0 );
+        return block( kEpb, body + option( 1, text( "comment" ) ) + option( 0, {} ) );
+    }
+
+    /// A Simple Packet Block of a packet @p originalLen long on the wire.
+    Bytes spb( const Bytes& data, uint32_t originalLen ) const
+    {
+        Bytes body;
+        put32( body, originalLen );
+        return block( kSpb, body + data );
+    }
+};
 
 /** Parse @p file and return its only packet (asserting there is one is the caller's job). */
 inline tcpdump::ParseResult parse( const Bytes& file )

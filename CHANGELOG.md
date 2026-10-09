@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **pcapng captures.** Files saved by Wireshark (its default format) or by
+  macOS's `tcpdump -P` open like a pcap, in either byte order and with several
+  sections. Each packet is dissected with the link type of the interface it
+  was captured on and shown at that interface's timestamp resolution
+  (`if_tsresol`), so a capture of an Ethernet and a Raw IP interface, or of a
+  microsecond and a nanosecond one, reads right; the Capture Summary lists
+  every link type. Name resolution, statistics, custom and other blocks are
+  skipped. A pcapng without packets converts to just the header line, and one
+  that is cut off is reported like a cut-off pcap. The file dialog offers
+  `.pcapng`.
 - **Log Format for the packet list.** `formats/tcpdump_log.json`, an
   lnav-compatible Log Format definition, names the fields of a packet line:
   number, stream, timestamp (the UTC Time), time, source, destination,

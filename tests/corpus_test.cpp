@@ -21,12 +21,13 @@
  * @file corpus_test.cpp
  * @brief Regression tests converting the captures in tests/corpus.
  *
- * Each <name>.pcap with a <name>.txt beside it must convert to exactly
- * that text.  The captures cover the link layers, byte orders, timestamp
+ * Each <name>.pcap or <name>.pcapng with a <name>.txt beside it must
+ * convert to exactly that text.  The captures cover the link layers, byte orders, timestamp
  * precisions and protocols the parser handles, including malformed and
  * cut-off records.  After an intended change of the output, run the tests
  * with TCPDUMP_UPDATE_CORPUS=1 to rewrite the .txt files, and review the
- * difference.  The malformed-*.pcap files, mutated captures from fuzzing,
+ * difference.  interfaces.pcapng is written by tests/make_pcapng_corpus.py.
+ * The malformed-*.pcap files, mutated captures from fuzzing,
  * must merely be read to their end.
  */
 
@@ -36,6 +37,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 using namespace tcpdump;
@@ -59,15 +61,15 @@ QByteArray readText( const QString& path )
 SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
 {
     const QDir dir( corpusDir() );
-    const auto captures = dir.entryList( { "*.pcap" }, QDir::Files, QDir::Name );
-    REQUIRE( captures.size() >= 2 );
+    const auto captures = dir.entryList( { "*.pcap", "*.pcapng" }, QDir::Files, QDir::Name );
+    REQUIRE( captures.size() >= 3 );
 
     QTemporaryDir out;
     REQUIRE( out.isValid() );
     const bool update = qEnvironmentVariableIsSet( "TCPDUMP_UPDATE_CORPUS" );
 
     for ( const auto& capture : captures ) {
-        const auto name = capture.chopped( 5 );
+        const auto name = QFileInfo( capture ).completeBaseName();
         const auto expectedPath = dir.filePath( name + ".txt" );
         if ( name.startsWith( "malformed-" ) || ( !QFile::exists( expectedPath ) && !update ) ) {
             continue;

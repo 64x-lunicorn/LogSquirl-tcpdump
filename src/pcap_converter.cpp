@@ -199,9 +199,10 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     if ( !openRegularFile( inputPath, input, inputError ) ) {
         return failed( inputError );
     }
-    FileSource source( input );
-    PcapReader pcapReader( source );
-    CaptureReader& reader = pcapReader; // the rest sees the capture through the seam
+    FileSource file( input );
+    HeadSource source( file );
+    const auto capture = makeCaptureReader( source ); // pcap or pcapng, by the first block
+    CaptureReader& reader = *capture;                 // the rest sees the capture through the seam
     if ( !reader.open() ) {
         return failed( QString::fromStdString( reader.error() ) );
     }

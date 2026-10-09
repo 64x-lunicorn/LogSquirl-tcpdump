@@ -10,7 +10,7 @@
 **Packet captures you can actually read.**
 
 **A [LogSquirl](https://github.com/64x-lunicorn/LogSquirl) plugin that turns
-`.pcap` files into a readable packet list.**
+`.pcap` and `.pcapng` files into a readable packet list.**
 
 Protocol dissection, application-layer detection and stream tracking — rendered
 as text, so LogSquirl's regex search and highlighters work on it.
@@ -39,7 +39,7 @@ have the log open in.
 
 | Reads the capture | Shows the story |
 | :--- | :--- |
-| **Standard libpcap files.** `.pcap`, `.cap`, `.dmp`, both endiannesses, microsecond and nanosecond timestamps, with a text preamble scan for `adb exec-out tcpdump` output. Read packet by packet in the background, so multi-GB captures work and can be cancelled. | **Wireshark-style columns.** No., Stream, UTC Time (`2026-10-09 08:41:12.123456Z`, the packet's wall-clock time in UTC), Time (since the first packet), Source, Destination, Protocol, Length (on the wire), Info — TCP flags in bracket notation; a packet cut at the snaplen is marked `[cut to N bytes]`. |
+| **pcap and pcapng files.** `.pcap`, `.pcapng`, `.cap`, `.dmp`, both endiannesses, microsecond and nanosecond timestamps, with a text preamble scan for `adb exec-out tcpdump` output. pcapng captures from Wireshark or macOS's `tcpdump -P` may mix interfaces of different link types and timestamp resolutions, and hold several sections. Read packet by packet in the background, so multi-GB captures work and can be cancelled. | **Wireshark-style columns.** No., Stream, UTC Time (`2026-10-09 08:41:12.123456Z`, the packet's wall-clock time in UTC), Time (since the first packet), Source, Destination, Protocol, Length (on the wire), Info — TCP flags in bracket notation; a packet cut at the snaplen is marked `[cut to N bytes]`. |
 | **Protocol dissection.** IPv4, IPv6 with its extension headers, TCP, UDP, ICMP, ICMPv6 and ARP; IP fragments after the first are shown as such. | **Conversations, not packets.** TCP and UDP stream numbers from addresses and ports, so both directions filter together; numbered per transport like Wireshark's `tcp.stream` and `udp.stream`, other packets show `-`. |
 | **Application layers.** TLS handshakes, HTTP requests and responses, DNS with domain names, NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials. | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
 | **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback (DLT_NULL, DLT_LOOP); stacked 802.1Q and QinQ tags stripped transparently. | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second and file size. |
@@ -86,7 +86,7 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 1. Open LogSquirl
 2. In the sidebar, select the **tcpdump** tab
-3. Click **Open pcap…** and select a `.pcap`, `.cap`, or `.dmp` file. The
+3. Click **Open pcap…** and select a `.pcap`, `.pcapng`, `.cap`, or `.dmp` file. The
    same dialog opens from **Plugins → tcpdump → Open pcap…**, and so from
    the Command Palette (`Ctrl+Shift+P`, `Cmd+Shift+P` on macOS); while a
    capture is being read, it only says so
@@ -195,7 +195,7 @@ cd build && ctest --output-on-failure
 graph TD
     A[User chooses Open pcap…, sidebar or menu] --> B[QFileDialog]
     B --> C[Worker thread: pcap_converter]
-    C --> D[PcapReader: global header]
+    C --> D[PcapReader or PcapngReader, by the first block]
     D --> E[Next packet record]
     E --> F[Link layer, VLAN tags]
     F --> G[IPv4 / IPv6 + extension headers / ARP]

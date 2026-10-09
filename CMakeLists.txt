@@ -38,6 +38,7 @@ qt_standard_project_setup()
 add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/pcap_parser.cpp
+    src/pcapng_reader.cpp
     src/payload_describer.cpp
     src/packet_formatter.cpp
     src/stream_tracker.cpp

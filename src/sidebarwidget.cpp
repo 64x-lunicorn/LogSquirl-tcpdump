@@ -61,8 +61,9 @@ const char* const kLogFormatHelpUrl
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
     , chooseFile_( []( QWidget* parent, const QString& dir ) {
-        return QFileDialog::getOpenFileName( parent, "Open pcap Capture File", dir,
-                                             "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+        return QFileDialog::getOpenFileName(
+            parent, "Open pcap Capture File", dir,
+            "Capture files (*.pcap *.pcapng *.cap *.dmp);;All files (*)" );
     } )
     , tempRoot_( tcpdump::tempRoot() )
 {

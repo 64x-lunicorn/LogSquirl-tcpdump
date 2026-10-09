@@ -21,13 +21,16 @@
  * @file wire_bytes.h
  * @brief Reading and formatting the fields of a packet, as they lie on the wire.
  *
- * Shared by the pcap Parser and the Payload Describer.  Pure C++.
+ * Shared by the pcap Parser and the Payload Describer.  The capture readers
+ * also read the fields of their file with it, in the byte order the file was
+ * written in.  Pure C++.
  */
 
 #pragma once
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace tcpdump {
@@ -43,6 +46,31 @@ inline uint32_t readBE32( const uint8_t* p )
 {
     return ( static_cast<uint32_t>( p[ 0 ] ) << 24 ) | ( static_cast<uint32_t>( p[ 1 ] ) << 16 )
            | ( static_cast<uint32_t>( p[ 2 ] ) << 8 ) | p[ 3 ];
+}
+
+/// Read a uint16 of a capture file; @p swap: it was written in the other
+/// byte order than this host's.
+inline uint16_t read16( const uint8_t* p, bool swap )
+{
+    uint16_t v;
+    std::memcpy( &v, p, 2 );
+    if ( swap ) {
+        v = static_cast<uint16_t>( ( v >> 8 ) | ( v << 8 ) );
+    }
+    return v;
+}
+
+/// Read a uint32 of a capture file; @p swap: it was written in the other
+/// byte order than this host's.
+inline uint32_t read32( const uint8_t* p, bool swap )
+{
+    uint32_t v;
+    std::memcpy( &v, p, 4 );
+    if ( swap ) {
+        v = ( ( v >> 24 ) & 0xFF ) | ( ( v >> 8 ) & 0xFF00 ) | ( ( v << 8 ) & 0xFF0000 )
+            | ( ( v << 24 ) & 0xFF000000 );
+    }
+    return v;
 }
 
 /// An IPv4 address in dotted decimal.

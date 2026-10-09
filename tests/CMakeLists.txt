@@ -18,6 +18,7 @@ add_executable(logsquirl_tcpdump_tests
     tests_main.cpp
     plugininfo_test.cpp
     pcap_parser_test.cpp
+    pcapng_reader_test.cpp
     pcap_layers_test.cpp
     socks_test.cpp
     streaming_test.cpp
@@ -54,6 +55,7 @@ target_sources(logsquirl_tcpdump_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
+        "${CMAKE_SOURCE_DIR}/src/pcapng_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/payload_describer.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
