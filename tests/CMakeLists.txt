@@ -27,6 +27,7 @@ add_executable(logsquirl_tcpdump_tests
     packet_formatter_test.cpp
     payload_describer_test.cpp
     stream_tracker_test.cpp
+    wire_bytes_test.cpp
 )
 
 set_target_properties(logsquirl_tcpdump_tests PROPERTIES

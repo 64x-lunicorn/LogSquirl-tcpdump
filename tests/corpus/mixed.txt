@@ -5,9 +5,9 @@ No.    Stream  Time           Source                                  Destinatio
 4      2       0.037035       192.168.1.1                             192.168.1.2                             TLS       63     50001 → 443 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=9 | Client Hello
 5      0       0.049380       192.168.1.1                             192.168.1.2                             DNS       71     40000 → 53 Len=29 | Query example.com
 6      1       -0.938275      192.168.1.1                             192.168.1.2                             NMEA      67     40001 → 10110 Len=17 | $GPGGA,1,2,3*47
-7      -       0.074070       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      ICMPv6    70     Type=143
-8      2       0.086415       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      mDNS      75     5353 → 5353 Len=5
-9      -       0.098760       fe80:0:0:0:0:0:0:1                      fe80:0:0:0:0:0:0:2                      IPv6      72     Fragment of IP protocol 17 (offset 1480, ID 0x0000CAFE)
+7      -       0.074070       fe80::1                                 fe80::2                                 ICMPv6    70     Type=143
+8      2       0.086415       fe80::1                                 fe80::2                                 mDNS      75     5353 → 5353 Len=5
+9      -       0.098760       fe80::1                                 fe80::2                                 IPv6      72     Fragment of IP protocol 17 (offset 1480, ID 0x0000CAFE)
 10     3       0.111105       192.168.1.1                             192.168.1.2                             SSH       54     50002 → 22 [ACK, PSH] Seq=1 Ack=0 Win=65535
 11     -       0.123450       192.168.1.1                             192.168.1.2                             IPv4      48     Fragment of IP protocol 6 (offset 1480, ID 0x1234)
 12     4       0.135795       192.168.1.1                             192.168.1.2                             SOCKS     58     50003 → 1080 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=4 | SOCKS5 Client Greeting, Version: 5, Methods: 2 [No Authentication (0x00), Username/Password (0x02)]

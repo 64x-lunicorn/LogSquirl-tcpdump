@@ -53,14 +53,46 @@ inline std::string formatIpv4( const uint8_t* p )
     return buf;
 }
 
-/// An IPv6 address as eight hexadecimal groups.
+/// An IPv6 address in the RFC 5952 form: lowercase hexadecimal groups
+/// without leading zeros, the longest run of two or more zero groups (the
+/// leftmost on a tie) collapsed to `::`.  An IPv4-mapped address is shown in
+/// hexadecimal too, as `::ffff:c000:201`.
 inline std::string formatIpv6( const uint8_t* p )
 {
-    char buf[ 40 ];
-    std::snprintf( buf, sizeof( buf ), "%x:%x:%x:%x:%x:%x:%x:%x", readBE16( p ), readBE16( p + 2 ),
-                   readBE16( p + 4 ), readBE16( p + 6 ), readBE16( p + 8 ), readBE16( p + 10 ),
-                   readBE16( p + 12 ), readBE16( p + 14 ) );
-    return buf;
+    uint16_t groups[ 8 ];
+    for ( int i = 0; i < 8; ++i ) {
+        groups[ i ] = readBE16( p + 2 * i );
+    }
+
+    int runStart = -1;
+    int runLength = 1; // a single zero group is never collapsed
+    for ( int i = 0; i < 8; ) {
+        int j = i;
+        while ( j < 8 && groups[ j ] == 0 ) {
+            ++j;
+        }
+        if ( j - i > runLength ) {
+            runStart = i;
+            runLength = j - i;
+        }
+        i = ( j > i ) ? j : i + 1;
+    }
+
+    std::string text;
+    char group[ 5 ];
+    for ( int i = 0; i < 8; ++i ) {
+        if ( i == runStart ) {
+            text += "::";
+            i += runLength - 1;
+            continue;
+        }
+        if ( !text.empty() && text.back() != ':' ) {
+            text += ':';
+        }
+        std::snprintf( group, sizeof( group ), "%x", groups[ i ] );
+        text += group;
+    }
+    return text;
 }
 
 } // namespace tcpdump

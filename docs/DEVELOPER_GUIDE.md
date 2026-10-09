@@ -77,6 +77,11 @@ packet, with 6 decimals, or 9 when the capture announces nanosecond
 precision for any of its packets (`PacketFormatter` takes the reader's
 `precision()`; `formatAllPackets()` the finest of its packets).
 
+IPv6 addresses are written in the RFC 5952 form (`fe80::1`, `::`) by
+`formatIpv6()` in `wire_bytes.h`, the one place that formats them: the
+Source and Destination columns, the Capture Summary endpoints, the Stream
+Tracker's keys and SOCKS5 destinations (as `[2001:db8::1]:443`) all use it.
+
 Length is the packet's length on the wire (`originalLen`), as Wireshark's
 Length column is; `Len=` in Info is the TCP or UDP payload length. A packet
 captured shorter than on the wire (`capturedLen < originalLen`, cut at the

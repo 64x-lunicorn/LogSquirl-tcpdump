@@ -245,7 +245,7 @@ SCENARIO( "SOCKS messages are described with their fields", "[socks]" )
         THEN( "the command and destination are shown" )
         {
             REQUIRE( contains( described.description, "Command: UDP Associate (0x03)" ) );
-            REQUIRE( contains( described.description, "Destination: 2001:0:0:0:0:0:0:1:53" ) );
+            REQUIRE( contains( described.description, "Destination: [2001::1]:53" ) );
         }
     }
 

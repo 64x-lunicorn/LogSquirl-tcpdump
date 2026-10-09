@@ -24,9 +24,14 @@
 
 #include <catch2/catch.hpp>
 
+#include <algorithm>
+
+#include "capture_stats.h"
+#include "pcapbuilder.h"
 #include "stream_tracker.h"
 
 using namespace tcpdump;
+using namespace tcpdump_test;
 
 namespace {
 
@@ -175,6 +180,35 @@ SCENARIO( "The Stream Tracker stops numbering at its cap", "[stream_tracker]" )
             REQUIRE( tracker.track( packetOver( std::nullopt, "10.0.0.2", 0, 0 ) ).id
                      == kNoStream );
             REQUIRE_FALSE( tracker.limitReached() );
+        }
+    }
+}
+
+SCENARIO( "IPv6 conversations pair both directions in compressed form", "[stream_tracker]" )
+{
+    GIVEN( "a TCP segment from fe80::1 to fe80::2 and its reply" )
+    {
+        auto request = ipv6( IpProtoTcp, tcp( 40000, 22 ) );
+        auto reply = ipv6( IpProtoTcp, tcp( 22, 40000 ) );
+        std::swap_ranges( reply.begin() + 8, reply.begin() + 24, reply.begin() + 24 );
+        const auto result
+            = parse( pcapOf( { eth( EthertypeIpv6, request ), eth( EthertypeIpv6, reply ) } ) );
+        REQUIRE( result.packets.size() == 2 );
+
+        THEN( "both directions share one stream and each address counts both packets" )
+        {
+            REQUIRE( result.packets[ 0 ].srcIp == "fe80::1" );
+            REQUIRE( result.packets[ 1 ].srcIp == "fe80::2" );
+
+            StreamTracker tracker;
+            CaptureStats stats;
+            for ( const auto& pkt : result.packets ) {
+                REQUIRE( tracker.track( pkt ).id == 0 );
+                stats.add( pkt );
+            }
+            REQUIRE( stats.endpointPackets.size() == 2 );
+            REQUIRE( stats.endpointPackets.at( "fe80::1" ) == 2 );
+            REQUIRE( stats.endpointPackets.at( "fe80::2" ) == 2 );
         }
     }
 }

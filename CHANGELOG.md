@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **IPv6 addresses in RFC 5952 form.** IPv6 addresses are shown as Wireshark
+  shows them: lowercase hexadecimal, the longest run of zero groups (the
+  leftmost on a tie, never a single group) collapsed to `::`, so `fe80::1`
+  instead of `fe80:0:0:0:0:0:0:1` and `::` for the unspecified address. This
+  applies to the Source and Destination columns and the Capture Summary
+  endpoints alike. A SOCKS5 IPv6 destination puts the address in brackets
+  before its port, `[2001:db8::1]:443`, as RFC 5952 recommends.
 - **The Length column shows the length on the wire.** The column, headed
   `Length` instead of `Len`, shows how long the packet was on the wire, as
   Wireshark's Length column does, instead of how many bytes were captured:
