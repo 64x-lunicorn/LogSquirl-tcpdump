@@ -241,8 +241,16 @@ bool CaptureCursor::reopen( const CapturePart& part, const ReaderCheckpoint* che
     if ( checkpoint ) {
         // The checkpoint was taken as the capture was read: the headers it
         // names lie elsewhere in a later file of it, copied ahead of its records.
-        reader_->relocateHeaders(
-            [ &part ]( uint64_t offset ) { return part.fileOffset( offset ).value_or( offset ); } );
+        if ( !reader_->relocateHeaders(
+                 [ &part ]( uint64_t offset ) { return part.fileOffset( offset ); } ) ) {
+            // Bytes at the offset the capture had them would be another
+            // record's: an export would copy them as the headers.
+            close();
+            error_ = QStringLiteral( "%1 lacks the headers its packets need: it has changed "
+                                     "since it was written." )
+                         .arg( QFileInfo( part.path ).fileName() );
+            return false;
+        }
     }
     readerPath_ = part.path;
     readerPacketsBefore_ = part.packetsBefore;

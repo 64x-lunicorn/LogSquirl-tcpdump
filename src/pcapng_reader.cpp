@@ -427,13 +427,22 @@ bool PcapngReader::resume( const ReaderCheckpoint& checkpoint )
     return true;
 }
 
-void PcapngReader::relocateHeaders( const std::function<uint64_t( uint64_t )>& where )
+bool PcapngReader::relocateHeaders(
+    const std::function<std::optional<uint64_t>( uint64_t )>& where )
 {
-    sectionHeader_.offset = where( sectionHeader_.offset );
+    const auto relocate = [ & ]( RecordSpan& span ) {
+        const auto here = where( span.offset );
+        if ( here ) {
+            span.offset = *here;
+        }
+        return here.has_value();
+    };
+    bool all = relocate( sectionHeader_ );
     for ( auto& iface : interfaces_ ) {
-        iface.block.offset = where( iface.block.offset );
+        all = relocate( iface.block ) && all;
     }
     sectionState_.reset(); // the next checkpoint keeps them as they are now
+    return all;
 }
 
 CaptureHeaders PcapngReader::headers() const
