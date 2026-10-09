@@ -173,7 +173,7 @@ LiveChoice loadLiveChoice( const QString& configDir )
     const QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
     choice.source = file.value( kLiveSourceKey ).toString();
     choice.device = file.value( kLiveDeviceKey ).toString();
-    choice.interface = file.value( kLiveInterfaceKey ).toString();
+    choice.networkInterface = file.value( kLiveInterfaceKey ).toString();
     choice.filter = file.value( kLiveFilterKey ).toString();
     choice.snaplen = static_cast<int>( readCount( file, kLiveSnaplenKey, kDefaultSnaplen, 1,
                                                   static_cast<size_t>( kMaxSnaplen ) ) );
@@ -188,7 +188,7 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
     QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
     file.setValue( kLiveSourceKey, choice.source );
     file.setValue( kLiveDeviceKey, choice.device );
-    file.setValue( kLiveInterfaceKey, choice.interface );
+    file.setValue( kLiveInterfaceKey, choice.networkInterface );
     file.setValue( kLiveFilterKey, choice.filter );
     file.setValue( kLiveSnaplenKey, choice.snaplen );
     file.sync();

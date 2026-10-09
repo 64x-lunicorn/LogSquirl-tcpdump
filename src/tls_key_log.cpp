@@ -163,7 +163,7 @@ void KeyLogFile::read()
         return;
     }
     error_.clear();
-    const auto size = std::min( file.size(), kMaxBytes );
+    const auto size = std::min<int64_t>( file.size(), kMaxBytes );
     if ( size <= offset_ || !file.seek( offset_ ) ) {
         return;
     }

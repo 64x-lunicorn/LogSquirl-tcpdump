@@ -861,7 +861,8 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
              QString( "Live capture from %1, interface %2, filter \"%3\", "
                       "snaplen %4" )
                  .arg( kind->displayName(),
-                       choice.interface.isEmpty() ? "(default)" : choice.interface, choice.filter )
+                       choice.networkInterface.isEmpty() ? "(default)" : choice.networkInterface,
+                       choice.filter )
                  .arg( choice.snaplen ) );
     return true;
 }

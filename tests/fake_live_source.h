@@ -138,7 +138,8 @@ public:
     }
     tcpdump::ProcessCommand command( const tcpdump::LiveChoice& choice ) const override
     {
-        QStringList arguments{ "-i", choice.interface, "-s", QString::number( choice.snaplen ) };
+        QStringList arguments{ "-i", choice.networkInterface, "-s",
+                               QString::number( choice.snaplen ) };
         if ( !choice.filter.isEmpty() ) {
             arguments << choice.filter; // one argument, as a real kind passes it
         }
