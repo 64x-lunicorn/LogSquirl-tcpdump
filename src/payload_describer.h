@@ -43,6 +43,10 @@ namespace tcpdump {
 struct PayloadDescription {
     std::string label;       ///< Protocol name ("TLS", "HTTP", …); empty: unknown.
     std::string description; ///< One line about the payload; empty: nothing to say.
+    /// The label is only what the ports suggest, not what a detector
+    /// recognised in the payload: a guess, which does not stick to the
+    /// stream (StreamLabels).
+    bool guessed = false;
 };
 
 /**

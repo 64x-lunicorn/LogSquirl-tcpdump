@@ -609,6 +609,7 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
     }
     if ( proto ) {
         result.label = proto;
+        result.guessed = true;
     }
     result.description = payloadPreview( p.data, p.len );
     return result;

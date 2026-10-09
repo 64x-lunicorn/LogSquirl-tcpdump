@@ -26,6 +26,7 @@
 
 #include "capture_reader.h"
 #include "packet_formatter.h"
+#include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
 #include "tempdirs.h"
@@ -243,6 +244,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
+    StreamLabels labels;
     PacketFormatter formatter( reader.precision() );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
@@ -257,9 +259,10 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
-        stats.add( pkt );
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
+        labels.apply( pkt, stream );
+        stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }

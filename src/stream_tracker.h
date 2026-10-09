@@ -78,13 +78,17 @@ struct TcpDirection {
  * What is known about one stream, kept for as long as the capture is read.
  *
  * Modules that follow a conversation over its packets (the TCP Analysis,
- * …) keep their fields here, and read and update them through the Stream
- * the tracker hands out.  Every byte added here is paid once per numbered
- * stream, see kMaxStreams.
+ * the Stream Labels, …) keep their fields here, and read and update them
+ * through the Stream the tracker hands out.  Every byte added here is paid
+ * once per numbered stream, see kMaxStreams.  A new TCP connection on the
+ * same addresses and ports (see analyseTcp()) starts from a fresh state.
  */
 struct StreamState {
     /// TCP only: each direction, indexed by Stream::direction.
     TcpDirection tcp[ 2 ];
+    /// The protocol a detector recognised on the stream, as StreamLabels
+    /// numbers it; 0 while none has.
+    uint8_t label = 0;
 };
 
 /// The stream a packet belongs to.

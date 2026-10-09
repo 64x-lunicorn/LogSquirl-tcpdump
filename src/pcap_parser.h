@@ -108,6 +108,9 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 /// The transport a packet's payload was carried by.
 enum class Transport { Tcp, Udp };
 
+/// Separates the transport summary in Info from the description of the payload.
+constexpr const char* kDescriptionSeparator = " | ";
+
 /// Represents a single parsed network packet.
 struct PacketRecord {
     uint32_t number = 0; ///< 1-based packet index
@@ -151,6 +154,11 @@ struct PacketRecord {
     uint8_t tcpHeaderLen = 0;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
+
+    /// A detector of the Payload Describer recognised the TCP or UDP payload
+    /// and named protocol, rather than the ports suggesting it.  Such a
+    /// label sticks to the packet's stream (StreamLabels).
+    bool protocolRecognised = false;
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")

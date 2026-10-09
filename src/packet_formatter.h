@@ -119,7 +119,8 @@ private:
  *
  * Times are shown at the finest precision of the packets, streams numbered
  * by a Stream Tracker of their own, TCP numbers shown relative by the TCP
- * Analysis.
+ * Analysis, and the protocol a stream was recognised by kept for its later
+ * packets by Stream Labels of their own.
  *
  * @param packets  Parsed packet records.
  * @return Vector of formatted text lines.

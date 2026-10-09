@@ -100,7 +100,9 @@ tried: each transport has a table of detectors, all of the same shape
 - The port hint, the last entry of both tables, names well-known ports
   (SSH, FTP, ADB, etc.) and previews the payload: printable ASCII, other
   bytes as dots, at most 200 characters; predominantly binary payloads get
-  none
+  none. Its label is a guess (`PayloadDescription::guessed`), which the
+  parser passes on as `PacketRecord::protocolRecognised` false, so that it
+  does not stick to the stream (Stream Labels, below)
 
 Everything that turns payload bytes into text lives here: escaping bytes
 outside printable ASCII as `\xNN`, the first-line cut (120 bytes), the
@@ -174,7 +176,8 @@ packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
 pointer. Every field added costs memory once per numbered stream: today a
 `TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
-so 64 bytes per stream, some 64 MB at the stream cap. A UDP stream pays
+and the stream's label, one byte, so 72 bytes per stream with the
+alignment, some 72 MB at the stream cap. A UDP stream pays
 for it too, as both transports share `StreamState`.
 
 `analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
@@ -195,6 +198,32 @@ parser writes the numbers as they are with `formatTcpNumbers()`, and the
 TCP Analysis replaces that text; segments of a stream past the stream cap
 have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
 `tcpAck` stay the raw values.
+
+#### Stream Labels (`stream_labels.h/cpp`)
+The describer names one payload at a time, and the parser asks it before
+the packet's stream is known, so on its own the Protocol column changes
+within a conversation: a 443 stream alternates between `TLS` (a segment
+that starts a record) and `HTTPS` (the port's guess for one in the middle
+of a record), an HTTP body on port 8080 shows `HTTP-Alt`, on port 3000
+`TCP`. `StreamLabels` (pure C++), owned by the Converter next to the Stream
+Tracker, puts that right after the fact: `apply()` runs on every packet
+after the Stream Tracker and the TCP Analysis. The first label a detector
+recognised on a stream (`PacketRecord::protocolRecognised`) sticks to it;
+a later packet that no detector recognises takes it, and if it carries
+payload, its description becomes `Continuation`, followed by the preview
+when there is one (`Continuation: {"status": "ok"}`). A packet a detector
+recognises keeps its own label (a TLS record in an HTTP CONNECT tunnel is
+`TLS`), and the stream keeps the first. A port's guess never sticks, so the
+handshake before the first payload keeps it, and a later content match
+overrides it. UDP streams behave the same.
+
+The describer is not moved behind the tracker for this: it looks at the
+payload bytes, which only the parser has, and lives on as a pure function
+of payload and ports that is tested without a stream. The label is kept as
+one byte of `StreamState`, a number into the capture's table of labels seen
+(at most 255 stick). A new TCP connection on the same addresses and ports
+(a SYN that the TCP Analysis finds starts one) resets the stream's whole
+`StreamState`, the label with it.
 
 #### TCP analysis markers
 `analyseTcp()` then classifies the segment as Wireshark's TCP analysis does
@@ -286,7 +315,9 @@ and the shared CI cannot yet pack it into the release archive (#58);
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream and the TCP Analysis show its numbers relative and mark it, counts its markers, formats the packet and appends its line to a new output file,
+its stream and the TCP Analysis show its numbers relative and mark it,
+lets the Stream Labels name it by its stream's protocol, counts its markers
+and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
@@ -382,7 +413,9 @@ difference. The pcapng corpus capture, `interfaces.pcapng`, is made up byte
 for byte by `tests/make_pcapng_corpus.py`, and `tcp-analysis.pcap`, a TCP
 connection that shows every analysis marker, by
 `tests/make_tcp_analysis_corpus.py`: a real lossy capture would need root
-for a lossy link (tc netem) and differ from run to run. The pcapng unit tests build their
+for a lossy link (tc netem) and differ from run to run. `stream-labels.pcap`,
+streams whose protocol sticks and a new connection that forgets it, is
+written by `tests/make_stream_labels_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in

@@ -102,7 +102,8 @@ private:
  * number of its first segment or the acknowledgement number of the other
  * direction's, whichever comes first, so that it too starts at 1.  A SYN
  * with a sequence number other than its direction's base starts a new
- * connection on the same addresses and ports, which counts afresh.  The
+ * connection on the same addresses and ports, which counts afresh: the
+ * stream's whole state is reset, its label (StreamLabels) too.  The
  * numbers wrap around at 2^32 with the sequence numbers.  Without the ACK
  * flag the acknowledgement field means nothing and Ack=0 is shown.
  *

@@ -588,3 +588,25 @@ SCENARIO( "Len is taken from the IP header when the capture was cut at the snapl
         }
     }
 }
+
+SCENARIO( "A packet tells whether a detector recognised its protocol", "[pcap_parser]" )
+{
+    GIVEN( "an HTTP request, a payload on a hinted port and a segment without payload" )
+    {
+        const auto result = parse( pcapOf( {
+            eth( EthertypeIpv4,
+                 ipv4( IpProtoTcp, tcp( 40000, 8080, text( "GET / HTTP/1.1\r\n" ) ) ) ),
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 8080, text( "body" ) ) ) ),
+            eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 40000, 40001 ) ) ),
+        } ) );
+        REQUIRE( result.packets.size() == 3 );
+
+        THEN( "only the request's protocol was recognised" )
+        {
+            REQUIRE( result.packets[ 0 ].protocolRecognised );
+            REQUIRE( result.packets[ 1 ].protocol == "HTTP-Alt" );
+            REQUIRE_FALSE( result.packets[ 1 ].protocolRecognised );
+            REQUIRE_FALSE( result.packets[ 2 ].protocolRecognised );
+        }
+    }
+}

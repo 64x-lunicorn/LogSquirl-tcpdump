@@ -64,9 +64,6 @@ std::string formatMac( const uint8_t* p )
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
-/// Separates the transport summary from the description of the payload.
-constexpr const char* kDescriptionSeparator = " | ";
-
 /// Ask the describer what the @p len captured payload bytes are: its label
 /// becomes the packet's protocol, its description follows the transport
 /// summary in @p oss.
@@ -77,6 +74,7 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
     if ( !described.label.empty() ) {
         pkt.protocol = described.label;
     }
+    pkt.protocolRecognised = !described.label.empty() && !described.guessed;
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
     }

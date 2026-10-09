@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The protocol sticks to the stream.** Once a detector has recognised a
+  TCP or UDP stream's protocol (TLS, HTTP, SOCKS, NMEA, …), its later
+  packets carry the same label in the Protocol column, also those no
+  detector recognises: a segment in the middle of a TLS record or an HTTP
+  body, a bare ACK. A segment with payload is described as `Continuation`,
+  followed by its preview when it has text. A port's guess (`HTTPS`,
+  `HTTP-Alt`) never sticks and gives way to the first recognised protocol;
+  a new connection on the same addresses and ports starts without a label.
+  So filtering by Protocol finds the whole conversation, and the protocol
+  breakdown in the Capture Summary counts it whole. Each numbered stream
+  takes 8 bytes more memory.
 - **TCP analysis markers.** TCP lines carry Wireshark's expert markers at
   the start of Info, in its words and order: `[TCP Retransmission]`,
   `[TCP Fast Retransmission]`, `[TCP Spurious Retransmission]`,

@@ -223,17 +223,21 @@ std::string markerText( const TcpMarkers& markers, uint32_t dupAckFrame, uint32_
     return text;
 }
 
+/// Whether a segment with @p flags and sequence number @p seq, sent in the
+/// direction @p fwd, starts a new connection on the same addresses and
+/// ports: a SYN without ACK whose sequence number is not its direction's
+/// base.  A retransmitted SYN is not one.
+bool startsNewConnection( const TcpDirection& fwd, uint8_t flags, uint32_t seq )
+{
+    return ( flags & kTcpSyn ) && !( flags & kTcpAck ) && fwd.baseSeqSet && fwd.baseSeq != seq;
+}
+
 /// Learn the bases of @p fwd, the packet's direction, and @p rev, the other
 /// one, from a segment with sequence number @p seq and acknowledgement
 /// number @p ack, if not known yet.  Unsigned arithmetic wraps at 2^32.
 void learnBases( TcpDirection& fwd, TcpDirection& rev, uint8_t flags, uint32_t seq, uint32_t ack )
 {
     const bool syn = ( flags & kTcpSyn ) != 0;
-    if ( syn && !( flags & kTcpAck ) && fwd.baseSeqSet && fwd.baseSeq != seq ) {
-        // A new connection on the same addresses and ports.
-        fwd = {};
-        rev = {};
-    }
     if ( !fwd.baseSeqSet ) {
         fwd.baseSeq = syn ? seq : seq - 1;
         fwd.baseSeqSet = true;
@@ -285,6 +289,11 @@ TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
     }
     auto& fwd = stream.state->tcp[ stream.direction ];
     auto& rev = stream.state->tcp[ 1 - stream.direction ];
+    if ( startsNewConnection( fwd, pkt.tcpFlags, pkt.tcpSeq ) ) {
+        // Everything known of the old connection is forgotten, both
+        // directions and what other modules keep of the stream.
+        *stream.state = StreamState();
+    }
     learnBases( fwd, rev, pkt.tcpFlags, pkt.tcpSeq, pkt.tcpAck );
 
     const auto seq = pkt.tcpSeq - fwd.baseSeq;

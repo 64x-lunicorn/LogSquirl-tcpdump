@@ -399,3 +399,38 @@ SCENARIO( "A description never breaks the one-line-per-packet format", "[describ
         }
     }
 }
+
+SCENARIO( "The describer tells a recognised label from a port's guess", "[describer]" )
+{
+    GIVEN( "a payload a detector recognises" )
+    {
+        THEN( "its label is no guess, also on a port with a hint" )
+        {
+            const auto described
+                = describe( Transport::Tcp, text( "GET / HTTP/1.1\r\n" ), 50000, 8080 );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE_FALSE( described.guessed );
+        }
+    }
+
+    GIVEN( "a payload no detector recognises, on a port with a hint" )
+    {
+        THEN( "the port's label is a guess" )
+        {
+            const auto described = describe( Transport::Tcp, text( "{\"id\": 1}" ), 50000, 8080 );
+            REQUIRE( described.label == "HTTP-Alt" );
+            REQUIRE( described.guessed );
+        }
+    }
+
+    GIVEN( "a payload no detector recognises, on ports without a hint" )
+    {
+        THEN( "there is no label to guess" )
+        {
+            const auto described
+                = describe( Transport::Tcp, text( "{\"id\": 1}" ), kUnknownSrc, kUnknownDst );
+            REQUIRE( described.label.empty() );
+            REQUIRE_FALSE( described.guessed );
+        }
+    }
+}
