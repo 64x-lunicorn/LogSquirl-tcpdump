@@ -523,6 +523,27 @@ SCENARIO( "A message split over segments is described once, where it completes",
         }
     }
 
+    GIVEN( "a SOME/IP notification split across 2 segments, on a port told by its header" )
+    {
+        Bytes message{ 0x12, 0x34, 0x80, 0x01 };
+        putBE32( message, 8 + 600 );
+        message = message + Bytes{ 0x00, 0x10, 0x00, 0x01, 0x01, 0x01, 0x02, 0x00 }
+                  + Bytes( 600, 0x5A );
+        const auto lines
+            = converted( handshake( 30501 ) + cut( message, { 100 }, kClientIsn + 1, 30501 ) );
+
+        THEN( "it is described whole on the second" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "SOME/IP" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].protocol == "SOME/IP" );
+            REQUIRE( lines[ 4 ].description
+                     == "Service 0x1234 Event 0x8001 Client 0x0010 Session 0x0001 NOTIFICATION, "
+                        "600 bytes"
+                            + reassembledFrom( 2 ) );
+        }
+    }
+
     GIVEN( "whole records and the start of another in one segment" )
     {
         const auto first = tlsRecord( 0x17, Bytes( 100, 0xAA ) );

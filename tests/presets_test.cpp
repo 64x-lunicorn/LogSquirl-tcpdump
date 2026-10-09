@@ -421,6 +421,11 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TCP SYN/FIN", { 17, 18 } },
               { "TCP handshakes", { 17, 18 } },
           } },
+        { "someip.txt",
+          {
+              { "TCP SYN/FIN", { 11, 12, 17, 18 } },
+              { "TCP handshakes", { 11, 12, 17, 18 } },
+          } },
         { "reassembly.txt",
           {
               // the late, retransmitted and overlapping segments, the lost one

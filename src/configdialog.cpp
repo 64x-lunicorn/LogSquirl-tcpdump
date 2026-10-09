@@ -29,10 +29,12 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -110,6 +112,37 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     capsNote->setWordWrap( true );
     advancedLayout->addRow( capsNote );
 
+    // SOME/IP
+    someIpPorts_ = new QLineEdit;
+    someIpPorts_->setObjectName( "someIpPorts" );
+    someIpPorts_->setPlaceholderText( QStringLiteral( "30501, 30502" ) );
+    someIpNamesFile_ = new QLineEdit;
+    someIpNamesFile_->setObjectName( "someIpNamesFile" );
+    someIpNamesFile_->setPlaceholderText( QStringLiteral( "None" ) );
+    auto* browse = new QPushButton( QStringLiteral( "Browse\u2026" ) );
+    browse->setObjectName( "someIpNamesBrowse" );
+    connect( browse, &QPushButton::clicked, this, [ this ] {
+        const auto path = QFileDialog::getOpenFileName(
+            this, QStringLiteral( "SOME/IP Name Table" ), someIpNamesFile_->text() );
+        if ( !path.isEmpty() ) {
+            someIpNamesFile_->setText( path );
+        }
+    } );
+    auto* namesRow = new QHBoxLayout;
+    namesRow->addWidget( someIpNamesFile_ );
+    namesRow->addWidget( browse );
+    auto* someIp = new QGroupBox( QStringLiteral( "SOME/IP" ) );
+    auto* someIpLayout = new QFormLayout( someIp );
+    someIpLayout->addRow( QStringLiteral( "Also on ports:" ), someIpPorts_ );
+    someIpLayout->addRow( QStringLiteral( "Name table:" ), namesRow );
+    auto* someIpNote = new QLabel( QStringLiteral(
+        "<small>SOME/IP is read on port 30490, on these ports, and on any other where its "
+        "header fits. The name table names services, methods and eventgroups, one per line: "
+        "<tt>service 0x1234 Navigation</tt>, <tt>method 0x1234 0x0001 GetRoute</tt>, "
+        "<tt>eventgroup 0x1234 0x0010 Route</tt>.</small>" ) );
+    someIpNote->setWordWrap( true );
+    someIpLayout->addRow( someIpNote );
+
     auto* note = new QLabel( QStringLiteral(
         "The options apply to the next capture you open: an open capture keeps the options "
         "it was converted with." ) );
@@ -127,6 +160,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     auto* layout = new QVBoxLayout( this );
     layout->addWidget( columns );
     layout->addWidget( previewBox );
+    layout->addWidget( someIp );
     layout->addWidget( advanced );
     layout->addWidget( note );
     layout->addWidget( buttons );
@@ -145,6 +179,8 @@ void ConfigDialog::showOptions( const ConversionOptions& options )
     maxStreams_->setValue( static_cast<int>( options.maxStreams ) );
     maxEndpoints_->setValue( static_cast<int>( options.maxEndpoints ) );
     reassemblyMegabytes_->setValue( static_cast<int>( options.reassemblyMegabytes ) );
+    someIpPorts_->setText( QString::fromStdString( someIpPortsText( options.someIpPorts ) ) );
+    someIpNamesFile_->setText( options.someIpNamesFile );
 }
 
 ConversionOptions ConfigDialog::options() const
@@ -157,6 +193,8 @@ ConversionOptions ConfigDialog::options() const
     options.maxStreams = static_cast<size_t>( maxStreams_->value() );
     options.maxEndpoints = static_cast<size_t>( maxEndpoints_->value() );
     options.reassemblyMegabytes = static_cast<size_t>( reassemblyMegabytes_->value() );
+    options.someIpPorts = parseSomeIpPorts( someIpPorts_->text().toStdString() );
+    options.someIpNamesFile = someIpNamesFile_->text().trimmed();
     return options;
 }
 

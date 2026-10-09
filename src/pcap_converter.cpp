@@ -29,6 +29,7 @@
 #include "media_expectations.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
+#include "someip.h"
 #include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
@@ -107,6 +108,15 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
                                  const std::function<void( int )>& progress,
                                  const ConversionOptions& options )
 {
+    // How SOME/IP is read, for the Payload Describer on this thread.
+    SomeIpConfig someIp;
+    someIp.ports = options.someIpPorts;
+    if ( !options.someIpNamesFile.isEmpty() ) {
+        someIp.names = loadSomeIpNames( QFile::encodeName( options.someIpNamesFile ).toStdString() )
+                           .value_or( SomeIpNames{} );
+    }
+    const SomeIpScope someIpScope( someIp );
+
     QFile input;
     QString inputError;
     if ( !openRegularFile( inputPath, input, inputError ) ) {

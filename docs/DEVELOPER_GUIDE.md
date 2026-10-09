@@ -257,15 +257,16 @@ and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
 over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
 `describe_socks.cpp`, `describe_mqtt.cpp` (with a connection on another
 port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
-`describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`) and
-`describe_nmea.cpp`. They share the internal
+`describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`),
+`describe_someip.cpp` (SOME/IP and SOME/IP-SD, and the name table of
+`someip.h`) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, TLS, SIP (before HTTP, whose `OPTIONS` it shares),
-  HTTP, the HTTP/2 preface, MQTT (on port 1883, or behind a CONNECT), NMEA
-  0183, SOCKS4/5 (only messages of the exact shape, in the right
+- TCP: DNS on port 53, SOME/IP on its ports, TLS, SIP (before HTTP, whose
+  `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
+  behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
 - HTTP: a request is its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
@@ -325,8 +326,42 @@ of the detectors and in-stream passes the tables use.
   is MQTT and gives its stream `StreamCue::MqttConnect`: the stream's later
   segments that no detector recognised are described from their first
   kPayloadHeadBytes in `describeMqttInStream()`. MQTT over TLS (8883) is TLS
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, SIP, QUIC, then
-  NMEA and the port hint
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, SOME/IP on its
+  ports, SIP, SOME/IP by its header, QUIC, then NMEA and the port hint
+- SOME/IP (AUTOSAR PRS_SOMEIPProtocol), on port 30490 (SOME/IP-SD's) and
+  the ports the user configured (`someIpPorts`) whatever the header says,
+  elsewhere only if every message's header keeps to the rules (protocol
+  version 1, a known message type, a return code up to 0x5E and E_OK in a
+  request or notification, a Length that covers the header) and the
+  messages fill the datagram or segment exactly. Labelled `SOME/IP`, or
+  `SOME/IP-SD` when the first message is SD's (service 0xFFFF, method
+  0x8100). Every message is named, up to eight, joined by `; `, then `…`:
+  `Service 0x1234 Method 0x0001 Client 0x0010 Session 0x0001 REQUEST, 4
+  bytes`; an ID with its high bit set is an `Event`; the message types as
+  AUTOSAR names them (`REQUEST_NO_RETURN`, `NOTIFICATION`, `RESPONSE`,
+  `ERROR`, the `_ACK` and `TP_` ones), an error with its return code as
+  Wireshark names it (`ERROR (E_NOT_OK)`), as is any code other than E_OK;
+  a SOME/IP-TP segment adds `Offset=… More`; the magic cookies of a TCP
+  connection are `Magic Cookie`. The name table (`SomeIpNames`) adds names
+  in parentheses, `Service 0x1234 (Navigation)`, escaped. A message cut at
+  the snaplen ends in ` …`; one whose header breaks the rules (on a port
+  that takes it anyway) is `[Malformed Packet]`, with `Protocol Version n`
+  if that is what is wrong. Over TCP, `frameSomeIpMessage()` frames a
+  message by its Length for the TCP Reassembly (by the header alone, up to
+  1 MiB, off SOME/IP's ports)
+- SOME/IP-SD (PRS_SOMEIPServiceDiscoveryProtocol): the entries, as
+  Wireshark names them, `Find Service 0x1234`, `Offer Service 0x1234
+  Instance 0x0001 v1.0 TTL=3`, `Stop Offer Service`, `Subscribe
+  Eventgroup 0x1234 Instance 0x0001 Eventgroup 0x0010 v1 TTL=3`, `Stop
+  Subscribe Eventgroup`, `Subscribe Eventgroup Ack` and `Nack` (TTL 0), an
+  instance or version of "any" left out, followed by the options of their
+  two runs in parentheses: endpoints as `192.0.2.10:30501 UDP`,
+  `[2001:db8::1]:30501 TCP`, with ` multicast` or ` SD` for those types,
+  `Configuration`, `Load Balancing`, `Option 0xNN`. At most 64 entries and
+  64 options are read, eight entries and four options of one named, then
+  `…`; the entries array must hold whole entries, an option index within
+  the options, else `[Malformed Packet]`; an endpoint option of the wrong
+  length is `[Malformed option]`; an SD message cut short ends in ` …`
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
   code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
@@ -677,7 +712,9 @@ one, as over TCP it is mandatory), an HTTP/1.x header section up to its
 empty line (the body is not held: a segment of body begins no message and
 is described as it is), an MQTT control packet by its Remaining Length (port
 1883 only: a framer sees no stream state, so MQTT behind a CONNECT on
-another port is not reassembled). A framer answers more
+another port is not reassembled), a SOME/IP message by its Length (8 + its
+value; on SOME/IP's ports whatever the header says, elsewhere if the header
+keeps to the rules and the message is at most 1 MiB). A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -907,9 +944,16 @@ the result becomes Cancelled and the output is removed.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`,
 the payload preview (`preview`, `previewChars`), the stream and endpoint
-caps and the TCP Reassembly's memory (`reassemblyMegabytes`). The defaults write the text of `tests/corpus`; any other choice is
-the payload preview (`preview`, `previewChars`) and the stream and endpoint
-caps; besides, `checkpointInterval`, which tests lower. The defaults write the text of `tests/corpus`; any other choice is
+caps, the TCP Reassembly's memory (`reassemblyMegabytes`), the ports SOME/IP
+is read on besides 30490 (`someIpPorts`) and its name table
+(`someIpNamesFile`); besides, `checkpointInterval`, which tests lower. The
+Converter loads the name table (`loadSomeIpNames()`, `someip.h`; a file that
+cannot be read names nothing) and puts the ports and names in place for the
+Payload Describer on its thread with a `SomeIpScope` while it converts (a
+`thread_local` pointer, as the describer's signature stays the same for
+every protocol). The Packet Panel dissects without one: there, SOME/IP is
+read on 30490 and by its header, without names. The
+defaults write the text of `tests/corpus`; any other choice is
 tested by deriving its text from that one, not by more committed text.
 
 While it converts, the Converter notes every packet in a `CaptureIndex`
@@ -927,7 +971,10 @@ read through a `FileSource` (`capture_file.h/cpp`), which the
 (`get_config_dir`, part of the API since 26.10). A value that is missing or
 not one reads as its default, a number out of range as the nearest allowed:
 the preview 1 to `kMaxPreviewChars`, the caps `kMinCap` to ten times their
-default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB). `ConfigDialog` shows and edits the options and says that an open
+default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB); the
+SOME/IP ports are a list (`someIpPorts`, read by `parseSomeIpPorts()`: 1 to
+65535, at most `kMaxSomeIpPorts`, anything else skipped), the name table a
+path (`someIpNamesFile`). `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
@@ -1195,7 +1242,12 @@ discovery to teardown, PPP in HDLC-like framing and Cisco HDLC on three
 interfaces, by `tests/make_link_layers_corpus.py`; `reassembly.pcap`, a
 ClientHello over 3 segments, HTTP split in its headers, a DNS-over-TCP answer
 over 2 segments, segments out of order, retransmitted, overlapping and
-lost, by `tests/make_reassembly_corpus.py`. The link layers' tests,
+lost, by `tests/make_reassembly_corpus.py`; `someip.pcap`, SOME/IP-SD offers,
+finds, subscriptions with their acks and a nack and a withdrawn offer,
+SOME/IP over UDP on a port only its headers tell (request, response,
+several notifications in a datagram, an error, a SOME/IP-TP segment), over
+TCP with a magic cookie and a response over two segments, and a message
+with a wrong protocol version, by `tests/make_someip_corpus.py`. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

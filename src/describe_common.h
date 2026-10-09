@@ -269,6 +269,19 @@ bool isMqttConnect( const uint8_t* payload, size_t len );
 std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
                        std::vector<SipCall>& calls );
 
+/// SOME/IP messages (describe_someip.cpp): their description, and whether
+/// the first is a SOME/IP-SD message.
+struct SomeIpDescription {
+    std::string text;
+    bool sd = false;
+};
+/// The SOME/IP messages a payload begins with, every one of a datagram or
+/// segment.  With @p heuristic, only if every message is whole and keeps
+/// to the rules of the header, and they fill the payload; otherwise empty.
+SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
+/// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
+bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
+
 // ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
 
 /// The payload begins with an RTCP header: version 2, an RTCP packet type.
@@ -298,6 +311,9 @@ std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
 std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len );
 /// An MQTT control packet, by its Remaining Length (describe_mqtt.cpp).
 std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
+/// A SOME/IP message, by its Length: on SOME/IP's port whatever its header
+/// says, elsewhere only if the header keeps to its rules (describe_someip.cpp).
+std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bool onSomeIpPort );
 
 // ── In the stream ────────────────────────────────────────────────────────
 

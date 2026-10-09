@@ -33,6 +33,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
@@ -88,6 +89,8 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
         options.maxStreams = 1234;
         options.maxEndpoints = 567;
         options.reassemblyMegabytes = 8;
+        options.someIpPorts = { 30501, 30502 };
+        options.someIpNamesFile = QStringLiteral( "/data/someip-names.txt" );
         ConfigDialog dialog( options );
 
         THEN( "its controls show them" )
@@ -101,6 +104,9 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE( child<QSpinBox>( dialog, "maxStreams" )->value() == 1234 );
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->value() == 567 );
             REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->value() == 8 );
+            REQUIRE( child<QLineEdit>( dialog, "someIpPorts" )->text() == "30501, 30502" );
+            REQUIRE( child<QLineEdit>( dialog, "someIpNamesFile" )->text()
+                     == "/data/someip-names.txt" );
             REQUIRE( dialog.options().layout.timeColumns == TimeColumns::AbsoluteOnly );
             REQUIRE( dialog.options().previewChars == 50 );
         }
@@ -121,6 +127,8 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             child<QSpinBox>( dialog, "maxStreams" )->setValue( 2000 );
             child<QSpinBox>( dialog, "maxEndpoints" )->setValue( 3000 );
             child<QSpinBox>( dialog, "reassemblyMegabytes" )->setValue( 128 );
+            child<QLineEdit>( dialog, "someIpPorts" )->setText( "40000 40001, nope" );
+            child<QLineEdit>( dialog, "someIpNamesFile" )->setText( " /data/other.txt " );
 
             THEN( "the dialog's options are the new ones" )
             {
@@ -133,6 +141,8 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( edited.maxStreams == 2000 );
                 REQUIRE( edited.maxEndpoints == 3000 );
                 REQUIRE( edited.reassemblyMegabytes == 128 );
+                REQUIRE( edited.someIpPorts == std::vector<uint16_t>{ 40000, 40001 } );
+                REQUIRE( edited.someIpNamesFile == "/data/other.txt" );
             }
         }
 
@@ -153,6 +163,8 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( restored.maxStreams == defaults.maxStreams );
                 REQUIRE( restored.maxEndpoints == defaults.maxEndpoints );
                 REQUIRE( restored.reassemblyMegabytes == defaults.reassemblyMegabytes );
+                REQUIRE( restored.someIpPorts.empty() );
+                REQUIRE( restored.someIpNamesFile.isEmpty() );
             }
         }
     }

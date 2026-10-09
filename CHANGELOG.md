@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
-  DNS-over-TCP message, a SIP message (by its Content-Length) or an MQTT
-  control packet on port 1883 (by its Remaining Length) that spans TCP
-  segments is described once, on the
+  DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
+  control packet on port 1883 (by its Remaining Length) or a SOME/IP
+  message (by its Length) that spans TCP segments is described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
   example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
@@ -116,6 +116,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is forgotten after 5 minutes without a packet, with its call's BYE, or
   for a newer one past the cap. Before, SIP was named by its port alone,
   with a preview of its text, and RTP was plain UDP.
+- **SOME/IP and SOME/IP-SD described.** SOME/IP over UDP and TCP, on
+  port 30490, on the ports configured for it (the new option *SOME/IP
+  also on ports*) and on any other where every message's header keeps to
+  the rules and the messages fill the payload, is labelled `SOME/IP` and
+  every message of a datagram or segment is named, up to eight: `Service
+  0x1234 Method 0x0001 Client 0x0010 Session 0x0001 REQUEST, 4 bytes`,
+  `Event 0x8001 … NOTIFICATION`, `ERROR (E_NOT_OK)`, the SOME/IP-TP
+  segments with their offset, the magic cookies of a TCP connection.
+  SOME/IP-SD messages are labelled `SOME/IP-SD` and list their entries as
+  Wireshark names them, with their endpoint options: `Find Service
+  0x1234`, `Offer Service 0x1234 Instance 0x0001 v1.0 TTL=3
+  (192.0.2.10:30501 UDP, 192.0.2.10:30502 TCP)`, `Stop Offer Service`,
+  `Subscribe Eventgroup`, `Subscribe Eventgroup Ack/Nack`, IPv4 and IPv6,
+  unicast, multicast and SD endpoints. An optional name table (the new
+  option *SOME/IP name table*, a text file of `service`, `method`, `event`
+  and `eventgroup` lines) adds names: `Service 0x1234 (Navigation)`. Every
+  length is checked against the captured bytes, entries and options are
+  capped at 64, a cut message ends in `…`, a malformed one is `[Malformed
+  Packet]`; over TCP a message that spans segments is reassembled by its
+  Length. A new synthetic capture, `tests/corpus/someip.pcap` (written by
+  `tests/make_someip_corpus.py`), shows each case.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section, a

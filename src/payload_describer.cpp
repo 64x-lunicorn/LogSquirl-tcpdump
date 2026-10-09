@@ -187,6 +187,25 @@ std::optional<PayloadDescription> sipMessages( const Payload& p )
     return result;
 }
 
+/// SOME/IP on SOME/IP-SD's port or one configured for it, whatever the
+/// header says; labelled by its first message.
+std::optional<PayloadDescription> someIpOnPort( const Payload& p )
+{
+    if ( !onSomeIpPort( p.srcPort, p.dstPort ) ) {
+        return std::nullopt;
+    }
+    const auto found = detectSomeIp( p.data, p.len, false );
+    return describedOnPort( found.sd ? "SOME/IP-SD" : "SOME/IP", found.text );
+}
+
+/// SOME/IP on any other port, if every message's header keeps to the
+/// rules and the messages fill the payload.
+std::optional<PayloadDescription> someIpByHeader( const Payload& p )
+{
+    const auto found = detectSomeIp( p.data, p.len, true );
+    return describedIfAny( found.sd ? "SOME/IP-SD" : "SOME/IP", found.text );
+}
+
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
     return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
@@ -217,8 +236,9 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 
 /// The TCP detectors, in the order they are tried.
 constexpr Detector kTcpDetectors[]
-    = { dnsOverTcpMessage, tlsRecord,    sipMessages,  httpMessage,       http2Preface,
-        mqttPackets,       nmeaSentence, socksMessage, portHintAndPreview };
+    = { dnsOverTcpMessage, someIpOnPort, tlsRecord,         sipMessages,
+        httpMessage,       http2Preface, mqttPackets,       someIpByHeader,
+        nmeaSentence,      socksMessage, portHintAndPreview };
 
 // ── Framing a TCP stream's messages ──────────────────────────────────────
 
@@ -255,6 +275,11 @@ std::optional<size_t> httpFrame( const Payload& p )
     return frameHttpHeader( p.data, p.len );
 }
 
+std::optional<size_t> someIpFrame( const Payload& p )
+{
+    return frameSomeIpMessage( p.data, p.len, onSomeIpPort( p.srcPort, p.dstPort ) );
+}
+
 /// MQTT on port 1883 only: the framer cannot know of a CONNECT before.
 std::optional<size_t> mqttFrame( const Payload& p )
 {
@@ -264,11 +289,12 @@ std::optional<size_t> mqttFrame( const Payload& p )
     return frameMqttPacket( p.data, p.len );
 }
 
-/// The TCP framers, in the order of their detectors in kTcpDetectors; a
+/// The TCP framers, in the order of their detectors in kTcpDetectors (SOME/IP
+/// on its port aside, which frames by its header too); a
 /// protocol is numbered by its place, from 1 (MessageExtent::framer).
 constexpr Framer kTcpFramers[] = {
     { "DNS", dnsOverTcpFrame }, { "TLS", tlsFrame },   { "SIP", sipFrame },
-    { "HTTP", httpFrame },      { "MQTT", mqttFrame },
+    { "HTTP", httpFrame },      { "MQTT", mqttFrame }, { "SOME/IP", someIpFrame },
 };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
@@ -322,8 +348,8 @@ std::optional<PayloadDescription> dhcpv6Packet( const Payload& p )
 
 /// The UDP detectors, in the order they are tried: ports first, then content.
 constexpr Detector kUdpDetectors[]
-    = { dnsMessage,  ssdpMessage, ntpPacket,    dhcpPacket,        dhcpv6Packet,
-        sipMessages, quicPacket,  nmeaSentence, portHintAndPreview };
+    = { dnsMessage,  ssdpMessage,    ntpPacket,  dhcpPacket,   dhcpv6Packet,      someIpOnPort,
+        sipMessages, someIpByHeader, quicPacket, nmeaSentence, portHintAndPreview };
 
 /// The detectors of a transport, as a range.
 template <size_t N>

@@ -30,6 +30,7 @@
 #pragma once
 
 #include "pcap_converter.h"
+#include "someip.h"
 
 #include <QString>
 
