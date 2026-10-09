@@ -38,8 +38,6 @@
 
 #pragma once
 
-#include "payload_describer.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -106,6 +104,9 @@ constexpr uint8_t IpProtoUdp = 17;
 constexpr uint8_t IpProtoIcmpv6 = 58;
 
 // ── Parsed packet ────────────────────────────────────────────────────────
+
+/// The transport a packet's payload was carried by.
+enum class Transport { Tcp, Udp };
 
 /// Represents a single parsed network packet.
 struct PacketRecord {
