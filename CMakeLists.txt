@@ -44,6 +44,8 @@ add_library(logsquirl_tcpdump SHARED
     src/protocol_names.cpp
     src/packet_formatter.cpp
     src/stream_tracker.cpp
+    src/stream_labels.cpp
+    src/tcp_analysis.cpp
     src/capture_stats.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp

@@ -46,6 +46,10 @@ namespace tcpdump {
 struct PayloadDescription {
     std::string label;       ///< Protocol name ("TLS", "HTTP", …); empty: unknown.
     std::string description; ///< One line about the payload; empty: nothing to say.
+    /// The label is only what the ports suggest, not what a detector
+    /// recognised in the payload: a guess, which does not stick to the
+    /// stream (StreamLabels).
+    bool guessed = false;
 };
 
 /**
@@ -62,7 +66,9 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
 /**
  * Describe @p pkt again with what its @p stream has shown so far, and
  * remember in the stream's state what later packets need: run on every
- * packet, in capture order, after the Stream Tracker.
+ * packet, in capture order, after the Stream Tracker and the TCP Analysis
+ * (which forgets the state of a TCP stream's old connection), before the
+ * Stream Labels.
  *
  * A UDP stream that carried a QUIC long header is a QUIC connection: its
  * short header packets, which carry no version, are labelled QUIC and
@@ -70,7 +76,9 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
  * the other side's last long header said.  A TCP stream that began with
  * the HTTP/2 connection preface is an HTTP/2 connection: its segments that
  * begin with frame headers are labelled HTTP2 and described as
- * "HEADERS[1], DATA[1]", each frame's type and stream.  Packets of other
+ * "HEADERS[1], DATA[1]", each frame's type and stream.  A packet so
+ * labelled counts as recognised (PacketRecord::protocolRecognised), so its
+ * label sticks to the stream.  Packets of other
  * streams, and of streams past the stream cap, which have no state, are
  * left as they are.
  */

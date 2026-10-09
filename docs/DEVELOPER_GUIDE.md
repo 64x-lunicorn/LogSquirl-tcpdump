@@ -65,7 +65,7 @@ to the same dissection (`dissectPacket()`):
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
 
 #### The reader seam
-Everything past the reader (Converter, Stream Tracker, Packet Formatter, `CaptureStats`)
+Everything past the reader (Converter, Stream Tracker, TCP Analysis, Packet Formatter, `CaptureStats`)
 sees a capture through `CaptureReader` only, never through a file header.
 Each `PacketRecord` carries the link-layer type it was dissected with
 (`linkType`) and the resolution its timestamp was recorded in
@@ -172,14 +172,19 @@ tried: each transport has a table of detectors, all of the same shape
   and labels the stream's later segments `HTTP2` when they begin with
   frame headers, naming the frames whose header lies in the kept bytes.
   A segment that begins inside a frame (its first bytes no plausible
-  header) is left as it is: segments are not reassembled. For this the parser keeps the
+  header) is not described again: segments are not reassembled, and the
+  Stream Labels make it an `HTTP2` `Continuation`. A packet labelled here
+  counts as recognised (`PacketRecord::protocolRecognised`), so its label
+  sticks to the stream. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
 - The port hint, the last entry of both tables, names the service of a
   well-known port from the name tables, the source port's before the
   destination port's, and previews the payload: printable ASCII, other
   bytes as dots, at most 200 characters; predominantly binary payloads get
-  none
+  none. Its label is a guess (`PayloadDescription::guessed`), which the
+  parser passes on as `PacketRecord::protocolRecognised` false, so that it
+  does not stick to the stream (Stream Labels, below)
 
 Everything that turns payload bytes into text lives here: escaping bytes
 outside printable ASCII as `\xNN`, the first-line cut (120 bytes), the
@@ -199,7 +204,7 @@ name what nothing dissects; a detector that recognises a protocol by its
 port or content (DNS, NTP, DHCP) runs before the port hint and decides
 alone, and may take its name from the table to keep the two in step.
 
-### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
 Time, Source, Destination, Protocol, Length, Info. Both times have 6
@@ -263,19 +268,142 @@ together, are numbered; packets of later ones show `?`.
 a number), and the packet's direction in it, 0 or 1 (the same for every
 packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
-pointer. Every field added costs memory once per numbered stream: today
+pointer. Every field added costs memory once per numbered stream: today a
+`TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
 the Payload Describer's `QuicConnection` (whether a QUIC long header was
-seen, and the connection ID length of each direction), 3 bytes, and
-whether a TCP stream began with the HTTP/2 preface, 1 byte.
+seen, and the connection ID length of each direction), 3 bytes, whether a
+TCP stream began with the HTTP/2 preface, 1 byte, and the stream's label,
+1 byte, so 72 bytes per stream with the alignment, some 72 MB at the stream
+cap. A UDP stream pays for the TCP fields too and a TCP stream for the QUIC
+ones, as both transports share `StreamState`.
+
+`analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
+by the Converter after the Stream Tracker, shows a TCP segment's `Seq=` and
+`Ack=` relative to the start of each direction, as Wireshark does by
+default. It follows Wireshark's rules: a SYN's sequence number is its
+direction's base, so the SYN shows `Seq=0`; a direction whose SYN was not
+captured takes one less than its first number seen as base (its first
+segment's sequence number, or the other direction's first acknowledgement
+number, whichever comes first), so a stream captured mid-way starts at
+`Seq=1 Ack=1` like one after its handshake. Without the ACK flag the
+acknowledgement field means nothing and `Ack=0` is shown. The arithmetic
+is modulo 2^32, so the numbers go on counting when the sequence numbers
+wrap. A SYN without ACK whose sequence number differs from its direction's
+base is a new connection on the same addresses and ports: both bases are
+forgotten and counting starts afresh; a retransmitted SYN keeps them. The
+parser writes the numbers as they are with `formatTcpNumbers()`, and the
+TCP Analysis replaces that text; segments of a stream past the stream cap
+have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
+`tcpAck` stay the raw values.
+
+`Win=` is the calculated window, as in Wireshark: the window field shifted
+by the sender's window scale (RFC 7323). The parser reads the shift count of
+a header's window scale option into `PacketRecord::tcpWindowShift`, walking
+the options as Wireshark does (a NOP is one byte; the end of options, or an
+option whose length is bogus or runs past the header, ends the walk). A
+SYN's option, its shift capped at 14 as RFC 7323 and Wireshark do, is kept
+in its direction's `TcpDirection::windowScale` (the shift plus one, 0 when
+the SYN carried none), and the TCP Analysis shifts the window of every later
+segment of a direction by its scale once both directions' SYNs carried the
+option; a SYN's own window is never scaled. Otherwise `Win=` is the window
+as sent: one side did not offer scaling, so neither scales, as RFC 7323
+says; or the handshake was not captured, which Wireshark shows as window
+size scaling factor -1 (unknown) and leaves unscaled with its default
+preferences, as here. Unlike Wireshark, which scales a side's windows by its
+SYN's shift when only that SYN was captured (and the SYN-ACK was not), this
+needs both. A new connection on the same addresses and ports forgets the
+scale with the rest of the stream's state. `PacketRecord::tcpWindow` stays
+the raw value.
+
+#### Stream Labels (`stream_labels.h/cpp`)
+The describer names one payload at a time, and the parser asks it before
+the packet's stream is known, so on its own the Protocol column changes
+within a conversation: a 443 stream alternates between `TLS` (a segment
+that starts a record) and `HTTPS` (the port's guess for one in the middle
+of a record), an HTTP body on port 8080 shows `HTTP-Alt`, on port 3000
+`TCP`. `StreamLabels` (pure C++), owned by the Converter next to the Stream
+Tracker, puts that right after the fact: `apply()` runs on every packet
+after the Stream Tracker, the TCP Analysis and `describeInStream()`, so the
+QUIC short headers and HTTP/2 frames that only their stream makes
+recognisable count as recognised too. The first label a detector
+recognised on a stream (`PacketRecord::protocolRecognised`) sticks to it;
+a later packet that no detector recognises takes it, and if it carries
+payload, its description becomes `Continuation`, followed by the preview
+when there is one (`Continuation: {"status": "ok"}`). A packet a detector
+recognises keeps its own label (a TLS record in an HTTP CONNECT tunnel is
+`TLS`), and the stream keeps the first. A port's guess never sticks, so the
+handshake before the first payload keeps it, and a later content match
+overrides it. UDP streams behave the same.
+
+The describer is not moved behind the tracker for this: it looks at the
+payload bytes, which only the parser has, and lives on as a pure function
+of payload and ports that is tested without a stream. The label is kept as
+one byte of `StreamState`, a number into the capture's table of labels seen
+(at most 255 stick). A new TCP connection on the same addresses and ports
+(a SYN that the TCP Analysis finds starts one) resets the stream's whole
+`StreamState`, the label with it.
+
+#### TCP analysis markers
+`analyseTcp()` then classifies the segment as Wireshark's TCP analysis does
+(`tcp_analyze_sequence_number()` in `epan/dissectors/packet-tcp.c`, with its
+default preferences), puts its markers at the start of Info in Wireshark's
+words, `[TCP Retransmission] 80 → 54321 [ACK, PSH] Seq=1 …`, and returns
+them as `TcpMarkers`, which the Converter counts in `CaptureStats` for the
+Capture Summary. Several markers stand in Wireshark's order, the last one
+it adds first: `[TCP ZeroWindow] [TCP Keep-Alive] …`. Each direction keeps
+what Wireshark's `tcp_flow_t` holds for the rules below, in relative numbers
+(0 meaning none seen yet, as in Wireshark) and with windows scaled, as `Win=`
+shows them, so that a window of 0 or a change of it is the same in Info and
+in the rules: the next sequence number expected
+(`nextSeq`, one past the highest sent, a SYN and a FIN counting one), the
+last acknowledgement number, window and time, the number of duplicate ACKs
+and the packet they count from, and whether the last segment was a
+keep-alive or a zero window probe. With `fwd` the segment's direction,
+`rev` the other one and `len` its payload on the wire:
+
+| Marker | Rule |
+|--------|------|
+| `[TCP ZeroWindowProbe]` | `len` 1 at `fwd.nextSeq` while `rev`'s window is 0; it skips the ACK checks below and does not advance `nextSeq` |
+| `[TCP ZeroWindow]` | window 0, no SYN, FIN or RST |
+| `[TCP Previous segment not captured]` | sequence number beyond `fwd.nextSeq`, no RST |
+| `[TCP Keep-Alive]` | `len` 0 or 1 at `fwd.nextSeq - 1`, no SYN, FIN or RST |
+| `[TCP Window Update]` | `len` 0, a new window other than 0, same sequence number (`fwd.nextSeq`) and ACK as before |
+| `[TCP Keep-Alive ACK]` | `len` 0, the same window (not 0), sequence number and ACK as before, after a keep-alive from `rev` |
+| `[TCP ZeroWindowProbeAck]` | `len` 0, window still 0, the same sequence number and ACK (or one more) as before, after a probe from `rev` |
+| `[TCP Dup ACK n#m]` | `len` 0, the same window (not 0), sequence number and ACK as before: the `m`th repeat of the ACK of packet `n` |
+| `[TCP Spurious Retransmission]` | data (not a keep-alive) that `rev` has acknowledged already |
+| `[TCP Fast Retransmission]` | data, a SYN or a FIN before `fwd.nextSeq`, at the sequence number `rev` last acknowledged, after at least two duplicate ACKs of it, within 20 ms of `rev`'s last segment |
+| `[TCP Out-Of-Order]` | otherwise before `fwd.nextSeq`, within 3 ms of `rev`'s last segment, and not ending where `fwd.nextSeq` is (or ending there after a segment without data had raised it) |
+| `[TCP Retransmission]` | otherwise before `fwd.nextSeq` |
+
+Segments with a bogus TCP header length are not analysed, as in Wireshark.
+The limits, all where Wireshark keeps more than a few integers per
+direction:
+
+- No list of the segments sent is kept, so a segment within 3 ms of the
+  other direction's last one that was captured before is still called
+  out of order, where Wireshark knows it was seen and calls it a
+  retransmission; and `[TCP ACKed unseen segment]` is not shown.
+- The 3 ms out-of-order limit is Wireshark's for a connection whose
+  round-trip time it does not know; Wireshark takes the handshake's when it
+  saw the handshake, this analysis never does.
+- SACK blocks are not read, so there is no SACK-based fast
+  retransmission; `[TCP Window Full]` is not shown.
+- `[TCP Port numbers reused]`, `[TCP Retransmission]`'s RTO and the other
+  fields Wireshark shows in its tree only are left out.
+- As in Wireshark, sequence numbers compare modulo 2^32, and a segment
+  captured before the other direction's last one (a capture that needs
+  reordering) counts as 0 ms after it.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet
-(among them the packets cut at the snaplen),
+(among them the packets cut at the snaplen and the TCP segments per
+analysis marker kind),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
 
 Memory therefore grows with the conversations and addresses in a capture,
-not with its size, and both are capped (at roughly 100 MB and 10 MB), so a
+not with its size, and both are capped (at roughly 150 MB and 10 MB), so a
 port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
@@ -299,14 +427,18 @@ A change of the packet line's columns is a change of the format too:
 line's columns, split at runs of spaces, and reads every timestamp with a
 port of LogSquirl's `TimestampReader` rules
 (`src/logformat/src/timestampreader.cpp` in the host). The plugin cannot
-register the format with LogSquirl (#50), nor tell whether it is installed,
-and the shared CI cannot yet pack it into the release archive (#58);
-`cmake --install` puts it next to the library.
+register the format with LogSquirl (#50), nor tell whether it is installed.
+The release archive carries it next to the library (`package_files` in
+`.github/plugin-ci.json`, LogSquirl-Plugin-CI v1.1.0), and `cmake --install`
+puts it there too.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
-its stream and the Payload Describer look at it again in its stream, formats the packet and appends its line to a new output file,
+its stream and the TCP Analysis show its numbers relative and mark it,
+lets the Payload Describer look at it again in its stream and the Stream
+Labels name it by its stream's protocol, counts its markers
+and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
@@ -332,8 +464,9 @@ Qt UI that provides:
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints, the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
-  (comma-separated when there are several), and the number of packets cut
-  at the snaplen when there are any
+  (comma-separated when there are several), the number of packets cut
+  at the snaplen when there are any, and under *Analysis* the TCP segments
+  per analysis marker kind when there are any
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
@@ -405,8 +538,49 @@ for byte by `tests/make_pcapng_corpus.py`; `tls.pcap` holds real TLS 1.3 and
 1.2 handshakes, which `tests/make_tls_corpus.py` runs through Python's
 `ssl` module in memory and frames in made-up TCP segments; `dns.pcap`
 holds DNS over UDP and TCP, encoded with name compression by
-`tests/make_dns_corpus.py`; the pcapng unit tests build their
+`tests/make_dns_corpus.py`; `tcp-analysis.pcap`, a TCP
+connection that shows every analysis marker, is written by
+`tests/make_tcp_analysis_corpus.py`: a real lossy capture would need root
+for a lossy link (tc netem) and differ from run to run. `stream-labels.pcap`,
+streams whose protocol sticks and a new connection that forgets it, is
+written by `tests/make_stream_labels_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in
 `tests/fakehost.h`.
+
+### Real captures
+
+Captures taken from a real network stack let the Parser, the Payload
+Describer and the Packet Formatter see what tcpdump actually writes: TCP
+options, a real handshake and teardown, real TLS records, a real DNS exchange,
+real ICMP. They are **never committed**: `tests/make_real_corpus.sh` records
+them into `tests/corpus/local`, which git ignores, and the corpus and Log
+Format tests convert and read them too when that directory exists. They hold
+only traffic between local processes on the loopback interface (`lo0` on
+macOS, link type `NULL`; `lo` on Linux), 127.0.0.1 to 127.0.0.1, and are each
+a few KB. The script needs root for tcpdump:
+
+```bash
+sudo bash tests/make_real_corpus.sh              # all four
+sudo bash tests/make_real_corpus.sh real-ping    # just the named ones
+TCPDUMP_UPDATE_CORPUS=1 build/tests/logsquirl_tcpdump_tests "[corpus]"
+```
+
+Each capture is one `tcpdump -i lo0 -s <snaplen> -U -w <name>.pcap
+<filter>` around one client command against a server the script starts:
+
+| Capture | Filter | Snaplen | Server | Client |
+|---------|--------|---------|--------|--------|
+| `real-http` | `tcp port 8080` | 262144 | `python3 -m http.server 8080 --bind 127.0.0.1` serving a one-line `index.html` | `curl -s -o /dev/null http://127.0.0.1:8080/index.html` |
+| `real-dns` | `udp port 53` | 262144 | a dozen lines of Python on 127.0.0.1:53 answering every query with `192.0.2.80` | `dig +tries=1 +time=2 +noedns @127.0.0.1 example.org A` |
+| `real-ping` | `icmp` | 262144 | the kernel | `ping -c 2 127.0.0.1` |
+| `real-tls` | `tcp port 8443` | 512 | `openssl s_server -quiet -accept 127.0.0.1:8443 -www` with a throw-away self-signed certificate for `localhost` | `curl -sk --resolve localhost:8443:127.0.0.1 -o /dev/null https://localhost:8443/` |
+
+The TLS capture keeps 512 bytes of each packet, enough for the whole
+ClientHello with its SNI and ALPN; larger records are cut. The macOS firewall
+in stealth mode drops echo requests even on loopback; the script switches
+stealth mode off while it records `real-ping` and back on afterwards. A
+recording keeps the time, client ports and sequence numbers of its moment, so
+a new recording changes every line of its text: review it against
+`tcpdump -nn -vv -r tests/corpus/local/<name>.pcap` before relying on it.

@@ -1798,6 +1798,7 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
     }
     if ( proto ) {
         result.label = proto;
+        result.guessed = true;
     }
     result.description = payloadPreview( p.data, p.len );
     return result;
@@ -1903,10 +1904,12 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
 namespace {
 
 /// Put @p description in place of the one in @p pkt's Info, and @p label
-/// in place of its protocol.
+/// in place of its protocol: recognised from its content, so the label
+/// sticks to the stream (StreamLabels).
 void redescribe( PacketRecord& pkt, const char* label, const std::string& description )
 {
     pkt.protocol = label;
+    pkt.protocolRecognised = true;
     pkt.info = pkt.info.substr( 0, pkt.info.find( kDescriptionSeparator ) ) + kDescriptionSeparator
                + description;
 }

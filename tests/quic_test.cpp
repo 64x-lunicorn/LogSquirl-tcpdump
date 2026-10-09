@@ -378,6 +378,7 @@ SCENARIO( "Short header packets are QUIC in a stream that began as QUIC", "[quic
         THEN( "each short header is QUIC, its connection ID as long as the other side chose" )
         {
             REQUIRE( packets[ 2 ].protocol == "QUIC" );
+            REQUIRE( packets[ 2 ].protocolRecognised );
             REQUIRE(
                 packets[ 2 ].info
                 == "50443 \xe2\x86\x92 443 Len=49 | Protected Payload, DCID=5e5e5e5e5e5e5e5e" );

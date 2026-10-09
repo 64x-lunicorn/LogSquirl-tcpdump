@@ -48,17 +48,69 @@ struct QuicConnection {
 };
 
 /**
+ * What is known about one direction of a TCP stream: what the TCP Analysis
+ * needs to show relative numbers and to classify the next segment, the
+ * fields of Wireshark's tcp_flow_t it uses, and no list of segments.
+ * Sequence and acknowledgement numbers are relative, so that 0 means none
+ * seen yet, as in Wireshark.  32 bytes.
+ */
+struct TcpDirection {
+    /// The sequence number relative numbers count from: the initial one,
+    /// or one less than the first seen when the SYN was not captured.
+    uint32_t baseSeq = 0;
+    /// One past the highest sequence number sent (a SYN and a FIN count
+    /// one); 0 before the first segment.
+    uint32_t nextSeq = 0;
+    /// The acknowledgement number of the last segment; 0 without one.
+    uint32_t lastAck = 0;
+    /// The packet number of the last segment that changed lastAck, which
+    /// the duplicate ACKs of it count from.
+    uint32_t lastNonDupAck = 0;
+    /// The time of the last segment, in nanoseconds since the epoch,
+    /// modulo 2^64.
+    uint64_t lastTime = 0;
+    uint32_t dupAcks = 0; ///< Duplicate ACKs of lastAck so far.
+    /// The window of the last segment, as sent; shifted by windowScale when
+    /// kWindowScaled is set.
+    uint16_t window = 0;
+    /// The window scale option of this direction's SYN: its shift count,
+    /// at most 14, plus one (4 bits); 0 while no SYN with the option was seen.
+    uint8_t windowScale = 0;
+    /// What is known and what the last segment was: TcpDirection::k… bits.
+    uint8_t flags = 0;
+
+    static constexpr uint8_t kBaseSeqSet = 0x01;      ///< A segment has told baseSeq.
+    static constexpr uint8_t kWindowKnown = 0x02;     ///< window is set.
+    static constexpr uint8_t kWindowScaled = 0x04;    ///< window is to be shifted.
+    static constexpr uint8_t kKeepAlive = 0x08;       ///< The last segment was a keep-alive.
+    static constexpr uint8_t kZeroWindowProbe = 0x10; ///< The last segment was a probe.
+    /// The last segment that raised nextSeq carried data.
+    static constexpr uint8_t kAdvancedWithData = 0x20;
+    /// The bits each segment sets afresh; kBaseSeqSet stays.
+    static constexpr uint8_t kSegmentFlags
+        = kWindowKnown | kWindowScaled | kKeepAlive | kZeroWindowProbe | kAdvancedWithData;
+};
+
+/**
  * What is known about one stream, kept for as long as the capture is read.
  *
- * Modules that follow a conversation over its packets (the Payload
- * Describer, …) keep their fields here, and read and update them through
- * the Stream the tracker hands out.  Every byte added here is paid once per
- * numbered stream, see kMaxStreams.
+ * Modules that follow a conversation over its packets (the TCP Analysis,
+ * the Payload Describer, the Stream Labels, …) keep their fields here, and
+ * read and update them through the Stream the tracker hands out.  Every
+ * byte added here is paid once per numbered stream, see kMaxStreams: 72
+ * bytes today, the two TcpDirections and the alignment taking most.  A new
+ * TCP connection on the same addresses and ports (see analyseTcp()) starts
+ * from a fresh state, its HTTP/2 flag and label with it.
  */
 struct StreamState {
+    /// TCP only: each direction, indexed by Stream::direction.
+    TcpDirection tcp[ 2 ];
     QuicConnection quic; ///< UDP only.
     /// TCP only: the stream began with the HTTP/2 connection preface.
     bool http2 = false;
+    /// The protocol a detector recognised on the stream, as StreamLabels
+    /// numbers it; 0 while none has.
+    uint8_t label = 0;
 };
 
 /// The stream a packet belongs to.
@@ -89,7 +141,7 @@ struct Stream {
  */
 class StreamTracker {
 public:
-    /// Conversations numbered by default: some 100 MB of memory at most.
+    /// Conversations numbered by default: some 150 MB of memory at most.
     static constexpr size_t kMaxStreams = 1000000;
 
     explicit StreamTracker( size_t maxStreams = kMaxStreams )

@@ -28,6 +28,8 @@
 
 namespace tcpdump {
 
+static_assert( sizeof( StreamState ) <= 72, "A stream's state is paid once per numbered stream" );
+
 Stream StreamTracker::track( const PacketRecord& pkt )
 {
     if ( !pkt.transport ) {

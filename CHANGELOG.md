@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The TCP window is shown scaled.** Once both SYNs of a connection
+  carried the window scale option, `Win=` is the window shifted by the
+  sender's scale, as Wireshark calculates it (`Win=408320` rather than
+  `Win=6380` on macOS, which scales by 64), and the TCP analysis markers
+  compare that window, as Wireshark's do. SYNs, connections where only
+  one side offered scaling and streams captured after their handshake, whose
+  scale is unknown, show the window as sent, as Wireshark does. A shift
+  beyond 14 counts as 14. No more memory per stream.
+
 ### Added
 - **HTTP names the host, the content type and length.** A request line
   shows the Host header's value before its path, `GET
@@ -64,6 +74,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   length, shows as `LLC`. The port hint learns SNMP, Syslog, TFTP,
   STUN/TURN, WireGuard, LLMNR, NBNS, DHCPv6, RTSP, LDAP, SMB, RDP, VNC,
   Kerberos and some sixty more services.
+- **The protocol sticks to the stream.** Once a detector has recognised a
+  TCP or UDP stream's protocol (TLS, HTTP, SOCKS, NMEA, …), its later
+  packets carry the same label in the Protocol column, also those no
+  detector recognises: a segment in the middle of a TLS record or an HTTP
+  body, a bare ACK. A segment with payload is described as `Continuation`,
+  followed by its preview when it has text. A port's guess (`HTTPS`,
+  `HTTP-Alt`) never sticks and gives way to the first recognised protocol;
+  a new connection on the same addresses and ports starts without a label.
+  So filtering by Protocol finds the whole conversation, and the protocol
+  breakdown in the Capture Summary counts it whole. Each numbered stream
+  takes 8 bytes more memory.
+- **TCP analysis markers.** TCP lines carry Wireshark's expert markers at
+  the start of Info, in its words and order: `[TCP Retransmission]`,
+  `[TCP Fast Retransmission]`, `[TCP Spurious Retransmission]`,
+  `[TCP Out-Of-Order]`, `[TCP Previous segment not captured]`,
+  `[TCP Dup ACK n#m]`, `[TCP Window Update]`, `[TCP ZeroWindow]`,
+  `[TCP ZeroWindowProbe]`, `[TCP ZeroWindowProbeAck]`, `[TCP Keep-Alive]`
+  and `[TCP Keep-Alive ACK]`, by Wireshark's rules as far as a few numbers
+  per direction of a stream allow (the Developer Guide lists the limits).
+  The Capture Summary counts the segments per marker under *Analysis*. Each
+  numbered stream takes 48 bytes more memory, some 48 MB at the stream cap.
+- **Relative TCP sequence and acknowledgement numbers.** `Seq=` and `Ack=`
+  in Info count from the start of each direction of a TCP stream, as
+  Wireshark shows them by default: the SYN is `Seq=0`, the first byte of
+  data `Seq=1`. A stream captured mid-way counts from its first segment seen
+  (`Seq=1 Ack=1`), the numbers go on counting when the sequence numbers wrap
+  past 2^32, and a new connection on the same addresses and ports starts
+  afresh. A segment without the ACK flag shows `Ack=0`. Streams past the
+  stream cap keep the numbers as they are.
 - **pcapng captures.** Files saved by Wireshark (its default format) or by
   macOS's `tcpdump -P` open like a pcap, in either byte order and with several
   sections. Each packet is dissected with the link type of the interface it
@@ -82,9 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field, the Δt column, *Go to timestamp*, time-range search limits and the
   Chart Panel's templates (packets per second, bytes over time); README's
   *Log Format* section says how. The first sidebar summary after the plugin
-  is loaded links to that section. The release archives do not carry the
-  file yet, as the shared CI cannot pack extra files (#58); `cmake --install`
-  installs it next to the library.
+  is loaded links to that section. The release archives carry the file next
+  to the library, as does `cmake --install`.
 - **Absolute UTC time column.** Every packet line shows the packet's
   wall-clock time in UTC, `2026-10-09 08:41:12.123456Z` (nine decimals for a
   nanosecond capture), in a `UTC Time` column before the relative `Time`, so

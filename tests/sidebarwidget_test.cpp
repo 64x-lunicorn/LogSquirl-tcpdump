@@ -567,3 +567,32 @@ SCENARIO( "the summary says what was cut", "[sidebar]" )
         }
     }
 }
+
+SCENARIO( "the summary lists the TCP analysis markers", "[sidebar]" )
+{
+    GIVEN( "a capture with retransmissions and duplicate ACKs" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 5000;
+        summary.tcpMarkers = { { "TCP Retransmission", 1200 }, { "TCP Dup ACK", 3 } };
+
+        THEN( "they are counted under Analysis, in the summary's order" )
+        {
+            const auto html = tcpdump::summaryHtml( "lossy.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>Analysis</b><br>" ) );
+            REQUIRE( html.contains(
+                QString( "TCP Retransmission: %1<br>" ).arg( QLocale().toString( 1200 ) ) ) );
+            REQUIRE( html.contains( "TCP Dup ACK: 3<br>" ) );
+            REQUIRE( html.indexOf( "TCP Retransmission" ) < html.indexOf( "TCP Dup ACK" ) );
+        }
+    }
+
+    GIVEN( "a capture without any" )
+    {
+        THEN( "there is no Analysis heading" )
+        {
+            const auto html = tcpdump::summaryHtml( "clean.pcap", 100, tcpdump::CaptureSummary() );
+            REQUIRE_FALSE( html.contains( "Analysis" ) );
+        }
+    }
+}

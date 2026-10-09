@@ -154,6 +154,13 @@ struct PacketRecord {
     uint32_t tcpAck = 0;
     uint8_t tcpFlags = 0;
     uint16_t tcpWindow = 0;
+    /// The TCP header's length in bytes as its data offset gives it; less
+    /// than 20 is bogus, and the segment's payload unknown.
+    uint8_t tcpHeaderLen = 0;
+    /// The shift count of the header's window scale option, as sent (RFC
+    /// 7323 allows at most 14); unset without the option.  Only a SYN's
+    /// counts, see analyseTcp().
+    std::optional<uint8_t> tcpWindowShift;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
 
@@ -162,6 +169,11 @@ struct PacketRecord {
     /// stream is known (describeInStream).
     std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
     size_t payloadHeadLen = 0;
+    /// A detector of the Payload Describer recognised the TCP or UDP payload
+    /// and named protocol, rather than the ports suggesting it, by the
+    /// payload alone or in its stream (describeInStream).  Such a label
+    /// sticks to the packet's stream (StreamLabels).
+    bool protocolRecognised = false;
 
     std::string protocol; ///< High-level protocol name ("TCP", "UDP", …)
     std::string info;     ///< One-line summary (e.g. "80 → 54321 [SYN] Seq=0")
@@ -174,6 +186,14 @@ struct PacketRecord {
  * @return String like "[SYN, ACK]", or "[none]" without flags, as tcpdump does.
  */
 std::string formatTcpFlags( uint8_t flags );
+
+/**
+ * Render a TCP segment's sequence and acknowledgement numbers and its window
+ * as Info shows them, after its flags.
+ *
+ * @return String like "Seq=1 Ack=1 Win=65535".
+ */
+std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window );
 
 /**
  * Dissect one captured packet into @p pkt, from its link-layer header up.

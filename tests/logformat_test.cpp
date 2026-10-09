@@ -37,6 +37,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -461,14 +462,18 @@ SCENARIO( "The Log Format defines one column per packet line field", "[logformat
 SCENARIO( "The Log Format reads every line of every corpus text", "[logformat][corpus]" )
 {
     const auto format = loadFormat();
-    const QDir dir( QStringLiteral( TCPDUMP_CORPUS_DIR ) );
-    const auto texts = dir.entryList( { "*.txt" }, QDir::Files, QDir::Name );
+    const QDir committed( QStringLiteral( TCPDUMP_CORPUS_DIR ) );
+    auto texts = committed.entryInfoList( { "*.txt" }, QDir::Files, QDir::Name );
     REQUIRE( texts.size() >= 2 );
+    // Real captures stay uncommitted in tests/corpus/local; their text is read too when present.
+    if ( const QDir local( committed.filePath( "local" ) ); local.exists() ) {
+        texts += local.entryInfoList( { "*.txt" }, QDir::Files, QDir::Name );
+    }
 
     for ( const auto& text : texts ) {
-        GIVEN( "the corpus text " + text.toStdString() )
+        GIVEN( "the corpus text " + text.fileName().toStdString() )
         {
-            QFile file( dir.filePath( text ) );
+            QFile file( text.filePath() );
             REQUIRE( file.open( QIODevice::ReadOnly | QIODevice::Text ) );
             auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
             if ( lines.last().isEmpty() ) {
