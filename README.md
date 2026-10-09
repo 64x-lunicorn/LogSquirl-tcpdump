@@ -146,7 +146,25 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    while converting, so no packet is kept in memory. A capture file that
    was changed, moved or removed after it was opened is reported, not
    misread; open it again. Needs LogSquirl ≥ 26.11
-11. With the [Log Format](#log-format) installed, switch to the table view
+11. To see what a conversation carried, as Wireshark's *Follow TCP/UDP
+   Stream* window does, select one of its packet lines and click **Follow
+   stream content** in the Packet panel, or choose **Plugins → tcpdump →
+   Follow stream content**. The panel's **Stream** tab shows the payload of
+   the whole TCP or UDP stream, the client's bytes (the side that sent the
+   first packet) in red and the server's in blue, as **Text** (UTF-8 kept,
+   other control bytes as `\xNN`) or **Hex** (Wireshark's dump, the
+   offset counted per direction, the server's lines indented), both
+   directions or one. TCP bytes are put in sequence order as the
+   reassembly orders them: a segment captured early waits for those before
+   it, retransmitted and overlapping bytes are shown once, and bytes the
+   capture lacks show as `[n bytes missing]`; UDP shows its datagrams, each
+   on its line. The stream is read again from the capture file in the
+   background, with a progress bar and **Cancel**; the first 1 MB is
+   shown, **Show more** reads 1 MB more each time, up to 16 MB, and a note
+   says when there is more. **Export…** writes the whole stream to a file,
+   however long: the raw bytes of the directions shown (gaps left out), or
+   the text as shown. Needs LogSquirl ≥ 26.11
+12. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Live capture
@@ -376,6 +394,7 @@ graph TD
     L -->|selected line's No.| P[Packet Panel]
     X --> P
     P -->|re-read from the nearest checkpoint| D
+    P -->|Follow stream content: the stream's packets, in order| D
 ```
 
 ## License

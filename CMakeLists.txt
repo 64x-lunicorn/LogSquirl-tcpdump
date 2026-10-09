@@ -59,6 +59,7 @@ add_library(logsquirl_tcpdump SHARED
     src/stream_tracker.cpp
     src/stream_labels.cpp
     src/tcp_analysis.cpp
+    src/byte_stream_orderer.cpp
     src/tcp_reassembly.cpp
     src/capture_stats.cpp
     src/capture_file.cpp
@@ -71,6 +72,8 @@ add_library(logsquirl_tcpdump SHARED
     src/live_capture.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
+    src/stream_content.cpp
+    src/stream_content_view.cpp
     src/regex_lab.cpp
 )
 

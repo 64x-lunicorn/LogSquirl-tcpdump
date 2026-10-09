@@ -203,6 +203,74 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
     }
 }
 
+SCENARIO( "The median initial round-trip time is kept in bounded memory", "[capture_stats]" )
+{
+    GIVEN( "fewer handshakes than are kept exactly" )
+    {
+        RunningMedian median;
+        for ( const uint64_t ns : { 30u, 10u, 20u, 40u } ) {
+            median.add( ns );
+        }
+
+        THEN( "the median is exact, the upper middle one of an even count" )
+        {
+            REQUIRE( median.exact() );
+            REQUIRE( median.count() == 4 );
+            REQUIRE( median.median() == 30u );
+        }
+    }
+
+    GIVEN( "no value" )
+    {
+        THEN( "there is no median" )
+        {
+            REQUIRE_FALSE( RunningMedian{}.median() );
+        }
+    }
+
+    GIVEN( "far more handshakes than are kept exactly, as a long or live capture has" )
+    {
+        RunningMedian median;
+        // 1 to 200000 microseconds, every value once, in a scrambled order.
+        constexpr uint64_t kCount = 200000;
+        for ( uint64_t i = 0; i < kCount; ++i ) {
+            median.add( ( ( i * 7919 ) % kCount + 1 ) * 1000 );
+        }
+
+        THEN( "the values are counted in a histogram of fixed size" )
+        {
+            REQUIRE_FALSE( median.exact() );
+            REQUIRE( median.count() == kCount );
+            REQUIRE( median.memoryBytes() <= RunningMedian::kMaxMemoryBytes );
+        }
+
+        THEN( "the median lies within the histogram's precision of the exact one" )
+        {
+            const double exact = 100001.0 * 1000;
+            REQUIRE( static_cast<double>( *median.median() )
+                     == Approx( exact ).epsilon( RunningMedian::kRelativePrecision ) );
+        }
+    }
+
+    GIVEN( "values beyond the exact buffer of zero and of the largest round-trip times" )
+    {
+        RunningMedian median;
+        for ( size_t i = 0; i <= RunningMedian::kExactValues; ++i ) {
+            median.add( i % 2 == 0 ? 0 : UINT64_MAX );
+        }
+
+        THEN( "both ends of the range are counted" )
+        {
+            REQUIRE( median.median() == 0u );
+            median.add( UINT64_MAX );
+            median.add( UINT64_MAX );
+            REQUIRE( static_cast<double>( *median.median() )
+                     == Approx( static_cast<double>( UINT64_MAX ) )
+                            .epsilon( RunningMedian::kRelativePrecision ) );
+        }
+    }
+}
+
 SCENARIO( "Packets captured shorter than on the wire are counted as cut", "[capture_stats]" )
 {
     CaptureStats stats;

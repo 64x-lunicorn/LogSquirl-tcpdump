@@ -39,6 +39,7 @@ add_executable(logsquirl_tcpdump_tests
     sidebarwidget_test.cpp
     packet_panel_test.cpp
     follow_stream_test.cpp
+    stream_content_test.cpp
     regex_lab_test.cpp
     corpus_test.cpp
     conversion_options_test.cpp
@@ -53,6 +54,7 @@ add_executable(logsquirl_tcpdump_tests
     stream_labels_test.cpp
     tcp_analysis_test.cpp
     tcp_options_test.cpp
+    byte_stream_orderer_test.cpp
     tcp_reassembly_test.cpp
     tunnels_test.cpp
     wire_bytes_test.cpp
@@ -102,6 +104,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_labels.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
+        "${CMAKE_SOURCE_DIR}/src/byte_stream_orderer.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_reassembly.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
@@ -114,6 +117,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_content.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_content_view.cpp"
         "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"
 )
 

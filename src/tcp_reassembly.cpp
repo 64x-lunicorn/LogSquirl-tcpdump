@@ -51,12 +51,6 @@ constexpr uint8_t letGoBit( unsigned direction )
     return static_cast<uint8_t>( 4u << direction );
 }
 
-/// How far sequence number @p a is after @p b, modulo 2^32: negative if before.
-int64_t seqAfter( uint32_t a, uint32_t b )
-{
-    return static_cast<int32_t>( a - b );
-}
-
 /// Where a run of bytes stops being whole messages.
 struct Walk {
     /// The end of the last whole message, or of the bytes if those after
@@ -149,7 +143,7 @@ void TcpReassembly::release( const Stream& stream, unsigned direction )
 void TcpReassembly::recharge( Entry& entry )
 {
     size_t cost = kEntryOverhead + entry.held.capacity();
-    for ( const auto& segment : entry.early ) {
+    for ( const auto& segment : entry.order.early() ) {
         cost += kEarlySegmentOverhead + segment.bytes.capacity();
     }
     used_ = used_ - entry.cost + cost;
@@ -175,10 +169,7 @@ bool TcpReassembly::makeRoom( size_t bytes, Key keep )
 
 bool TcpReassembly::reserve( Entry& entry, Key key, size_t extra )
 {
-    size_t early = 0;
-    for ( const auto& segment : entry.early ) {
-        early += segment.bytes.size();
-    }
+    const auto early = entry.order.earlyBytes();
     const auto needed = entry.held.size() + extra;
     if ( needed + early > streamLimit_ ) {
         return false;
@@ -205,52 +196,32 @@ bool TcpReassembly::append( Entry& entry, Key key, const uint8_t* data, size_t l
         return false;
     }
     entry.held.insert( entry.held.end(), data, data + len );
-    entry.nextSeq += static_cast<uint32_t>( len );
+    entry.order.advance( len );
     ++entry.segments;
     return true;
 }
 
 bool TcpReassembly::holdEarly( Entry& entry, Key key, uint32_t seq, ByteView payload )
 {
-    for ( const auto& segment : entry.early ) {
-        if ( segment.seq == seq && segment.bytes.size() >= payload.size ) {
-            return true; // the same bytes again
-        }
+    if ( entry.order.holds( seq, payload.size ) ) {
+        return true; // the same bytes again
     }
-    size_t early = 0;
-    for ( const auto& segment : entry.early ) {
-        early += segment.bytes.size();
-    }
-    if ( entry.early.size() >= kMaxEarlySegments
-         || entry.held.capacity() + early + payload.size > streamLimit_
+    if ( entry.order.early().size() >= kMaxEarlySegments
+         || entry.held.capacity() + entry.order.earlyBytes() + payload.size > streamLimit_
          || !makeRoom( kEarlySegmentOverhead + payload.size, key ) ) {
         return false;
     }
-    entry.early.push_back(
-        { seq, std::vector<uint8_t>( payload.data, payload.data + payload.size ) } );
+    entry.order.holdEarly( seq, payload );
     recharge( entry );
     return true;
 }
 
 bool TcpReassembly::appendEarly( Entry& entry, Key key )
 {
-    for ( bool found = true; found; ) {
-        found = false;
-        for ( auto it = entry.early.begin(); it != entry.early.end(); ++it ) {
-            const auto ahead = seqAfter( it->seq, entry.nextSeq );
-            if ( ahead > 0 ) {
-                continue;
-            }
-            auto segment = std::move( *it );
-            entry.early.erase( it );
-            const auto overlap = static_cast<size_t>( -ahead );
-            if ( overlap < segment.bytes.size()
-                 && !append( entry, key, segment.bytes.data() + overlap,
-                             segment.bytes.size() - overlap ) ) {
-                return false;
-            }
-            found = true;
-            break;
+    std::vector<uint8_t> next;
+    while ( entry.order.popNext( next ) ) {
+        if ( !append( entry, key, next.data(), next.size() ) ) {
+            return false;
         }
     }
     recharge( entry );
@@ -314,7 +285,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     entry.direction = stream.direction;
     entry.framer = first.framer;
     entry.label = first.label;
-    entry.nextSeq = pkt.tcpSeq + static_cast<uint32_t>( payload.size );
+    entry.order.reset( pkt.tcpSeq + static_cast<uint32_t>( payload.size ) );
     entry.segments = 1;
     entry.held.reserve( std::max( rest, expected ) );
     entry.held.assign( payload.data + walk.end, payload.data + payload.size );
@@ -347,20 +318,19 @@ ReassembledMessages TcpReassembly::segment( PacketRecord& pkt, const Stream& str
 
     if ( entry ) {
         lru_.splice( lru_.end(), lru_, entry->lru );
-        const auto ahead = seqAfter( pkt.tcpSeq, entry->nextSeq );
-        if ( ahead > 0 ) {
+        const auto place = entry->order.place( pkt.tcpSeq, payload.size );
+        if ( place.fit == ByteStreamOrderer::Fit::Early ) {
             if ( holdEarly( *entry, key, pkt.tcpSeq, payload ) ) {
                 redescribe( pkt, entry->label, kSegmentOfMessage );
                 return {};
             }
             release( key ); // too much came early: a gap, which this segment is after
         }
-        else if ( ahead + static_cast<int64_t>( payload.size ) <= 0 ) {
+        else if ( place.fit == ByteStreamOrderer::Fit::Taken ) {
             return {}; // bytes taken already: a retransmission
         }
         else {
-            const auto overlap = static_cast<size_t>( -ahead );
-            if ( !append( *entry, key, payload.data + overlap, payload.size - overlap )
+            if ( !append( *entry, key, payload.data + place.overlap, payload.size - place.overlap )
                  || !appendEarly( *entry, key ) ) {
                 release( key );
                 mark( pkt, kReassemblyLimit );
@@ -403,7 +373,7 @@ ReassembledMessages TcpReassembly::apply( PacketRecord& pkt, const Stream& strea
     if ( ( flags & kTcpAck ) && ( state.reassembly & heldBit( 1 - direction ) ) ) {
         // The other side has bytes the capture lacks: a gap there.
         const auto* other = find( stream, 1 - direction );
-        if ( other && seqAfter( pkt.tcpAck, other->nextSeq ) > 0 ) {
+        if ( other && seqAfter( pkt.tcpAck, other->order.nextSeq() ) > 0 ) {
             release( stream, 1 - direction );
         }
     }

@@ -137,6 +137,12 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
+    /// Plugins > tcpdump > Follow stream content: show the content of the
+    /// selected line's stream in the Packet Panel's Stream tab, or notify
+    /// the user why not; if the panel is not in view, a notification says
+    /// where it is.
+    void followStreamContent();
+
     /// The Packet Panel.
     PacketPanel* packetPanel() const
     {

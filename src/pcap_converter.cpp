@@ -164,7 +164,7 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
                                              stats.tcpMarkers[ i ] );
         }
     }
-    summary.handshakes = stats.initialRtts.size();
+    summary.handshakes = stats.initialRtts.count();
     summary.medianInitialRttNs = stats.medianInitialRttNs();
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {
@@ -371,6 +371,9 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
             showTcpTimestamps( pkt );
         }
         const auto stream = tracker.track( pkt );
+        if ( pkt.transport ) {
+            index->noteStream( *pkt.transport, stream.id, reader.packetsRead() );
+        }
         stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );

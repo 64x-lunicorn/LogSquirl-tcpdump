@@ -727,8 +727,13 @@ from the message's start are held; whole messages before it in the segment
 are described alone. The segment that completes it is described by
 `describePayload()` from all held bytes, followed by `[reassembled from k
 segments]`, and `apply()` returns those bytes (`ReassembledMessages`) for
-a module that wants the whole messages. Bytes are taken in sequence order:
-a segment ahead of the held bytes is held apart (at most
+a module that wants the whole messages. Bytes are taken in sequence order,
+by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
+C++, shared with Follow stream content): `place()` says whether a segment
+is next (and how many of its first bytes were taken), came early or was
+taken already; it holds the early ones (`holdEarly()`), pops them once they
+are next (`popNext()`) and skips a gap (`skipTo()`), and leaves the limits
+to its user. Here, a segment ahead of the held bytes is held apart (at most
 `kMaxEarlySegments`, 32) and also described as a segment of the message,
 then appended once the bytes before it come; a segment whose bytes were
 all taken (a retransmission) is left as it is, and the part of one that
@@ -820,8 +825,12 @@ pure ACK in either direction even without a SYN-ACK; here it is in Info,
 and a stream whose handshake was not captured whole has none. Each stream
 shows it once: a SYN sent after the handshake does not arm it again, a new
 connection on the same ports does. The Converter collects the times in
-`CaptureStats::initialRtts`, 8 bytes per handshake (at most one per
-numbered stream), for the summary's median.
+`CaptureStats::initialRtts`, a `RunningMedian`, for the summary's median:
+it keeps the first 4,096 times as they are and gives their exact median,
+then counts them in a histogram of fixed size (64 buckets per power of
+two, an HDR histogram), whose median is the middle of its bucket and lies
+within 1/128 (0.8 %) of the exact one. It holds 32 KB at most, however
+long a capture or live capture runs.
 The limits, all where Wireshark keeps more than a few integers per
 direction:
 
@@ -1153,8 +1162,55 @@ export, conversation statistics):
   and ASCII on each line. The packet is read on the UI thread: at most
   `kCheckpointInterval` records from a local file.
 
+- **Follow stream content** (`stream_content.h/cpp`,
+  `stream_content_view.h/cpp`). The panel's Stream tab, a
+  `StreamContentView`, shows the payload of the shown packet's stream when
+  the user asks for it: the panel's *Follow stream content* button calls
+  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
+  stream content does through `SidebarWidget::followStreamContent()`
+  (which notifies where it is shown when the panel is out of view). The
+  panel keeps the Stream column of the line it shows (`shownStream_`).
+  `StreamContentReader` reads the stream back: `open()` reads the packet
+  for its transport, addresses and ports, then `read()` reads the packets
+  from the stream's first to its last, which the Converter notes in the
+  index (`CaptureIndex::noteStream()`, `streamExtent()`: 8 bytes per
+  numbered stream; an unnumbered one is looked for in the whole capture),
+  and keeps those of the stream by their addresses and ports. The client,
+  end 0, is the side of the stream's first packet (the SYN's side when that
+  is a SYN-ACK). A UDP datagram is a `StreamChunk` as it comes (the part cut
+  at the snaplen as missing). TCP bytes go through a `ByteStreamOrderer`
+  per direction: a SYN starts it, the first data segment when the
+  handshake was not captured; early segments are held, at most
+  `kMaxEarlySegments` (64) and `kMaxEarlyBytes` (1 MB) a direction, beyond
+  which the bytes before them are taken as missing; an ACK of the other
+  direction past its bytes (but not past its FIN, which takes a sequence
+  number and no byte) takes the bytes it lacks as missing, and so does the
+  stream's end for what is still held. A chunk is either bytes or a gap
+  (`missing`). `read()` stops at the end of a packet once a budget of bytes
+  was handed out (`Status::More`), checks the cancel flag between packets
+  and reports progress; it goes on where it stopped. `StreamRenderer`
+  turns chunks into text: `streamText()` keeps printable ASCII, tab, line
+  breaks (CR LF as one) and valid UTF-8 beyond the C1 controls, and escapes
+  every other byte as `\xNN`; each direction's run, each datagram and
+  each gap begin a line; the hex dump is Wireshark's, 16 bytes a line,
+  the offset counted per direction (gaps included), the server's lines
+  indented by 4. `exportStreamContent()` reads the whole stream with a
+  fresh reader, a budget at a time, writing raw bytes of the directions
+  chosen (gaps left out) or the rendered text; a failed or cancelled export
+  removes its file. The view runs reads and exports on a `QThreadPool` of
+  its own, one at a time, with a `QFutureWatcher` per task and a
+  generation count, so a result of a stream followed before is dropped;
+  its destructor cancels and waits. It holds the chunks read, at most
+  `kMaxShownBytes` (16 MB), for re-rendering when the format or direction
+  changes, and reads `kShowBytes` (1 MB) at first and per Show more.
+  `stream_content_test.cpp` checks the reader, renderer and export on
+  built captures; `packet_panel_test.cpp` follows streams of
+  `reassembly.pcap` and `mixed.pcap` through the `FakeHost` and compares
+  the export with the payloads its script wrote.
+
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details entry and no polling; the panel says what it needs.
+details or Follow stream content entry and no polling; the panel says what
+it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
 it against its line and an in-memory parse, and that its layers stay
@@ -1165,8 +1221,8 @@ of `get_selected_log_lines`).
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entries (Open pcap…, and Packet details and Follow stream where
-the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
+the menu entries (Open pcap…, and Packet details, Follow stream content and
+Follow stream where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept

@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include "byte_stream_orderer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
@@ -69,7 +70,8 @@ struct ReassembledMessages {
  * whole messages, or none the describer frames, keeps its own description,
  * and costs no memory.
  *
- * Segments are taken in sequence order: one that comes early is held until
+ * Segments are taken in sequence order (ByteStreamOrderer): one that comes
+ * early is held until
  * the bytes before it come; a retransmission, and the part of a segment
  * that overlaps bytes already taken, is dropped.  A gap, bytes the capture
  * lacks (the other side acknowledges them, a segment was cut at the snaplen,
@@ -128,26 +130,20 @@ public:
     }
 
 private:
-    /// A segment that came before the bytes ahead of it.
-    struct EarlySegment {
-        uint32_t seq = 0;
-        std::vector<uint8_t> bytes;
-    };
-
     /// What a direction holds while a message in it is incomplete.
     struct Entry {
         StreamState* state = nullptr; ///< Its stream's, to mark when let go.
         unsigned direction = 0;
         /// The bytes from the start of the incomplete message, in order.
         std::vector<uint8_t> held;
-        /// The sequence number after the held bytes.
-        uint32_t nextSeq = 0;
+        /// Where the segments lie against the held bytes, which end at its
+        /// nextSeq(), and those that came early.
+        ByteStreamOrderer order;
         /// Segments the held bytes came from.
         uint32_t segments = 0;
         /// The protocol that frames the messages (MessageExtent::framer).
         uint8_t framer = 0;
         const char* label = nullptr;
-        std::vector<EarlySegment> early;
         size_t cost = 0;                   ///< Counted in used_.
         std::list<uint64_t>::iterator lru; ///< Its place in lru_.
     };

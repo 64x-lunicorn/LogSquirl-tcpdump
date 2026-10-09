@@ -383,6 +383,21 @@ void SidebarWidget::showPacketDetails()
                     .arg( names.join( " / " ) ) );
 }
 
+void SidebarWidget::followStreamContent()
+{
+    packetPanel_->refresh();
+    QString why;
+    if ( !packetPanel_->followStreamContent( &why ) ) {
+        hostNotify( "Follow stream content: " + why );
+        return;
+    }
+    if ( !packetPanel_->isVisible() ) {
+        hostNotify( QString( "Follow stream content: the stream of packet %1 is shown in the "
+                             "tcpdump sidebar tab." )
+                        .arg( packetPanel_->shownPacket() ) );
+    }
+}
+
 void SidebarWidget::openLink( const QString& link )
 {
     try {
