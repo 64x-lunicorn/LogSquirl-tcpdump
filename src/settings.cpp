@@ -52,6 +52,11 @@ constexpr const char* kLiveDeviceKey = "live/device";
 constexpr const char* kLiveInterfaceKey = "live/interface";
 constexpr const char* kLiveFilterKey = "live/filter";
 constexpr const char* kLiveSnaplenKey = "live/snaplen";
+/// The group of a source's options: live/options/<source>/<name>.
+QString liveOptionsGroup( const QString& source )
+{
+    return QStringLiteral( "live/options/" ) + source;
+}
 
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
@@ -174,7 +179,23 @@ LiveChoice loadLiveChoice( const QString& configDir )
     choice.filter = file.value( kLiveFilterKey ).toString();
     choice.snaplen = static_cast<int>( readCount( file, kLiveSnaplenKey, kDefaultSnaplen, 1,
                                                   static_cast<size_t>( kMaxSnaplen ) ) );
+    choice.options = loadLiveOptions( configDir, choice.source );
     return choice;
+}
+
+LiveOptions loadLiveOptions( const QString& configDir, const QString& source )
+{
+    LiveOptions options;
+    if ( configDir.isEmpty() || source.isEmpty() ) {
+        return options;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.beginGroup( liveOptionsGroup( source ) );
+    for ( const auto& name : file.childKeys() ) {
+        options.insert( name, file.value( name ).toString() );
+    }
+    file.endGroup();
+    return options;
 }
 
 bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
@@ -188,6 +209,16 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
     file.setValue( kLiveInterfaceKey, choice.interface );
     file.setValue( kLiveFilterKey, choice.filter );
     file.setValue( kLiveSnaplenKey, choice.snaplen );
+    if ( !choice.source.isEmpty() ) {
+        file.remove( liveOptionsGroup( choice.source ) );
+        file.beginGroup( liveOptionsGroup( choice.source ) );
+        for ( auto option = choice.options.cbegin(); option != choice.options.cend(); ++option ) {
+            if ( !option.key().isEmpty() && !option.key().contains( QLatin1Char( '/' ) ) ) {
+                file.setValue( option.key(), option.value() );
+            }
+        }
+        file.endGroup();
+    }
     file.sync();
     return file.status() == QSettings::NoError;
 }

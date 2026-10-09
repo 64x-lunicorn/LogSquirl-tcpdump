@@ -31,6 +31,7 @@
  *   - says whether the kind can be used here, and why not ("adb not found"),
  *   - lists its devices (phones, hosts) and their interfaces, on a worker
  *     thread, each listing bounded by a timeout,
+ *   - may have options of its own, edited in a widget it makes,
  *   - checks a choice before it starts,
  *   - makes the capture's stream for a choice: by default a Process Source
  *     running the command the kind builds from {device, interface, capture
@@ -49,6 +50,7 @@
 #include "live_capture.h"
 #include "process_source.h"
 
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
@@ -65,6 +67,12 @@ constexpr int kDefaultSnaplen = 262144;
 /// The most the snaplen may be set to.
 constexpr int kMaxSnaplen = 262144;
 
+/// A kind's own options, by name: e.g. ssh's "exclude own SSH port", an
+/// extcap's arguments, a saved command.  Names hold no '/'.
+using LiveOptions = QMap<QString, QString>;
+
+class LiveOptionsWidget;
+
 /// What the user chose to capture: one choice of the live capture UI, as
 /// settings.ini remembers it.
 struct LiveChoice {
@@ -73,12 +81,14 @@ struct LiveChoice {
     QString interface; ///< The interface's id; empty: the kind's default, if it has one.
     QString filter;    ///< The capture filter, BPF; empty: everything.
     int snaplen = kDefaultSnaplen; ///< Bytes kept of each packet.
+    /// The source's own options (makeOptionsWidget()); kept per source.
+    LiveOptions options;
 
     bool operator==( const LiveChoice& other ) const
     {
         return source == other.source && device == other.device
-               && interface == other.interface && filter == other.filter
-               && snaplen == other.snaplen;
+               && interface == other.interface && filter == other.filter && snaplen == other.snaplen
+               && options == other.options;
     }
     bool operator!=( const LiveChoice& other ) const
     {
@@ -174,6 +184,14 @@ public:
     /// syntax and the snaplen's range are checked before: captureFilterProblem());
     /// empty if it can.  By default an interface must be chosen.
     virtual QString validate( const LiveChoice& choice ) const;
+
+    /// A new widget for the kind's own options (LiveChoice::options), which
+    /// the form shows below its fields while the kind is chosen, and owns;
+    /// null (the default) for a kind without options.  On the UI thread.
+    virtual LiveOptionsWidget* makeOptionsWidget() const
+    {
+        return nullptr;
+    }
 
     /// The capture program for @p choice: e.g. `tcpdump -i <if> -s <snaplen>
     /// -U -w - <filter>`, the filter one argument.  For makeSource().

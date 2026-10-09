@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once it has ended. Sources plug in through one small interface, the
   Live Source Kind (#71). Closing the section or the dialog, or shutting
   the plugin down, cancels a device or interface listing that still runs
-  (its program is killed) instead of waiting up to its 10 s timeout
+  (its program is killed) instead of waiting up to its 10 s timeout. A
+  source may have options of its own, shown in the form while it is
+  chosen and remembered per source in `settings.ini`
 - **Follow stream content.** The Packet Panel's new **Stream** tab shows
   the payload of the selected packet's TCP or UDP conversation, as
   Wireshark's *Follow TCP/UDP Stream* does: the client's bytes in red, the

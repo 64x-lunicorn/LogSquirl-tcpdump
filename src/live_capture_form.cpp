@@ -161,8 +161,18 @@ void LiveCaptureForm::setSources( std::shared_ptr<const LiveSourceRegistry> sour
     setChoice( current );
 }
 
+void LiveCaptureForm::setSourceOptions( const QString& source, const LiveOptions& options )
+{
+    if ( options_ && optionsSource_ == source ) {
+        options_->setOptions( options );
+    }
+    optionsBySource_[ source ] = options;
+}
+
 void LiveCaptureForm::setChoice( const LiveChoice& choice )
 {
+    dropOptionsWidget();
+    optionsBySource_[ choice.source ] = choice.options;
     wanted_ = choice;
     const auto index = source_->findData( choice.source );
     source_->setCurrentIndex( index >= 0 ? index : ( source_->count() > 0 ? 0 : -1 ) );
@@ -183,6 +193,13 @@ LiveChoice LiveCaptureForm::choice() const
     choice.interface = currentId( interface_ );
     choice.filter = filter_->text().trimmed();
     choice.snaplen = snaplen_->value();
+    if ( options_ ) {
+        choice.options = options_->options();
+    }
+    else if ( const auto kept = optionsBySource_.find( choice.source );
+              kept != optionsBySource_.end() ) {
+        choice.options = kept->second;
+    }
     return choice;
 }
 
@@ -229,6 +246,8 @@ void LiveCaptureForm::refresh()
 void LiveCaptureForm::sourceChanged()
 {
     ++generation_;
+    dropOptionsWidget();
+    showOptionsWidget();
     device_->clear();
     interface_->clear();
     const auto kind = currentKind();
@@ -419,6 +438,36 @@ void LiveCaptureForm::showStatus( const QString& text )
 {
     status_->setText( text );
     status_->setHidden( text.isEmpty() );
+}
+
+void LiveCaptureForm::dropOptionsWidget()
+{
+    if ( !options_ ) {
+        return;
+    }
+    optionsBySource_[ optionsSource_ ] = options_->options();
+    // Deleted now, not later: its object name must not be found any more.
+    delete options_;
+    options_ = nullptr;
+    optionsSource_.clear();
+}
+
+void LiveCaptureForm::showOptionsWidget()
+{
+    const auto kind = currentKind();
+    options_ = kind ? kind->makeOptionsWidget() : nullptr;
+    if ( !options_ ) {
+        return;
+    }
+    optionsSource_ = kind->id();
+    if ( const auto kept = optionsBySource_.find( optionsSource_ );
+         kept != optionsBySource_.end() ) {
+        options_->setOptions( kept->second );
+    }
+    auto* layout = static_cast<QFormLayout*>( this->layout() );
+    layout->addRow( options_ );
+    options_->setEnabled( kind->availability().available );
+    connect( options_, &LiveOptionsWidget::changed, this, &LiveCaptureForm::changed );
 }
 
 void LiveCaptureForm::checkFilter()

@@ -1205,7 +1205,8 @@ knows none of them. A kind answers:
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
-| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice`; by default an interface is needed |
+| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none |
+| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
 | `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. An extcap's FIFO overrides it |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
@@ -1273,7 +1274,11 @@ The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
 only. `loadLiveChoice()` and `saveLiveChoice()` keep the last
 `LiveChoice` started (source, device, interface, filter, snaplen 1 to
-`kMaxSnaplen`) in the group `live` of the same file; no source asks for or
+`kMaxSnaplen`) in the group `live` of the same file, its `options` (a
+string map, `LiveOptions`) under `live/options/<source>/<name>`, replacing
+those of its source only; `loadLiveOptions( configDir, source )` reads a
+source's, which the sidebar hands the form (`setSourceOptions()`) for every
+kind, so that each source keeps its own options. No source asks for or
 keeps a password.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
@@ -1333,7 +1338,9 @@ snaplen. Choosing a source shows its `availability()` reason, or lists its
 devices and then the interfaces of the device chosen on the sidebar's
 listing pool, each listing bounded by the kind's timeout; a result for a
 source or device chosen since is dropped (a generation counter). The form
-remembers the choice it was given and selects it once listed. `problem()`
+remembers the choice it was given and selects it once listed. A kind's
+options widget is made anew whenever the kind is chosen, and its options
+are kept per source when another is chosen. `problem()`
 (no source, unavailable, the filter, the kind's `validate()`) keeps
 **Start** disabled, with the reason as its tooltip, as does a conversion or
 a capture running; the form is locked while a capture runs.

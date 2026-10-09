@@ -31,13 +31,18 @@
  * instead (the default makeSource(), a Process Source), its arguments
  * `-i <interface> -s <snaplen> <filter>`.  With a listing program set, it
  * lists interfaces by running that (runListing()), as a real kind does.
+ * With options on, its options widget is a line edit, "fakeNote", for the
+ * option "note"; a note "bad" does not validate.
  */
 
 #pragma once
 
+#include "live_capture_form.h"
 #include "live_source.h"
 #include "pcapbuilder.h"
 
+#include <QHBoxLayout>
+#include <QLineEdit>
 #include <QString>
 
 #include <algorithm>
@@ -85,6 +90,36 @@ private:
     Bytes bytes_;
     std::string failure_;
     size_t at_ = 0;
+};
+
+/// FakeSourceKind's options: a line edit for the option "note".
+class FakeOptionsWidget : public tcpdump::LiveOptionsWidget {
+public:
+    FakeOptionsWidget()
+    {
+        auto* layout = new QHBoxLayout( this );
+        layout->setContentsMargins( 0, 0, 0, 0 );
+        note_ = new QLineEdit;
+        note_->setObjectName( "fakeNote" );
+        layout->addWidget( note_ );
+        connect( note_, &QLineEdit::textChanged, this, &LiveOptionsWidget::changed );
+    }
+
+    void setOptions( const tcpdump::LiveOptions& options ) override
+    {
+        note_->setText( options.value( "note" ) );
+    }
+    tcpdump::LiveOptions options() const override
+    {
+        tcpdump::LiveOptions options;
+        if ( !note_->text().isEmpty() ) {
+            options.insert( "note", note_->text() );
+        }
+        return options;
+    }
+
+private:
+    QLineEdit* note_ = nullptr;
 };
 
 class FakeSourceKind : public tcpdump::LiveSourceKind {
@@ -170,6 +205,17 @@ public:
             return std::make_unique<ScriptedSource>( bytes, error, stop );
         };
     }
+    tcpdump::LiveOptionsWidget* makeOptionsWidget() const override
+    {
+        return withOptions ? new FakeOptionsWidget : nullptr;
+    }
+    QString validate( const tcpdump::LiveChoice& choice ) const override
+    {
+        if ( choice.options.value( "note" ) == "bad" ) {
+            return "The note is bad.";
+        }
+        return LiveSourceKind::validate( choice );
+    }
     QString explainFailure( const QString& error ) const override
     {
         return error.contains( "permission" ) ? hint : QString();
@@ -197,6 +243,7 @@ public:
     QString hint;              ///< What explainFailure() says to a permission error.
     QString program;           ///< Set: a capture runs this program.
     QString listingProgram;    ///< Set: listing the interfaces runs this program.
+    bool withOptions = false;  ///< Whether it has an options widget.
     mutable std::atomic<int> interfaceListings{ 0 };
 
 private:

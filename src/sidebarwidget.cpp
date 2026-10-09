@@ -310,6 +310,15 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         // Neither this widget nor its members are used after the dialog:
         // it may be gone when it returns (its pool waits for the listings).
         LiveCaptureDialog dialog( liveSources_, choice, parent, &listingPool_ );
+        // Another source chosen there starts with the options saved for it.
+        if ( liveSources_ ) {
+            for ( const auto& kind : liveSources_->kinds() ) {
+                if ( kind->id() != choice.source ) {
+                    dialog.form()->setSourceOptions(
+                        kind->id(), loadLiveOptions( hostConfigDir(), kind->id() ) );
+                }
+            }
+        }
         if ( dialog.exec() != QDialog::Accepted ) {
             return false;
         }
@@ -907,6 +916,12 @@ void SidebarWidget::setLiveSources( std::shared_ptr<const LiveSourceRegistry> so
 {
     liveSources_ = std::move( sources );
     liveForm_->setSources( liveSources_ );
+    if ( liveSources_ ) {
+        for ( const auto& kind : liveSources_->kinds() ) {
+            liveForm_->setSourceOptions( kind->id(),
+                                         loadLiveOptions( hostConfigDir(), kind->id() ) );
+        }
+    }
     liveForm_->setChoice( loadLiveChoice( hostConfigDir() ) );
     updateStartButton();
 }

@@ -39,6 +39,11 @@
  * as it goes (ListingCancelScope): their programs are killed, so that
  * waiting for them takes moments, not a listing's timeout.
  *
+ * A source with options of its own (an ssh's own port excluded, an extcap's
+ * arguments) shows their widget below the snaplen while it is chosen; the
+ * options of each source are kept apart, so that choosing another source
+ * and back keeps them.
+ *
  * problem() says why the choice cannot be captured, for the Start button
  * of whoever holds the form; changed() tells it to ask again.
  */
@@ -52,6 +57,7 @@
 #include <QWidget>
 
 #include <atomic>
+#include <map>
 #include <memory>
 
 class QComboBox;
@@ -61,6 +67,27 @@ class QPushButton;
 class QSpinBox;
 
 namespace tcpdump {
+
+/**
+ * The fields of a Live Source Kind's own options, below the form's while
+ * the kind is chosen (LiveSourceKind::makeOptionsWidget()): the form hands
+ * it the options kept for its kind and reads them back for choice().  It
+ * emits changed() when they change, so that problem() is asked again.
+ */
+class LiveOptionsWidget : public QWidget {
+    Q_OBJECT
+
+public:
+    using QWidget::QWidget;
+
+    /// Show @p options; names it does not know are ignored.
+    virtual void setOptions( const LiveOptions& options ) = 0;
+    /// The options the fields hold.
+    virtual LiveOptions options() const = 0;
+
+signals:
+    void changed();
+};
 
 class LiveCaptureForm : public QWidget {
     Q_OBJECT
@@ -86,6 +113,10 @@ public:
     void setChoice( const LiveChoice& choice );
     /// What the fields hold.
     LiveChoice choice() const;
+
+    /// The options @p source starts with when it is chosen, until the user
+    /// changes them or setChoice() gives others (the ones saved for it).
+    void setSourceOptions( const QString& source, const LiveOptions& options );
 
     /// The source chosen, or null if there is none.
     std::shared_ptr<const LiveSourceKind> currentKind() const;
@@ -127,6 +158,10 @@ private:
     void showStatus( const QString& text );
     /// Show the capture filter's problem below it.
     void checkFilter();
+    /// Keep the options widget's options for its source, and remove it.
+    void dropOptionsWidget();
+    /// Show the options widget of the current source, if it has one.
+    void showOptionsWidget();
 
     std::shared_ptr<const LiveSourceRegistry> sources_;
     LiveChoice wanted_; ///< The choice setChoice() was given.
@@ -139,6 +174,11 @@ private:
     QLineEdit* filter_ = nullptr;
     QLabel* filterHint_ = nullptr;
     QSpinBox* snaplen_ = nullptr;
+    /// The current source's options, if it has any; owned by the form.
+    LiveOptionsWidget* options_ = nullptr;
+    QString optionsSource_; ///< The source options_ is of.
+    /// The options of each source, as last shown or given.
+    std::map<QString, LiveOptions> optionsBySource_;
     /// Counts the source and device changes: a listing's result is shown
     /// only if none came after it started.
     quint64 generation_ = 0;

@@ -376,6 +376,102 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     }
 }
 
+SCENARIO( "A source's own options show in the form, are part of the choice, and are kept",
+          "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir root;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->withOptions = true;
+    fake->capture = pcapOf( { datagram( 0 ) } );
+    auto plain = std::make_shared<FakeSourceKind>( "plain", "Plain" );
+    auto registry = registryOf( fake );
+    registry->add( plain );
+
+    auto sidebar = std::make_unique<SidebarWidget>();
+    sidebar->setTempRoot( root.path() );
+    sidebar->setLiveSources( registry );
+    auto* form = sidebar->liveForm();
+    const Fields fields( sidebar.get() );
+    REQUIRE( listed( form, fields ) );
+    auto* note = sidebar->findChild<QLineEdit*>( "fakeNote" );
+    REQUIRE( note );
+
+    WHEN( "an option is set" )
+    {
+        int changes = 0;
+        QObject::connect( form, &LiveCaptureForm::changed, [ & ] { ++changes; } );
+        note->setText( "hello" );
+
+        THEN( "it is part of the choice, and the form says it changed" )
+        {
+            REQUIRE( changes > 0 );
+            REQUIRE( form->choice().options == LiveOptions{ { "note", "hello" } } );
+            REQUIRE( fields.start->isEnabled() );
+        }
+
+        AND_WHEN( "another source is chosen, and then this one again" )
+        {
+            fields.source->setCurrentIndex( 1 );
+            emit fields.source->activated( 1 );
+
+            THEN( "the other source has no options widget, and this one's options stay" )
+            {
+                REQUIRE_FALSE( sidebar->findChild<QLineEdit*>( "fakeNote" ) );
+                REQUIRE( form->choice().options.isEmpty() );
+                fields.source->setCurrentIndex( 0 );
+                emit fields.source->activated( 0 );
+                auto* again = sidebar->findChild<QLineEdit*>( "fakeNote" );
+                REQUIRE( again );
+                REQUIRE( again->text() == "hello" );
+                REQUIRE( form->choice().options == LiveOptions{ { "note", "hello" } } );
+            }
+        }
+
+        AND_WHEN( "the capture is started and the plugin restarts" )
+        {
+            fields.start->click();
+            REQUIRE( fake->started().size() == 1 );
+            REQUIRE( fake->started().front().options == LiveOptions{ { "note", "hello" } } );
+            sidebar->stopLiveCapture();
+            REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+            sidebar.reset();
+            SidebarWidget restarted;
+            restarted.setLiveSources( registry );
+
+            THEN( "the option is shown again" )
+            {
+                auto* again = restarted.findChild<QLineEdit*>( "fakeNote" );
+                REQUIRE( again );
+                REQUIRE( again->text() == "hello" );
+                REQUIRE( restarted.liveForm()->choice().options
+                         == LiveOptions{ { "note", "hello" } } );
+            }
+        }
+    }
+
+    WHEN( "an option the source does not accept is set" )
+    {
+        note->setText( "bad" );
+
+        THEN( "Start is disabled with the source's reason" )
+        {
+            REQUIRE_FALSE( fields.start->isEnabled() );
+            REQUIRE( fields.start->toolTip() == "The note is bad." );
+        }
+    }
+
+    WHEN( "a choice with options is set" )
+    {
+        form->setChoice( LiveChoice{ "fake", "", "fake0", "", 100, { { "note", "given" } } } );
+
+        THEN( "the widget shows them" )
+        {
+            REQUIRE( sidebar->findChild<QLineEdit*>( "fakeNote" )->text() == "given" );
+        }
+    }
+}
+
 SCENARIO( "The Start live capture dialog has the section's fields", "[live_ui]" )
 {
     FakeHost host;
