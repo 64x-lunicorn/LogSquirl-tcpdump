@@ -19,12 +19,13 @@
 
 /**
  * @file pcap_parser.h
- * @brief Parser for pcap and pcap-ng capture files.
+ * @brief Parser for pcap and pcapng capture files.
  *
  * Reads the global header and per-packet records from a pcap capture,
  * one packet at a time, producing PacketRecord structs suitable for
  * formatting.  Supports both big-endian and little-endian byte orders
- * (magic number).
+ * (magic number).  makeCaptureReader() picks the reader for a capture
+ * from its first block: this one, or the PcapngReader (pcapng_reader.h).
  *
  * The rest of the plugin sees a capture through the CaptureReader seam
  * only: each PacketRecord carries the link-layer type it was dissected with
@@ -38,6 +39,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -50,7 +52,7 @@ constexpr uint32_t PcapMagicLE = 0xA1B2C3D4;   ///< pcap in host byte order
 constexpr uint32_t PcapMagicBE = 0xD4C3B2A1;   ///< pcap in swapped byte order
 constexpr uint32_t PcapNsMagicLE = 0xA1B23C4D; ///< Nanosecond pcap in host byte order
 constexpr uint32_t PcapNsMagicBE = 0x4D3CB2A1; ///< Nanosecond pcap in swapped byte order
-constexpr uint32_t PcapNgMagic = 0x0A0D0D0A;   ///< pcap-ng section header
+constexpr uint32_t PcapNgMagic = 0x0A0D0D0A;   ///< pcapng section header block type
 
 /// Parsed pcap global header.
 struct PcapGlobalHeader {
@@ -149,6 +151,17 @@ struct PacketRecord {
  */
 std::string formatTcpFlags( uint8_t flags );
 
+/**
+ * Dissect one captured packet into @p pkt, from its link-layer header up.
+ *
+ * @param linkType  The link-layer type (DLT_*) the packet was captured with.
+ * @param swap      The capture was written in the other byte order than this
+ *                  host's, which a BSD loopback header (DLT_NULL) is in.
+ * @param data      The captured bytes, @p len of them.
+ */
+void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* data,
+                    size_t len );
+
 // ── Parser ───────────────────────────────────────────────────────────────
 
 /// Longest text preamble (e.g. tcpdump's stderr) searched for the pcap magic.
@@ -186,6 +199,57 @@ private:
     size_t size_;
     size_t pos_ = 0;
 };
+
+/**
+ * A ByteSource that can look at the first bytes of another before they are
+ * read, so that a capture's format can be told from its first block.  The
+ * bytes looked at are read again from it.
+ */
+class HeadSource : public ByteSource {
+public:
+    explicit HeadSource( ByteSource& source )
+        : source_( source )
+    {
+    }
+    HeadSource( const HeadSource& ) = delete;
+    HeadSource& operator=( const HeadSource& ) = delete;
+
+    /// The next @p n bytes, or fewer at the end of the source, without
+    /// consuming them.
+    const std::vector<uint8_t>& peek( size_t n );
+
+    size_t read( uint8_t* dst, size_t n ) override;
+    bool skip( uint64_t n ) override;
+
+private:
+    ByteSource& source_;
+    std::vector<uint8_t> head_; ///< Bytes looked at and not yet read.
+};
+
+/// The capture file formats there is a reader for.
+enum class CaptureFormat : uint8_t {
+    Pcap,
+    Pcapng,
+};
+
+/**
+ * Find where the capture starts in the first bytes of a file, and its format.
+ *
+ * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
+ * e.g. "tcpdump: listening on …", into the output ahead of the capture.
+ * The header is therefore looked for behind up to kMaxPreamble bytes of
+ * text.  Past offset 0 it is only accepted when everything before it is
+ * text and it is a valid header (a pcap magic and version, or a pcapng
+ * section header with its byte-order magic), not merely 4 magic bytes: a
+ * stray magic in binary data, or in the text, must not be taken for a
+ * capture.  At offset 0 the magic decides, so that an unsupported version
+ * is reported as such.
+ *
+ * @return The offset of the header, or @p size if there is none; @p error
+ *         then says why.
+ */
+size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
+                         std::string& error );
 
 /**
  * Reads a capture one packet at a time, so that a capture of any size needs
@@ -276,9 +340,7 @@ private:
     size_t read( uint8_t* dst, size_t n );
     bool skip( uint64_t n );
 
-    ByteSource& source_;
-    std::vector<uint8_t> head_; ///< Start of the source, searched for the magic.
-    size_t headPos_ = 0;        ///< Next unread byte in head_.
+    HeadSource source_; ///< Its start is searched for the header.
     std::vector<uint8_t> packet_;
     PcapGlobalHeader header_;
     bool swap_ = false;
@@ -287,19 +349,29 @@ private:
     uint32_t packetCount_ = 0;
 };
 
-/// Result of parsing a whole pcap buffer.
+/**
+ * The reader for the capture in @p source, chosen by its first block: a
+ * PcapngReader for a pcapng section header, a PcapReader otherwise, which
+ * also says what is wrong with a file that is neither.  It is not open yet;
+ * @p source must outlive it.
+ */
+std::unique_ptr<CaptureReader> makeCaptureReader( HeadSource& source );
+
+/// Result of parsing a whole capture buffer.
 struct ParseResult {
     bool ok = false;
     std::string error;
-    PcapGlobalHeader header;
+    PcapGlobalHeader header; ///< A pcap's global header; empty for a pcapng.
+    TimePrecision precision = TimePrecision::Microseconds; ///< What the reader announced.
+    std::vector<uint32_t> linkTypes;                       ///< What the capture declared.
     std::vector<PacketRecord> packets;
     bool truncated = false; ///< The capture ends in the middle of a record.
 };
 
 /**
- * Parse a pcap capture held in memory, keeping every packet.
+ * Parse a pcap or pcapng capture held in memory, keeping every packet.
  *
- * @param data  Pointer to the raw pcap file contents.
+ * @param data  Pointer to the raw capture file contents.
  * @param size  Size of the buffer in bytes.
  * @return ParseResult with packets on success, or an error string.
  */

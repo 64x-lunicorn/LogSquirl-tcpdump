@@ -4,10 +4,15 @@
 
 The plugin is structured into three layers:
 
-### 1. pcap Parser (`pcap_parser.h/cpp`)
-Pure C++ (no Qt dependency). `PcapReader` reads libpcap captures from a
-`ByteSource` one record at a time, so the capture is never held in memory.
-It is the one `CaptureReader` so far (see *The reader seam* below):
+### 1. pcap Parser (`pcap_parser.h/cpp`, `pcapng_reader.h/cpp`)
+Pure C++ (no Qt dependency). A `CaptureReader` (see *The reader seam* below)
+reads a capture from a `ByteSource` one record at a time, so the capture is
+never held in memory. `makeCaptureReader()` picks the reader from the first
+block, which it looks at through a `HeadSource` without consuming it:
+`findCaptureStart()` finds a pcap global header or a pcapng section header,
+also behind a text preamble, and the rest is left to the reader it picks.
+
+`PcapReader` reads libpcap captures:
 - Detects byte order and timestamp precision from the magic number
   (`0xa1b2c3d4` µs, `0xa1b23c4d` ns, either byte order)
 - Finds the header behind a text preamble (e.g. `adb exec-out tcpdump`
@@ -29,7 +34,25 @@ It is the one `CaptureReader` so far (see *The reader seam* below):
 - Hands a TCP or UDP payload with its ports to the Payload Describer, and
   appends the description it gets back to the transport summary after ` | `
 
-`parsePcap()` parses a whole buffer in memory, for tests.
+`PcapngReader` reads pcapng captures block by block and hands each packet
+to the same dissection (`dissectPacket()`):
+- Section header blocks in either byte order; a file may hold several
+  sections, each with its own byte order and interfaces (major version 1)
+- Interface description blocks: link-layer type, snaplen and `if_tsresol`,
+  in its power-of-ten and power-of-two forms (microseconds by default); at
+  most 65,536 interfaces per section
+- Enhanced packet blocks, and simple packet blocks, which belong to the
+  section's first interface, are cut to its snaplen and have no timestamp
+  (time 0)
+- Every other block (name resolution, interface statistics, decryption
+  secrets, custom, the obsolete packet block) is skipped by its length
+- Every block's length is checked against its fields, its trailing copy and
+  the end of the file before anything is read past it; a block that fails
+  ends the capture as one cut off inside a record (`truncated()`), and only
+  the first 256 KiB of a packet are dissected
+- `if_tsoffset` is not applied: times are relative to the first packet
+
+`parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
 
 #### The reader seam
 Everything past the reader (Converter, Packet Formatter, `CaptureStats`)
@@ -45,8 +68,19 @@ The seam exists for pcapng: there one file holds several interfaces, each
 with its own link-layer type and timestamp resolution, so neither is a
 property of the file. A pcap has one global header, so `PcapReader` fills
 both fields of every packet from it and announces the magic number's
-precision and the header's link-layer type. A pcapng reader fills them
+precision and the header's link-layer type. `PcapngReader` fills them
 from the interface each packet was captured on.
+
+The precision must be known before the first packet, but a pcapng declares
+its interfaces in blocks anywhere in the file. `PcapngReader::open()` reads
+the blocks up to the first packet block, where Wireshark's dumpcap declares
+all its interfaces, and announces the finest precision among them. The
+packets of an interface declared later are marked and shown at most at that
+precision, so that the promise "no packet is finer" holds; a full pre-scan
+would read a large capture twice. Its `linkTypes()` are those of all
+interfaces declared so far, each once, so a pcapng without packets names
+its interfaces' link types in the summary, as an empty pcap names its
+header's.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -93,7 +127,8 @@ port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
-`convertPcap()` reads a capture through a `CaptureReader`, formats each packet and
+`convertPcap()` reads a capture through the `CaptureReader` that
+`makeCaptureReader()` picks for it, formats each packet and
 appends its line to a new output file, reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
@@ -179,5 +214,7 @@ the helpers in `tests/pcapbuilder.h`; the application protocols are tested
 through the Payload Describer with a payload alone. `tests/corpus` holds captures with the text they must
 convert to (`corpus_test.cpp`); run the tests with `TCPDUMP_UPDATE_CORPUS=1`
 to rewrite that text after an intended change of the output, and review the
-difference. Plugin and sidebar tests run against the `FakeHost` in
+difference. The pcapng corpus capture, `interfaces.pcapng`, is made up byte
+for byte by `tests/make_pcapng_corpus.py`; the pcapng unit tests build their
+blocks with `Pcapng` in `tests/pcapbuilder.h`. Plugin and sidebar tests run against the `FakeHost` in
 `tests/fakehost.h`.

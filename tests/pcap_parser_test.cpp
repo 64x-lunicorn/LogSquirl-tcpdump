@@ -620,11 +620,11 @@ SCENARIO( "Parsing a big-endian pcap file", "[pcap_parser]" )
     }
 }
 
-// ── pcap-ng Rejection ────────────────────────────────────────────────────
+// ── pcapng Detection ─────────────────────────────────────────────────────
 
-SCENARIO( "pcap-ng files are rejected with a clear error", "[pcap_parser]" )
+SCENARIO( "A broken pcapng section header is rejected with a clear error", "[pcap_parser]" )
 {
-    GIVEN( "a buffer starting with pcap-ng magic" )
+    GIVEN( "a buffer starting with the pcapng magic and no byte-order magic" )
     {
         std::vector<uint8_t> buf( 32, 0 );
         uint32_t magic = PcapNgMagic;
@@ -634,10 +634,10 @@ SCENARIO( "pcap-ng files are rejected with a clear error", "[pcap_parser]" )
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "parsing fails with pcap-ng error message" )
+            THEN( "parsing fails with a pcapng error message" )
             {
                 REQUIRE_FALSE( result.ok );
-                REQUIRE( result.error.find( "pcap-ng" ) != std::string::npos );
+                REQUIRE( result.error.find( "pcapng" ) != std::string::npos );
             }
         }
     }
