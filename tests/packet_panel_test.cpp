@@ -37,6 +37,7 @@
 #include <QFile>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTreeWidget>
@@ -602,6 +603,21 @@ SCENARIO( "A long stream is shown in part, read off the UI thread with Cancel",
             REQUIRE_FALSE( view->hasMore() );
             REQUIRE( view->contentText().size() == 1500 * 1000 );
             REQUIRE( view->noteText().isEmpty() );
+        }
+
+        THEN( "a format chosen while Show more reads is the format of all that is shown" )
+        {
+            view->findChild<QPushButton*>( "streamMore" )->click();
+            REQUIRE( view->isBusy() );
+            view->findChild<QComboBox*>( "streamFormat" )->setCurrentIndex( 1 );
+            REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+            const auto text = view->contentText();
+            REQUIRE( text.startsWith( "00000000  61 61 61" ) );
+            const QRegularExpression hexLine( "^\\s*[0-9a-f]{8}  |^$" );
+            for ( const auto& line : text.split( '\n' ) ) {
+                INFO( line.toStdString() );
+                REQUIRE( hexLine.match( line ).hasMatch() );
+            }
         }
 
         THEN( "a read cancelled at once can go on later" )
