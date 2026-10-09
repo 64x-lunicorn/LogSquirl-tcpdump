@@ -27,6 +27,7 @@
 #include "capture_index.h"
 #include "capture_stats.h"
 #include "conversations.h"
+#include "gzip_source.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_parser.h"
@@ -94,8 +95,12 @@ struct CaptureSummary {
     /// Packets captured shorter than on the wire, cut at the snaplen; their
     /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
     uint64_t cutPackets = 0;
-    /// The capture ends in the middle of a record, which is not shown.
+    /// The capture ends in the middle of a record, which is not shown; or
+    /// its gzip stream ends early (compressionProblem).
     bool endsInsideRecord = false;
+    /// Why a gzip-compressed capture's stream ended before its end, cut off
+    /// or corrupt; empty otherwise.
+    std::string compressionProblem;
     /// Set when conversations past the stream cap went unnumbered and show
     /// stream "?" in the log: the cap, i.e. how many were numbered.
     std::optional<uint64_t> streamCap;
@@ -198,6 +203,9 @@ struct ConversionOptions {
     size_t reassemblyMegabytes = TcpReassembly::kDefaultMemoryLimit / kMegabyte;
     /// Packets between two checkpoints of the CaptureIndex.
     uint32_t checkpointInterval = CaptureIndex::kCheckpointInterval;
+    /// Decompressed bytes between two access points of a gzip-compressed
+    /// capture (GzipSource::kAccessSpan).
+    uint64_t gzipAccessSpan = GzipSource::kAccessSpan;
     /// Whether every TCP segment shows its timestamps option in Info, as
     /// Wireshark does, rather than the SYNs only (showTcpTimestamps()).
     bool tcpTimestamps = false;

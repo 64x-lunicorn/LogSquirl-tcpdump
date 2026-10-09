@@ -22,6 +22,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     packet_layers_test.cpp
     capture_index_test.cpp
+    gzip_source_test.cpp
     packet_export_test.cpp
     link_layers_test.cpp
     socks_test.cpp
@@ -86,6 +87,7 @@ target_link_libraries(logsquirl_tcpdump_tests
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        tcpdump_zlib
 )
 
 # Compile plugin sources into the test binary
@@ -125,6 +127,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
+        "${CMAKE_SOURCE_DIR}/src/gzip_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"

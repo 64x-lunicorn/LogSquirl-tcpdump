@@ -55,6 +55,7 @@
  */
 
 #include "sidebarwidget.h"
+#include "capture_file.h"
 #include "conversation_table.h"
 #include "follow_stream.h"
 #include "live_capture_form.h"
@@ -142,7 +143,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     , chooseFile_( []( QWidget* parent, const QString& dir ) {
         return QFileDialog::getOpenFileName(
             parent, "Open pcap Capture File", dir,
-            "Capture files (*.pcap *.pcapng *.cap *.dmp);;All files (*)" );
+            "Capture files (*.pcap *.pcapng *.cap *.dmp *.pcap.gz *.pcapng.gz *.cap.gz);;"
+            "All files (*)" );
     } )
     , chooseSaveFile_( []( QWidget* parent, const QString& suggested ) {
         return QFileDialog::getSaveFileName( parent, "Save Capture", suggested,
@@ -162,8 +164,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         request.numbers = dialog.packetSet().numbers;
         const bool pcapng = request.format == CaptureFormat::Pcapng;
         const auto suggested
-            = QDir( dir ).filePath( QFileInfo( request.captureName ).completeBaseName()
-                                    + "-packets." + ( pcapng ? "pcapng" : "pcap" ) );
+            = QDir( dir ).filePath( tcpdump::captureBaseName( request.captureName ) + "-packets."
+                                    + ( pcapng ? "pcapng" : "pcap" ) );
         request.outputPath
             = QFileDialog::getSaveFileName( parent, "Export Packets", suggested,
                                             pcapng ? "pcapng captures (*.pcapng);;All files (*)"
@@ -1224,7 +1226,11 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     html += QString( "%1: %2<br>" )
                 .arg( linkTypes.size() > 1 ? "Link types" : "Link type" )
                 .arg( linkTypes.join( ", " ) );
-    if ( summary.endsInsideRecord ) {
+    if ( !summary.compressionProblem.empty() ) {
+        html += QString( "<i>The capture was cut off: %1.</i><br>" )
+                    .arg( QString::fromStdString( summary.compressionProblem ).toHtmlEscaped() );
+    }
+    else if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }
     html += "<br>";

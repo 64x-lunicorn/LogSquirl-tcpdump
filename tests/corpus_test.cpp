@@ -22,7 +22,8 @@
  * @brief Regression tests converting the captures in tests/corpus.
  *
  * Each <name>.pcap or <name>.pcapng with a <name>.txt beside it must
- * convert to exactly that text.  The captures cover the link layers, byte orders, timestamp
+ * convert to exactly that text, and so must a gzip-compressed
+ * <name>.pcap.gz or <name>.pcapng.gz.  The captures cover the link layers, byte orders, timestamp
  * precisions and protocols the parser handles, including malformed and
  * cut-off records.  After an intended change of the output, run the tests
  * with TCPDUMP_UPDATE_CORPUS=1 to rewrite the .txt files, and review the
@@ -35,7 +36,8 @@
  * tests/make_link_layers_corpus.py, reassembly.pcap by
  * tests/make_reassembly_corpus.py, mqtt.pcap by tests/make_mqtt_corpus.py,
  * sip.pcap by tests/make_sip_corpus.py, someip.pcap by
- * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py.
+ * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py,
+ * interfaces.pcapng.gz by tests/make_gzip_corpus.py.
  * Captures of real loopback traffic, recorded by tests/make_real_corpus.sh,
  * stay uncommitted in tests/corpus/local and are converted too when present.
  * The malformed-*.pcap files, mutated captures from fuzzing,
@@ -44,6 +46,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "capture_file.h"
 #include "pcap_converter.h"
 
 #include <QDir>
@@ -64,7 +67,7 @@ QString corpusDir()
 // if there is one.
 QFileInfoList corpusCaptures()
 {
-    const QStringList patterns{ "*.pcap", "*.pcapng" };
+    const QStringList patterns{ "*.pcap", "*.pcapng", "*.pcap.gz", "*.pcapng.gz" };
     auto captures = QDir( corpusDir() ).entryInfoList( patterns, QDir::Files, QDir::Name );
     const QDir local( corpusDir() + QStringLiteral( "/local" ) );
     if ( local.exists() ) {
@@ -91,16 +94,17 @@ SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
     const bool update = qEnvironmentVariableIsSet( "TCPDUMP_UPDATE_CORPUS" );
 
     for ( const auto& capture : corpusCaptures() ) {
-        const auto name = capture.completeBaseName();
+        const auto name = captureBaseName( capture.filePath() );
         const auto expectedPath = capture.dir().filePath( name + ".txt" );
         if ( name.startsWith( "malformed-" ) || ( !QFile::exists( expectedPath ) && !update ) ) {
             continue;
         }
 
-        GIVEN( "the capture " + name.toStdString() )
+        GIVEN( "the capture " + capture.fileName().toStdString() )
         {
             const auto result = convertPcap( capture.filePath(), out.path() );
             REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.compressionProblem.empty() );
             const auto outPath = result.outputPath;
 
             if ( update ) {

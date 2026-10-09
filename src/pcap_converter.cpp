@@ -27,6 +27,7 @@
 #include "capture_file.h"
 #include "capture_reader.h"
 #include "capture_source.h"
+#include "gzip_source.h"
 #include "media_expectations.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
@@ -231,11 +232,12 @@ using Clock = std::chrono::steady_clock;
 
 /**
  * The conversion of the capture in @p input, named @p name; whatever it
- * throws, the caller turns into Failed.  @p inputPath is the capture file
- * @p input reads, which the CaptureIndex points into, and @p inputSize its
- * size for progress; both empty for a stream, whose size is unknown and
- * which reports none.  With @p live, the input is a stream converted live
- * (convertStream()), and the index points into its raw capture.
+ * throws, the caller turns into Failed.  @p file is the capture file
+ * @p input reads, which the CaptureIndex points into and whose size and
+ * consumed bytes give the progress; null for a stream, whose size is
+ * unknown and which reports none.  With @p live, the input is a stream
+ * converted live (convertStream()), and the index points into its raw
+ * capture.
  *
  * Every packet goes through the same steps for a file and a stream: the
  * Parser's record (its preview limited), the stream it belongs to, its TCP
@@ -243,8 +245,8 @@ using Clock = std::chrono::steady_clock;
  * an SDP announced, its stream labels, the conversations' and the
  * summary's counts, its line, and its place in the CaptureIndex.
  */
-ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, const QString& name,
-                                 uint64_t inputSize, const QString& outputRoot,
+ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QString& inputPath,
+                                 const QString& name, const QString& outputRoot,
                                  const std::atomic_bool* cancel,
                                  const std::function<void( int )>& progress,
                                  const ConversionOptions& options, const LiveObserver* live )
@@ -273,11 +275,16 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     HeadSource source( liveInput ? static_cast<ByteSource&>( *liveInput ) : input );
     const auto capture = makeCaptureReader( source ); // pcap or pcapng, by the first block
     CaptureReader& reader = *capture;                 // the rest sees the capture through the seam
+    GzipSource* gzip = file ? file->gzip() : nullptr;
     if ( !reader.open() ) {
         // A stream stopped before its header came was not read: it did not
         // fail, and a cancel request still wins.
         auto result = stoppedBeforeHeader( input ).value_or(
             streamFailure( input ).value_or( failed( QString::fromStdString( reader.error() ) ) ) );
+        if ( gzip && gzip->cutOff() ) {
+            result = failed( QStringLiteral( "Cannot read the gzip-compressed capture: %1" )
+                                 .arg( QString::fromStdString( gzip->error() ) ) );
+        }
         return applyCancelRequest( std::move( result ), cancel );
     }
 
@@ -393,6 +400,19 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     }
 
     int lastPermille = -1;
+    auto reportProgress = [ & ] {
+        if ( !progress || !file ) {
+            return;
+        }
+        // A gzip-compressed file's progress is in compressed bytes.
+        const auto size = std::max<uint64_t>( file->size(), 1 );
+        const auto permille
+            = static_cast<int>( std::min<uint64_t>( file->consumed() * 1000 / size, 1000 ) );
+        if ( permille != lastPermille ) {
+            lastPermille = permille;
+            progress( permille );
+        }
+    };
     bool firstPacket = true;
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
@@ -448,16 +468,10 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
             }
         }
         firstPacket = false;
-        if ( progress && inputSize > 0 ) {
-            const auto permille = static_cast<int>(
-                std::min<uint64_t>( reader.bytesRead() * 1000 / inputSize, 1000 ) );
-            if ( permille != lastPermille ) {
-                lastPermille = permille;
-                progress( permille );
-            }
-        }
+        reportProgress();
     }
     beforeWait = nullptr;
+    reportProgress(); // a gzip stream's end lies behind its last packet
 
     auto broken = streamFailure( input );
     // A live capture that broke off keeps what was captured, once there is
@@ -489,7 +503,15 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
     }
     result.summary = summarise( std::move( stats ), tracker, labels, conversations, reader,
                                 options.maxStreams );
+    if ( gzip && gzip->cutOff() ) {
+        // The capture ends where its gzip stream does: as one cut off.
+        result.summary.endsInsideRecord = true;
+        result.summary.compressionProblem = gzip->error();
+    }
     index->setCaptureFile( live ? result.rawPath : inputPath );
+    if ( gzip ) {
+        index->setGzipAccessPoints( gzip->accessPoints() );
+    }
     result.index = std::move( index );
     outputDir.setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );
@@ -518,14 +540,16 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
                               const ConversionOptions& options )
 {
     return failedOnException( [ & ] {
-        QFile input;
+        CaptureFile file;
         QString inputError;
-        if ( !openRegularFile( inputPath, input, inputError ) ) {
+        if ( !file.open( inputPath, inputError ) ) {
             return failed( inputError );
         }
-        FileSource file( input );
-        const auto size = static_cast<uint64_t>( std::max<qint64>( input.size(), 1 ) );
-        return convertOrThrow( file, inputPath, QFileInfo( inputPath ).completeBaseName(), size,
+        if ( auto* gzip = file.gzip() ) {
+            // For the Packet Panel and Export Packets to reach any packet.
+            gzip->keepAccessPoints( options.gzipAccessSpan );
+        }
+        return convertOrThrow( file.source(), &file, inputPath, captureBaseName( inputPath ),
                                outputRoot, cancel, progress, options, nullptr );
     } );
 }
@@ -535,7 +559,7 @@ ConversionResult convertStream( ByteSource& source, const QString& name, const Q
                                 const LiveObserver& live )
 {
     return failedOnException( [ & ] {
-        return convertOrThrow( source, {}, name, 0, outputRoot, cancel, {}, options, &live );
+        return convertOrThrow( source, nullptr, {}, name, outputRoot, cancel, {}, options, &live );
     } );
 }
 
@@ -545,7 +569,7 @@ bool CaptureSummary::operator==( const CaptureSummary& other ) const
         return std::tie( s.packets, s.bytes, s.durationSeconds, s.firstTimeUtc, s.lastTimeUtc,
                          s.linkTypeNames, s.protocolPackets, s.protocolBytes, s.endpointPackets,
                          s.tunnelEndpointPackets, s.tcpMarkers, s.cutPackets, s.endsInsideRecord,
-                         s.streamCap, s.otherEndpointPackets );
+                         s.compressionProblem, s.streamCap, s.otherEndpointPackets );
     };
     return fields( *this ) == fields( other );
 }

@@ -16,7 +16,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(logsquirl_tcpdump
     VERSION   0.3.0
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -33,6 +33,49 @@ add_compile_definitions(LOGSQUIRL_PLUGIN_VERSION="${PROJECT_VERSION}")
 # ── Find Qt6 ──────────────────────────────────────────────────────────────
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Widgets)
 qt_standard_project_setup()
+
+# ── zlib, for gzip-compressed captures ────────────────────────────────────
+# Fetched as the release tarball, pinned by its SHA-256, and built here as a
+# static library of the files the plugin needs (zlib's own CMakeLists would
+# add a shared library, examples and install rules).  Qt does not offer gzip
+# streaming publicly (qUncompress() takes a whole zlib-format buffer), and a
+# system zlib is not there on every CI platform (Windows).  Z_PREFIX renames
+# its symbols to z_*, and they are hidden, so that it cannot clash with the
+# zlib Qt or the host loads.  Licence: NOTICE.
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW) # extracted files get the extraction time
+endif()
+FetchContent_Declare(tcpdump_zlib
+    URL      https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+    URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+    # No CMakeLists.txt there: the sources are fetched, not added as a project.
+    SOURCE_SUBDIR not-a-cmake-project
+)
+FetchContent_MakeAvailable(tcpdump_zlib)
+
+add_library(tcpdump_zlib STATIC
+    "${tcpdump_zlib_SOURCE_DIR}/adler32.c"
+    "${tcpdump_zlib_SOURCE_DIR}/crc32.c"
+    "${tcpdump_zlib_SOURCE_DIR}/deflate.c"    # the tests write gzip files
+    "${tcpdump_zlib_SOURCE_DIR}/inffast.c"
+    "${tcpdump_zlib_SOURCE_DIR}/inflate.c"
+    "${tcpdump_zlib_SOURCE_DIR}/inftrees.c"
+    "${tcpdump_zlib_SOURCE_DIR}/trees.c"
+    "${tcpdump_zlib_SOURCE_DIR}/zutil.c"
+)
+target_include_directories(tcpdump_zlib SYSTEM PUBLIC "${tcpdump_zlib_SOURCE_DIR}")
+target_compile_definitions(tcpdump_zlib PUBLIC Z_PREFIX)
+set_target_properties(tcpdump_zlib PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_definitions(tcpdump_zlib PRIVATE _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE)
+    target_compile_options(tcpdump_zlib PRIVATE /W0)
+else()
+    target_compile_options(tcpdump_zlib PRIVATE -w)
+endif()
 
 # ── Plugin shared library ─────────────────────────────────────────────────
 add_library(logsquirl_tcpdump SHARED
@@ -70,6 +113,7 @@ add_library(logsquirl_tcpdump SHARED
     src/capture_stats.cpp
     src/conversations.cpp
     src/capture_file.cpp
+    src/gzip_source.cpp
     src/capture_index.cpp
     src/packet_export.cpp
     src/pcap_converter.cpp
@@ -114,6 +158,7 @@ target_link_libraries(logsquirl_tcpdump
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        tcpdump_zlib
 )
 
 # ── Install rule ──────────────────────────────────────────────────────────

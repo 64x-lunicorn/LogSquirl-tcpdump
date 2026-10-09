@@ -305,6 +305,64 @@ stream as `convertPcap()` converts a file, into `<name>.log`, without
 progress, as a stream has no size. Regular files keep their own path:
 `convertPcap()` opens them as `FileSource` with size-based progress.
 
+#### gzip-compressed captures (`gzip_source.h/cpp`, `capture_file.h/cpp`)
+A `.pcap.gz`, `.pcapng.gz` or `.cap.gz` file is read as Wireshark reads
+it: decompressed on the fly. `CaptureFile::open()` opens the regular file
+and tells a gzip stream by its first bytes (`findGzipStart()`: the magic
+`1f 8b` at offset 0, or a full gzip header start behind up to
+`kMaxPreamble` bytes of text, as for `adb exec-out` output), never by the
+name; its `source()` is then a `GzipSource` over the `FileSource`, else the
+`FileSource` itself. The Converter, the `CaptureCursor` and Export Packets
+all open the capture through it, so everything past it sees the capture
+decompressed, and every offset (`ReaderCheckpoint::offset`,
+`recordOffset()`, the `RecordSpan`s) is one in the decompressed capture.
+
+`GzipSource` inflates with zlib into a ring of `kGzipWindow` (32 KiB) and
+returns the bytes from there, so a capture of any size takes that much
+memory plus a 64 KiB input buffer. A file of several members (`cat a.gz
+b.gz`) reads as one capture; bytes after a complete member that start no
+other one are ignored, as `gzip -d` ignores trailing garbage. A stream that
+ends inside a member, or whose data zlib rejects (a bad block, a CRC or
+length that does not match), ends there: `cutOff()` and `error()` ("the
+gzip stream is cut off", "the gzip data is corrupt (…)"). The Converter
+then ends Converted with what it read, and the summary is cut off
+(`endsInsideRecord`, with the reason in `compressionProblem`, which the
+sidebar shows); a stream cut off before the capture header fails the
+conversion ("Cannot read the gzip-compressed capture: …"). Progress counts
+compressed bytes consumed (`CaptureFile::consumed()`) against the file
+size. A gzip stream read from a live source is not decompressed:
+`findCaptureStart()` names gzip data as such.
+
+A deflate stream cannot be entered in the middle, but the Packet Panel,
+Follow stream content and Export Packets read packets by their offset. So
+the Converter's `GzipSource` keeps *access points*, the technique of
+zlib's `examples/zran.c`: every `GzipSource::kAccessSpan` (32 MiB, the
+option `gzipAccessSpan` for tests) of output, at the next deflate block
+boundary (`inflate(Z_BLOCK)`), the decompressed and compressed offset, the
+bits of the byte before that belong to the block, and the 32 KiB of output
+before it, which the block may refer back to: about 1 KiB of memory per MiB
+of capture. They go into the `CaptureIndex` (`setGzipAccessPoints()`), and
+a `GzipSource` given them (`useAccessPoints()`) seeks by them: `seek()` and
+`skip()` go to the last point before the offset (raw inflate primed with
+those bits and the window as dictionary; the member's trailer is then
+skipped by hand, its CRC unchecked) and decompress the rest, at most 32 MiB;
+without a point before it, a seek back starts again at the beginning. The
+input must be able to seek (`ByteSource::seek()`, which `FileSource` and
+`MemorySource` implement); a stream cannot.
+
+Decisions (#51): zlib is fetched at configure time (CMake `FetchContent`,
+the 1.3.1 release tarball pinned by SHA-256) and its inflate and deflate
+sources are built as a static library `tcpdump_zlib` inside this project,
+not through zlib's own CMakeLists (which adds a shared library, examples
+and installs). Qt has no public gzip streaming (`qUncompress()` takes a
+whole zlib-format buffer), and a system zlib is not there on every CI
+platform (Windows). The library is compiled with `Z_PREFIX` (its symbols
+are `z_inflate`, …) and hidden visibility, so that it cannot clash with
+the zlib Qt or LogSquirl loads. deflate is only linked into the tests,
+which compress their captures themselves. zstd and xz are out of scope:
+such a file is no capture to the plugin and fails as one; decompress it
+first. Packets are exported uncompressed.
+
 #### The Process Source (`process_source.h/cpp`)
 A capture program (tcpdump, dumpcap, adb, ssh, an extcap, a user's
 command) writes its capture to stdout and its complaints to stderr. A
@@ -1248,9 +1306,13 @@ While it converts, the Converter notes every packet in a `CaptureIndex`
 (`capture_index.h/cpp`), which keeps a `ReaderCheckpoint` every
 `kCheckpointInterval` (10,000) packets, the packet count, and the capture
 file's canonical path, size and modification time; a Converted result
-carries it as `index`. The capture file is opened by `openRegularFile()` and
-read through a `FileSource` (`capture_file.h/cpp`), which the
-`CaptureCursor` shares.
+carries it as `index`, with the access points of a gzip-compressed file
+(see *gzip-compressed captures*). The capture file is opened by a
+`CaptureFile` (`capture_file.h/cpp`: `openRegularFile()`, then a
+`FileSource`, decompressed by a `GzipSource` if need be), as the
+`CaptureCursor` and Export Packets open it. The text is named by
+`captureBaseName()`: the file name without its extension, and without
+`.gz` first (`trace.pcap.gz` gives `trace.log`).
 
 ### Settings and configuration dialog (`settings.h/cpp`, `configdialog.h/cpp`)
 `loadConversionOptions()` and `saveConversionOptions()` keep the
@@ -1748,7 +1810,13 @@ power mode over UDP, routing activation and diagnostic messages over TCP
 with UDS sessions, identifiers, a negative response, a response pending, a
 TransferData over two segments, a diagnostic message NACK and an alive
 check, an inverse version that does not match and a payload length its type
-does not allow, by `tests/make_doip_corpus.py`. The link layers' tests,
+does not allow, by `tests/make_doip_corpus.py`; `interfaces.pcapng.gz`,
+that capture in two gzip members, by `tests/make_gzip_corpus.py`: a
+`<name>.pcap.gz` or `<name>.pcapng.gz` converts to `<name>.txt`, the text
+of the capture in it. `tests/gzip_source_test.cpp` compresses its
+captures itself (`tests/gzip_writer.h`, with zlib's deflate), cut off,
+corrupt, in several members and flushed often, so that small captures get
+access points. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
