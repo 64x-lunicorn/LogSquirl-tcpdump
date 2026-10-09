@@ -223,6 +223,15 @@ the Command Palette), which shows the same fields in a dialog:
   error the section shows
 - **Snaplen**: the bytes kept of each packet, 262144 by default; a packet
   cut shorter is marked `[cut to N bytes]`
+- **Stop after time / packets / size**: the capture stops by itself at the
+  first of them it reaches, as with Stop (dumpcap's `-a duration`,
+  `packets`, `filesize`). The size is that of the raw capture, in MB of
+  1024 × 1024 bytes. The packet that reaches a count or a size is the last
+  one; the time also runs out while no packet comes. *No limit* by default
+- **Ring buffer** and **New file after**: for captures that run for hours
+  or days (dumpcap's `-b`). With *N files*, the raw capture is split into
+  files of the size or duration given, and only the newest N are kept;
+  see *Ring buffer* below. *Off* by default
 - **Start** and **Stop** (also **Plugins → tcpdump → Stop live capture**).
   Start is disabled while a capture file is read or a live capture runs;
   one live capture runs at a time, and the menu entry offers to stop the
@@ -376,6 +385,36 @@ is converted while it runs:
   copies the raw capture elsewhere, to convert again or open in Wireshark
 - If the source fails, e.g. the capture program exits with an error, the
   sidebar and a notification say why, and what was captured so far stays
+- With stop conditions, the sidebar also shows how far the capture is to
+  each (`Stops after 10:00 (35%), or at 1,000 packets (12%)`); one that
+  stops it says so in a notification
+
+The stop conditions and the ring buffer are the same for every source,
+and are remembered with the rest of the choice.
+
+#### Ring buffer
+
+With a ring buffer of N files, the raw capture is written to
+`<name>_00001_<time>.pcap`, `<name>_00002_<time>.pcap`, … (`.pcapng` for
+a pcapng stream; the time is when the file was started). A file ends after
+the packet that fills it, or the last packet before its duration is over,
+when the next packet comes: so no file is empty, a file may be one packet
+bigger than the size given, and one may cover more than its duration when
+no packet came for a while. Every file is a capture of its own: a pcap's
+header, or a pcapng's section header and interfaces, are repeated at its
+start, so Wireshark opens any of them. When the N+1st file starts, the
+oldest is deleted.
+
+The capture's tab is bounded too: it keeps the lines of the packets in
+the files kept. When the oldest file is deleted, its packets' lines are
+cut from the start of the `.log`, and LogSquirl reloads the tab, as it does
+a log that was truncated (marks on those lines go). The packet numbers in
+the No. column go on across the files. A line still selected from before
+(or in another view) of a packet whose file was deleted shows *Rotated
+away* in the Packet Panel; Follow stream content starts at the first
+packet kept. **Save capture…** writes the files kept as one capture
+(packets of the deleted files are gone); **Export packets…** copies the
+selected packets from the files they are in.
 
 ### Options
 

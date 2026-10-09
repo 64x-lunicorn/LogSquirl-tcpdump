@@ -88,6 +88,15 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources()
     return registry;
 }
 
+QString liveLimitsProblem( const LiveLimits& limits )
+{
+    if ( limits.ringFiles > 0 && !limits.ringBuffer() ) {
+        return QStringLiteral( "The ring buffer needs a file size or a file duration to start "
+                               "a new file at." );
+    }
+    return {};
+}
+
 QString captureFilterProblem( const QString& filter )
 {
     const auto trimmed = filter.trimmed();

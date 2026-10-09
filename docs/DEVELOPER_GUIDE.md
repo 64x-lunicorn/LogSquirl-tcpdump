@@ -1274,13 +1274,66 @@ breaks off with an error after its first packet ends Failed with the
 message *and* `outputPath`, `rawPath` and the summary of what was captured;
 before a packet, it leaves nothing behind, as before.
 
+#### Stop conditions and the ring buffer (`LiveLimits`, `raw_capture.h/cpp`)
+`convertStream()` takes `LiveLimits` (dumpcap's `-a` and `-b`; 0 is "none"
+throughout) and a `LiveClock`, the clock their durations are measured with
+(a test's fake one; empty: the steady clock). The stop conditions, a
+duration, a packet count and a size (bytes read from the stream), are
+checked after each packet, so the packet that reaches a count or a size is
+the last one; the duration is also checked while the stream has nothing to
+read: with a duration set, `LiveInput` waits in 10 ms slices and reads as
+ended at the deadline, though nothing comes (only a wait: the rest of a
+record that has come is read). The first condition reached ends the
+conversion as Stop does, Converted, with `ConversionResult::stoppedBy`
+saying which; one reached before the capture header came ends Stopped.
+
+With a ring buffer (`LiveLimits::ringBuffer()`: files kept, and a file size
+or duration) the raw capture is a `RawCapture` of numbered files,
+`<name>_00001_<yyyyMMddHHmmss>.pcap` and on. A file that a packet filled
+(by size, the copied headers included), or whose duration is over, ends
+when the next packet comes, after the record of the last one before it:
+`RawCapture::rotate( cut, packetsBefore, headers )` moves what was written
+past the cut into the new file, behind a copy of the headers the reader
+held after that packet (`CaptureReader::headers()`: a pcap's global
+header; a pcapng's section header, its section length set to -1, and the
+interfaces declared so far), and deletes the oldest files beyond
+`ringFiles`. A file is therefore never empty, and a duration is the least
+a file covers, not the most. Each file is a `CapturePart`
+(`capture_index.h`): its path, the packets before it, where its records
+start in the stream, the header bytes ahead of them, and where each copied
+header record lay in the stream. The text keeps the lines of the packets
+in the files kept: the Converter notes where each file's lines start in
+the `.log` and, when a file is deleted, cuts its lines out of the file in
+place (`cutText()`, through a second, binary handle) and writes on at the
+new end. LogSquirl, which follows the tab, re-reads a file that changed in
+the range it indexed as it does a truncated log; marks on dropped lines
+go. A snapshot goes out right after each rotation, so the Packet Panel's
+index follows the files at once.
+
+The `CaptureIndex` keeps the parts (`setCaptureParts()`, `parts()`,
+`partOf( number )`, `rotatedAway()`): its checkpoints stay in stream
+offsets, and the `CaptureCursor` reads a packet from its file, translating
+a checkpoint that lies after a packet of that file into it
+(`CapturePart::fileOffset()`), and telling the reader where the header
+records the checkpoint's state names lie there
+(`CaptureReader::relocateHeaders()`: a pcapng's section header and
+interfaces). A packet of a file deleted since, also through an index taken
+before the deletion, fails with *Rotated away: …*, never with another
+packet's bytes. `CapturedPacket::file` is the file it was read from:
+Export packets copies each packet from its own file, Follow stream content
+starts at the first packet kept, and `saveCaptureParts()` writes the files
+kept as one capture (the first whole, the records of the others without
+their copied headers) for **Save capture…**.
+
 `LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
 own and posts what it is told to its own (the UI) thread as signals:
 `readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
 `finished( ConversionResult )`. The source is made on the worker by a
 `SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
 ProcessCommand )` for a capture program), as a `ProcessSource` must be.
-`stop()` sets the source's stop flag, `cancel()` also the cancel flag. The
+`stop()` sets the source's stop flag, `cancel()` also the cancel flag;
+`setLimits()` and `setClock()` before `start()` hand the conversion its
+`LiveLimits` and clock, the same for every source kind. The
 outcome is posted before the source is destroyed, so a program that takes
 up to `kTerminateGrace` to end does not delay it; the destructor stops and
 waits for the worker.

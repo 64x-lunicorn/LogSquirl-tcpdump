@@ -62,6 +62,7 @@
 #include "packet_panel.h"
 #include "pcap_converter.h"
 #include "plugin.h"
+#include "raw_capture.h"
 #include "regex_lab.h"
 #include "settings.h"
 #include "tempdirs.h"
@@ -296,7 +297,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     // when LogSquirl quits: this keeps it.
     saveButton_ = new QPushButton( "Save capture\xe2\x80\xa6" );
     saveButton_->setObjectName( "saveCaptureButton" );
-    saveButton_->setToolTip( "Save the raw capture of this tab as a pcap file" );
+    saveButton_->setToolTip( "Save the raw capture of this tab as a pcap file; a ring buffer's "
+                             "files kept as one" );
     saveButton_->setHidden( true );
     layout->addWidget( saveButton_ );
     connect( saveButton_, &QPushButton::clicked, this, &SidebarWidget::saveCapture );
@@ -799,7 +801,8 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
     summaryLabel_->setText( html );
 }
 
-bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource )
+bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource,
+                                      const LiveLimits& limits )
 {
     if ( refuseWhileBusy() ) {
         return false;
@@ -810,6 +813,8 @@ bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFa
     live_.reset();
     live_ = std::make_unique<LiveCapture>(
         name, tempRoot_, loadConversionOptions( hostConfigDir() ), std::move( makeSource ) );
+    live_->setLimits( limits );
+    liveLimits_ = limits;
     connect( live_.get(), &LiveCapture::readyToOpen, this, &SidebarWidget::openLiveCapture );
     connect( live_.get(), &LiveCapture::snapshotTaken, this, &SidebarWidget::takeLiveSnapshot );
     connect( live_.get(), &LiveCapture::finished, this, &SidebarWidget::finishLiveCapture );
@@ -850,8 +855,14 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
     else if ( choice.snaplen < 1 || choice.snaplen > kMaxSnaplen ) {
         problem = QString( "The snaplen must be 1 to %1 bytes." ).arg( kMaxSnaplen );
     }
-    else if ( problem = captureFilterProblem( choice.filter ); problem.isEmpty() ) {
-        problem = kind->validate( choice );
+    else {
+        problem = captureFilterProblem( choice.filter );
+        if ( problem.isEmpty() ) {
+            problem = liveLimitsProblem( choice.limits );
+        }
+        if ( problem.isEmpty() ) {
+            problem = kind->validate( choice );
+        }
     }
     if ( !problem.isEmpty() ) {
         hostNotify( "Cannot start the live capture: " + problem );
@@ -867,7 +878,7 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
         liveForm_->setChoice( choice );
     }
     const auto source = kind->makeSource( choice );
-    if ( !startLiveCapture( liveCaptureName( choice ), source ) ) {
+    if ( !startLiveCapture( liveCaptureName( choice ), source, choice.limits ) ) {
         return false;
     }
     liveKind_ = kind;
@@ -989,7 +1000,7 @@ void SidebarWidget::setCapturing( bool capturing )
 
 void SidebarWidget::showLiveProgress()
 {
-    liveLabel_->setText( liveProgressText( liveSnapshot_, liveClock_.elapsed() ) );
+    liveLabel_->setText( liveProgressText( liveSnapshot_, liveClock_.elapsed(), liveLimits_ ) );
 }
 
 void SidebarWidget::openLiveCapture( const QString& logPath, const QString& rawPath )
@@ -1113,6 +1124,12 @@ void SidebarWidget::reportLiveOutcome( const ConversionResult& result )
         hostLog(
             LOGSQUIRL_LOG_INFO,
             QString( "Captured %1 packets from %2" ).arg( result.summary.packets ).arg( name ) );
+        if ( result.stoppedBy != StopCondition::None ) {
+            // Nobody pressed Stop: whoever left it running is told.
+            const auto message = liveStopText( name, result.stoppedBy, liveLimits_ );
+            hostLog( LOGSQUIRL_LOG_INFO, message );
+            hostNotify( message );
+        }
         break;
     }
 
@@ -1135,33 +1152,47 @@ void SidebarWidget::saveCapture()
     if ( found == converted_.end() || found->second.rawPath.isEmpty() ) {
         return;
     }
-    const auto raw = found->second.rawPath;
+    // The files of the capture, those a ring buffer keeps, as the latest
+    // index has them; before the first one, the raw file.
+    std::vector<CapturePart> parts;
+    if ( found->second.index ) {
+        parts = found->second.index->parts();
+    }
+    if ( parts.empty() ) {
+        CapturePart part;
+        part.path = found->second.rawPath;
+        parts.push_back( part );
+    }
     if ( lastDir_.isEmpty() ) {
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
 
+    // Named after the text, <name>.pcap: a ring buffer's files are numbered.
+    const auto suggested = QFileInfo( frontKey_ ).completeBaseName() + "."
+                           + QFileInfo( found->second.rawPath ).suffix();
     // The dialog runs its own event loop, as in chooseAndOpen().
     const QPointer<SidebarWidget> self( this );
-    const auto target
-        = chooseSaveFile_( this, QDir( lastDir_ ).filePath( found->second.fileName ) );
+    const auto target = chooseSaveFile_( this, QDir( lastDir_ ).filePath( suggested ) );
     if ( !self || target.isEmpty() ) {
         return;
     }
     lastDir_ = QFileInfo( target ).absolutePath();
 
-    // The dialog asked before replacing a file; QFile::copy() does not.
-    if ( QFileInfo::exists( target ) ) {
-        QFile::remove( target );
-    }
-    if ( !QFile::copy( raw, target ) ) {
-        const auto message = QString( "The capture could not be saved as %1" )
-                                 .arg( QDir::toNativeSeparators( target ) );
+    // The dialog asked before replacing a file; it is replaced when the
+    // capture is complete.
+    QString error;
+    if ( !saveCaptureParts( parts, target, error ) ) {
+        const auto message = QString( "The capture could not be saved as %1: %2" )
+                                 .arg( QDir::toNativeSeparators( target ), error );
         hostLog( LOGSQUIRL_LOG_ERROR, message );
         hostNotify( message );
         return;
     }
-    QFile( target ).setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
-    hostLog( LOGSQUIRL_LOG_INFO, "Saved the capture as " + target );
+    hostLog( LOGSQUIRL_LOG_INFO, parts.size() > 1
+                                     ? QString( "Saved the %1 files of the ring buffer as %2" )
+                                           .arg( parts.size() )
+                                           .arg( target )
+                                     : "Saved the capture as " + target );
 }
 
 namespace {
@@ -1336,7 +1367,30 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     return html;
 }
 
-QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs )
+namespace {
+
+/// @p seconds as m:ss, or h:mm:ss from an hour on.
+QString clockTime( qint64 seconds )
+{
+    seconds = std::max<qint64>( seconds, 0 );
+    return seconds >= 3600
+               ? QString( "%1:%2:%3" )
+                     .arg( seconds / 3600 )
+                     .arg( seconds / 60 % 60, 2, 10, QChar( '0' ) )
+                     .arg( seconds % 60, 2, 10, QChar( '0' ) )
+               : QString( "%1:%2" ).arg( seconds / 60 ).arg( seconds % 60, 2, 10, QChar( '0' ) );
+}
+
+/// How far @p done is to @p limit, in percent, at most 100.
+int percentOf( uint64_t done, uint64_t limit )
+{
+    return static_cast<int>(
+        std::min<uint64_t>( done * 100 / std::max<uint64_t>( limit, 1 ), 100 ) );
+}
+
+} // namespace
+
+QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs, const LiveLimits& limits )
 {
     const auto packets = snapshot.summary.packets;
     QString rate = "-";
@@ -1346,16 +1400,57 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs )
                                 'f', 1 );
     }
     const auto seconds = std::max<qint64>( elapsedMs, 0 ) / 1000;
-    const auto elapsed
-        = seconds >= 3600
-              ? QString( "%1:%2:%3" )
-                    .arg( seconds / 3600 )
-                    .arg( seconds / 60 % 60, 2, 10, QChar( '0' ) )
-                    .arg( seconds % 60, 2, 10, QChar( '0' ) )
-              : QString( "%1:%2" ).arg( seconds / 60 ).arg( seconds % 60, 2, 10, QChar( '0' ) );
-    return QString( "Packets: %1 \xc2\xb7 Bytes: %2 \xc2\xb7 %3 packets/s \xc2\xb7 Elapsed %4" )
-        .arg( QLocale().toString( static_cast<qulonglong>( packets ) ),
-              formatBytes( snapshot.summary.bytes ), rate, elapsed );
+    auto text
+        = QString( "Packets: %1 \xc2\xb7 Bytes: %2 \xc2\xb7 %3 packets/s \xc2\xb7 Elapsed %4" )
+              .arg( QLocale().toString( static_cast<qulonglong>( packets ) ),
+                    formatBytes( snapshot.summary.bytes ), rate, clockTime( seconds ) );
+
+    // Each stop condition, and how far the capture is to it: the one
+    // furthest on stops it first, unless the traffic changes.
+    QStringList stops;
+    if ( limits.duration.count() > 0 ) {
+        stops << QString( "after %1 (%2%)" )
+                     .arg( clockTime( limits.duration.count() ) )
+                     .arg( percentOf( static_cast<uint64_t>( seconds ),
+                                      static_cast<uint64_t>( limits.duration.count() ) ) );
+    }
+    if ( limits.packets > 0 ) {
+        stops << QString( "at %1 packets (%2%)" )
+                     .arg( QLocale().toString( static_cast<qulonglong>( limits.packets ) ) )
+                     .arg( percentOf( packets, limits.packets ) );
+    }
+    if ( limits.bytes > 0 ) {
+        stops << QString( "at %1 (%2%)" )
+                     .arg( formatBytes( limits.bytes ) )
+                     .arg( percentOf( snapshot.rawBytes, limits.bytes ) );
+    }
+    if ( !stops.isEmpty() ) {
+        text += "\nStops " + stops.join( ", or " );
+    }
+    if ( limits.ringBuffer() ) {
+        text += QString( "\nRing buffer: file %1, keeping the last %2" )
+                    .arg( snapshot.rawFile )
+                    .arg( limits.ringFiles );
+    }
+    return text;
+}
+
+QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits )
+{
+    switch ( condition ) {
+    case StopCondition::Duration:
+        return QString( "The capture %1 stopped after %2, as set." )
+            .arg( name, clockTime( limits.duration.count() ) );
+    case StopCondition::Packets:
+        return QString( "The capture %1 stopped after %2 packets, as set." )
+            .arg( name, QLocale().toString( static_cast<qulonglong>( limits.packets ) ) );
+    case StopCondition::Bytes:
+        return QString( "The capture %1 stopped at %2 captured, as set." )
+            .arg( name, formatBytes( limits.bytes ) );
+    case StopCondition::None:
+        break;
+    }
+    return QString( "The capture %1 stopped." ).arg( name );
 }
 
 } // namespace tcpdump

@@ -65,8 +65,15 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
 
 /// The progress of a live capture as the sidebar shows it, in place of a
 /// percentage (a stream has no size): packets, bytes and packets/s as of
-/// @p snapshot, and the time since the capture started, @p elapsedMs.
-QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs );
+/// @p snapshot, and the time since the capture started, @p elapsedMs.  With
+/// @p limits, how far the capture is to each stop condition, and the ring
+/// buffer's file.
+QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
+                          const LiveLimits& limits = {} );
+
+/// What the sidebar says of a live capture @p name that @p condition of
+/// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
+QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
 
 /**
  * Sidebar widget displayed in the LogSquirl sidebar panel.
@@ -207,10 +214,12 @@ public:
      * (LiveCapture), named @p name: its files are <name>.log and the raw
      * <name>.pcap or .pcapng.  Its tab opens, following the file, once the
      * first packet line is in it; a capture that ends without packets opens
-     * none and says so.  False, with a notification, while a capture is
-     * being read or captured.
+     * none and says so.  It stops by itself, and keeps a ring buffer, as
+     * @p limits say.  False, with a notification, while a capture is being
+     * read or captured.
      */
-    bool startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource );
+    bool startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource,
+                           const LiveLimits& limits = {} );
 
     /**
      * Capture @p choice live: its source (a kind of the live sources, see
@@ -379,6 +388,7 @@ private:
     std::unique_ptr<LiveCapture> live_;
     QString liveKey_;           ///< The live capture's text file, once it is there.
     LiveSnapshot liveSnapshot_; ///< The latest snapshot of the live capture.
+    LiveLimits liveLimits_;     ///< The live capture's stop conditions and ring buffer.
     QElapsedTimer liveClock_;   ///< Since the live capture started.
     QTimer liveTicker_;         ///< Moves the elapsed time on.
     /// Where the live capture form and dialog list devices and interfaces;

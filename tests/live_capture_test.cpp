@@ -94,6 +94,42 @@ SCENARIO( "The progress of a live capture is packets, bytes, packets/s and elaps
     REQUIRE( text.contains( "Elapsed 1:23" ) );
     REQUIRE_FALSE( text.contains( "%" ) );
     REQUIRE( liveProgressText( {}, 3723000 ).contains( "Elapsed 1:02:03" ) );
+
+    WHEN( "the capture has stop conditions and a ring buffer" )
+    {
+        LiveLimits limits;
+        limits.duration = std::chrono::seconds( 600 );
+        limits.packets = 10000;
+        limits.bytes = 4 * 1024;
+        limits.ringFiles = 5;
+        limits.fileBytes = 1024;
+        snapshot.rawBytes = 1024;
+        snapshot.rawFile = 7;
+
+        THEN( "it shows how far it is to each, and the ring buffer's file" )
+        {
+            const auto limited = liveProgressText( snapshot, 150000, limits );
+            REQUIRE( limited.contains( "Stops after 10:00 (25%), or at "
+                                       + QLocale().toString( 10000 ) + " packets (12%), or at "
+                                       + "4.0 KB (25%)" ) );
+            REQUIRE( limited.contains( "Ring buffer: file 7, keeping the last 5" ) );
+        }
+    }
+}
+
+SCENARIO( "A live capture that a stop condition ended says which", "[live_capture]" )
+{
+    LiveLimits limits;
+    limits.duration = std::chrono::seconds( 90 );
+    limits.packets = 1000;
+    limits.bytes = 2 * 1024 * 1024;
+    REQUIRE( liveStopText( "eth0", StopCondition::Duration, limits )
+             == "The capture eth0 stopped after 1:30, as set." );
+    REQUIRE( liveStopText( "eth0", StopCondition::Packets, limits )
+             == "The capture eth0 stopped after " + QLocale().toString( 1000 )
+                    + " packets, as set." );
+    REQUIRE( liveStopText( "eth0", StopCondition::Bytes, limits )
+             == "The capture eth0 stopped at 2.0 MB captured, as set." );
 }
 
 #ifdef Q_OS_UNIX
@@ -268,6 +304,93 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
 }
 
 #endif
+
+SCENARIO( "A live capture with a ring buffer keeps the newest packets in its tab",
+          "[live_capture]" )
+{
+    GIVEN( "the sidebar capturing from a pipe into a ring buffer of two files of two packets" )
+    {
+        FakeHost host;
+        QTemporaryDir root;
+        SidebarWidget sidebar;
+        sidebar.setTempRoot( root.path() );
+        sidebar.show();
+        auto pipe = std::make_shared<Pipe>();
+        LiveLimits limits;
+        limits.ringFiles = 2;
+        limits.fileBytes = 24 + 2 * ( 16 + datagram( 0 ).size() );
+        REQUIRE( sidebar.startLiveCapture(
+            "eth0", factoryOf( [ pipe ]( const std::atomic_bool* stop ) {
+                return std::make_unique<FdSource>( pipe->readEnd(), stop );
+            } ),
+            limits ) );
+        auto* live = sidebar.findChild<QLabel*>( "liveProgress" );
+        std::vector<Bytes> packets;
+        for ( int i = 0; i < 6; ++i ) {
+            packets.push_back( datagram( i ) );
+        }
+        const auto whole = pcapOf( packets );
+        const auto firstEnd = 24 + 16 + static_cast<std::ptrdiff_t>( packets[ 0 ].size() );
+
+        WHEN( "a packet comes and its line is selected" )
+        {
+            pipe->write( Bytes( whole.begin(), whole.begin() + firstEnd ) );
+            REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
+            const auto logPath = host.openedFiles.first();
+            sidebar.showSummaryFor( logPath );
+            const auto firstLine = readLines( logPath ).at( 1 );
+
+            AND_WHEN( "five more come, so that its file is deleted, and the capture is stopped" )
+            {
+                pipe->write( Bytes( whole.begin() + firstEnd, whole.end() ) );
+                REQUIRE( waitFor( [ & ] { return live->text().contains( "file 3" ); } ) );
+                REQUIRE( waitFor( [ & ] { return readLines( logPath ).size() == 5; } ) );
+                sidebar.findChild<QPushButton*>( "stopButton" )->click();
+                REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+
+                THEN( "the tab keeps the lines of packets 3 to 6" )
+                {
+                    const auto lines = readLines( logPath );
+                    REQUIRE( lines.size() == 5 );
+                    REQUIRE( lines.at( 1 ).startsWith( "3 " ) );
+                    REQUIRE( lines.at( 4 ).startsWith( "6 " ) );
+                }
+
+                THEN( "the Packet Panel says the first packet was rotated away" )
+                {
+                    auto* panel = sidebar.packetPanel();
+                    host.selectedLines = { firstLine };
+                    panel->refresh();
+                    REQUIRE( waitFor(
+                        [ & ] { return panel->statusText().contains( "Rotated away" ); } ) );
+                    REQUIRE( panel->shownPacket() == 0 );
+
+                    host.selectedLines = { readLines( logPath ).at( 2 ) };
+                    panel->refresh();
+                    REQUIRE( waitFor( [ & ] { return panel->shownPacket() == 4; } ) );
+                }
+
+                THEN( "Save capture… writes the files kept as one capture of packets 3 to 6" )
+                {
+                    QTemporaryDir saved;
+                    const auto target = saved.filePath( "kept.pcap" );
+                    QString suggested;
+                    sidebar.setSaveChooser( [ & ]( QWidget*, const QString& path ) {
+                        suggested = path;
+                        return target;
+                    } );
+                    sidebar.findChild<QPushButton*>( "saveCaptureButton" )->click();
+                    REQUIRE( QFileInfo( suggested ).fileName() == "eth0.pcap" );
+                    const auto third
+                        = 24 + 2 * ( 16 + static_cast<std::ptrdiff_t>( packets[ 0 ].size() ) );
+                    REQUIRE( fileContent( target )
+                             == asByteArray( Bytes( whole.begin(), whole.begin() + 24 )
+                                             + Bytes( whole.begin() + third, whole.end() ) ) );
+                }
+            }
+        }
+    }
+}
 
 SCENARIO( "A live capture whose source fails keeps its tab and says why", "[live_capture]" )
 {

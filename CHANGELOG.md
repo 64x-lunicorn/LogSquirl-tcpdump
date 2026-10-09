@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live capture stop conditions and ring buffer.** A live capture, from
+  any source, can stop by itself after a time, a number of packets or a
+  size, the first reached ending it as Stop does; the sidebar shows how far
+  it is to each, and a notification which one stopped it. A **Ring
+  buffer** splits the raw capture into `<name>_00001_<time>.pcap`, … of a
+  size or duration and keeps the newest N, each a capture of its own (a
+  pcapng's section header and interfaces repeated). The tab keeps the
+  lines of the packets kept: the oldest file's lines are cut from the
+  `.log` when it is deleted, and the Packet Panel says *Rotated away* for
+  a packet that was in it. **Save capture…** writes the files kept as one
+  capture; Export packets… reads each packet from its file. The settings
+  are fields of the Live capture form, kept in `settings.ini` (#77)
 - **Custom command as a live source.** The **Custom command** source runs
   a command whose stdout is a pcap or pcapng stream (a vendor tool, `nc`,
   `ssh router tcpdump -w -`) and converts it live. The line is split like

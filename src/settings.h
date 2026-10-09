@@ -68,7 +68,8 @@ ConversionOptions loadConversionOptions( const QString& configDir );
 bool saveConversionOptions( const QString& configDir, const ConversionOptions& options );
 
 /// The live capture choice saved in @p configDir; the snaplen within 1 to
-/// kMaxSnaplen.  Without a directory, or a file, an empty choice.
+/// kMaxSnaplen, the limits within theirs (kMaxLimitSeconds, …), none if
+/// none were saved.  Without a directory, or a file, an empty choice.
 LiveChoice loadLiveChoice( const QString& configDir );
 
 /// Save @p choice in @p configDir, its options as those of its source
