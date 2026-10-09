@@ -566,13 +566,13 @@ void SidebarWidget::exportSelectedPackets()
     // Only when the selection's packets are exported does its truncation matter.
     request.truncated = request.truncated && request.numbers == ofSelection;
     hostLog( LOGSQUIRL_LOG_INFO, QString( "Exporting %1 packets of %2 to %3" )
-                                     .arg( request.numbers.size() )
+                                     .arg( request.numbers.count() )
                                      .arg( request.captureName, request.outputPath ) );
 
     auto cancelled = std::make_shared<std::atomic_bool>( false );
     cancelExport_ = cancelled;
     exportProgress_ = new QProgressDialog(
-        QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.size() ), "Cancel", 0,
+        QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.count() ), "Cancel", 0,
         1000, this );
     exportProgress_->setObjectName( "exportProgress" );
     exportProgress_->setWindowTitle( "Export Packets" );

@@ -30,6 +30,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace tcpdump {
@@ -78,7 +79,14 @@ ExportDialog::ExportDialog( const ExportRequest& request, QWidget* parent )
     layout->addWidget( buttons );
     connect( buttons, &QDialogButtonBox::accepted, this, &QDialog::accept );
     connect( buttons, &QDialogButtonBox::rejected, this, &QDialog::reject );
-    connect( text_, &QPlainTextEdit::textChanged, this, &ExportDialog::update );
+    updateTimer_ = new QTimer( this );
+    updateTimer_->setSingleShot( true );
+    updateTimer_->setInterval( kUpdateDelayMs );
+    connect( updateTimer_, &QTimer::timeout, this, &ExportDialog::update );
+    connect( text_, &QPlainTextEdit::textChanged, this, [ this ] {
+        exportButton_->setEnabled( false ); // until the text is read again
+        updateTimer_->start();
+    } );
 
     update();
 }
@@ -86,14 +94,24 @@ ExportDialog::ExportDialog( const ExportRequest& request, QWidget* parent )
 void ExportDialog::setText( const QString& text )
 {
     text_->setPlainText( text );
+    update();
+}
+
+const PacketSet& ExportDialog::packetSet()
+{
+    if ( updateTimer_->isActive() ) {
+        update();
+    }
+    return set_;
 }
 
 void ExportDialog::update()
 {
+    updateTimer_->stop();
     set_ = parsePacketSet( text_->toPlainText(), packets_ );
-    auto count = set_.numbers.size() == 1
-                     ? QStringLiteral( "1 packet" )
-                     : QStringLiteral( "%1 packets" ).arg( set_.numbers.size() );
+    const auto packets = set_.numbers.count();
+    auto count = packets == 1 ? QStringLiteral( "1 packet" )
+                              : QStringLiteral( "%1 packets" ).arg( packets );
     if ( set_.skipped > 0 ) {
         count += QStringLiteral( "; %1 skipped that name no packet of the capture" )
                      .arg( set_.skipped );

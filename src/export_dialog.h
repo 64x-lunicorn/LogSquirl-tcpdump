@@ -36,15 +36,16 @@
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QTimer;
 
 namespace tcpdump {
 
 /// What Export packets… asks the user to confirm, and where the export goes.
 struct ExportRequest {
-    QString captureName;           ///< The capture's file name, without directory.
-    uint32_t packets = 0;          ///< Packets of the capture.
-    std::vector<uint32_t> numbers; ///< The packets to export, ascending.
-    size_t selectedLines = 0;      ///< Lines the host told as selected.
+    QString captureName;      ///< The capture's file name, without directory.
+    uint32_t packets = 0;     ///< Packets of the capture.
+    PacketNumbers numbers;    ///< The packets to export.
+    size_t selectedLines = 0; ///< Lines the host told as selected.
     /// The host told only the first selected lines: at most
     /// LOGSQUIRL_SELECTED_LOG_LINES_MAX_LINES or _MAX_BYTES of them.
     bool truncated = false;
@@ -66,10 +67,7 @@ public:
     explicit ExportDialog( const ExportRequest& request, QWidget* parent = nullptr );
 
     /// The packets the text names now.
-    const PacketSet& packetSet() const
-    {
-        return set_;
-    }
+    const PacketSet& packetSet();
 
     /// Replace the text, as the user would (for tests).
     void setText( const QString& text );
@@ -78,8 +76,13 @@ private:
     /// Read the text again and show what it names.
     void update();
 
+    /// The text is read again this long after the last change, not on
+    /// every key: a long paste of packet lines takes a while.
+    static constexpr int kUpdateDelayMs = 200;
+
     uint32_t packets_;
     PacketSet set_;
+    QTimer* updateTimer_ = nullptr;
     QPlainTextEdit* text_ = nullptr;
     QLabel* count_ = nullptr;
     QPushButton* exportButton_ = nullptr;

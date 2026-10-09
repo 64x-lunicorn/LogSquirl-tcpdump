@@ -2160,7 +2160,11 @@ export, conversation statistics):
   itself is refused. `parsePacketSet()` reads packet lines (their No.) and
   numbers and ranges ("1-5, 9") and counts what names no packet;
   `packetLinesOf()` reads packet lines only, as the selection holds them;
-  `formatPacketRanges()` writes numbers back as ranges.
+  `formatPacketRanges()` writes numbers back as ranges. The numbers are a
+  `PacketNumbers`, ascending ranges apart from each other, never one entry
+  per packet: "1-3000000000" takes a few bytes and is counted at once. The
+  `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
+  change, not on every key.
   `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
   packets…) reads the selection with `get_selected_log_lines`, whose
   `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
