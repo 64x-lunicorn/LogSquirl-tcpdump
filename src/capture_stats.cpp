@@ -49,11 +49,21 @@ void CaptureStats::add( const PacketRecord& pkt )
     addLinkType( pkt.linkType );
     ++protocolPackets[ pkt.protocol ];
     protocolBytes[ pkt.protocol ] += pkt.capturedLen;
-    countEndpoint( pkt.srcIp );
-    countEndpoint( pkt.dstIp );
+    countEndpoint( endpointPackets, pkt.srcIp );
+    countEndpoint( endpointPackets, pkt.dstIp );
+    // Nested tunnels often share their endpoints: each counts the packet
+    // once.  A packet has at most kMaxTunnels, so a list is searched.
+    std::vector<const std::string*> tunnelEnds;
     for ( const auto& tunnel : pkt.tunnels ) {
-        countEndpoint( tunnel.srcIp );
-        countEndpoint( tunnel.dstIp );
+        for ( const auto* address : { &tunnel.srcIp, &tunnel.dstIp } ) {
+            const auto seen = std::find_if(
+                tunnelEnds.begin(), tunnelEnds.end(),
+                [ address ]( const std::string* other ) { return *other == *address; } );
+            if ( seen == tunnelEnds.end() ) {
+                tunnelEnds.push_back( address );
+                countEndpoint( tunnelEndpointPackets, *address );
+            }
+        }
     }
 }
 
@@ -73,17 +83,18 @@ void CaptureStats::addLinkType( uint32_t linkType )
     }
 }
 
-void CaptureStats::countEndpoint( const std::string& address )
+void CaptureStats::countEndpoint( std::map<std::string, uint64_t>& counts,
+                                  const std::string& address )
 {
     if ( address.empty() ) {
         return;
     }
-    const auto known = endpointPackets.find( address );
-    if ( known != endpointPackets.end() ) {
+    const auto known = counts.find( address );
+    if ( known != counts.end() ) {
         ++known->second;
     }
-    else if ( endpointPackets.size() < maxEndpoints ) {
-        endpointPackets.emplace( address, 1 );
+    else if ( endpointPackets.size() + tunnelEndpointPackets.size() < maxEndpoints ) {
+        counts.emplace( address, 1 );
     }
     else {
         ++otherEndpointPackets;

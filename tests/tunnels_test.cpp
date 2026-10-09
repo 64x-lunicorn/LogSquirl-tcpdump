@@ -634,15 +634,47 @@ SCENARIO( "The Capture Summary counts a tunnel's endpoints", "[tunnels]" )
     {
         const auto pkt = only( overVxlan( 100, innerEth( EthertypeIpv4, innerTcp() ) ) );
 
-        THEN( "the inner and the outer addresses are endpoints" )
+        THEN( "the inner addresses are endpoints, the outer ones tunnel endpoints" )
         {
             CaptureStats stats;
             stats.add( pkt );
+            REQUIRE( stats.endpointPackets.size() == 2 );
             REQUIRE( stats.endpointPackets.at( "192.168.1.1" ) == 1 );
             REQUIRE( stats.endpointPackets.at( "192.168.1.2" ) == 1 );
-            REQUIRE( stats.endpointPackets.at( "10.0.0.1" ) == 1 );
-            REQUIRE( stats.endpointPackets.at( "10.0.0.2" ) == 1 );
+            REQUIRE( stats.tunnelEndpointPackets.size() == 2 );
+            REQUIRE( stats.tunnelEndpointPackets.at( "10.0.0.1" ) == 1 );
+            REQUIRE( stats.tunnelEndpointPackets.at( "10.0.0.2" ) == 1 );
             REQUIRE( stats.protocolPackets.at( "TCP" ) == 1 );
+        }
+    }
+
+    GIVEN( "a packet carried through two tunnels between the same endpoints" )
+    {
+        const auto pkt = only( overVxlan(
+            100, innerEth( EthertypeIpv4,
+                           outerIpv4( IpProtoGre, gre( EthertypeIpv4, innerTcp() ) ) ) ) );
+
+        THEN( "each tunnel endpoint counts the packet once" )
+        {
+            CaptureStats stats;
+            stats.add( pkt );
+            REQUIRE( stats.tunnelEndpointPackets.size() == 2 );
+            REQUIRE( stats.tunnelEndpointPackets.at( "10.0.0.1" ) == 1 );
+            REQUIRE( stats.tunnelEndpointPackets.at( "10.0.0.2" ) == 1 );
+        }
+    }
+
+    GIVEN( "statistics that keep at most three addresses, and a tunnelled packet" )
+    {
+        const auto pkt = only( overVxlan( 100, innerEth( EthertypeIpv4, innerTcp() ) ) );
+        CaptureStats stats;
+        stats.maxEndpoints = 3;
+        stats.add( pkt );
+
+        THEN( "endpoints and tunnel endpoints share the cap" )
+        {
+            REQUIRE( stats.endpointPackets.size() + stats.tunnelEndpointPackets.size() == 3 );
+            REQUIRE( stats.otherEndpointPackets == 1 );
         }
     }
 }

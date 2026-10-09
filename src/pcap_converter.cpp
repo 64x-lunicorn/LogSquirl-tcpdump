@@ -108,6 +108,7 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     summary.protocolPackets = std::move( stats.protocolPackets );
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );
+    summary.tunnelEndpointPackets = std::move( stats.tunnelEndpointPackets );
     for ( size_t i = 0; i < kTcpMarkerKinds; ++i ) {
         if ( stats.tcpMarkers[ i ] > 0 ) {
             summary.tcpMarkers.emplace_back( tcpMarkerName( static_cast<TcpMarker>( i ) ),

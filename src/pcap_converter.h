@@ -63,8 +63,12 @@ struct CaptureSummary {
     std::vector<std::string> linkTypeNames;
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
-    /// Packets per IP address, for every address that was counted.
+    /// Packets per IP address in the Source or Destination column, for
+    /// every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
+    /// Packets per address of a tunnel's endpoints, which no column shows
+    /// (CaptureStats::tunnelEndpointPackets); empty without tunnels.
+    std::map<std::string, uint64_t> tunnelEndpointPackets;
     /// TCP segments per analysis marker ("TCP Retransmission", …), for the
     /// kinds that occur, in the order of TcpMarker.
     std::vector<std::pair<std::string, uint64_t>> tcpMarkers;

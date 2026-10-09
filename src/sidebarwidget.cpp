@@ -33,7 +33,9 @@
  *
  * The endpoints and protocols its summary lists are links, on a host that
  * has the Regex Lab: a click opens the Lab with the pattern of their lines
- * (see regex_lab.h).
+ * (see regex_lab.h).  The tunnel endpoints are not: the addresses of the
+ * packets that carried a tunnelled one show in no column, so no pattern
+ * could pick their lines.
  *
  * It keeps each converted capture's summary under the path of its .log file
  * and shows the one of the tab in front, as the host reports tab switches.
@@ -531,6 +533,21 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
         html += QString( "Other endpoints: %1 pkts<br>" )
                     .arg( QLocale().toString(
                         static_cast<qulonglong>( *summary.otherEndpointPackets ) ) );
+    }
+
+    // The tunnels' endpoints, which no line shows: plain text, no filter
+    if ( !summary.tunnelEndpointPackets.empty() ) {
+        html += QString( "<br><b>Tunnel endpoints</b> (%1 unique)<br>" )
+                    .arg( summary.tunnelEndpointPackets.size() );
+        int shownTunnel = 0;
+        for ( const auto& [ ip, count ] : byCount( summary.tunnelEndpointPackets ) ) {
+            if ( shownTunnel >= 8 )
+                break;
+            html += QString::fromStdString( ip ).toHtmlEscaped();
+            html += QString( ": %1 pkts<br>" )
+                        .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
+            shownTunnel++;
+        }
     }
     if ( summary.streamCap ) {
         html += QString( "<br><i>More than %1 conversations: later ones show stream ? in the "
