@@ -29,7 +29,8 @@
  * records every choice it was asked to capture, so a test sees the filter
  * and snaplen the UI passed.  With a program set, it runs that program
  * instead (the default makeSource(), a Process Source), its arguments
- * `-i <interface> -s <snaplen> <filter>`.
+ * `-i <interface> -s <snaplen> <filter>`.  With a listing program set, it
+ * lists interfaces by running that (runListing()), as a real kind does.
  */
 
 #pragma once
@@ -125,7 +126,7 @@ public:
         return listing;
     }
     tcpdump::LiveListing listInterfaces( const QString& device,
-                                         std::chrono::milliseconds ) const override
+                                         std::chrono::milliseconds timeout ) const override
     {
         {
             const std::lock_guard<std::mutex> lock( mutex_ );
@@ -133,6 +134,11 @@ public:
         }
         ++interfaceListings;
         tcpdump::LiveListing listing;
+        if ( !listingProgram.isEmpty() ) {
+            const auto output = tcpdump::runListing( { listingProgram, {} }, timeout );
+            listing.error = output.error;
+            return listing;
+        }
         listing.targets = { { "fake0", "Fake Ethernet", {} }, { "fake1", "Fake Wi-Fi", {} } };
         return listing;
     }
@@ -190,6 +196,7 @@ public:
     std::string failure;       ///< Set: a capture breaks off with it afterwards.
     QString hint;              ///< What explainFailure() says to a permission error.
     QString program;           ///< Set: a capture runs this program.
+    QString listingProgram;    ///< Set: listing the interfaces runs this program.
     mutable std::atomic<int> interfaceListings{ 0 };
 
 private:

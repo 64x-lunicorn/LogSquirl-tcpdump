@@ -30,6 +30,8 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <mutex>
+#include <vector>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -119,9 +121,79 @@ QString captureFilterProblem( const QString& filter )
     return {};
 }
 
+namespace {
+
+/// The cancel flags of the listings running now, for cancelListings().
+std::mutex listingsMutex;
+std::vector<std::shared_ptr<std::atomic_bool>> runningListings;
+
+/// The flag of the ListingCancelScope of this thread, if there is one.
+thread_local std::shared_ptr<const std::atomic_bool> scopeCancel;
+
+/// How often a listing looks whether it was cancelled.
+constexpr int kCancelPollMs = 20;
+
+/// Kill @p process and, on Unix, every process of its group.
+void killListing( QProcess& process )
+{
+#ifndef Q_OS_WIN
+    // Again until the group is gone: a process forking as the first
+    // signal comes may leave a child that did not get it.
+    const auto group = -static_cast<pid_t>( process.processId() );
+    QElapsedTimer killing;
+    killing.start();
+    while ( ::kill( group, SIGKILL ) == 0 && killing.elapsed() < 1000 ) {
+        process.waitForFinished( 10 );
+    }
+#endif
+    process.kill();
+    process.waitForFinished( 1000 );
+}
+
+} // namespace
+
+ListingCancelScope::ListingCancelScope( std::shared_ptr<const std::atomic_bool> cancel )
+{
+    scopeCancel = std::move( cancel );
+}
+
+ListingCancelScope::~ListingCancelScope()
+{
+    scopeCancel.reset();
+}
+
+void cancelListings()
+{
+    const std::lock_guard<std::mutex> lock( listingsMutex );
+    for ( const auto& cancel : runningListings ) {
+        cancel->store( true );
+    }
+}
+
 ListingOutput runListing( const ProcessCommand& command, std::chrono::milliseconds timeout )
 {
     ListingOutput output;
+    const auto cancel = std::make_shared<std::atomic_bool>( false );
+    const auto cancelled = [ &cancel ] { return *cancel || ( scopeCancel && *scopeCancel ); };
+    {
+        const std::lock_guard<std::mutex> lock( listingsMutex );
+        runningListings.push_back( cancel );
+    }
+    struct Withdraw {
+        std::shared_ptr<std::atomic_bool> cancel;
+        ~Withdraw()
+        {
+            const std::lock_guard<std::mutex> lock( listingsMutex );
+            runningListings.erase(
+                std::remove( runningListings.begin(), runningListings.end(), cancel ),
+                runningListings.end() );
+        }
+    } withdraw{ cancel };
+    if ( cancelled() ) {
+        output.error = QStringLiteral( "Listing with %1 cancelled" ).arg( command.displayName() );
+        return output;
+    }
+
     QProcess process;
     process.setProcessChannelMode( QProcess::SeparateChannels );
     // Nothing to answer a prompt with: a program that asks fails at once.
@@ -145,28 +217,30 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
         process.setProgram( command.program );
         process.setArguments( command.arguments );
     }
+    QElapsedTimer clock;
+    clock.start();
     process.start();
     if ( !process.waitForStarted( static_cast<int>( timeout.count() ) ) ) {
         output.error = QStringLiteral( "Cannot start %1: %2" )
                            .arg( command.displayName(), process.errorString() );
         return output;
     }
-    if ( !process.waitForFinished( static_cast<int>( timeout.count() ) ) ) {
-#ifndef Q_OS_WIN
-        // Again until the group is gone: a process forking as the first
-        // signal comes may leave a child that did not get it.
-        const auto group = -static_cast<pid_t>( process.processId() );
-        QElapsedTimer killing;
-        killing.start();
-        while ( ::kill( group, SIGKILL ) == 0 && killing.elapsed() < 1000 ) {
-            process.waitForFinished( 10 );
-        }
-#endif
-        process.kill();
-        process.waitForFinished( 1000 );
-        output.error = QStringLiteral( "%1 did not answer within %2 s" )
-                           .arg( command.displayName() )
-                           .arg( static_cast<double>( timeout.count() ) / 1000.0 );
+    // In slices, to see a cancel in time.
+    bool finished = false;
+    while ( !finished && !cancelled() && clock.elapsed() < timeout.count() ) {
+        const auto left = timeout.count() - clock.elapsed();
+        finished = process.waitForFinished(
+            static_cast<int>( std::min<qint64>( kCancelPollMs, std::max<qint64>( 1, left ) ) ) );
+        finished = finished || process.state() == QProcess::NotRunning;
+    }
+    if ( !finished ) {
+        killListing( process );
+        output.error
+            = cancelled()
+                  ? QStringLiteral( "Listing with %1 cancelled" ).arg( command.displayName() )
+                  : QStringLiteral( "%1 did not answer within %2 s" )
+                        .arg( command.displayName() )
+                        .arg( static_cast<double>( timeout.count() ) / 1000.0 );
     }
     else if ( process.exitStatus() == QProcess::CrashExit ) {
         output.error = QStringLiteral( "%1 crashed" ).arg( command.displayName() );

@@ -141,7 +141,8 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
 
 LiveCaptureForm::~LiveCaptureForm()
 {
-    // A listing's program ends by its timeout at the latest.
+    // Its listings' programs are killed, rather than waited for.
+    cancel_->store( true );
     if ( ownPool_ ) {
         ownPool_->waitForDone();
     }
@@ -358,7 +359,8 @@ void LiveCaptureForm::runListing( std::function<LiveListing()> listing,
                  done( result );
              } );
     // The listing holds its kind, never the form: it may outlive it.
-    watcher->setFuture( QtConcurrent::run( pool_, [ listing ] {
+    watcher->setFuture( QtConcurrent::run( pool_, [ listing, cancel = cancel_ ] {
+        const ListingCancelScope scope( cancel );
         try {
             return listing();
         } catch ( const std::exception& e ) {

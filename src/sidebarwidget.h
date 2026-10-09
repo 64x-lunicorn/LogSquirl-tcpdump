@@ -382,7 +382,7 @@ private:
     QElapsedTimer liveClock_;   ///< Since the live capture started.
     QTimer liveTicker_;         ///< Moves the elapsed time on.
     /// Where the live capture form and dialog list devices and interfaces;
-    /// waited for when the widget goes.
+    /// cancelled and waited for when the widget goes.
     QThreadPool listingPool_;
     /// The kinds of live sources offered.
     std::shared_ptr<const LiveSourceRegistry> liveSources_;

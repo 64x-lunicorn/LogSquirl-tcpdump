@@ -36,6 +36,10 @@
 #include <QSettings>
 #include <QTemporaryDir>
 
+#include <atomic>
+#include <memory>
+#include <thread>
+
 using namespace tcpdump;
 using namespace tcpdump_test;
 
@@ -247,6 +251,59 @@ SCENARIO( "A listing program is run with a timeout and nothing to answer a promp
             quiet.start();
             waitFor( [ & ] { return quiet.elapsed() > 1500; } );
             REQUIRE_FALSE( QFile::exists( marker ) );
+        }
+    }
+
+    GIVEN( "a program that does not finish, and its listing cancelled" )
+    {
+        const auto program = listingProgram( dir, "hang", "sleep 30" );
+        ListingOutput output;
+        QElapsedTimer took;
+        took.start();
+        std::thread lister(
+            [ & ] { output = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) ); } );
+        QElapsedTimer started;
+        started.start();
+        waitFor( [ & ] { return started.elapsed() > 300; } );
+        cancelListings();
+        lister.join();
+
+        THEN( "it ends at once, cancelled, without waiting for its timeout" )
+        {
+            REQUIRE( took.elapsed() < 1500 );
+            REQUIRE( output.error.contains( "cancelled" ) );
+            REQUIRE( output.exitCode == -1 );
+        }
+
+        THEN( "a listing started afterwards is not cancelled" )
+        {
+            const auto quick = listingProgram( dir, "quick", "echo en0" );
+            REQUIRE( runListing( { quick, {} }, std::chrono::milliseconds( 10000 ) ).out
+                     == "en0\n" );
+        }
+    }
+
+    GIVEN( "a program that does not finish, run under a cancel flag" )
+    {
+        const auto program = listingProgram( dir, "hang", "sleep 30" );
+        auto cancel = std::make_shared<std::atomic_bool>( false );
+        ListingOutput output;
+        QElapsedTimer took;
+        took.start();
+        std::thread lister( [ & ] {
+            const ListingCancelScope scope( cancel );
+            output = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) );
+        } );
+        QElapsedTimer started;
+        started.start();
+        waitFor( [ & ] { return started.elapsed() > 300; } );
+        cancel->store( true );
+        lister.join();
+
+        THEN( "setting the flag ends it" )
+        {
+            REQUIRE( took.elapsed() < 1500 );
+            REQUIRE( output.error.contains( "cancelled" ) );
         }
     }
 

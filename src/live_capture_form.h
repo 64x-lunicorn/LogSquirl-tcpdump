@@ -35,7 +35,9 @@
  * A listing touches nothing of the form, so a form with a given pool goes
  * at once, its listings' results dropped; the pool's owner waits for them
  * (the plugin must not be unloaded while one runs).  A form with its own
- * pool waits for them as it goes, at most a listing's timeout.
+ * pool waits for them as it goes.  Either way the form cancels its listings
+ * as it goes (ListingCancelScope): their programs are killed, so that
+ * waiting for them takes moments, not a listing's timeout.
  *
  * problem() says why the choice cannot be captured, for the Start button
  * of whoever holds the form; changed() tells it to ask again.
@@ -49,6 +51,7 @@
 #include <QThreadPool>
 #include <QWidget>
 
+#include <atomic>
 #include <memory>
 
 class QComboBox;
@@ -65,8 +68,7 @@ class LiveCaptureForm : public QWidget {
 public:
     /// Lists on @p pool, or on a pool of its own if it is null.
     explicit LiveCaptureForm( QThreadPool* pool = nullptr, QWidget* parent = nullptr );
-    /// With a pool of its own, waits for a listing that still runs, which
-    /// its timeout bounds.
+    /// Cancels its listings; with a pool of its own, waits for them to end.
     ~LiveCaptureForm() override;
 
     LiveCaptureForm( const LiveCaptureForm& ) = delete;
@@ -140,7 +142,9 @@ private:
     /// Counts the source and device changes: a listing's result is shown
     /// only if none came after it started.
     quint64 generation_ = 0;
-    int listing_ = 0;                      ///< Listings running.
+    int listing_ = 0; ///< Listings running.
+    /// Set as the form goes: cancels the listings it started.
+    std::shared_ptr<std::atomic_bool> cancel_ = std::make_shared<std::atomic_bool>( false );
     std::unique_ptr<QThreadPool> ownPool_; ///< Without a pool given.
     QThreadPool* pool_ = nullptr;          ///< Where listings run.
 };

@@ -1215,7 +1215,12 @@ while the UI asks it the rest. `runListing( command, timeout )` runs a
 listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
 device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
-returns its stdout, stderr and exit code. `captureFilterProblem()` catches
+returns its stdout, stderr and exit code. A listing can be cancelled, which
+kills its group within moments: `cancelListings()` cancels every running
+one (the sidebar's destructor, so that the plugin's shutdown does not wait
+for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
+worker thread cancels those run under it once the flag is set (the form
+cancels its own listings as it goes); the kinds need not know of either. `captureFilterProblem()` catches
 what would be misread before libpcap sees a filter (a line break, a
 leading `-`, unbalanced parentheses, a display filter field such as
 `ip.addr`); the capture program compiles it. `liveCaptureName( choice )`

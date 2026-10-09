@@ -336,6 +336,11 @@ SidebarWidget::~SidebarWidget()
     // a runtime disable.  Its worker is waited for, as the conversion's.
     live_.reset();
 
+    // The listings of the form and the dialog are waited for by
+    // listingPool_, as the host unloads the library next: their programs
+    // are killed first, so that this takes moments, not a listing's timeout.
+    cancelListings();
+
     // The host unloads the library right after the plugin is shut down:
     // the worker must be done with it before.  It checks the cancel flag
     // between packets, and convertPcap() reads regular files only, so it

@@ -36,6 +36,7 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
@@ -545,6 +546,62 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
 }
 
 #ifdef Q_OS_UNIX
+
+SCENARIO( "A listing that hangs does not hold up closing the sidebar or a dialog", "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir dir;
+    const auto program = dir.filePath( "hanging-lister" );
+    {
+        QFile file( program );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        file.write( "#!/bin/sh\nsleep 30\n" );
+        file.close();
+        REQUIRE( file.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner ) );
+    }
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->listingProgram = program;
+    /// Long enough for the listing program to be running.
+    const auto whileListing = [ & ]( const LiveCaptureForm* form ) {
+        REQUIRE( form->isListing() );
+        QElapsedTimer running;
+        running.start();
+        waitFor( [ & ] { return running.elapsed() > 300; } );
+        REQUIRE( form->isListing() );
+    };
+
+    WHEN( "the sidebar goes while its form lists" )
+    {
+        auto sidebar = std::make_unique<SidebarWidget>();
+        sidebar->setTempRoot( dir.path() );
+        sidebar->setLiveSources( registryOf( fake ) );
+        whileListing( sidebar->liveForm() );
+        QElapsedTimer took;
+        took.start();
+        sidebar.reset();
+
+        THEN( "the listing is cancelled, not waited for" )
+        {
+            REQUIRE( took.elapsed() < 1000 );
+        }
+    }
+
+    WHEN( "a form with a pool of its own goes while it lists" )
+    {
+        auto form = std::make_unique<LiveCaptureForm>();
+        form->setSources( registryOf( fake ) );
+        whileListing( form.get() );
+        QElapsedTimer took;
+        took.start();
+        form.reset();
+
+        THEN( "the listing is cancelled, not waited for" )
+        {
+            REQUIRE( took.elapsed() < 1000 );
+        }
+    }
+}
 
 SCENARIO( "A source's capture program gets the capture filter as one argument, no shell",
           "[live_ui]" )

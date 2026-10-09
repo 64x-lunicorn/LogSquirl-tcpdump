@@ -52,6 +52,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <vector>
@@ -242,8 +243,33 @@ struct ListingOutput {
  * event loop is needed.  stdin is the null device, so a program that would
  * ask (a password, a host key) fails instead of waiting.  A program still
  * running at the timeout is killed with what it started.
+ *
+ * A listing can be cancelled, so that closing the live capture UI or
+ * shutting the plugin down does not wait for its timeout: by
+ * cancelListings(), or by the flag of a ListingCancelScope on its thread.
+ * Its program is then killed with what it started, and error says
+ * "cancelled".
  */
 ListingOutput runListing( const ProcessCommand& command, std::chrono::milliseconds timeout );
+
+/// Cancel every listing running now, on whichever thread (the plugin's
+/// shutdown); listings started afterwards run as usual.
+void cancelListings();
+
+/**
+ * While it lives, the listings run on its thread (runListing(), called by a
+ * kind's listDevices() or listInterfaces()) are cancelled once @p cancel is
+ * set: how the live capture form cancels its own listings, which the kinds
+ * need not know of.  Scopes do not nest.
+ */
+class ListingCancelScope {
+public:
+    explicit ListingCancelScope( std::shared_ptr<const std::atomic_bool> cancel );
+    ~ListingCancelScope();
+
+    ListingCancelScope( const ListingCancelScope& ) = delete;
+    ListingCancelScope& operator=( const ListingCancelScope& ) = delete;
+};
 
 /// A file name for a capture of @p choice: its interface, after its device
 /// if it has one, with anything but letters, digits, '.', '-' and '_'
