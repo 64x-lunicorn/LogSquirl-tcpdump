@@ -213,6 +213,12 @@ const char* ipProtocolName( uint8_t protocol )
     return lookUp( kIpProtocols, protocol );
 }
 
+std::string ipProtocolLabel( uint8_t protocol )
+{
+    const auto* name = ipProtocolName( protocol );
+    return name ? name : "IP(" + std::to_string( protocol ) + ")";
+}
+
 const char* etherTypeName( uint16_t etherType )
 {
     return lookUp( kEtherTypes, etherType );

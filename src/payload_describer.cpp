@@ -33,6 +33,7 @@
 #include "wire_bytes.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -51,6 +52,39 @@ std::string hexCode( uint8_t code )
     char buf[ 8 ];
     std::snprintf( buf, sizeof( buf ), "0x%02X", code );
     return buf;
+}
+
+/// @p len bytes as lowercase hexadecimal, as Wireshark shows connection
+/// IDs and DUIDs: at most @p maxBytes of them, then an ellipsis.
+std::string hexBytes( const uint8_t* p, size_t len, size_t maxBytes = SIZE_MAX )
+{
+    static const char kDigits[] = "0123456789abcdef";
+    const auto shown = std::min( len, maxBytes );
+    std::string out;
+    out.reserve( 2 * shown );
+    for ( size_t i = 0; i < shown; ++i ) {
+        out += kDigits[ p[ i ] >> 4 ];
+        out += kDigits[ p[ i ] & 0x0F ];
+    }
+    return len > maxBytes ? out + "\xe2\x80\xa6" : out;
+}
+
+/// @p names joined with ", ": the first @p maxNames of them, then "…" if
+/// there were more, or if @p more says that more were left unnamed.
+std::string joinNames( std::vector<std::string> names, size_t maxNames, bool more = false )
+{
+    if ( names.size() > maxNames ) {
+        names.resize( maxNames );
+        more = true;
+    }
+    if ( more ) {
+        names.emplace_back( "\xe2\x80\xa6" );
+    }
+    std::string joined;
+    for ( const auto& name : names ) {
+        joined += ( joined.empty() ? "" : ", " ) + name;
+    }
+    return joined;
 }
 
 /// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
@@ -1038,19 +1072,6 @@ std::string dhcpv6MessageName( uint8_t type )
     return "Unknown (" + std::to_string( type ) + ")";
 }
 
-/// @p len bytes as lowercase hexadecimal, at most kMaxDuidBytes of them,
-/// then an ellipsis.
-std::string hexBytes( const uint8_t* p, size_t len )
-{
-    std::string out;
-    char buf[ 3 ];
-    for ( size_t i = 0; i < len && i < kMaxDuidBytes; ++i ) {
-        std::snprintf( buf, sizeof( buf ), "%02x", p[ i ] );
-        out += buf;
-    }
-    return len > kMaxDuidBytes ? out + "\xe2\x80\xa6" : out;
-}
-
 /// Describe a DHCPv6 message like Wireshark: "Solicit XID: 0x1a2b3c CID:
 /// 000100011c39cf88001122334455", the client's DUID (option 1) if it has
 /// one; a relay message names its link address and the message it relays
@@ -1087,7 +1108,7 @@ std::string describeDhcpv6( FieldReader message, int relays = 0 )
     FieldReader value( nullptr, 0 );
     while ( message.u16( code ) && message.takeVector16( value ) && value.complete() ) {
         if ( !relay && code == 1 && value.remaining() > 0 ) {
-            description += " CID: " + hexBytes( value.here(), value.remaining() );
+            description += " CID: " + hexBytes( value.here(), value.remaining(), kMaxDuidBytes );
             break;
         }
         if ( relay && code == 9 ) {
@@ -1470,18 +1491,7 @@ std::string detectTls( const uint8_t* payload, size_t len )
         }
     }
 
-    if ( names.size() > kMaxTlsMessages ) {
-        names.resize( kMaxTlsMessages );
-        names.emplace_back( "\xe2\x80\xa6" );
-    }
-    std::string description;
-    for ( const auto& name : names ) {
-        if ( !description.empty() ) {
-            description += ", ";
-        }
-        description += name;
-    }
-    return description;
+    return joinNames( std::move( names ), kMaxTlsMessages );
 }
 
 // ── QUIC ─────────────────────────────────────────────────────────────────
@@ -1552,19 +1562,6 @@ const char* quicLongPacketName( uint32_t version, uint8_t firstByte )
     return kNames[ static_cast<size_t>( quicLongPacketType( version, firstByte ) ) ];
 }
 
-/// Connection ID bytes in hex, as Wireshark shows them.
-std::string quicCid( const uint8_t* p, size_t len )
-{
-    static const char kDigits[] = "0123456789abcdef";
-    std::string out;
-    out.reserve( 2 * len );
-    for ( size_t i = 0; i < len; ++i ) {
-        out += kDigits[ p[ i ] >> 4 ];
-        out += kDigits[ p[ i ] & 0x0F ];
-    }
-    return out;
-}
-
 /// The fields every long header starts with (RFC 8999, 5.1).
 struct QuicLongHeader {
     uint8_t firstByte = 0;
@@ -1601,10 +1598,10 @@ std::string quicCids( const QuicLongHeader& header )
 {
     std::string out;
     if ( header.dcid.remaining() > 0 ) {
-        out += ", DCID=" + quicCid( header.dcid.here(), header.dcid.remaining() );
+        out += ", DCID=" + hexBytes( header.dcid.here(), header.dcid.remaining() );
     }
     if ( header.scid.remaining() > 0 ) {
-        out += ", SCID=" + quicCid( header.scid.here(), header.scid.remaining() );
+        out += ", SCID=" + hexBytes( header.scid.here(), header.scid.remaining() );
     }
     return out;
 }
@@ -1689,15 +1686,8 @@ std::string detectQuic( const uint8_t* payload, size_t len )
         more = skipQuicLongPacket( datagram, next.version, next.firstByte );
     }
 
-    if ( names.size() > kMaxQuicPackets ) {
-        names.resize( kMaxQuicPackets );
-        names.emplace_back( "\xe2\x80\xa6" );
-    }
-    std::string description;
-    for ( const auto& name : names ) {
-        description += ( description.empty() ? "" : ", " ) + name;
-    }
-    return description + ", Version " + quicVersionName( first.version ) + quicCids( first );
+    return joinNames( std::move( names ), kMaxQuicPackets ) + ", Version "
+           + quicVersionName( first.version ) + quicCids( first );
 }
 
 // ── HTTP/2 ───────────────────────────────────────────────────────────────
@@ -1797,13 +1787,14 @@ std::string http2Frames( const uint8_t* p, size_t len, size_t wireLen )
 {
     std::vector<std::string> names;
     size_t offset = 0;
+    bool more = false;
     while ( offset < wireLen ) {
         if ( names.size() == kMaxHttp2Frames || offset >= len
              || len - offset < kHttp2FrameHeaderBytes ) {
             if ( names.empty() ) {
                 return {};
             }
-            names.emplace_back( "\xe2\x80\xa6" );
+            more = true;
             break;
         }
         FieldReader header( p + offset, kHttp2FrameHeaderBytes );
@@ -1825,11 +1816,7 @@ std::string http2Frames( const uint8_t* p, size_t len, size_t wireLen )
         names.push_back( std::string( name ) + "[" + std::to_string( stream ) + "]" );
         offset += kHttp2FrameHeaderBytes + length;
     }
-    std::string description;
-    for ( const auto& name : names ) {
-        description += ( description.empty() ? "" : ", " ) + name;
-    }
-    return description;
+    return joinNames( std::move( names ), kMaxHttp2Frames, more );
 }
 
 /// The HTTP/2 connection preface, "Magic", and the frames behind it.
@@ -2345,7 +2332,7 @@ void describeQuicInStream( PacketRecord& pkt, const Stream& stream )
     }
     std::string description = "Protected Payload";
     if ( dcidLength > 0 && head.remaining() >= static_cast<size_t>( dcidLength ) ) {
-        description += ", DCID=" + quicCid( head.here(), static_cast<size_t>( dcidLength ) );
+        description += ", DCID=" + hexBytes( head.here(), static_cast<size_t>( dcidLength ) );
     }
     redescribe( pkt, "QUIC", description );
 }

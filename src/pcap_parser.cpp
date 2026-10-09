@@ -107,19 +107,12 @@ std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
     return std::nullopt;
 }
 
-/// The name of @p pkt's IP protocol, or its number as `IP(200)`.
-std::string ipProtocolLabel( const PacketRecord& pkt )
-{
-    const auto* name = ipProtocolName( pkt.ipProtocol );
-    return name ? name : "IP(" + std::to_string( pkt.ipProtocol ) + ")";
-}
-
 /// The transport layer of a packet quoted in an ICMP error: its protocol's
 /// name and the ports of a TCP or UDP header, the first 4 of the 8 bytes a
 /// router quotes.  Nothing else of it is read.
 void parseQuotedTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 {
-    pkt.protocol = ipProtocolLabel( pkt );
+    pkt.protocol = ipProtocolLabel( pkt.ipProtocol );
     if ( ( pkt.ipProtocol == IpProtoTcp || pkt.ipProtocol == IpProtoUdp ) && remaining >= 4 ) {
         pkt.transport = pkt.ipProtocol == IpProtoTcp ? Transport::Tcp : Transport::Udp;
         pkt.srcPort = readBE16( data );
@@ -212,7 +205,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     }
     else {
         // A protocol not dissected further: its name, if it has one.
-        pkt.protocol = ipProtocolLabel( pkt );
+        pkt.protocol = ipProtocolLabel( pkt.ipProtocol );
         pkt.info = "Protocol " + std::to_string( pkt.ipProtocol );
     }
 }
