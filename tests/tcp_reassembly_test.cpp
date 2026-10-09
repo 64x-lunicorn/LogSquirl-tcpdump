@@ -1254,6 +1254,23 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
         }
     }
 
+    GIVEN( "a global limit, and a message whose last segment begins a long one" )
+    {
+        const auto first = tlsRecord( 0x17, Bytes( 2000, 0xAA ) );
+        const auto next = tlsRecord( 0x17, Bytes( 16000, 0xBB ) );
+        const size_t limit = TcpReassembly::kEntryOverhead + 4000;
+        TcpReassembly reassembly( limit );
+        auto parts = cut( first + next, { 1000, first.size() + 10 } );
+        parts.pop_back();
+        const auto lines = converted( handshake() + parts, reassembly );
+
+        THEN( "the next message is held only as far as the limit lets it" )
+        {
+            REQUIRE( lines[ 4 ].description.find( reassembledFrom( 2 ) ) != std::string::npos );
+            REQUIRE( reassembly.memoryUsed() <= limit );
+        }
+    }
+
     GIVEN( "a stream that ends inside a message" )
     {
         auto parts = cut( hello, { 200 } );

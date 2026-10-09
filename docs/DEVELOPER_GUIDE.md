@@ -1160,7 +1160,12 @@ directions together at most the global limit, `kDefaultMemoryLimit` (64
 MiB) or the option *TCP reassembly memory at most*
 (`ConversionOptions::reassemblyMegabytes`, 1 to 1,024 MiB), counting
 `kEntryOverhead` (128 bytes) for each held direction and
-`kEarlySegmentOverhead` (32) for each segment held apart. On top of that,
+`kEarlySegmentOverhead` (32) for each segment held apart. The global limit
+is never passed: every buffer is made room for (`makeRoom()`, which lets go
+of the directions that waited longest) before it is reserved, the next
+message's after a segment completed one too; with no room even for its
+bytes at hand, the direction is let go and the segment marked
+`[reassembly limit]`. On top of that,
 the messages the last segment completed are kept until the next one (at
 most a direction's limit). A message longer than a direction's limit, or
 one that outgrows it, is not held: its segment keeps its own description,
