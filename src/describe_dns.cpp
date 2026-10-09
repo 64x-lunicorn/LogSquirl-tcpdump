@@ -25,6 +25,7 @@
 #include "describe_common.h"
 
 #include <cstdio>
+#include <optional>
 #include <string>
 
 namespace tcpdump::describer {
@@ -418,6 +419,24 @@ std::string detectDnsOverTcp( const uint8_t* payload, size_t len )
         }
     }
     return description;
+}
+
+/// The DNS-over-TCP message a segment begins with, behind its 2-byte length:
+/// 2 bytes more than that length, or nothing if the bytes there are no
+/// plausible message header.  Fewer bytes than a header's are taken for one.
+std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len )
+{
+    if ( len < 2 ) {
+        return size_t{ 2 };
+    }
+    const uint16_t length = readBE16( payload );
+    constexpr size_t kHeaderFieldsRead = 2 + 6; // length, ID, flags, questions
+    if ( length < 12
+         || ( len >= kHeaderFieldsRead
+              && !isPlausibleDnsHeader( FieldReader( payload + 2, len - 2 ), length ) ) ) {
+        return std::nullopt;
+    }
+    return size_t{ 2 } + length;
 }
 
 } // namespace tcpdump::describer

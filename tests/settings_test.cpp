@@ -42,7 +42,7 @@ bool operator==( const ConversionOptions& a, const ConversionOptions& b )
     return a.layout.timeColumns == b.layout.timeColumns
            && a.layout.macColumns == b.layout.macColumns && a.preview == b.preview
            && a.previewChars == b.previewChars && a.maxStreams == b.maxStreams
-           && a.maxEndpoints == b.maxEndpoints;
+           && a.maxEndpoints == b.maxEndpoints && a.reassemblyMegabytes == b.reassemblyMegabytes;
 }
 
 } // namespace tcpdump
@@ -77,6 +77,7 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
         options.previewChars = 64;
         options.maxStreams = 5000;
         options.maxEndpoints = 300;
+        options.reassemblyMegabytes = 16;
 
         WHEN( "they are saved" )
         {
@@ -111,6 +112,7 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
             file.setValue( "conversion/previewChars", 5000 );
             file.setValue( "conversion/maxStreams", 0 );
             file.setValue( "conversion/maxEndpoints", "many" );
+            file.setValue( "conversion/reassemblyMegabytes", 1000000 );
         }
 
         THEN( "those values are their defaults or the nearest allowed" )
@@ -120,6 +122,7 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
             REQUIRE( options.previewChars == kMaxPreviewChars );
             REQUIRE( options.maxStreams == kMinCap );
             REQUIRE( options.maxEndpoints == ConversionOptions{}.maxEndpoints );
+            REQUIRE( options.reassemblyMegabytes == kMaxReassemblyMegabytes );
         }
     }
 }

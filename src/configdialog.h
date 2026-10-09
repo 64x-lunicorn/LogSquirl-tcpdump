@@ -61,6 +61,7 @@ private:
     QSpinBox* previewChars_ = nullptr;
     QSpinBox* maxStreams_ = nullptr;
     QSpinBox* maxEndpoints_ = nullptr;
+    QSpinBox* reassemblyMegabytes_ = nullptr;
 };
 
 } // namespace tcpdump
