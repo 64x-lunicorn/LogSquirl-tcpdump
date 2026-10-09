@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TCP reassembly.** A TLS record, an HTTP/1.x header section or a
+  DNS-over-TCP message that spans TCP segments is described once, on the
+  segment that completes it, from all its bytes: `Client Hello,
+  SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
+  example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
+  whole DNS answer with all its records. The segments before it say `[TCP
+  segment of a reassembled PDU]`, labelled with the message's protocol.
+  Segments are taken in sequence order: one captured early waits for those
+  before it, retransmitted and overlapping bytes are taken once, and a gap
+  (bytes the other side acknowledges but the capture lacks, a segment cut
+  at the snaplen) gives the message up and starts again at the next one.
+  Memory is bounded: at most 64 KB a stream direction and 64 MB all
+  together (the new option *TCP reassembly memory at most*, 1 to 1,024 MB);
+  a message that does not fit keeps its per-segment description, followed
+  by `[reassembly limit]`, and when memory runs out, the streams that waited
+  longest are let go. A direction is let go on its FIN, a stream on a SYN or
+  an RST; a segment of whole messages costs nothing. A new synthetic
+  capture, `tests/corpus/reassembly.pcap` (written by
+  `tests/make_reassembly_corpus.py`), shows each case.
 - **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
   without checksum, key and sequence number, carrying IPv4, IPv6 or an
   Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by
@@ -65,6 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group: SIGTERM, then SIGKILL after 2 s; on Windows it runs in a job
   object that is terminated. Shutting the plugin down, as LogSquirl quits
   or the plugin is disabled, ends every capture program still running.
+
+### Changed
+- A segment that ends inside a TLS record, an HTTP header section or a
+  DNS-over-TCP message no longer names the message as far as it goes
+  (`Client Hello` without its server name, `Standard query response … (2
+  answers)`), and the segment that ends it no longer says `Continuation`:
+  the first says `[TCP segment of a reassembled PDU]`, the last describes
+  the whole message (see *TCP reassembly*). A message the capture never
+  completes is described by none of its segments.
 
 ### Fixed
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the

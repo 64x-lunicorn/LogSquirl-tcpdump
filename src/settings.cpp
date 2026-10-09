@@ -40,6 +40,7 @@ constexpr const char* kPreviewKey = "conversion/preview";
 constexpr const char* kPreviewCharsKey = "conversion/previewChars";
 constexpr const char* kMaxStreamsKey = "conversion/maxStreams";
 constexpr const char* kMaxEndpointsKey = "conversion/maxEndpoints";
+constexpr const char* kReassemblyMegabytesKey = "conversion/reassemblyMegabytes";
 
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
@@ -109,6 +110,9 @@ ConversionOptions loadConversionOptions( const QString& configDir )
         = readCount( file, kMaxStreamsKey, options.maxStreams, kMinCap, kMaxStreamCap );
     options.maxEndpoints
         = readCount( file, kMaxEndpointsKey, options.maxEndpoints, kMinCap, kMaxEndpointCap );
+    options.reassemblyMegabytes
+        = readCount( file, kReassemblyMegabytesKey, options.reassemblyMegabytes, kMinCap,
+                     kMaxReassemblyMegabytes );
     return options;
 }
 
@@ -128,6 +132,8 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     file.setValue( kPreviewCharsKey, static_cast<qulonglong>( options.previewChars ) );
     file.setValue( kMaxStreamsKey, static_cast<qulonglong>( options.maxStreams ) );
     file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );
+    file.setValue( kReassemblyMegabytesKey,
+                   static_cast<qulonglong>( options.reassemblyMegabytes ) );
     file.sync();
     return file.status() == QSettings::NoError;
 }

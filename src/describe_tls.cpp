@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -326,6 +327,29 @@ std::string detectTls( const uint8_t* payload, size_t len )
     }
 
     return joinNames( std::move( names ), kMaxTlsMessages );
+}
+
+/// The TLS record a segment begins with: its header and fragment, or
+/// nothing if the bytes there are no record header (RFC 8446, 5.1).  A
+/// fragment longer than 2^14 + 2048 bytes, the most a TLS 1.2 ciphertext
+/// may take, is no record's.  Fewer bytes than a header's are taken for one
+/// if those there fit.
+std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len )
+{
+    constexpr size_t kHeaderBytes = 5;
+    constexpr uint16_t kMaxFragment = 16384 + 2048;
+    if ( len == 0 || payload[ 0 ] < 0x14 || payload[ 0 ] > 0x17
+         || ( len >= 2 && payload[ 1 ] != 0x03 ) || ( len >= 3 && payload[ 2 ] > 0x04 ) ) {
+        return std::nullopt;
+    }
+    if ( len < kHeaderBytes ) {
+        return kHeaderBytes;
+    }
+    const uint16_t length = readBE16( payload + 3 );
+    if ( length > kMaxFragment ) {
+        return std::nullopt;
+    }
+    return kHeaderBytes + length;
 }
 
 } // namespace tcpdump::describer

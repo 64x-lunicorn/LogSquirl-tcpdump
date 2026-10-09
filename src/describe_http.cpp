@@ -165,6 +165,30 @@ std::string detectHttp( const uint8_t* payload, size_t len )
     return {};
 }
 
+/// The HTTP/1.x header section a segment begins with, the start line up to
+/// the empty line that ends it, or nothing if no request or status line
+/// starts there.  Its body, if any, is not part of it: the description
+/// reads the header section only.  While the empty line has not come, one
+/// byte more than there is.
+std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len )
+{
+    if ( detectHttp( payload, std::min<size_t>( len, 8 ) ).empty() ) {
+        return std::nullopt;
+    }
+    for ( size_t i = 0; i + 1 < len; ++i ) {
+        if ( payload[ i ] != '\n' ) {
+            continue;
+        }
+        if ( payload[ i + 1 ] == '\n' ) {
+            return i + 2;
+        }
+        if ( payload[ i + 1 ] == '\r' && i + 2 < len && payload[ i + 2 ] == '\n' ) {
+            return i + 3;
+        }
+    }
+    return len + 1;
+}
+
 // ── HTTP/2 ───────────────────────────────────────────────────────────────
 
 namespace {

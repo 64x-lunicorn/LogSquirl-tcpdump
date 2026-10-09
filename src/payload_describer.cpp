@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -196,6 +197,44 @@ constexpr Detector kTcpDetectors[]
     = { dnsOverTcpMessage, tlsRecord,    httpMessage,       http2Preface,
         nmeaSentence,      socksMessage, portHintAndPreview };
 
+// ── Framing a TCP stream's messages ──────────────────────────────────────
+
+/// How many bytes the message at the start of a payload takes (see
+/// describe_common.h), nothing if it is none of the protocol's.
+using Frame = std::optional<size_t> ( * )( const Payload& );
+
+/// A protocol whose messages the TCP Reassembly puts together.
+struct Framer {
+    const char* label; ///< As its detector names it.
+    Frame frame;
+};
+
+std::optional<size_t> dnsOverTcpFrame( const Payload& p )
+{
+    if ( !onPort( p, 53 ) ) {
+        return std::nullopt;
+    }
+    return frameDnsOverTcp( p.data, p.len );
+}
+
+std::optional<size_t> tlsFrame( const Payload& p )
+{
+    return frameTlsRecord( p.data, p.len );
+}
+
+std::optional<size_t> httpFrame( const Payload& p )
+{
+    return frameHttpHeader( p.data, p.len );
+}
+
+/// The TCP framers, in the order of their detectors in kTcpDetectors; a
+/// protocol is numbered by its place, from 1 (MessageExtent::framer).
+constexpr Framer kTcpFramers[] = {
+    { "DNS", dnsOverTcpFrame },
+    { "TLS", tlsFrame },
+    { "HTTP", httpFrame },
+};
+
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
 /// payload parses as a DNS message.
 std::optional<PayloadDescription> dnsMessage( const Payload& p )
@@ -302,8 +341,6 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
     return {};
 }
 
-namespace describer {
-
 void redescribe( PacketRecord& pkt, const char* label, const std::string& description )
 {
     pkt.previewBytes = 0;
@@ -313,7 +350,26 @@ void redescribe( PacketRecord& pkt, const char* label, const std::string& descri
                + description;
 }
 
-} // namespace describer
+MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
+                                uint8_t framer )
+{
+    const Payload p{ data, len, srcPort, dstPort, Transport::Tcp };
+    for ( size_t i = 0; i < std::size( kTcpFramers ); ++i ) {
+        const auto number = static_cast<uint8_t>( i + 1 );
+        if ( framer != 0 && framer != number ) {
+            continue;
+        }
+        if ( const auto length = kTcpFramers[ i ].frame( p ) ) {
+            MessageExtent extent;
+            extent.framer = number;
+            extent.label = kTcpFramers[ i ].label;
+            extent.length = *length;
+            extent.needsMore = *length > len;
+            return extent;
+        }
+    }
+    return {};
+}
 
 void describeInStream( PacketRecord& pkt, const Stream& stream )
 {

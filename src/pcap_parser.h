@@ -207,6 +207,12 @@ struct PacketRecord {
     /// stream is known (describeInStream).
     std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
     size_t payloadHeadLen = 0;
+    /// Where the captured TCP or UDP payload lies in the bytes the packet
+    /// was dissected from, payloadCaptured bytes of it, which may be fewer
+    /// than payloadLen: CaptureReader::payloadOf() hands them out while
+    /// they are there, for the TCP Reassembly (tcp_reassembly.h).
+    uint32_t payloadOffset = 0;
+    uint32_t payloadCaptured = 0;
     /// A detector of the Payload Describer recognised the TCP or UDP payload
     /// and named protocol, rather than the ports suggesting it, by the
     /// payload alone or in its stream (describeInStream).  Such a label
@@ -276,6 +282,12 @@ constexpr size_t kMaxPreamble = 4096;
 
 /// Bytes of a packet that are dissected; the rest of a longer record is skipped.
 constexpr uint32_t kMaxDissectedBytes = 262144;
+
+/// Bytes someone else owns: @p size of them at @p data.
+struct ByteView {
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+};
 
 /**
  * Where a CaptureReader reads the capture from: a file, a buffer, or a
@@ -440,6 +452,14 @@ public:
         return bytesRead_;
     }
 
+    /**
+     * The captured TCP or UDP payload of @p pkt, which next() must have
+     * returned last: a view into the reader's buffer, valid until next()
+     * is called again.  Empty for a packet without one, and for one whose
+     * payload does not lie within the buffer (an older packet's).
+     */
+    ByteView payloadOf( const PacketRecord& pkt ) const;
+
 protected:
     /// @param start  Where the capture's first header starts in @p source.
     CaptureReader( ByteSource& source, uint64_t start )
@@ -464,6 +484,8 @@ protected:
     const uint64_t start_; ///< Where the first header starts; skipped by open().
     std::string error_;
     bool truncated_ = false;
+    /// The bytes of the packet next() returned last, as dissected.
+    std::vector<uint8_t> packet_;
 
 private:
     ByteSource& source_;
@@ -503,7 +525,6 @@ public:
     }
 
 private:
-    std::vector<uint8_t> packet_;
     PcapGlobalHeader header_;
     bool swap_ = false;
     bool open_ = false;

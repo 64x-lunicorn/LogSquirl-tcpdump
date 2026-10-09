@@ -765,3 +765,68 @@ SCENARIO( "Endpoint counts stop growing at their cap", "[capture_stats]" )
         }
     }
 }
+
+SCENARIO( "The TCP reassembly holds the memory the options allow", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "80 connections that each begin a TLS record of 18,000 bytes before any ends it" )
+    {
+        constexpr int kConnections = 80;
+        Bytes record{ 0x17, 0x03, 0x03 };
+        putBE16( record, 18000 );
+        record.resize( 5 + 18000, 0xA5 );
+        auto segment = [ & ]( int connection, size_t from, size_t to ) {
+            const Bytes part( record.begin() + static_cast<std::ptrdiff_t>( from ),
+                              record.begin() + static_cast<std::ptrdiff_t>( to ) );
+            const auto port = static_cast<uint16_t>( 40000 + connection );
+            return eth( EthertypeIpv4,
+                        ipv4( IpProtoTcp, tcp( port, 443, part, 5, 0x18,
+                                               1 + static_cast<uint32_t>( from ) ) ) );
+        };
+        std::vector<Bytes> frames;
+        for ( int i = 0; i < kConnections; ++i ) {
+            frames.push_back( segment( i, 0, 1000 ) );
+        }
+        for ( int i = 0; i < kConnections; ++i ) {
+            frames.push_back( segment( i, 1000, record.size() ) );
+        }
+        const auto input = writeFile( dir, "records.pcap", pcapOf( frames ) );
+
+        auto marked = []( const QStringList& lines ) {
+            return lines.filter( QStringLiteral( "[reassembly limit]" ) ).size();
+        };
+        auto reassembled = []( const QStringList& lines ) {
+            return lines.filter( QStringLiteral( "[reassembled from 2 segments]" ) ).size();
+        };
+
+        WHEN( "it is converted with the default memory" )
+        {
+            const auto result = convertPcap( input, out.path() );
+            THEN( "every record is described where it ends" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( reassembled( lines ) == kConnections );
+                REQUIRE( marked( lines ) == 0 );
+            }
+        }
+
+        WHEN( "it is converted with 1 MB, room for some 55 of them" )
+        {
+            ConversionOptions options;
+            options.reassemblyMegabytes = 1;
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
+            THEN( "the records that waited longest are given up, their ends marked" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( marked( lines ) > 0 );
+                REQUIRE( marked( lines ) + reassembled( lines ) == kConnections );
+            }
+        }
+    }
+}

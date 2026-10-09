@@ -31,6 +31,7 @@
 #include "stream_labels.h"
 #include "stream_tracker.h"
 #include "tcp_analysis.h"
+#include "tcp_reassembly.h"
 #include "tempdirs.h"
 
 #include <QDir>
@@ -263,6 +264,7 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
+    TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
@@ -280,6 +282,7 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& name, uint64_
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
+        reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {

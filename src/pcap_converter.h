@@ -29,6 +29,7 @@
 #include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
+#include "tcp_reassembly.h"
 
 #include <QString>
 
@@ -108,6 +109,9 @@ struct ConversionResult {
     CaptureSummary summary; ///< What was converted, when Converted.
 };
 
+/// Bytes in a mebibyte, the unit of ConversionOptions::reassemblyMegabytes.
+constexpr size_t kMegabyte = 1024 * 1024;
+
 /// Settings of a conversion, as the user chose them in the configuration
 /// dialog (settings.h).  The defaults write the text the Log Format is made
 /// for; a test lowers the caps to see them reached on a small capture.
@@ -122,6 +126,8 @@ struct ConversionOptions {
     size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
+    /// Mebibytes the TCP Reassembly holds at most, of all streams together.
+    size_t reassemblyMegabytes = TcpReassembly::kDefaultMemoryLimit / kMegabyte;
 };
 
 /**
