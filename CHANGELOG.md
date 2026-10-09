@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (TSval, TSecr) on every segment* (off by default) shows the timestamps
   on the other segments too. The ACK that completes a handshake shows its
   initial round-trip time, from the SYN, `[iRTT=0.012345]`, and the
-  summary the median of all handshakes captured whole. A segment that
+  summary the median of all handshakes captured whole (exact up to 4,096
+  handshakes, within 0.8 % beyond, in 32 KB of memory however long the
+  capture). A segment that
   fills the window the receiver advertised last, scaled as negotiated, is
   marked `[TCP Window Full]`, counted in the summary and coloured and
   filtered with the other TCP problems. `tests/corpus/tcp-analysis.pcap`

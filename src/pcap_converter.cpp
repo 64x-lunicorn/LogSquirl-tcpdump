@@ -81,7 +81,7 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
                                              stats.tcpMarkers[ i ] );
         }
     }
-    summary.handshakes = stats.initialRtts.size();
+    summary.handshakes = stats.initialRtts.count();
     summary.medianInitialRttNs = stats.medianInitialRttNs();
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {

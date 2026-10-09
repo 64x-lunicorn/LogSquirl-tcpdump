@@ -708,8 +708,12 @@ pure ACK in either direction even without a SYN-ACK; here it is in Info,
 and a stream whose handshake was not captured whole has none. Each stream
 shows it once: a SYN sent after the handshake does not arm it again, a new
 connection on the same ports does. The Converter collects the times in
-`CaptureStats::initialRtts`, 8 bytes per handshake (at most one per
-numbered stream), for the summary's median.
+`CaptureStats::initialRtts`, a `RunningMedian`, for the summary's median:
+it keeps the first 4,096 times as they are and gives their exact median,
+then counts them in a histogram of fixed size (64 buckets per power of
+two, an HDR histogram), whose median is the middle of its bucket and lies
+within 1/128 (0.8 %) of the exact one. It holds 32 KB at most, however
+long a capture or live capture runs.
 The limits, all where Wireshark keeps more than a few integers per
 direction:
 
