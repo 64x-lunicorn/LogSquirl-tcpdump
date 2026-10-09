@@ -25,6 +25,7 @@
 #pragma once
 
 #include "capture_stats.h"
+#include "packet_formatter.h"
 #include "pcap_parser.h"
 
 #include <QString>
@@ -50,6 +51,15 @@ struct ConversionResult {
     bool streamLimitReached = false; ///< Some conversations have no stream number.
 };
 
+/// Settings of a conversion.  The defaults are the plugin's; a test lowers
+/// the caps to see them reached on a small capture.
+struct ConversionOptions {
+    /// Conversations to number at most; later ones show stream "?".
+    size_t maxStreams = PacketFormatter::kMaxStreams;
+    /// Addresses to count packets for at most; the rest are "other endpoints".
+    size_t maxEndpoints = CaptureStats::kMaxEndpoints;
+};
+
 /**
  * Convert the pcap file @p inputPath into a new text file at @p outputPath,
  * one line per packet, reading and writing packet by packet.  The output
@@ -58,9 +68,11 @@ struct ConversionResult {
  * @param cancel    If set, checked between packets; stops the conversion.
  * @param progress  If set, called with the share of the input read so far,
  *                  in per mille, whenever that changes.
+ * @param options   The memory caps; the defaults unless a test lowers them.
  */
 ConversionResult convertPcap( const QString& inputPath, const QString& outputPath,
                               const std::atomic_bool* cancel = nullptr,
-                              const std::function<void( int )>& progress = {} );
+                              const std::function<void( int )>& progress = {},
+                              const ConversionOptions& options = {} );
 
 } // namespace tcpdump

@@ -137,9 +137,11 @@ bool openRegularFile( const QString& path, QFile& file, QString& error )
 
 ConversionResult convertPcap( const QString& inputPath, const QString& outputPath,
                               const std::atomic_bool* cancel,
-                              const std::function<void( int )>& progress )
+                              const std::function<void( int )>& progress,
+                              const ConversionOptions& options )
 {
     ConversionResult result;
+    result.stats.maxEndpoints = options.maxEndpoints;
 
     QFile input;
     if ( !openRegularFile( inputPath, input, result.error ) ) {
@@ -174,7 +176,7 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputPat
                && output.write( "\n", 1 ) == 1;
     };
 
-    PacketFormatter formatter( result.header.nanoseconds );
+    PacketFormatter formatter( result.header.nanoseconds, options.maxStreams );
     if ( !writeLine( formatter.header() ) ) {
         return fail(
             QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );

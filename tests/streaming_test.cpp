@@ -224,6 +224,45 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
         }
     }
 
+    GIVEN( "a capture of three conversations between four addresses" )
+    {
+        auto segmentFrom = []( uint8_t lastOctet, uint16_t srcPort ) {
+            Ipv4Options addresses;
+            addresses.src[ 3 ] = lastOctet;
+            return eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( srcPort, 80 ), addresses ) );
+        };
+        const auto input = writeFile(
+            dir, "many.pcap",
+            pcapOf( { segmentFrom( 2, 1001 ), segmentFrom( 3, 1002 ), segmentFrom( 4, 1003 ) } ) );
+        const auto output = dir.filePath( "many.log" );
+
+        WHEN( "it is converted with both caps lowered to one" )
+        {
+            ConversionOptions options;
+            options.maxStreams = 1;
+            options.maxEndpoints = 1;
+            const auto result = convertPcap( input, output, nullptr, {}, options );
+
+            THEN( "the result says that both caps were reached" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.streamLimitReached );
+                REQUIRE( result.stats.endpointLimitReached() );
+            }
+        }
+
+        WHEN( "it is converted with the default caps" )
+        {
+            const auto result = convertPcap( input, output );
+
+            THEN( "neither cap is reached" )
+            {
+                REQUIRE_FALSE( result.streamLimitReached );
+                REQUIRE_FALSE( result.stats.endpointLimitReached() );
+            }
+        }
+    }
+
     GIVEN( "a file that is not a capture" )
     {
         const auto input = writeFile( dir, "junk.pcap", Bytes( 100, 0xEE ) );
