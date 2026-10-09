@@ -52,6 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the default cap of 1,000,000 streams); the packets of streams past it are
   one row, *Other streams*. The table is part of the Capture Summary and
   shows a new summary snapshot as it comes, keeping its sort and selection.
+- **Export packets.** *Plugins → tcpdump → Export packets…* writes the
+  packets of the selected lines to a new capture file, e.g. the lines of a
+  Filtered View, to share a narrowed view or open it in Wireshark. Each
+  packet's record is copied byte for byte (timestamps, lengths, link type);
+  a pcap gives a pcap with the capture's header, a pcapng a pcapng with
+  the section headers and interfaces of the exported packets. A dialog
+  shows the packets as numbers and ranges to confirm or change, or to
+  paste packet lines into: LogSquirl tells at most the first 1,000
+  selected lines (or 1 MiB), and says so, which the dialog and the
+  notification after the export repeat. The capture is read once, front to
+  back, from the Packet Panel's checkpoints, on a worker thread with
+  progress and Cancel. Needs LogSquirl ≥ 26.11.
 - **Tunnels unwrapped.** A packet carried in VXLAN (UDP 4789), GRE (with or
   without checksum, key and sequence number, carrying IPv4, IPv6 or an
   Ethernet frame) or IP-in-IP (IPv4 or IPv6 in IPv4 or IPv6) is shown by

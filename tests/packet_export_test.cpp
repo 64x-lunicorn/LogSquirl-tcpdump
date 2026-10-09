@@ -27,17 +27,27 @@
 
 #include "capture_reader.h"
 #include "corpus_layouts.h"
+#include "export_dialog.h"
+#include "fakehost.h"
 #include "packet_export.h"
 #include "pcap_converter.h"
+#include "sidebarwidget.h"
 
 #include <QFile>
 #include <QFileInfo>
+#include <QLabel>
+#include <QPushButton>
 #include <QTemporaryDir>
 
 #include <atomic>
 #include <cstring>
 
+extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
+                                         size_t api_size );
+
 using namespace tcpdump;
+using tcpdump_test::FakeHost;
+using tcpdump_test::waitFor;
 
 namespace {
 
@@ -91,6 +101,55 @@ uint32_t word( const QByteArray& bytes, qsizetype offset )
     std::memcpy( &value, bytes.constData() + offset, 4 );
     return value;
 }
+
+/// A loaded plugin whose sidebar converted @p capture and whose tab of it is
+/// in front; the Export dialog answered by the test.
+struct LoadedCapture {
+    explicit LoadedCapture( const QString& capture )
+    {
+        REQUIRE( tempRoot.isValid() );
+        g_state.tempRoot = tempRoot.path();
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+        sidebar = g_state.sidebarWidget;
+        sidebar->openPcapFile( capture );
+        REQUIRE( waitFor( [ this ] { return !sidebar->isConverting(); } ) );
+        REQUIRE( host.openedFiles.size() == 1 );
+        QFile file( host.openedFiles.first() );
+        REQUIRE( file.open( QIODevice::ReadOnly ) );
+        lines = QString::fromUtf8( file.readAll() ).split( '\n', Qt::SkipEmptyParts );
+        host.activateFile( host.openedFiles.first() );
+        sidebar->setExportConfirmer( [ this ]( QWidget*, ExportRequest& request ) {
+            requests.push_back( request );
+            request.outputPath = outputPath;
+            return confirm;
+        } );
+    }
+
+    ~LoadedCapture()
+    {
+        logsquirl_plugin_shutdown();
+    }
+
+    /// Choose Plugins > tcpdump > Export packets… and wait for the export.
+    void exportSelected()
+    {
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
+                  return a.label == "Export packets\xe2\x80\xa6";
+              } );
+        REQUIRE( entry != host.menuActions.end() );
+        entry->trigger();
+        REQUIRE( waitFor( [ this ] { return !sidebar->isExporting(); } ) );
+    }
+
+    QTemporaryDir tempRoot;
+    FakeHost host;
+    SidebarWidget* sidebar = nullptr;
+    QStringList lines; ///< The text's lines, the header first.
+    QString outputPath = tempRoot.filePath( "export.pcap" );
+    bool confirm = true;
+    std::vector<ExportRequest> requests;
+};
 
 } // namespace
 
@@ -299,6 +358,18 @@ SCENARIO( "An export reports its progress, can be cancelled and leaves nothing w
         }
     }
 
+    GIVEN( "the capture itself as the export's file" )
+    {
+        const auto result = exportPackets( converted.index, { 1 }, capture );
+
+        THEN( "it is not replaced" )
+        {
+            REQUIRE( result.status == ExportResult::Status::Failed );
+            REQUIRE( result.error.contains( "cannot replace the capture" ) );
+            REQUIRE( converted.index->fileProblem().isEmpty() );
+        }
+    }
+
     GIVEN( "no packet, or one the capture does not have" )
     {
         THEN( "nothing is exported" )
@@ -357,5 +428,142 @@ SCENARIO( "The packets to export are read from packet lines, numbers and ranges"
     {
         REQUIRE( formatPacketRanges( { 1, 2, 3, 5, 7, 8 } ) == "1-3, 5, 7-8" );
         REQUIRE( formatPacketRanges( {} ).isEmpty() );
+    }
+}
+
+SCENARIO( "Export packets writes the packets of the selected lines", "[packet_export]" )
+{
+    const auto capture = QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" );
+    LoadedCapture loaded( capture );
+    auto& host = loaded.host;
+    const auto source = recordsOf( readAll( capture ) );
+
+    GIVEN( "the header and three packet lines selected" )
+    {
+        host.selectedLines
+            = { loaded.lines[ 0 ], loaded.lines[ 2 ], loaded.lines[ 5 ], loaded.lines[ 6 ] };
+        loaded.exportSelected();
+
+        THEN( "the user confirms their packets, which are written to the file chosen" )
+        {
+            REQUIRE( loaded.requests.size() == 1 );
+            const auto& request = loaded.requests.front();
+            REQUIRE( request.numbers == std::vector<uint32_t>{ 2, 5, 6 } );
+            REQUIRE( request.captureName == "mixed.pcap" );
+            REQUIRE( request.format == CaptureFormat::Pcap );
+            REQUIRE_FALSE( request.truncated );
+
+            const auto exported = recordsOf( readAll( loaded.outputPath ) );
+            REQUIRE( exported.records.size() == 3 );
+            REQUIRE( exported.records[ 0 ] == source.records[ 1 ] );
+            REQUIRE( exported.records[ 2 ] == source.records[ 5 ] );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().startsWith( "Exported 3 packets of mixed.pcap" ) );
+        }
+    }
+
+    GIVEN( "more lines selected than LogSquirl tells" )
+    {
+        host.selectedLines = { loaded.lines[ 1 ], loaded.lines[ 2 ] };
+        host.selectionResult = LOGSQUIRL_LOG_LINES_TRUNCATED;
+        loaded.exportSelected();
+
+        THEN( "the user is told, before and after the export" )
+        {
+            REQUIRE( loaded.requests.front().truncated );
+            REQUIRE( loaded.requests.front().selectedLines == 2 );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().contains(
+                "LogSquirl told only the first 2 selected lines" ) );
+
+            ExportDialog dialog( loaded.requests.front() );
+            REQUIRE( dialog.findChild<QLabel*>( "truncatedNote" ) );
+        }
+    }
+
+    GIVEN( "no line selected" )
+    {
+        loaded.confirm = false;
+        loaded.exportSelected();
+
+        THEN( "the user may still name the packets, and nothing is exported unconfirmed" )
+        {
+            REQUIRE( loaded.requests.size() == 1 );
+            REQUIRE( loaded.requests.front().numbers.empty() );
+            REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
+            REQUIRE( host.notifications.isEmpty() );
+        }
+    }
+
+    GIVEN( "a tab in front that shows no capture" )
+    {
+        host.activateFile( QString() );
+        loaded.exportSelected();
+
+        THEN( "nothing is asked and the user is told" )
+        {
+            REQUIRE( loaded.requests.empty() );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().contains( "shows no capture" ) );
+        }
+    }
+
+    GIVEN( "an export cancelled at once" )
+    {
+        host.selectedLines = { loaded.lines[ 1 ] };
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
+                  return a.label == "Export packets\xe2\x80\xa6";
+              } );
+        entry->trigger();
+        REQUIRE( loaded.sidebar->isExporting() );
+        loaded.sidebar->cancelExport();
+        REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+
+        THEN( "the cancel wins: no file, no notification" )
+        {
+            REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
+            REQUIRE( host.notifications.isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "The Export dialog shows the packets its text names", "[packet_export]" )
+{
+    ExportRequest request;
+    request.captureName = "mixed.pcap";
+    request.packets = 20;
+    request.numbers = { 1, 2, 3, 9 };
+    ExportDialog dialog( request );
+    auto* count = dialog.findChild<QLabel*>( "packetCount" );
+    auto* button = dialog.findChild<QPushButton*>( "exportButton" );
+
+    THEN( "the selection's packets are shown as ranges" )
+    {
+        REQUIRE( dialog.packetSet().numbers == request.numbers );
+        REQUIRE( count->text() == "4 packets" );
+        REQUIRE( button->isEnabled() );
+        REQUIRE_FALSE( dialog.findChild<QLabel*>( "truncatedNote" ) );
+    }
+
+    WHEN( "the user names other packets, some of which the capture does not have" )
+    {
+        dialog.setText( "5-7, 30" );
+
+        THEN( "those it has are taken, the others counted" )
+        {
+            REQUIRE( dialog.packetSet().numbers == std::vector<uint32_t>{ 5, 6, 7 } );
+            REQUIRE( count->text().startsWith( "3 packets; 1 skipped" ) );
+        }
+    }
+
+    WHEN( "the text names no packet" )
+    {
+        dialog.setText( "none" );
+
+        THEN( "there is nothing to export" )
+        {
+            REQUIRE_FALSE( button->isEnabled() );
+        }
     }
 }

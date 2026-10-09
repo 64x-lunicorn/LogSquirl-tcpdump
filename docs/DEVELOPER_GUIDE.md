@@ -240,7 +240,12 @@ each packet the reader also tells where its record lies (`recordOffset()`,
 `recordLength()`: the pcap record header or the pcapng block, header and
 all), its bytes as dissected (`packetBytes()`, at most
 `kMaxDissectedBytes`) and the byte order they were read in
-(`byteSwapped()`).
+(`byteSwapped()`). `headers()` tells the records a file of that packet
+needs ahead of it (`CaptureHeaders`: the format and `RecordSpan`s): a
+pcap's global header, or a pcapng section's header block and the interface
+description blocks declared in it so far, in order, so that an interface ID
+is an index into them. The pcapng reader keeps those spans in its
+`SectionState`, so a reader resumed at a checkpoint tells them too.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -963,8 +968,41 @@ export, conversation statistics):
   with `conversationPattern()`, the Follow stream pattern built from the
   row's stream number, addresses and ports.
 
+- **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
+  `exportPackets(index, numbers, path, cancel, progress)` sorts the
+  numbers, reads them with one `CaptureCursor` in one pass, and copies each
+  packet's record (`recordOffset`/`recordLength`) from the capture file
+  byte for byte through a `QSaveFile`, which appears only when complete, so
+  a cancel or a failure leaves nothing. Ahead of a packet go the records
+  of its `CapturedPacket::headers` not written yet: a pcap's global header
+  once; for a pcapng, its section's header block when the section changes
+  (its section length set to -1, "unknown") and the section's interface
+  description blocks as they are declared, all of them, in order, so that
+  the packet block's interface ID stays valid without changing the block.
+  A pcapng is thus exported as a pcapng, never converted to a pcap; other
+  blocks (name resolution, interface statistics, custom) are not exported.
+  Nothing is written from what was dissected. Writing over the capture
+  itself is refused. `parsePacketSet()` reads packet lines (their No.) and
+  numbers and ranges ("1-5, 9") and counts what names no packet;
+  `packetLinesOf()` reads packet lines only, as the selection holds them;
+  `formatPacketRanges()` writes numbers back as ranges.
+  `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
+  packets…) reads the selection with `get_selected_log_lines`, whose
+  `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
+  selected) is carried in the `ExportRequest`; the `ExportConfirmer`
+  (`setExportConfirmer()` for tests) shows the `ExportDialog`, where the
+  user may change the numbers or paste lines copied in LogSquirl, then a
+  save dialog. The host offers no call for the lines of a Filtered View
+  or a search, so selecting them there (or pasting them) is the way to
+  export a filtered view. The export runs on `exportPool_`, a thread of
+  its own, with a `QProgressDialog` whose Cancel sets the flag the export
+  checks between packets; as for a conversion, a cancel wins over an
+  export that was done when it came. The notification after the export
+  repeats a truncation that limited it.
+
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details entry and no polling; the panel says what it needs.
+details or Export packets entry and no polling; the panel says what it
+needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
 it against its line and an in-memory parse, and that its layers stay
@@ -975,12 +1013,17 @@ of `get_selected_log_lines`). `conversations_test.cpp` checks the counts
 on built packets and that every row's pattern finds exactly its packets in
 every corpus text; `conversation_table_test.cpp` drives the table (sorting
 by every column, clicks, the stream cap's row, snapshot updates) through
-the `FakeHost`.
+the `FakeHost`. `packet_export_test.cpp` exports every other packet of
+every corpus capture, read with a checkpoint every 3 packets, re-reads the
+export and compares each record byte for byte and each packet's fields
+with the capture's; it checks that a pcapng export of packets of two
+sections and interfaces keeps them, progress, cancel and failure, and
+drives Export packets… and the `ExportDialog` through the `FakeHost`.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entries (Open pcap…, and Packet details and Follow stream where
-the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
+the menu entries (Open pcap…, and Packet details, Export packets… and
+Follow stream where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept

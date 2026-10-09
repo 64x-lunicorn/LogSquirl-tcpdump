@@ -27,11 +27,14 @@
 
 #pragma once
 
+#include "export_dialog.h"
 #include "pcap_converter.h"
 
 #include <QFutureWatcher>
 #include <QLabel>
+#include <QPointer>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QThreadPool>
 #include <QVBoxLayout>
@@ -71,6 +74,10 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
  *     packet of the line selected in the tab in front, and the
  *     Conversations table of the capture in front
+ *
+ * Plugins > tcpdump > Export packets… writes the packets of the lines
+ * selected in the tab in front to a new capture file (packet_export.h), on
+ * a worker thread of its own, with a progress dialog and Cancel.
  *
  * The summaries of all captures converted while the plugin is loaded are
  * kept with their CaptureIndex, keyed by the text file written for each, so
@@ -128,6 +135,32 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
+    /// Plugins > tcpdump > Export packets…: the packets of the lines selected
+    /// in the tab in front, confirmed by the user, written to a new capture
+    /// file in the background.  While an export runs, only a notification
+    /// says so.
+    void exportSelectedPackets();
+
+    /// Asks the user to confirm the packets of @p request and where to write
+    /// them; false if the user does not want them exported.
+    using ExportConfirmer = std::function<bool( QWidget* parent, ExportRequest& request )>;
+
+    /// Ask with @p confirmer instead of the Export dialog and a file dialog
+    /// (for tests).
+    void setExportConfirmer( ExportConfirmer confirmer )
+    {
+        confirmExport_ = std::move( confirmer );
+    }
+
+    /// Whether an export is running.
+    bool isExporting() const
+    {
+        return exportWatcher_ != nullptr;
+    }
+
+    /// Stop a running export; nothing is left of it then.
+    void cancelExport();
+
     /// The Packet Panel.
     PacketPanel* packetPanel() const
     {
@@ -170,6 +203,8 @@ private:
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
+    /// Report the outcome of the export @p request asked for.
+    void finishExport( const ExportRequest& request, ExportResult result );
 
     QPushButton* openButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
@@ -194,6 +229,15 @@ private:
     QFutureWatcher<ConversionResult>* watcher_ = nullptr;
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
+
+    ExportConfirmer confirmExport_; ///< Shows the Export dialog and a file dialog.
+    /// Cancels the running export.
+    std::shared_ptr<std::atomic_bool> cancelExport_;
+    /// The running export's outcome, delivered on this thread; null while none runs.
+    QFutureWatcher<ExportResult>* exportWatcher_ = nullptr;
+    QPointer<QProgressDialog> exportProgress_; ///< Its progress, and Cancel.
+    /// The export's worker thread, apart from the conversion's.
+    QThreadPool exportPool_;
 };
 
 } // namespace tcpdump

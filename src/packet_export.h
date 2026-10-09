@@ -70,6 +70,10 @@ struct PacketSet {
  */
 PacketSet parsePacketSet( const QString& text, uint32_t packets );
 
+/// The packets of the packet lines in @p text, such as the selected lines
+/// the host tells; every other line is skipped and counted.
+PacketSet packetLinesOf( const QString& text, uint32_t packets );
+
 /// @p numbers, ascending, as ranges: "1-5, 9, 12-40".
 QString formatPacketRanges( const std::vector<uint32_t>& numbers );
 

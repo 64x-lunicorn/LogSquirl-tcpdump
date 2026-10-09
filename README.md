@@ -158,7 +158,21 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    table is counted while converting, for the streams that get a number:
    past the stream cap (see [Options](#options)), the packets of all other
    streams are one row, `?` *Other streams*
-12. With the [Log Format](#log-format) installed, switch to the table view
+12. To share some packets, or open them in Wireshark, select their lines
+   (in the Filtered View, e.g., all lines a filter or search left) and
+   choose **Plugins → tcpdump → Export packets…**. A dialog shows their
+   packet numbers as ranges (`1-5, 9`): change them, or paste packet lines
+   copied in LogSquirl, then choose the file. LogSquirl tells the plugin at
+   most the first 1,000 selected lines (and at most 1 MiB of them); the
+   dialog says when there were more, and pasting the copied lines exports
+   them all. The packets are copied from the capture file record by record,
+   unchanged: a pcap gives a `.pcap` with the capture's header, a pcapng a
+   `.pcapng` with the section headers and interfaces of the exported
+   packets (other pcapng blocks, such as name resolution, are left out).
+   The capture is read once from front to back in the background; a
+   progress dialog shows how far, and Cancel leaves no file. Needs
+   LogSquirl ≥ 26.11
+13. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Options
@@ -367,6 +381,9 @@ graph TD
     L -->|selected line's No.| P[Packet Panel]
     X --> P
     P -->|re-read from the nearest checkpoint| D
+    L -->|selected lines' No.| Q[Export packets]
+    X --> Q
+    Q -->|records copied as they are| R[new .pcap / .pcapng]
 ```
 
 ## License

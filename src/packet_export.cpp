@@ -27,6 +27,7 @@
 #include "capture_file.h"
 #include "regex_lab.h"
 
+#include <QFileInfo>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStringList>
@@ -122,7 +123,11 @@ ExportResult failed( const QString& error )
 
 // ── Choosing the packets ─────────────────────────────────────────────────
 
-PacketSet parsePacketSet( const QString& text, uint32_t packets )
+namespace {
+
+/// The packets of the packet lines in @p text and, if @p numbersToo, of the
+/// numbers and ranges in its other lines.
+PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
 {
     PacketSet set;
     const auto add = [ & ]( uint64_t first, uint64_t last ) {
@@ -150,6 +155,10 @@ PacketSet parsePacketSet( const QString& text, uint32_t packets )
             ok ? add( number, number ) : void( ++set.skipped );
             continue;
         }
+        if ( !numbersToo ) {
+            ++set.skipped;
+            continue;
+        }
         auto pieces = trimmed;
         pieces.replace( dash, QStringLiteral( "-" ) );
         for ( const auto& piece : pieces.split( separators, Qt::SkipEmptyParts ) ) {
@@ -169,6 +178,18 @@ PacketSet parsePacketSet( const QString& text, uint32_t packets )
     std::sort( set.numbers.begin(), set.numbers.end() );
     set.numbers.erase( std::unique( set.numbers.begin(), set.numbers.end() ), set.numbers.end() );
     return set;
+}
+
+} // namespace
+
+PacketSet parsePacketSet( const QString& text, uint32_t packets )
+{
+    return parse( text, packets, true );
+}
+
+PacketSet packetLinesOf( const QString& text, uint32_t packets )
+{
+    return parse( text, packets, false );
 }
 
 QString formatPacketRanges( const std::vector<uint32_t>& numbers )
@@ -215,6 +236,12 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index,
     numbers.erase( std::unique( numbers.begin(), numbers.end() ), numbers.end() );
     if ( numbers.empty() ) {
         return failed( QStringLiteral( "No packet to export." ) );
+    }
+
+    // Replacing the capture with some of its packets would lose the others.
+    if ( QFileInfo( outputPath ).canonicalFilePath() == index->capturePath() ) {
+        return failed( QStringLiteral( "The packets cannot replace the capture they are "
+                                       "from: choose another file." ) );
     }
 
     QFile capture;
