@@ -635,7 +635,8 @@ sessions decrypted, or says why the key log could not be read.
   to it (at most twice a second); a last line is read once its line feed
   is written
 - **Memory**: a session keeps its keys and sequence numbers, no data; at
-  most 65,536 sessions are followed, and HTTP/2 header decoding takes at
+  most 16,384 sessions are followed at a time (about 55 MB), a new one
+  in place of the one idle the longest, and HTTP/2 header decoding takes at
   most 32 MB, all sessions together
 
 **Security.** The key log decrypts every session whose secrets it holds:

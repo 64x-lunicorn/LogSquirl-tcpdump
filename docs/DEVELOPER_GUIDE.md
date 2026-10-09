@@ -1267,8 +1267,13 @@ it runs, and the text is the same as before.
   Other frames' payloads are skipped as they come; a header block frame is
   held until whole, at most 64 KiB, so that the HPACK table stays in step.
 - **Memory**: a session keeps its randoms, keys (Mbed TLS contexts) and
-  sequence numbers, no records; `kMaxSessions` (65,536) are followed, a
-  session is dropped on its connection's RST, both FINs or a new SYN. The
+  sequence numbers, no records, and of TLS 1.3 per direction a handshake
+  message over more than one record until it is whole (16 KiB at most):
+  about 3.3 KB a session with keys (measured: TLS 1.3, AES-128-GCM). A
+  session is dropped on its connection's RST, both FINs or a new SYN;
+  `kMaxSessions` (16,384, some 55 MB) are followed at most, and a new one
+  beyond takes the place of the session with the least recent record
+  (`recent_`), whose connection's end the capture did not see. The
   HTTP/2 directions together hold at most `kHttp2MemoryLimit` (32 MiB);
   one that would pass it stops decoding header blocks. The plaintext of a
   segment is held while it is described, then wiped.

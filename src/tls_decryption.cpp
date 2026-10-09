@@ -431,7 +431,8 @@ struct TlsDecryption::Session {
     /// The key log's bytes read when it had no secrets for the session;
     /// -1 if it was not looked for in vain.
     int64_t missedAt = -1;
-    uint8_t fins = 0; ///< Bit 1 << d: direction d sent its FIN.
+    std::list<int>::iterator recent; ///< Its place in recent_.
+    uint8_t fins = 0;                ///< Bit 1 << d: direction d sent its FIN.
     Direction dir[ 2 ];
 };
 
@@ -451,9 +452,10 @@ bool tls13Keys( const Suite& suite, const tls::SecretBytes& secret,
 
 } // namespace
 
-TlsDecryption::TlsDecryption( Lookup lookup, KeyLogBytes keyLogBytes )
+TlsDecryption::TlsDecryption( Lookup lookup, KeyLogBytes keyLogBytes, size_t maxSessions )
     : lookup_( std::move( lookup ) )
     , keyLogBytes_( std::move( keyLogBytes ) )
+    , maxSessions_( std::max<size_t>( maxSessions, 1 ) )
 {
 }
 
@@ -468,6 +470,7 @@ void TlsDecryption::erase( int streamId )
     for ( const auto& direction : it->second->dir ) {
         http2Memory_ -= direction.http2Charged;
     }
+    recent_.erase( it->second->recent );
     sessions_.erase( it );
 }
 
@@ -485,12 +488,13 @@ void TlsDecryption::handshake( const Stream& stream, ByteView fragment )
             // A new session, or the second ClientHello after a
             // HelloRetryRequest, with the same random.
             erase( stream.id );
-            if ( sessions_.size() >= kMaxSessions ) {
-                return;
+            if ( sessions_.size() >= maxSessions_ ) {
+                erase( recent_.front() ); // its connection's end was not captured, or is far
             }
             auto session = std::make_unique<Session>();
             std::copy( random.data, random.data + random.size, session->clientRandom.begin() );
             session->client = stream.direction;
+            session->recent = recent_.insert( recent_.end(), stream.id );
             sessions_.emplace( stream.id, std::move( session ) );
             return;
         }
@@ -553,6 +557,10 @@ void TlsDecryption::apply( PacketRecord& pkt, const Stream& stream,
         erase( stream.id ); // a new connection on the ports
     }
     if ( messages.bytes.data != nullptr && messages.bytes.size > 0 ) {
+        const auto it = sessions_.find( stream.id );
+        if ( it != sessions_.end() ) {
+            recent_.splice( recent_.end(), recent_, it->second->recent );
+        }
         records( pkt, stream, messages );
     }
     if ( flags & kTcpRst ) {

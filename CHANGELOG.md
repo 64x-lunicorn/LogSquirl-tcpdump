@@ -148,7 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep their lines. A live capture reads the key log again as it grows.
   The secrets are read only, kept in memory for the conversion and wiped,
   never written or shown; a session keeps its keys and sequence numbers,
-  no data, 65,536 sessions at most. The sidebar summary counts the
+  no data, 16,384 sessions at a time, a new one in place of the one idle
+  the longest. The sidebar summary counts the
   sessions decrypted. The cryptography is Mbed TLS 3.6.7, fetched by the
   build at that release and hash and linked in (NOTICE).
 - **Follow stream content.** The Packet Panel's new **Stream** tab shows

@@ -41,6 +41,7 @@
 #include <mbedtls/gcm.h>
 
 #include <cstring>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -165,10 +166,12 @@ constexpr uint8_t kEndHeaders = 0x4;
 /// of whole records at a time.
 class Tls13Session {
 public:
-    Tls13Session()
+    /// The session on TCP stream @p streamId, its client random its own.
+    explicit Tls13Session( int streamId = 0 )
+        : streamId_( streamId )
     {
         for ( size_t i = 0; i < random_.size(); ++i ) {
-            random_[ i ] = static_cast<uint8_t>( 0xA0 + i );
+            random_[ i ] = static_cast<uint8_t>( 0xA0 + i + streamId );
         }
         secrets_.clientHandshakeTraffic = secret( 1 );
         secrets_.serverHandshakeTraffic = secret( 2 );
@@ -275,7 +278,7 @@ public:
         pkt.srcPort = d == 0 ? 50000 : 443;
         pkt.dstPort = d == 0 ? 443 : 50000;
         pkt.info = "segment";
-        const Stream stream{ 0, &state_, d };
+        const Stream stream{ streamId_, &state_, d };
         decryption.apply( pkt, stream, ReassembledMessages{ { bytes.data(), bytes.size() }, 1 } );
         return pkt.info;
     }
@@ -307,6 +310,7 @@ private:
         return tls::SecretBytes( bytes.data(), bytes.size() );
     }
 
+    int streamId_;
     tls::ClientRandom random_{};
     tls::SessionSecrets secrets_;
     Keys keys_[ 2 ];
@@ -686,6 +690,50 @@ SCENARIO( "A session the key log has no secrets for is looked for once it grew",
             THEN( "it is looked for again, once" )
             {
                 REQUIRE( asked == 2 );
+            }
+        }
+    }
+}
+
+SCENARIO( "TLS sessions past the most followed take the place of the least recent",
+          "[tls_decryption]" )
+{
+    std::vector<std::unique_ptr<Tls13Session>> sessions;
+    for ( int i = 0; i < 3; ++i ) {
+        sessions.push_back( std::make_unique<Tls13Session>( i ) );
+    }
+    TlsDecryption decryption(
+        [ &sessions ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+            for ( const auto& session : sessions ) {
+                if ( const auto* secrets = session->lookup()( random ) ) {
+                    return secrets;
+                }
+            }
+            return nullptr;
+        },
+        {}, 2 );
+    const std::string ok = "HTTP/1.1 200 OK\r\n\r\n";
+    auto respond = [ & ]( int i ) {
+        return sessions[ i ]->feed( decryption, 1,
+                                    sessions[ i ]->seal( 1, 0x17, Bytes( ok.begin(), ok.end() ) ) );
+    };
+
+    GIVEN( "two sessions followed, the first one used since the second began" )
+    {
+        sessions[ 0 ]->handshake( decryption, "" );
+        sessions[ 1 ]->handshake( decryption, "" );
+        REQUIRE( contains( respond( 0 ), "HTTP/1.1 200 OK" ) );
+
+        WHEN( "a third one begins" )
+        {
+            sessions[ 2 ]->handshake( decryption, "" );
+
+            THEN( "it is decrypted, in place of the least recently used" )
+            {
+                REQUIRE( decryption.sessions() == 2 );
+                REQUIRE( contains( respond( 2 ), "TLS (decrypted) | HTTP/1.1 200 OK" ) );
+                REQUIRE( contains( respond( 0 ), "TLS (decrypted) | HTTP/1.1 200 OK" ) );
+                REQUIRE_FALSE( contains( respond( 1 ), kDecryptedMarker ) );
             }
         }
     }
