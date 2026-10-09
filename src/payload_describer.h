@@ -263,8 +263,9 @@ public:
      * DATA[1]", up to four, then "…"; the connection preface first, at the
      * start of the client's direction, as "Magic".  A header block's
      * request (:method, :authority, :path) or response (:status,
-     * Content-Type, Content-Length) is told when the block is complete in
-     * the same bytes.  Empty if no frame header is among them.
+     * Content-Type, Content-Length) is told on the frame that began the
+     * block, or on the one that ends it when the block began in earlier
+     * bytes.  Empty if no frame header is among them.
      */
     std::string describe( const uint8_t* data, size_t len );
 

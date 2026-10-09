@@ -473,6 +473,20 @@ SCENARIO( "HTTP/2 from whole bytes is described with its header blocks", "[tls_d
         }
     }
 
+    GIVEN( "a header block whose CONTINUATION comes in later bytes" )
+    {
+        Http2Direction client;
+        const Bytes first( kFirstRequest.begin(), kFirstRequest.begin() + 5 );
+        const Bytes rest( kFirstRequest.begin() + 5, kFirstRequest.end() );
+
+        THEN( "the request is told on the frame that ends the block" )
+        {
+            REQUIRE( describe( client, h2Frame( kHeaders, 0, 1, first ) ) == "HEADERS[1]" );
+            REQUIRE( describe( client, h2Frame( kContinuation, kEndHeaders, 1, rest ) )
+                     == "CONTINUATION[1]: GET www.example.com/" );
+        }
+    }
+
     GIVEN( "a request frame split over two pieces of bytes, then one that builds on it" )
     {
         Http2Direction client;
