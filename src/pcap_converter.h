@@ -25,8 +25,8 @@
 #pragma once
 
 #include "capture_stats.h"
-#include "packet_formatter.h"
 #include "pcap_parser.h"
+#include "stream_tracker.h"
 
 #include <QString>
 
@@ -44,13 +44,17 @@ namespace tcpdump {
  * What the Converter knows about a converted capture, in the shape the
  * sidebar shows it: the counts and breakdowns, and what was cut.
  *
- * "What was cut" is three facts, each standing on its own with the number
+ * "What was cut" is four facts, each standing on its own with the number
  * that applies, so that the sidebar prints what it is told.
  */
 struct CaptureSummary {
     uint64_t packets = 0;
     uint64_t bytes = 0;           ///< Captured bytes of all packets.
     double durationSeconds = 0.0; ///< Between the earliest and the latest packet.
+    /// The earliest and the latest packet time, as the UTC Time column
+    /// writes them at the capture's precision; empty without packets.
+    std::string firstTimeUtc;
+    std::string lastTimeUtc;
     /// The capture's link-layer types by name, or number, in the order they
     /// were first seen: one for a pcap, one per kind of interface otherwise.
     std::vector<std::string> linkTypeNames;
@@ -59,6 +63,9 @@ struct CaptureSummary {
     /// Packets per IP address, for every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
 
+    /// Packets captured shorter than on the wire, cut at the snaplen; their
+    /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
+    uint64_t cutPackets = 0;
     /// The capture ends in the middle of a record, which is not shown.
     bool endsInsideRecord = false;
     /// Set when conversations past the stream cap went unnumbered and show
@@ -95,7 +102,7 @@ struct ConversionResult {
 /// the caps to see them reached on a small capture.
 struct ConversionOptions {
     /// Conversations to number at most; later ones show stream "?".
-    size_t maxStreams = PacketFormatter::kMaxStreams;
+    size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
 };

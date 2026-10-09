@@ -55,7 +55,7 @@ to the same dissection (`dissectPacket()`):
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
 
 #### The reader seam
-Everything past the reader (Converter, Packet Formatter, `CaptureStats`)
+Everything past the reader (Converter, Stream Tracker, Packet Formatter, `CaptureStats`)
 sees a capture through `CaptureReader` only, never through a file header.
 Each `PacketRecord` carries the link-layer type it was dissected with
 (`linkType`) and the resolution its timestamp was recorded in
@@ -103,20 +103,68 @@ preview and its caps. A description is finalised as one line before it
 leaves the describer, so one packet is always one line whatever a detector
 forgot to escape.
 
-### 3. Packet Formatter (`packet_formatter.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
-Wireshark-style text lines with fixed-width columns: No., Stream, Time,
-Source, Destination, Protocol, Len, Info. Times are relative to the first
-packet, with 6 decimals, or 9 when the capture announces nanosecond
-precision for any of its packets (`PacketFormatter` takes the reader's
-`precision()`; `formatAllPackets()` the finest of its packets).
+Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
+Time, Source, Destination, Protocol, Length, Info. Both times have 6
+decimals, or 9 when the capture announces nanosecond precision for any of
+its packets (`PacketFormatter` takes the reader's `precision()`;
+`formatAllPackets()` the finest of its packets); further digits are cut,
+not rounded.
 
-Stream IDs are computed from IP+port 4-tuples — both directions of a
-conversation share the same stream number. Non-TCP/UDP packets (ICMP,
-ARP) show `-` as stream. At most `PacketFormatter::kMaxStreams` (1,000,000)
-conversations are numbered; packets of later ones show `?`.
+UTC Time is the packet's wall-clock time, written by `formatUtcTime()` as
+an ISO 8601 date and time in UTC ending in `Z`:
+`2026-10-09 08:41:12.123456Z`, or `2026-10-09 08:41:12.123456789Z`. It is
+computed from the calendar alone (no `gmtime`, no time zone), so the text is
+the same on every platform and in every zone; a time before 1970 counts
+back from the epoch, and a year outside 0000–9999 gets ISO 8601's sign
+(`+10000`, `-0001`). The Capture Summary's first and last packet times are
+written by the same function. A Log Format reads the column with
+`%Y-%m-%d %H:%M:%S.%f%z`: LogSquirl's `%f` takes any number of digits, `%z`
+the `Z` as UTC. Time is relative to the first packet in the file, as
+Wireshark's default Time column; a packet recorded before it (a merged
+capture) has a negative Time but its own UTC Time.
 
-`CaptureStats` collects the sidebar summary's counts packet by packet,
+UTC Time comes before Time because it is the line's timestamp: the first
+time in the line, the field a Log Format names, and LogSquirl's table view
+puts its Δt column right after it, so the relative and the elapsed time sit
+side by side instead of Δt splitting the two.
+
+IPv6 addresses are written in the RFC 5952 form (`fe80::1`, `::`) by
+`formatIpv6()` in `wire_bytes.h`, the one place that formats them: the
+Source and Destination columns, the Capture Summary endpoints, the Stream
+Tracker's keys and SOCKS5 destinations (as `[2001:db8::1]:443`) all use it.
+
+Length is the packet's length on the wire (`originalLen`), as Wireshark's
+Length column is; `Len=` in Info is the TCP or UDP payload length. A packet
+captured shorter than on the wire (`capturedLen < originalLen`, cut at the
+snaplen) ends its Info with `[cut to N bytes]`, N the bytes captured, so a
+reader knows why its description stops short.
+
+The Formatter keeps no conversations: the Stream column shows the stream
+number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
+`kUnnumbered`.
+
+`StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Converter,
+follows the conversations of a capture. Only TCP and UDP packets have a
+stream: those the parser read a TCP or UDP header of (`PacketRecord::transport`
+is set) and that share addresses and ports, in either direction. TCP and
+UDP are numbered independently, each from 0, as Wireshark's `tcp.stream`
+and `udp.stream` are; the column shows the number alone, the Protocol
+column says which transport it belongs to. ICMP, ICMPv6, ARP, IP fragments
+after the first and every other packet without TCP/UDP ports show `-`. At
+most `StreamTracker::kMaxStreams` (1,000,000) conversations, both transports
+together, are numbered; packets of later ones show `?`.
+
+`track()` returns a `Stream`: the number and a pointer to the stream's
+`StreamState`, the same slot for every packet of the stream (null without
+a number). The slot is empty for now; modules that follow a conversation
+(relative sequence numbers, TCP analysis, …) add their fields to it and
+read and update them through that pointer. Every field added costs memory
+once per numbered stream.
+
+`CaptureStats` collects the sidebar summary's counts packet by packet
+(among them the packets cut at the snaplen),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
@@ -128,8 +176,9 @@ hit.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
-`makeCaptureReader()` picks for it, formats each packet and
-appends its line to a new output file, reporting progress and checking a
+`makeCaptureReader()` picks for it, has the Stream Tracker give each packet
+its stream, formats the packet and appends its line to a new output file,
+reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
@@ -152,8 +201,10 @@ Qt UI that provides:
   a notification. Tests replace the dialog with `setFileChooser()`
 - A progress bar and Cancel button while a capture is converted
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
-  top endpoints, packets per second, file size, the link-layer type names
-  (comma-separated when there are several)
+  top endpoints, the first and last packet time in UTC, packets per
+  second, file size, the link-layer type names
+  (comma-separated when there are several), and the number of packets cut
+  at the snaplen when there are any
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome

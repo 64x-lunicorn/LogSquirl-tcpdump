@@ -46,6 +46,8 @@ struct CaptureStats {
 
     uint64_t packets = 0;
     uint64_t bytes = 0; ///< Captured bytes of all packets.
+    /// Packets captured shorter than on the wire, i.e. cut at the snaplen.
+    uint64_t cutPackets = 0;
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
     /// Packets per IP address, for at most maxEndpoints addresses, so that a

@@ -18,11 +18,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped. A pcapng without packets converts to just the header line, and one
   that is cut off is reported like a cut-off pcap. The file dialog offers
   `.pcapng`.
+- **Absolute UTC time column.** Every packet line shows the packet's
+  wall-clock time in UTC, `2026-10-09 08:41:12.123456Z` (nine decimals for a
+  nanosecond capture), in a `UTC Time` column before the relative `Time`, so
+  that a capture can be lined up with a log of the same incident. The text
+  does not depend on the computer's time zone. A packet recorded before the
+  first one shows its own time there, while its relative time is negative.
+  The sidebar summary shows the first and last packet time in UTC.
 - **Open pcap… in the Plugins menu.** `Plugins → tcpdump → Open pcap…`, and
   so the Command Palette, opens the same dialog as the sidebar button. Chosen
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **IPv6 addresses in RFC 5952 form.** IPv6 addresses are shown as Wireshark
+  shows them: lowercase hexadecimal, the longest run of zero groups (the
+  leftmost on a tie, never a single group) collapsed to `::`, so `fe80::1`
+  instead of `fe80:0:0:0:0:0:0:1` and `::` for the unspecified address. This
+  applies to the Source and Destination columns and the Capture Summary
+  endpoints alike. A SOCKS5 IPv6 destination puts the address in brackets
+  before its port, `[2001:db8::1]:443`, as RFC 5952 recommends.
+- **The Length column shows the length on the wire.** The column, headed
+  `Length` instead of `Len`, shows how long the packet was on the wire, as
+  Wireshark's Length column does, instead of how many bytes were captured:
+  a capture taken with a snaplen no longer looks like it carried small
+  packets. A packet captured shorter than on the wire ends its Info with
+  `[cut to 96 bytes]`, naming the bytes captured, so it is clear why its
+  description stops short; the sidebar summary counts these cut packets.
+  `Len=` in Info remains the TCP or UDP payload length.
+- **Only TCP and UDP have streams, numbered per transport.** TCP and UDP
+  conversations are numbered independently, each from 0, as Wireshark's
+  `tcp.stream` and `udp.stream` are; the Protocol column says which one a
+  number belongs to. Conversations are followed by a module of their own,
+  the Stream Tracker, which keeps a state slot per stream for later
+  analyses.
 - **Link type and time precision come with each packet.** Internally, every
   packet carries the link-layer type it was dissected with and the precision
   of its timestamp, read through one reader interface, so that a capture
@@ -34,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Hello` instead of `Len=9 [Client Hello]` for TLS, and `Len=29 | Query
   example.com` instead of `Len=29 Query example.com` for DNS. HTTP, NMEA,
   SOCKS and the payload previews already used it.
+
+### Fixed
+- **ICMP, ARP and IP fragments no longer get a stream.** As documented, they
+  show `-`: before, every packet with IP addresses was numbered, so ICMP and
+  a fragment between the same two hosts shared one "conversation", and ARP
+  got a number of its own.
 
 ## [0.2.0] — 2026-09-30
 

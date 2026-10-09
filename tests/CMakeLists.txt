@@ -27,6 +27,8 @@ add_executable(logsquirl_tcpdump_tests
     corpus_test.cpp
     packet_formatter_test.cpp
     payload_describer_test.cpp
+    stream_tracker_test.cpp
+    wire_bytes_test.cpp
 )
 
 set_target_properties(logsquirl_tcpdump_tests PROPERTIES
@@ -55,6 +57,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/pcapng_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/payload_describer.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"

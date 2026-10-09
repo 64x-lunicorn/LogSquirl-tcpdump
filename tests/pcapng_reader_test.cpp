@@ -70,9 +70,10 @@ QStringList readLines( const QString& path )
 }
 
 /// The Time column of a converted line.
+// The relative time follows the UTC date and time.
 QString timeOf( const QString& line )
 {
-    return line.mid( 14 ).section( ' ', 0, 0, QString::SectionSkipEmpty );
+    return line.mid( 14 ).section( ' ', 2, 2, QString::SectionSkipEmpty );
 }
 
 const Pcapng le;

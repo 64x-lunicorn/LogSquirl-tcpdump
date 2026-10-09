@@ -309,7 +309,17 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     html += QString( "<b>Overview</b><br>" );
     html += QString( "Packets: <b>%1</b><br>" )
                 .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
+    if ( summary.cutPackets > 0 ) {
+        html += QString( "Cut packets: <b>%1</b> (captured shorter than on the wire)<br>" )
+                    .arg( QLocale().toString( static_cast<qulonglong>( summary.cutPackets ) ) );
+    }
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
+    if ( !summary.firstTimeUtc.empty() ) {
+        html += QString( "First packet: %1<br>" )
+                    .arg( QString::fromStdString( summary.firstTimeUtc ) );
+        html += QString( "Last packet: %1<br>" )
+                    .arg( QString::fromStdString( summary.lastTimeUtc ) );
+    }
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
     QStringList linkTypes;
