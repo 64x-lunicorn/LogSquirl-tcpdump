@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Custom command as a live source.** The **Custom command** source runs
+  a command whose stdout is a pcap or pcapng stream (a vendor tool, `nc`,
+  `ssh router tcpdump -w -`) and converts it live. The line is split like
+  a shell would split it (quotes, backslash escapes) but run without one,
+  nothing expanded; `{interface}`, `{filter}` and `{snaplen}` are replaced
+  inside an argument, never split. **Run through the shell** (off by
+  default, with a warning) is there for pipes and redirections, the
+  placeholders then quoted. Commands can be saved by name, chosen,
+  edited and deleted, kept in `settings.ini` at once; examples for
+  tcpdump, adb and ssh are offered, never run by themselves. A command
+  whose output is not a capture fails with *Not a capture*, its stderr and
+  what to write instead (#76)
 - **Remote live capture over SSH.** The **SSH** source captures on a
   server with its `tcpdump`, over the system's OpenSSH client (Windows:
   `System32\OpenSSH\ssh.exe`). The host is typed as `[user@]host[:port]`,
@@ -334,6 +346,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/make_doip_corpus.py`), shows each case.
 
 ### Changed
+- A live capture whose program exits without having written a capture
+  fails with *Not a capture* and the program's last stderr lines, not
+  the Parser's error alone (#76).
 - The *HTTP* filter and the *HTTP 4xx/5xx* highlighter also match
   decrypted HTTP/1.1 lines, `… | TLS (decrypted) | GET …`.
 - A segment that ends inside a TLS record, an HTTP header section, a

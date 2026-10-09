@@ -25,6 +25,7 @@
 
 #include "live_source.h"
 
+#include "command_source.h"
 #include "local_source.h"
 #include "ssh_source.h"
 
@@ -83,6 +84,7 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources()
     // Custom command (#76).
     registry->add( std::make_shared<LocalSourceKind>() );
     registry->add( std::make_shared<SshSourceKind>() );
+    registry->add( std::make_shared<CustomCommandSourceKind>() );
     return registry;
 }
 

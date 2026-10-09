@@ -80,4 +80,10 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice );
 /// directory, a file, or options saved for it.
 LiveOptions loadLiveOptions( const QString& configDir, const QString& source );
 
+/// Save the option @p name of @p source in @p configDir at once, the other
+/// options and the choice as they are (a custom command saved by name);
+/// false if it could not be written.
+bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
+                     const QString& value );
+
 } // namespace tcpdump

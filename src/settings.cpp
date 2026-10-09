@@ -226,4 +226,19 @@ bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
     return file.status() == QSettings::NoError;
 }
 
+bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
+                     const QString& value )
+{
+    if ( configDir.isEmpty() || source.isEmpty() || name.isEmpty()
+         || name.contains( QLatin1Char( '/' ) ) || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.beginGroup( liveOptionsGroup( source ) );
+    file.setValue( name, value );
+    file.endGroup();
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
 } // namespace tcpdump

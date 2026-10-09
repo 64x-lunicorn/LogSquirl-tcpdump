@@ -129,6 +129,7 @@ add_library(logsquirl_tcpdump SHARED
     src/live_source.cpp
     src/local_source.cpp
     src/ssh_source.cpp
+    src/command_source.cpp
     src/live_capture_form.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp

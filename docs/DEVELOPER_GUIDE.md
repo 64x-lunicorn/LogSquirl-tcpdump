@@ -337,6 +337,11 @@ read through a `DeviceSource`:
   program ended on purpose (`terminate()`, `terminateCaptureProcesses()`)
   did not fail: its stream reads as `stopped()`
   (`StreamSource::endedOnPurpose()`).
+- **Not a capture.** A program that exits with 0 but wrote no capture to
+  stdout (text, a usage message) fails with `Not a capture: <the reader's
+  error>` and `StreamSource::writerSaid()`: for a Process Source its
+  failure, or `<name> wrote on stderr:` and its last lines, after waiting
+  `kSaidGrace` (500 ms) for a program still running to end.
 - **Ending it.** On Unix the program runs in a process group of its own
   (`setpgid( 0, 0 )` in the child); `terminate()` sends SIGTERM to the
   group and SIGKILL to what is left after `ProcessSource::kTerminateGrace`
@@ -1362,6 +1367,36 @@ unreachable host) to what to do; listings add it to their error,
 its argv, insists on `BatchMode=yes` and runs the remote command with
 `/bin/sh`, `$SSH_CLIENT` set and fake `sudo` and `tcpdump` alone on `PATH`,
 also with hostile interfaces and filters.
+
+The **Custom command** kind (`command_source.h/cpp`, id `command`) is
+`CustomCommandSourceKind( configDir, LocalPrograms )`, without devices; its
+interfaces are what the Local kind lists here, suggestions for
+`{interface}` (tests pass `LocalPrograms{}`, which lists nothing). Its
+options are `command` (the line), `shell` (`true`: run through the shell;
+`false` by default), `name` (the saved command it came from) and `saved`,
+the saved commands as a JSON array of `{name, command, shell}`
+(`savedCommands()`, `savedCommandsOption()`). `customCommand( choice )`
+builds the `ProcessCommand`, or says why it cannot (`validate()` returns
+that): without the shell, `splitCommandLine()` splits the line as a POSIX
+shell would, without running one (blanks; `'…'`; `"…"` with `\"` and `\\`;
+`\x` outside quotes; nothing expanded) and points out an unquoted word with
+`|&;<>` (`shellOperator`), which is refused; then `{interface}`,
+`{filter}`, `{snaplen}` are replaced inside each word in one pass (a value
+holding a placeholder is not replaced again), a word that is `{filter}`
+alone dropped for an empty filter. With the shell, the line goes to
+`ProcessCommand::shell()`, each value `shellQuote()`d (Windows: in double
+quotes, a value with `"`, `%`, `!` or a trailing `\` refused). A command
+using `{interface}` needs one, not starting with `-`. The options widget
+(`commandSaved`, `commandLine`, `commandShell`, `commandShellWarning`,
+`commandName`, `commandSave`, `commandDelete`) writes the saved commands
+to `settings.ini` as they are saved or deleted (`saveLiveOption()`), and
+shows them in every widget of the kind that is open (the sidebar's and the
+dialog's); choosing a saved command or one of `commandExamples()` fills
+the line and runs nothing. `explainFailure()` says what a command must
+write for `Not a capture`, what to check for `Cannot start`, and
+otherwise defers to the permission and SSH guidance. Tests run fake
+scripts that print their arguments, with hostile interfaces and filters,
+with and without the shell, and one that writes text instead of a capture.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview

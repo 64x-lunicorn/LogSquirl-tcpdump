@@ -318,6 +318,45 @@ keys the server refuses (`ssh-add`, `ssh-copy-id`, `IdentityFile`), a sudo
 that wants a password, tcpdump missing on the server or lacking
 permissions, a host that cannot be reached.
 
+#### Custom command
+
+The **Custom command** source runs a command you write and converts what it
+writes to stdout, which must be a **pcap or pcapng capture** (text before
+the capture's header, up to 4 KB, is skipped; messages belong on stderr,
+which the section shows). Use it for what the other sources do not cover:
+a vendor tool, `nc -l 9999`, a capture on a router. Examples to start from
+(choosing one fills the line; nothing runs until you press Start):
+
+```
+tcpdump -i {interface} -U -w - {filter}
+adb exec-out tcpdump -i {interface} -s {snaplen} -U -w - {filter}
+ssh -o BatchMode=yes user@host tcpdump -i {interface} -s {snaplen} -U -w - {filter}
+```
+
+The line is a program and its arguments, **split like a shell splits it,
+but no shell runs it**: blanks separate arguments, `'…'` and `"…"` quote
+(in `"…"`, `\"` and `\\` escape), `\` escapes the next character outside
+quotes; nothing is expanded (`$HOME`, `~`, `*`, `$(…)` stay as they are)
+and `|`, `;`, `&&` or `>` make no pipe, list or redirection (the form
+refuses them unquoted). The placeholders `{interface}`, `{filter}` and
+`{snaplen}` are replaced by the fields above inside the argument they are
+in, so a filter with spaces or quotes is still one argument; `{filter}`
+alone is left out when the filter is empty. `{interface}` needs an
+interface (this computer's are suggested; type any).
+
+**Run through the shell** (off by default) hands the line to `/bin/sh -c`
+(Windows: `cmd.exe /c`) as it is, for pipes and redirections, e.g. `ssh
+router 'tcpdump -U -w - {filter}' | tee router.pcap`. Everything in the
+line then runs, as you. The placeholders are put in quoted as one word
+each (single quotes; on Windows double quotes, and an interface or filter
+with `"`, `%` or `!` is refused): write them outside of quotes.
+
+Commands can be **saved** under a name (**Save**; saving under an existing
+name replaces it), chosen again from the list, and **deleted**; they are
+kept in `settings.ini` (`[live]`, `options/command/saved`) as soon as they
+are saved. A command whose output is not a capture fails with *Not a
+capture*, its last stderr lines and what it must write instead.
+
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:
 
