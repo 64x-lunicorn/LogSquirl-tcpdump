@@ -27,9 +27,11 @@
 #include "fakehost.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
+#include "regex_lab.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -37,9 +39,15 @@
 #include <QLocale>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QTemporaryDir>
+#include <QUrl>
 
 #include <memory>
+#include <set>
+
+extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
+                                         size_t api_size );
 
 using tcpdump::SidebarWidget;
 using tcpdump_test::FakeHost;
@@ -70,6 +78,45 @@ Bytes captureOf( int count )
     }
     return pcapOf( packets );
 }
+
+/** The target of the link that reads @p text in @p html; empty without one. */
+QString linkTarget( const QString& html, const QString& text )
+{
+    const QRegularExpression link( "<a href=\"([^\"]*)\">"
+                                   + QRegularExpression::escape( text.toHtmlEscaped() ) + "</a>" );
+    return link.match( html ).captured( 1 );
+}
+
+/** The numbers of the lines of @p path that @p pattern matches, from 1. */
+std::set<int> matchedLines( const QString& path, const QString& pattern )
+{
+    QFile file( path );
+    REQUIRE( file.open( QIODevice::ReadOnly ) );
+    const auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
+    const QRegularExpression regex( pattern );
+    REQUIRE( regex.isValid() );
+    std::set<int> numbers;
+    for ( int i = 0; i < lines.size(); ++i ) {
+        if ( regex.match( lines[ i ] ).hasMatch() ) {
+            numbers.insert( i + 1 );
+        }
+    }
+    return numbers;
+}
+
+/** Records the URLs QDesktopServices::openUrl() is asked to open. */
+class UrlRecorder : public QObject {
+    Q_OBJECT
+
+public:
+    QList<QUrl> opened;
+
+public slots:
+    void open( const QUrl& url )
+    {
+        opened << url;
+    }
+};
 
 template <typename T>
 T* child( const SidebarWidget& widget, const char* name )
@@ -420,7 +467,20 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
             {
                 REQUIRE( summary->text().contains( "first.pcap" ) );
                 REQUIRE( summary->text().contains( "href=\"" + readmeSection + "\"" ) );
-                REQUIRE( summary->openExternalLinks() );
+
+                AND_WHEN( "the user clicks the link" )
+                {
+                    UrlRecorder browser;
+                    QDesktopServices::setUrlHandler( "https", &browser, "open" );
+                    emit summary->linkActivated( linkTarget( summary->text(), "install it once" ) );
+                    QDesktopServices::unsetUrlHandler( "https" );
+
+                    THEN( "the README section opens in the browser" )
+                    {
+                        REQUIRE( browser.opened == QList<QUrl>{ QUrl( readmeSection ) } );
+                        REQUIRE( host.regexLabs.isEmpty() );
+                    }
+                }
             }
 
             AND_WHEN( "another capture is converted" )
@@ -452,6 +512,127 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
     }
 }
 
+SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir tempRoot;
+    REQUIRE( dir.isValid() );
+    REQUIRE( tempRoot.isValid() );
+
+    GIVEN( "an initialised plugin that converted two captures, each opened in a tab" )
+    {
+        FakeHost host;
+        tcpdump::g_state.tempRoot = tempRoot.path();
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+        REQUIRE( host.hasActiveFileCallback() );
+        auto* widget = tcpdump::g_state.sidebarWidget;
+        auto* summary = child<QLabel>( *widget, "summary" );
+
+        widget->openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+        REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+        widget->openPcapFile( writeCapture( dir, "second.pcap", captureOf( 2 ) ) );
+        REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+        REQUIRE( host.openedFiles.size() == 2 );
+        const auto first = host.openedFiles.at( 0 );
+        const auto second = host.openedFiles.at( 1 );
+
+        WHEN( "the first capture's tab comes to the front" )
+        {
+            host.activateFile( first );
+
+            THEN( "the sidebar shows the first capture's summary, as it was" )
+            {
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+                REQUIRE_FALSE( summary->text().contains( "second.pcap" ) );
+                REQUIRE( summary->text().contains( "#log-format" ) );
+            }
+
+            AND_WHEN( "the second capture's tab comes to the front again" )
+            {
+                host.activateFile( second );
+
+                THEN( "the sidebar shows the second capture's summary" )
+                {
+                    REQUIRE( summary->text().contains( "second.pcap" ) );
+                    REQUIRE_FALSE( summary->text().contains( "first.pcap" ) );
+                }
+            }
+        }
+
+        WHEN( "a tab with a file the plugin did not write comes to the front" )
+        {
+            host.activateFile( dir.filePath( "server.log" ) );
+
+            THEN( "the sidebar says the tab holds no capture, and names none" )
+            {
+                REQUIRE( summary->text() == "No capture in this tab." );
+            }
+
+            AND_WHEN( "a capture's tab comes back" )
+            {
+                host.activateFile( first );
+
+                THEN( "its summary is shown again" )
+                {
+                    REQUIRE( summary->text().contains( "first.pcap" ) );
+                }
+            }
+        }
+
+        WHEN( "a tab that holds no Log File comes to the front, such as the dashboard" )
+        {
+            host.activateFile( QString() );
+
+            THEN( "the sidebar says the tab holds no capture" )
+            {
+                REQUIRE( summary->text() == "No capture in this tab." );
+            }
+        }
+
+        WHEN( "the host names a capture's file by another spelling of its path" )
+        {
+            const QFileInfo info( first );
+            host.activateFile( info.absolutePath() + "/./" + info.fileName() );
+
+            THEN( "the capture is still recognised" )
+            {
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+            }
+        }
+
+        WHEN( "a third capture is converted" )
+        {
+            widget->openPcapFile( writeCapture( dir, "third.pcap", captureOf( 3 ) ) );
+            REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+            REQUIRE( host.openedFiles.size() == 3 );
+
+            THEN( "the summaries of the others are kept" )
+            {
+                REQUIRE( summary->text().contains( "third.pcap" ) );
+                host.activateFile( first );
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+                host.activateFile( second );
+                REQUIRE( summary->text().contains( "second.pcap" ) );
+            }
+        }
+
+        WHEN( "the tab in front changes while a capture is being read" )
+        {
+            widget->openPcapFile( writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
+            host.activateFile( first );
+
+            THEN( "the sidebar keeps showing the reading, until it is done" )
+            {
+                REQUIRE( summary->text().contains( "Reading big.pcap" ) );
+                widget->cancel();
+                REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+}
+
 SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
 {
     GIVEN( "a capture whose file name, protocol and endpoint contain markup" )
@@ -472,6 +653,32 @@ SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
                 REQUIRE( html.contains( "&lt;i&gt;P&lt;/i&gt;" ) );
                 REQUIRE( html.contains( "&lt;img src=x&gt;" ) );
                 REQUIRE_FALSE( html.contains( "<img" ) );
+                REQUIRE_FALSE( html.contains( "<i>" ) );
+            }
+        }
+    }
+}
+
+SCENARIO( "the summary's filter links keep any name intact", "[sidebar]" )
+{
+    GIVEN( "a protocol and an endpoint whose names hold ':', '%' and markup" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 2;
+        summary.protocolPackets[ "A:B%1<i>" ] = 2;
+        summary.protocolBytes[ "A:B%1<i>" ] = 120;
+        summary.endpointPackets[ "fe80::1%2" ] = 2;
+
+        WHEN( "the summary is built with filter links" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary, true );
+
+            THEN( "each is a link, followed by its counts" )
+            {
+                REQUIRE_FALSE( linkTarget( html, "A:B%1<i>" ).isEmpty() );
+                REQUIRE_FALSE( linkTarget( html, "fe80::1%2" ).isEmpty() );
+                REQUIRE( html.contains( "A:B%1&lt;i&gt;</a>: 2 (100.0%, 120 B)<br>" ) );
+                REQUIRE( html.contains( "fe80::1%2</a>: 2 pkts<br>" ) );
                 REQUIRE_FALSE( html.contains( "<i>" ) );
             }
         }
@@ -650,3 +857,122 @@ SCENARIO( "the summary lists the TCP analysis markers", "[sidebar]" )
         }
     }
 }
+
+SCENARIO( "endpoints and protocols in the summary open the Regex Lab as filters", "[sidebar]" )
+{
+    QTemporaryDir tempRoot;
+    REQUIRE( tempRoot.isValid() );
+    const auto capture = QDir( QStringLiteral( TCPDUMP_CORPUS_DIR ) ).filePath( "mixed.pcap" );
+
+    GIVEN( "a capture converted on a host with the Regex Lab" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( tempRoot.path() );
+        auto* summary = child<QLabel>( widget, "summary" );
+        widget.openPcapFile( capture );
+        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+        REQUIRE( host.openedFiles.size() == 1 );
+        const auto text = host.openedFiles.first();
+
+        THEN( "each endpoint and protocol listed is a link" )
+        {
+            for ( const auto& name :
+                  { "192.168.1.1", "192.168.1.100", "fe80::1", "HTTP", "ICMPv6", "SOCKS" } ) {
+                INFO( name );
+                REQUIRE_FALSE( linkTarget( summary->text(), name ).isEmpty() );
+            }
+        }
+
+        WHEN( "the user clicks an IPv6 endpoint" )
+        {
+            emit summary->linkActivated( linkTarget( summary->text(), "fe80::1" ) );
+
+            THEN( "the Regex Lab opens with the pattern of that address, matching case" )
+            {
+                REQUIRE( host.regexLabs.size() == 1 );
+                const auto& lab = host.regexLabs.first();
+                REQUIRE( lab.pattern == tcpdump::endpointPattern( "fe80::1" ) );
+                REQUIRE( lab.flags == LOGSQUIRL_REGEX_LAB_MATCH_CASE );
+                REQUIRE( matchedLines( text, lab.pattern ) == std::set<int>{ 8, 9, 10 } );
+                REQUIRE( host.logs.contains( "Filter: " + lab.pattern ) );
+            }
+
+            AND_WHEN( "the user applies it" )
+            {
+                host.regexLabs.first().apply( host.regexLabs.first().pattern,
+                                              LOGSQUIRL_REGEX_LAB_MATCH_CASE );
+
+                THEN( "the applied pattern is logged" )
+                {
+                    REQUIRE(
+                        host.logs.contains( "Filter: applied " + host.regexLabs.first().pattern ) );
+                }
+            }
+        }
+
+        WHEN( "the user clicks an IPv4 endpoint that starts another" )
+        {
+            emit summary->linkActivated( linkTarget( summary->text(), "192.168.1.1" ) );
+
+            THEN( "the pattern matches its lines in Source or Destination, not the other's" )
+            {
+                REQUIRE( host.regexLabs.size() == 1 );
+                const auto& lab = host.regexLabs.first();
+                REQUIRE( lab.pattern == tcpdump::endpointPattern( "192.168.1.1" ) );
+                std::set<int> expected;
+                for ( int line = 2; line <= 22; ++line ) {
+                    if ( line < 8 || line > 10 ) {
+                        expected.insert( line );
+                    }
+                }
+                REQUIRE( matchedLines( text, lab.pattern ) == expected );
+            }
+        }
+
+        WHEN( "the user clicks the endpoint it starts" )
+        {
+            emit summary->linkActivated( linkTarget( summary->text(), "192.168.1.100" ) );
+
+            THEN( "the pattern matches that address's line only" )
+            {
+                REQUIRE( host.regexLabs.size() == 1 );
+                REQUIRE( matchedLines( text, host.regexLabs.first().pattern )
+                         == std::set<int>{ 22 } );
+            }
+        }
+
+        WHEN( "the user clicks a protocol" )
+        {
+            emit summary->linkActivated( linkTarget( summary->text(), "HTTP" ) );
+
+            THEN( "the Regex Lab opens with the pattern of that Protocol column" )
+            {
+                REQUIRE( host.regexLabs.size() == 1 );
+                const auto& lab = host.regexLabs.first();
+                REQUIRE( lab.pattern == tcpdump::protocolPattern( "HTTP" ) );
+                REQUIRE( matchedLines( text, lab.pattern ) == std::set<int>{ 2, 3, 4 } );
+            }
+        }
+    }
+
+    GIVEN( "a capture converted on a host older than LogSquirl 26.11" )
+    {
+        FakeHost host( LOGSQUIRL_HOST_API_BASE_SIZE );
+        SidebarWidget widget;
+        widget.setTempRoot( tempRoot.path() );
+        auto* summary = child<QLabel>( widget, "summary" );
+        widget.openPcapFile( capture );
+        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+        THEN( "the summary lists endpoints and protocols as plain text, as before" )
+        {
+            REQUIRE( summary->text().contains( "<b>Endpoints</b>" ) );
+            REQUIRE( summary->text().contains( "192.168.1.1: " ) );
+            REQUIRE( summary->text().contains( "HTTP: " ) );
+            REQUIRE_FALSE( summary->text().contains( "tcpdump-filter:" ) );
+        }
+    }
+}
+
+#include "sidebarwidget_test.moc"

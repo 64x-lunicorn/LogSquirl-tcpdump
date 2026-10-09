@@ -31,11 +31,14 @@ add_executable(logsquirl_tcpdump_tests
     streaming_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    follow_stream_test.cpp
+    regex_lab_test.cpp
     corpus_test.cpp
     conversion_options_test.cpp
     settings_test.cpp
     configdialog_test.cpp
     logformat_test.cpp
+    presets_test.cpp
     packet_formatter_test.cpp
     payload_describer_test.cpp
     protocol_names_test.cpp
@@ -93,14 +96,18 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
+        "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
+        "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"
 )
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format
-# that reads that text, for logformat_test.cpp
+# that reads that text, for logformat_test.cpp, and the highlighter set and
+# filter group that colour and filter it, for presets_test.cpp
 target_compile_definitions(logsquirl_tcpdump_tests
     PRIVATE
         TCPDUMP_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
         TCPDUMP_FORMAT_FILE="${CMAKE_SOURCE_DIR}/formats/tcpdump_log.json"
+        TCPDUMP_PRESETS_DIR="${CMAKE_SOURCE_DIR}/presets"
 )
 
 # ── Register with CTest ──────────────────────────────────────────────────

@@ -21,19 +21,25 @@
  * @file plugin.cpp
  * @brief C ABI entry points for the LogSquirl tcpdump plugin.
  *
- * Implements the four exported symbols:
+ * Implements the five exported symbols:
  *
  *   - logsquirl_plugin_get_info()   → static metadata
- *   - logsquirl_plugin_init()       → store host API, create sidebar tab
+ *   - logsquirl_plugin_init_ex()    → store host API and what it offers,
+ *                                     create sidebar tab
+ *   - logsquirl_plugin_init()       → init_ex() with the base table size
  *   - logsquirl_plugin_shutdown()   → tear down widget, clear state
  *   - logsquirl_plugin_configure()  → the configuration dialog
  *
  * PLUGIN LIFECYCLE
  * ────────────────
  *   1. Host calls get_info() to read metadata.
- *   2. Host calls init(api, handle) — we store the pointers, create
- *      a SidebarWidget, register it as a sidebar tab, and add
- *      Plugins > tcpdump > Open pcap… to the menu.
+ *   2. Host calls init_ex(api, handle, api_size) — or init(api, handle)
+ *      if it is older than LogSquirl 26.11 — we store the pointers and
+ *      the host capabilities the size tells, create a SidebarWidget,
+ *      register it as a sidebar tab, add Plugins > tcpdump >
+ *      Open pcap… to the menu (and Follow stream, on a host with the
+ *      Regex Lab and the selected lines), and register for the host's active-file
+ *      notifications, so the sidebar shows the summary of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
@@ -46,6 +52,7 @@
 
 #include "plugin.h"
 #include "configdialog.h"
+#include "follow_stream.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
@@ -59,6 +66,15 @@
 
 namespace tcpdump {
 PluginState g_state;
+
+HostCapabilities HostCapabilities::of( std::size_t apiSize )
+{
+    HostCapabilities caps;
+    caps.regexLab = LOGSQUIRL_HOST_API_HAS( apiSize, open_regex_lab );
+    caps.goToLogLine = LOGSQUIRL_HOST_API_HAS( apiSize, go_to_log_line );
+    caps.selectedLogLines = LOGSQUIRL_HOST_API_HAS( apiSize, get_selected_log_lines );
+    return caps;
+}
 
 void hostLog( int level, const QString& message )
 {
@@ -140,6 +156,23 @@ static void openFromMenu( void* /* user_data */ )
     } );
 }
 
+/// Plugins > tcpdump > Follow stream: the same as the sidebar's button.
+static void followStreamFromMenu( void* /* user_data */ )
+{
+    guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
+}
+
+/// The host brought another tab to the front: show its capture's summary.
+static void onActiveFileChanged( void* /* user_data */, const char* filePath )
+{
+    guarded( "showing the summary of the tab in front", [ filePath ] {
+        // A failed init leaves no widget, and the host keeps the callback.
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->showSummaryFor( QString::fromUtf8( filePath ? filePath : "" ) );
+        }
+    } );
+}
+
 // ── Exported C entry points ──────────────────────────────────────────────
 
 extern "C" {
@@ -152,8 +185,10 @@ LOGSQUIRL_PLUGIN_EXPORT const LogSquirlPluginInfo* logsquirl_plugin_get_info( vo
     return &kPluginInfo;
 }
 
-/// Initialise the plugin — create sidebar tab for pcap viewing.
-LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle )
+/// Initialise the plugin — create sidebar tab for pcap viewing.  A host of
+/// LogSquirl 26.11 or later calls this one, with the size of its table.
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
+                                                      size_t api_size )
 {
     if ( !api || !handle ) {
         return 1;
@@ -161,6 +196,7 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
 
     tcpdump::g_state.api = api;
     tcpdump::g_state.handle = handle;
+    tcpdump::g_state.hostCapabilities = tcpdump::HostCapabilities::of( api_size );
     tcpdump::g_state.initialised = true;
     tcpdump::g_state.quitting = false;
 
@@ -181,6 +217,17 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
                                    nullptr );
+        // Only a host that has the Regex Lab and tells the selected lines
+        // can follow a stream.
+        if ( tcpdump::g_state.hostCapabilities.regexLab
+             && tcpdump::g_state.hostCapabilities.selectedLogLines ) {
+            api->register_menu_action( handle, "tcpdump", "Follow stream", &followStreamFromMenu,
+                                       nullptr );
+        }
+
+        // The summary follows the tab in front.  There is no call to remove
+        // the callback either: the host drops it with the plugin.
+        api->register_active_file_callback( handle, &onActiveFileChanged, nullptr );
 
         // The host shuts the plugin down both when LogSquirl quits (after
         // aboutToQuit) and when the plugin is disabled or updated at runtime,
@@ -202,6 +249,13 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, 
         return 1;
     }
     return 0;
+}
+
+/// Initialise the plugin for a host older than init_ex(): its table has no
+/// function added later.  The host refuses a plugin without this entry point.
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle )
+{
+    return logsquirl_plugin_init_ex( api, handle, LOGSQUIRL_HOST_API_BASE_SIZE );
 }
 
 /// Shut down the plugin — unregister sidebar and release resources.
@@ -239,6 +293,7 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
 
     tcpdump::g_state.api = nullptr;
     tcpdump::g_state.handle = nullptr;
+    tcpdump::g_state.hostCapabilities = {};
     tcpdump::g_state.initialised = false;
 }
 

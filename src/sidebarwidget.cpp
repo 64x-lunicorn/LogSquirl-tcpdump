@@ -27,14 +27,27 @@
  *      packet, formats it into a human-readable line, and writes the line
  *      to a temporary .log file
  *   3. Opens the .log file in LogSquirl's main viewer
+ *
+ * Its Follow stream button, on a host that offers it, opens the Regex Lab on
+ * the conversation of the selected packet line (see follow_stream.h).
+ *
+ * The endpoints and protocols its summary lists are links, on a host that
+ * has the Regex Lab: a click opens the Lab with the pattern of their lines
+ * (see regex_lab.h).
+ *
+ * It keeps each converted capture's summary under the path of its .log file
+ * and shows the one of the tab in front, as the host reports tab switches.
  */
 
 #include "sidebarwidget.h"
+#include "follow_stream.h"
 #include "pcap_converter.h"
 #include "plugin.h"
+#include "regex_lab.h"
 #include "settings.h"
 #include "tempdirs.h"
 
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLocale>
@@ -42,6 +55,7 @@
 #include <QPromise>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -56,6 +70,48 @@ namespace {
 /// The README section on installing the Log Format and what it unlocks.
 const char* const kLogFormatHelpUrl
     = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+
+/// What the summary says for a tab that shows no capture of the plugin.
+const char* const kNoCaptureText = "No capture in this tab.";
+
+/// The links of the summary that open a filter: this, then "endpoint/" or
+/// "protocol/" and the percent-encoded name.
+const char* const kFilterScheme = "tcpdump-filter:";
+const char* const kEndpointFilter = "endpoint/";
+const char* const kProtocolFilter = "protocol/";
+
+/// The pattern of the filter @p link opens; empty for any other link.
+QString filterPattern( const QString& link )
+{
+    if ( !link.startsWith( kFilterScheme ) ) {
+        return {};
+    }
+    const auto filter = link.mid( static_cast<qsizetype>( qstrlen( kFilterScheme ) ) );
+    const auto nameOf = []( const QString& rest, const char* kind ) {
+        return QString::fromUtf8(
+            QByteArray::fromPercentEncoding( rest.mid( qstrlen( kind ) ).toUtf8() ) );
+    };
+    if ( filter.startsWith( kEndpointFilter ) ) {
+        return endpointPattern( nameOf( filter, kEndpointFilter ) );
+    }
+    if ( filter.startsWith( kProtocolFilter ) ) {
+        return protocolPattern( nameOf( filter, kProtocolFilter ) );
+    }
+    return {};
+}
+
+/// One spelling of @p filePath, so that the path the host reports for a tab
+/// finds the file the plugin wrote: e.g. on macOS the temporary directory
+/// /var/folders/... is a link to /private/var/folders/....
+QString fileKey( const QString& filePath )
+{
+    if ( filePath.isEmpty() ) {
+        return {};
+    }
+    const QFileInfo info( filePath );
+    const auto canonical = info.canonicalFilePath();
+    return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
+}
 
 } // namespace
 
@@ -86,6 +142,25 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
     connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
 
+    // Follow stream, as in the Plugins menu: only a host that has the Regex
+    // Lab and tells the selected lines gets it.
+    if ( g_state.hostCapabilities.regexLab && g_state.hostCapabilities.selectedLogLines ) {
+        auto* followButton = new QPushButton( "Follow stream" );
+        followButton->setObjectName( "followStreamButton" );
+        followButton->setToolTip( "Filter the conversation of the selected packet line in the "
+                                  "Regex Lab" );
+        layout->addWidget( followButton );
+        connect( followButton, &QPushButton::clicked, this, [] {
+            try {
+                followSelectedStream();
+            } catch ( const std::exception& e ) {
+                // An exception must not escape into Qt or the host.
+                hostLog( LOGSQUIRL_LOG_ERROR,
+                         "Follow stream failed: " + QString::fromUtf8( e.what() ) );
+            }
+        } );
+    }
+
     // Progress of a running conversion, and a way to stop it
     progressBar_ = new QProgressBar;
     progressBar_->setObjectName( "progress" );
@@ -104,7 +179,9 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
-    summaryLabel_->setOpenExternalLinks( true );
+    // Its links are opened here: filters in the Regex Lab, pages outside.
+    summaryLabel_->setTextInteractionFlags( Qt::LinksAccessibleByMouse );
+    connect( summaryLabel_, &QLabel::linkActivated, this, &SidebarWidget::openLink );
     layout->addWidget( summaryLabel_ );
 
     // Push everything up
@@ -227,6 +304,22 @@ void SidebarWidget::cancel()
     summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
 }
 
+void SidebarWidget::openLink( const QString& link )
+{
+    try {
+        const auto pattern = filterPattern( link );
+        if ( pattern.isEmpty() ) {
+            QDesktopServices::openUrl( QUrl( link ) );
+            return;
+        }
+        openRegexLab( "Filter", pattern );
+    } catch ( const std::exception& e ) {
+        // An exception must not escape into Qt or the host.
+        hostLog( LOGSQUIRL_LOG_ERROR,
+                 "Opening " + link + " failed: " + QString::fromUtf8( e.what() ) );
+    }
+}
+
 void SidebarWidget::setConverting( bool converting )
 {
     converting_ = converting;
@@ -262,25 +355,51 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         break;
     }
 
+    // Whether LogSquirl has the Log Format installed is not known to the
+    // plugin, so the hint is shown regardless, but only with the first
+    // capture of a load.
+    ConvertedCapture capture;
+    capture.fileName = QFileInfo( filePath ).fileName();
+    capture.fileSize = QFileInfo( filePath ).size();
+    capture.summary = std::move( result.summary );
+    capture.withFormatHint = !formatHintShown_;
+    formatHintShown_ = true;
+    const auto packets = capture.summary.packets;
+
+    // Kept before the tab is opened: the host may report it in front at once.
+    const auto key = fileKey( result.outputPath );
+    converted_.insert_or_assign( key, std::move( capture ) );
+    showSummaryFor( key );
+
     // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
         g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
     }
 
-    auto html = summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(),
-                             result.summary );
-    // Whether LogSquirl has the Log Format installed is not known to the
-    // plugin, so the hint is shown regardless, but only once per load.
-    if ( !formatHintShown_ ) {
-        formatHintShown_ = true;
+    hostLog( LOGSQUIRL_LOG_INFO,
+             QString( "Opened %1 packets from %2" ).arg( packets ).arg( filePath ) );
+}
+
+void SidebarWidget::showSummaryFor( const QString& filePath )
+{
+    // The capture being read is shown in a tab of its own when it is done.
+    if ( converting_ ) {
+        return;
+    }
+    const auto found = converted_.find( fileKey( filePath ) );
+    if ( found == converted_.end() ) {
+        summaryLabel_->setText( kNoCaptureText );
+        return;
+    }
+    const auto& capture = found->second;
+    auto html = summaryHtml( capture.fileName, capture.fileSize, capture.summary,
+                             g_state.hostCapabilities.regexLab );
+    if ( capture.withFormatHint ) {
         html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
                          "Log Format: <a href=\"%1\">install it once</a>.</i>" )
                     .arg( kLogFormatHelpUrl );
     }
     summaryLabel_->setText( html );
-
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 packets from %2" ).arg( result.summary.packets ).arg( filePath ) );
 }
 
 namespace {
@@ -297,6 +416,19 @@ QString formatBytes( uint64_t bytes )
     return QString::number( bytes ) + " B";
 }
 
+/// @p name as text, or, with @p link, as a link to the filter of @p kind.
+QString filterName( const std::string& name, const char* kind, bool link )
+{
+    const auto text = QString::fromStdString( name ).toHtmlEscaped();
+    if ( !link ) {
+        return text;
+    }
+    return QString( "<a href=\"%1%2%3\">%4</a>" )
+        .arg( QString( kFilterScheme ), QString( kind ),
+              QString::fromUtf8( QUrl::toPercentEncoding( QString::fromStdString( name ) ) ),
+              text );
+}
+
 /// Entries of @p counts by count, highest first.
 std::vector<std::pair<std::string, uint64_t>>
 byCount( const std::map<std::string, uint64_t>& counts )
@@ -309,7 +441,8 @@ byCount( const std::map<std::string, uint64_t>& counts )
 
 } // namespace
 
-QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary )
+QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
+                     bool filterLinks )
 {
     const double duration = summary.durationSeconds;
 
@@ -361,8 +494,9 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
         const auto bytes = summary.protocolBytes.at( proto );
         const auto pct
             = static_cast<double>( count ) / static_cast<double>( summary.packets ) * 100.0;
-        html += QString( "%1: %2 (%3%, %4)<br>" )
-                    .arg( QString::fromStdString( proto ).toHtmlEscaped() )
+        // The name is not put in with arg(), which would read a '%' in it.
+        html += filterName( proto, kProtocolFilter, filterLinks );
+        html += QString( ": %1 (%2%, %3)<br>" )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
                     .arg( pct, 0, 'f', 1 )
                     .arg( formatBytes( bytes ) );
@@ -388,8 +522,8 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     for ( const auto& [ ip, count ] : byCount( summary.endpointPackets ) ) {
         if ( shown >= 8 )
             break;
-        html += QString( "%1: %2 pkts<br>" )
-                    .arg( QString::fromStdString( ip ).toHtmlEscaped() )
+        html += filterName( ip, kEndpointFilter, filterLinks );
+        html += QString( ": %1 pkts<br>" )
                     .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
         shown++;
     }

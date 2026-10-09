@@ -645,6 +645,47 @@ The release archive carries it next to the library (`package_files` in
 `.github/plugin-ci.json`, LogSquirl-Plugin-CI v1.1.0), and `cmake --install`
 puts it there too.
 
+#### Highlighter set and filter group (`presets/`)
+`tcpdump_highlighter.conf` and `tcpdump_filter.conf` are a LogSquirl
+Highlighter Set and Filter Group as its *Export* writes them and its
+*Import* reads them: QSettings INI files holding one
+`HighlighterSetCollection` or `PredefinedFiltersCollection` with one set
+(`groupexchange.cpp`, `highlighterset.cpp`, `predefinedfilters.cpp` in the
+host). The plugin API has no call to install either, so the user imports
+them (README, *Highlighters and filters*). Each set has a fixed id, so that
+importing a newer file offers *Replace*; keep it.
+
+Every pattern starts with `^` and reads the columns up to Protocol, as
+`regex_lab.cpp`'s patterns do, so that only a column or the start of Info
+decides: a word in a payload's text never does. They read every
+`LineLayout`: either time column is optional, as in `upToSourcePattern()`,
+and a pattern that reads the start of Info (TCP flags and markers, ICMP
+errors) takes the two MAC columns as optional before it; one that reads the
+payload's description takes Info up to its first ` | `. Patterns use no
+capture groups (a highlighter with groups colours only what they take) and
+nothing Vectorscan, LogSquirl's default search engine, cannot compile (no
+lookaround, backreference or possessive quantifier), so that a filter is
+not left to the slower Qt engine. Highlighters have no names in the file;
+the topmost that matches colours the line.
+
+**Update the patterns when a column or an Info text they read changes**: a
+column added, moved or removed, a TCP flag or analysis marker renamed, a
+protocol label or a DNS, HTTP or ICMP description reworded.
+`tests/presets_test.cpp` reads both files as the host does, applies every
+pattern to every line of every corpus text (`tests/corpus/*.txt` and the
+local `tests/corpus/local/*.txt`) and checks that it matches exactly the
+lines its rule picks from the columns, and in the committed texts the
+packet numbers listed in the test, also with the committed captures
+converted in every `LineLayout`; a new corpus text needs its list there.
+A new Wireshark analysis marker that is a problem goes into the *TCP
+problems* highlighter and the *TCP errors* filter (the test fails until it
+does); Window Update, Keep-Alive and Keep-Alive ACK stay out, as in
+Wireshark's "Bad TCP" rule. The files are edited by hand: a backslash in a
+pattern is written twice, and a pattern with a comma is quoted. The
+release archive carries both next to the library (`package_files` in
+`.github/plugin-ci.json`; the archive is flat, so no two packed files may
+share a base name), and `cmake --install` puts them there too.
+
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
@@ -692,8 +733,11 @@ Qt UI that provides:
   the disabled button, can be chosen during a conversion and then only shows
   a notification. Tests replace the dialog with `setFileChooser()`
 - A progress bar and Cancel button while a capture is converted
+- A "Follow stream" button, created only when `g_state.hostCapabilities`
+  has the Regex Lab and the selected lines (see *Follow stream* below)
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
-  top endpoints, the first and last packet time in UTC, packets per
+  top endpoints (on a host with `regexLab`, each protocol and endpoint is a
+  link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
   (comma-separated when there are several), the number of packets cut
   at the snaplen when there are any, and under *Analysis* the TCP segments
@@ -701,6 +745,15 @@ Qt UI that provides:
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
+- The summary of the capture in the tab in front. Every converted capture's
+  summary is kept for the session, under the path of the text file written
+  for it (canonical, so that the host's spelling of the path finds it); the
+  plugin's active-file callback calls `showSummaryFor()` on every tab
+  switch, which shows the kept summary or "No capture in this tab." for a
+  file the plugin did not write or a tab without a Log File. While a capture
+  is being read the label keeps saying so. The summaries are lost when the
+  plugin is unloaded, so after a runtime disable or update the tabs left
+  open show no capture
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
@@ -718,8 +771,9 @@ cannot block on a FIFO or device; destroying the widget cancels a running
 conversion and waits for the worker.
 
 ### Plugin Entry (`plugin.h/cpp`)
-C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab
-with the host application. No exception may leave them: their work runs
+C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
+the menu entries (Open pcap…, and Follow stream where the host can serve
+it) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
@@ -729,6 +783,73 @@ which LogSquirl calls for **Configure…** in Plugin Management with its main
 window as the parent, runs the `ConfigDialog` modally and saves the options
 when it is accepted; `hostConfigDir()` is the directory, empty without a
 host, where saving fails with a notification.
+
+#### Host capabilities
+The host API grows by appending functions to `LogSquirlHostApi` (the SDK
+guide's *A Growing API*). LogSquirl 26.11 and later call
+`logsquirl_plugin_init_ex()` with the size of their table; an older host
+calls `logsquirl_plugin_init()`, which forwards with
+`LOGSQUIRL_HOST_API_BASE_SIZE`. `init_ex()` records what the size covers in
+`g_state.hostCapabilities` (`HostCapabilities::of()`, through
+`LOGSQUIRL_HOST_API_HAS`): `regexLab`, `goToLogLine` and `selectedLogLines`.
+Code that uses one of those functions checks the record first, and offers
+nothing that needs it otherwise; it never calls or reads a member the record
+does not report, not even to compare it with null, as an older host's table
+ends before it. Keep the pointer the host passed: never copy `*api`.
+
+#### Follow stream (`follow_stream.h/cpp`)
+`Plugins → tcpdump → Follow stream` and the sidebar button call
+`followSelectedStream()`, offered only on a host with `regexLab` and
+`selectedLogLines`. It reads the first selected Log Line through
+`get_selected_log_lines`, and `followStreamPattern()` turns it into a
+pattern for `open_regex_lab` (with Match case); the Lab's answer, the
+applied pattern or a cancel, is logged. The line is read with the Log
+Format's regex, which `packetLineRegex()` in `regex_lab.cpp` repeats;
+`logformat_test.cpp` fails when the two differ.
+The pattern requires the line's stream number, its two addresses and the
+two ports at the start of a TCP or UDP Info (markers in brackets may come
+first), each pair in either order. The Stream column alone is not enough:
+TCP and UDP streams are numbered each from 0, and the Protocol column
+changes within a stream. The columns up to Source are those of
+`upToSourcePattern()`, which takes either time column as optional, and the
+ports are looked for anywhere in Info, after the MAC columns a `LineLayout`
+may put at its start; the rest of Info is not read, so a change there does
+not break the pattern. A
+line that is no packet line, one with stream `-` or `?`, no selection or a
+tab without a Log File give a notification with the reason instead.
+`follow_stream_test.cpp` checks the pattern against every corpus line,
+checks that it finds the same packets in the corpus converted in every
+`LineLayout`, and drives the menu entry and the button through the
+`FakeHost`.
+
+#### Summary filters (`regex_lab.h/cpp`)
+`summaryHtml()` with `filterLinks`, which `showSummaryFor()` passes as
+`g_state.hostCapabilities.regexLab`, makes each protocol and endpoint of the
+summary a `tcpdump-filter:protocol/<name>` or `tcpdump-filter:endpoint/<name>`
+link, the name percent-encoded. The label opens no link itself: its
+`linkActivated` goes to `SidebarWidget::openLink()`, which opens a filter
+link's pattern with `openRegexLab()` and any other link, such as the README
+link, with `QDesktopServices`. `endpointPattern()` and `protocolPattern()`
+require the columns before Info as `packetLineRegex()` reads them, through
+`upToSourcePattern()` and the Length after Protocol, so they match a whole
+Source, Destination or Protocol column and never Info in every
+`LineLayout`, and escape the name with `literalPattern()`. `openRegexLab()`, which Follow
+stream uses too, opens the Lab with Match case and logs the pattern, then
+the applied one or the cancel, under the feature's name ("Filter: …").
+`regex_lab_test.cpp` checks every endpoint and protocol of the summary of
+each corpus capture, converted in every `LineLayout`, against the columns of
+its lines;
+`sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
+
+#### The plugin API header
+`include/logsquirl_plugin_api.h` is the host's
+`src/plugins/include/logsquirl_plugin_api.h`, byte for byte, from the
+LogSquirl release named by `host_ref` in `.github/plugin-ci.json`; CI fails
+if they differ, and its Format job leaves the file alone. To move to a newer
+host, set `host_ref` to that release and refresh the header with
+LogSquirl-Plugin-CI's `scripts/sync-plugin.sh <this checkout>` (or copy the
+file from the LogSquirl release tag); never edit it by hand. A function the
+new header adds goes into `HostCapabilities` before anything calls it.
 
 ## Adding Protocol Support
 

@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] — 2026-10-09
 
 ### Added
+- **Highlighter set and filter group.** `presets/tcpdump_highlighter.conf`
+  colours the packet list in the spirit of Wireshark's default colouring
+  rules: TCP analysis problems and a bogus TCP header orange, RST strong red,
+  ICMP errors orange, DNS NXDOMAIN and HTTP 4xx/5xx responses red, SYN and
+  FIN green, TLS blue, ARP grey. `presets/tcpdump_filter.conf` adds the
+  predefined filters *TCP handshakes*, *TCP errors*, *DNS*, *HTTP*, *TLS*,
+  *ICMP* and *ARP*. Both are imported once in LogSquirl (README,
+  *Highlighters and filters*); their patterns read the columns, so a word in
+  a payload's text never matches, and they read the packet list in every
+  choice of time and MAC columns. The release archives carry them next to
+  the library, as `cmake --install` installs them.
 - **Options dialog.** **Configure…** on the plugin's card in **Plugins →
   Plugin Management…** opens the plugin's options: the time columns (UTC
   time and time since the first packet, UTC time only, or time since the
@@ -212,8 +223,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Open pcap… in the Plugins menu.** `Plugins → tcpdump → Open pcap…`, and
   so the Command Palette, opens the same dialog as the sidebar button. Chosen
   while a capture is being read, it shows a notification instead.
+- **Follow stream.** With a packet line selected, `Plugins → tcpdump →
+  Follow stream` or the sidebar's *Follow stream* button opens LogSquirl's
+  Regex Lab with a pattern matching that TCP or UDP conversation's lines:
+  its stream number, addresses and ports, in either direction. Applied, it
+  filters the view to the conversation. No selection, a packet without a
+  stream or a line of another log give a notification saying why. The
+  pattern reads the lines in every choice of time and MAC columns. Offered
+  on LogSquirl 26.11 and later only.
+- **Endpoints and protocols as filters.** In the sidebar's Capture Summary,
+  each endpoint address and protocol name is a link: a click opens
+  LogSquirl's Regex Lab with a pattern matching the lines with that address
+  in the Source or Destination column, or that protocol in the Protocol
+  column, ready to apply, as Wireshark's *Apply as Filter*. Addresses are
+  matched literally (dots, IPv6 colons) and whole, so `192.168.1.1` does not
+  find `192.168.1.100`, nor an address only mentioned in Info, in every
+  choice of time and MAC columns. On a
+  LogSquirl older than 26.11 the summary stays plain text.
 
 ### Changed
+- **The sidebar summary follows the tab in front.** With several captures
+  open, the sidebar shows the Capture Summary of the one in the tab in front
+  and switches with the tab; a tab that is not a capture converted by the
+  plugin, or holds no log at all, shows "No capture in this tab." instead of
+  the last capture's summary. Converting another capture keeps the summaries
+  of the others for the rest of the session.
+- **Plugin API of LogSquirl 26.11.** The plugin builds against LogSquirl
+  26.11's plugin API header and exports `logsquirl_plugin_init_ex` next to
+  `logsquirl_plugin_init`, learning from the host's table size whether it
+  offers the Regex Lab, *Go to line* and the selected log lines. Nothing
+  visible changes yet; it still loads into LogSquirl 26.03 and later.
 - **DNS descriptions in Wireshark's words.** `Query example.com` is now
   `Standard query 0x1234 A example.com`, and `Response example.com (1
   answers)` lists the answer instead of counting it in a wrong plural; a
