@@ -33,6 +33,11 @@
  * timestamp, which a Log Format reads, and LogSquirl's table view puts its
  * Δt column right after it.
  *
+ * Every column but Info is followed by at least one space, also when its
+ * value is as wide as the column or wider, and an empty value is shown as
+ * "-": a line always splits into its columns at runs of spaces, which a Log
+ * Format's regex relies on.
+ *
  * Length is the length on the wire (PacketRecord::originalLen).  A packet
  * captured shorter than that, cut at the snaplen, ends its Info with
  * "[cut to N bytes]", N the bytes captured.

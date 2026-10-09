@@ -78,6 +78,11 @@ its packets (`PacketFormatter` takes the reader's `precision()`;
 `formatAllPackets()` the finest of its packets); further digits are cut,
 not rounded.
 
+The widths are a minimum: a value as wide as its column, or wider (packet
+1,000,000, `ETH(0x88CC)`), is still followed by a space, and an empty value
+(Source and Destination of a packet without addresses) is shown as `-`, so
+that a line always splits into its columns at runs of spaces.
+
 UTC Time is the packet's wall-clock time, written by `formatUtcTime()` as
 an ISO 8601 date and time in UTC ending in `Z`:
 `2026-10-09 08:41:12.123456Z`, or `2026-10-09 08:41:12.123456789Z`. It is

@@ -495,3 +495,81 @@ SCENARIO( "The UTC Time column shows each packet's wall-clock time", "[packet_fo
         }
     }
 }
+
+SCENARIO( "Every column of a packet line is separated from the next", "[packet_formatter]" )
+{
+    PacketFormatter formatter;
+    PacketRecord pkt;
+    pkt.number = 1;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+    pkt.protocol = "UDP";
+    pkt.capturedLen = 60;
+    pkt.originalLen = 60;
+    pkt.info = "443 \xe2\x86\x92 80 Len=18";
+
+    // The columns of a line, as a reader splits them: at runs of spaces,
+    // Info being the rest.  UTC Time has a space between date and time, so
+    // there are ten.
+    auto columnsOf = [ & ]( const std::string& line ) {
+        std::vector<std::string> columns;
+        size_t pos = 0;
+        for ( int i = 0; i < 10 && pos < line.size(); ++i ) {
+            const auto end = line.find( ' ', pos );
+            columns.push_back( line.substr( pos, end - pos ) );
+            pos = line.find_first_not_of( ' ', end );
+        }
+        return columns;
+    };
+
+    GIVEN( "values as wide as their columns, or wider" )
+    {
+        pkt.number = 1000000;
+        pkt.protocol = "ETH(0x88CC)";
+        pkt.capturedLen = 1234567;
+        pkt.originalLen = 1234567;
+        pkt.srcIp = "2001:db8:aaaa:bbbb:cccc:dddd:eeee:ffff:1";
+        const auto line = formatter.format( pkt, 1234567 );
+
+        THEN( "a space still follows each of them" )
+        {
+            const auto columns = columnsOf( line );
+            REQUIRE( columns.size() == 10 );
+            REQUIRE( columns[ 0 ] == "1000000" );
+            REQUIRE( columns[ 1 ] == "1234567" );
+            REQUIRE( columns[ 5 ] == pkt.srcIp );
+            REQUIRE( columns[ 7 ] == "ETH(0x88CC)" );
+            REQUIRE( columns[ 8 ] == "1234567" );
+            REQUIRE( line.substr( line.find( "1234567 443" ) + 8 ) == pkt.info );
+        }
+    }
+
+    GIVEN( "a packet without addresses or protocol" )
+    {
+        pkt.srcIp.clear();
+        pkt.dstIp.clear();
+        pkt.protocol.clear();
+        const auto line = formatter.format( pkt, kNoStream );
+
+        THEN( "Source, Destination and Protocol show -" )
+        {
+            const auto columns = columnsOf( line );
+            REQUIRE( columns.size() == 10 );
+            REQUIRE( columns[ 5 ] == "-" );
+            REQUIRE( columns[ 6 ] == "-" );
+            REQUIRE( columns[ 7 ] == "-" );
+            REQUIRE( columns[ 8 ] == "60" );
+        }
+    }
+
+    GIVEN( "values that fit" )
+    {
+        const auto line = formatter.format( pkt, 0 );
+
+        THEN( "the columns keep their fixed widths" )
+        {
+            REQUIRE( line.find( "192.168.1.1" ) == 7 + 8 + 29 + 15 );
+            REQUIRE( line.find( pkt.info ) == 7 + 8 + 29 + 15 + 40 + 40 + 10 + 7 );
+        }
+    }
+}

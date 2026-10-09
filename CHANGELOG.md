@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SOCKS and the payload previews already used it.
 
 ### Fixed
+- **Columns no longer run together.** A value as wide as its column, or
+  wider, such as packet number 1,000,000, the protocol `ETH(0x88CC)` or a
+  length of a million bytes, is still followed by a space, and an empty
+  Source, Destination or Protocol (a packet without addresses) shows `-`
+  instead of blanks, so every line splits into its columns.
 - **ICMP, ARP and IP fragments no longer get a stream.** As documented, they
   show `-`: before, every packet with IP addresses was numbered, so ICMP and
   a fragment between the same two hosts shared one "conversation", and ARP

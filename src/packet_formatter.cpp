@@ -32,7 +32,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <iomanip>
 #include <sstream>
 
 namespace tcpdump {
@@ -40,13 +39,13 @@ namespace tcpdump {
 namespace {
 
 /// Width of the relative time column, with three more digits for nanoseconds.
-int timeWidth( TimePrecision precision )
+size_t timeWidth( TimePrecision precision )
 {
     return precision == TimePrecision::Nanoseconds ? 18 : 15;
 }
 
 /// Width of the UTC time column: the time and two spaces.
-int utcTimeWidth( TimePrecision precision )
+size_t utcTimeWidth( TimePrecision precision )
 {
     return precision == TimePrecision::Nanoseconds ? 32 : 29;
 }
@@ -93,6 +92,17 @@ std::string formatRelativeTime( int64_t deltaNs, TimePrecision precision )
                        static_cast<unsigned long long>( fraction / 1000 ) );
     }
     return buf;
+}
+
+/// Writes @p value left-aligned in a column @p width wide, and at least one
+/// space after it, so that a value as wide as its column, or wider, does not
+/// run into the next one; an empty value as "-", so that the column is not
+/// lost between its neighbours.
+void writeColumn( std::ostream& out, const std::string& value, size_t width )
+{
+    const std::string shown = value.empty() ? "-" : value;
+    const auto padding = shown.size() < width ? width - shown.size() : 1;
+    out << shown << std::string( padding, ' ' );
 }
 
 } // namespace
@@ -143,21 +153,20 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
 
     // Use fixed-width columns like Wireshark's packet list
     std::ostringstream oss;
-    oss << std::left;
-    oss << std::setw( 7 ) << pkt.number;
-    oss << std::setw( 8 ) << streamStr;
+    writeColumn( oss, std::to_string( pkt.number ), 7 );
+    writeColumn( oss, streamStr, 8 );
     // Each packet's own wall-clock time, also for one recorded before the
     // first packet, whose relative time is negative
-    oss << std::setw( utcTimeWidth( precision ) )
-        << formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision );
-    oss << std::setw( timeWidth( precision ) ) << formatRelativeTime( deltaNs, precision );
-    oss << std::setw( 40 ) << ( pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp );
-    oss << std::setw( 40 ) << ( pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp );
-    oss << std::setw( 10 ) << pkt.protocol;
+    writeColumn( oss, formatUtcTime( pkt.timestampSec, pkt.timestampNsec, precision ),
+                 utcTimeWidth( precision ) );
+    writeColumn( oss, formatRelativeTime( deltaNs, precision ), timeWidth( precision ) );
+    writeColumn( oss, pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp, 40 );
+    writeColumn( oss, pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp, 40 );
+    writeColumn( oss, pkt.protocol, 10 );
     // The length on the wire, as Wireshark's Length column; a packet cut at
     // the snaplen says in Info how much of it was captured, so that a reader
     // knows why its description stops short.
-    oss << std::setw( 7 ) << pkt.originalLen;
+    writeColumn( oss, std::to_string( pkt.originalLen ), 7 );
     oss << pkt.info;
     if ( pkt.capturedLen < pkt.originalLen ) {
         oss << ( pkt.info.empty() ? "" : " " ) << "[cut to " << pkt.capturedLen << " bytes]";
@@ -169,15 +178,14 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
 std::string PacketFormatter::header() const
 {
     std::ostringstream hdr;
-    hdr << std::left;
-    hdr << std::setw( 7 ) << "No.";
-    hdr << std::setw( 8 ) << "Stream";
-    hdr << std::setw( utcTimeWidth( precision_ ) ) << "UTC Time";
-    hdr << std::setw( timeWidth( precision_ ) ) << "Time";
-    hdr << std::setw( 40 ) << "Source";
-    hdr << std::setw( 40 ) << "Destination";
-    hdr << std::setw( 10 ) << "Protocol";
-    hdr << std::setw( 7 ) << "Length";
+    writeColumn( hdr, "No.", 7 );
+    writeColumn( hdr, "Stream", 8 );
+    writeColumn( hdr, "UTC Time", utcTimeWidth( precision_ ) );
+    writeColumn( hdr, "Time", timeWidth( precision_ ) );
+    writeColumn( hdr, "Source", 40 );
+    writeColumn( hdr, "Destination", 40 );
+    writeColumn( hdr, "Protocol", 10 );
+    writeColumn( hdr, "Length", 7 );
     hdr << "Info";
     return hdr.str();
 }
