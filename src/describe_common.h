@@ -84,6 +84,59 @@ std::string hexBytes( const uint8_t* p, size_t len, size_t maxBytes = SIZE_MAX )
 /// there were more, or if @p more says that more were left unnamed.
 std::string joinNames( std::vector<std::string> names, size_t maxNames, bool more = false );
 
+/// One message of a payload, as nameMessages() reads it.
+struct NamedMessage {
+    /// Its name, as the description shows it; empty: nothing is named.
+    std::string text;
+    /// The bytes it takes from where it was read: the next one begins
+    /// after them.
+    size_t length = 0;
+    /// No message is read after it.
+    bool last = false;
+    /// With last: messages left unnamed follow it, which "…" says.
+    bool more = false;
+};
+
+/**
+ * The names of the messages in @p len bytes of a payload, one after the
+ * other from the first, as every protocol that names several in a segment
+ * names them: @p readOne( at ) reads the one at offset at (a NamedMessage).
+ * At most @p maxMessages are named, joined by @p separator ("; " or ", "),
+ * then the separator and "…" if one more is there.  The walk ends after a
+ * message that is last, "…" after it if it says so, or at the end of the
+ * bytes, "…" after it with @p moreAfter (the bytes are not all of the
+ * payload's).  A readOne() that is not last must take bytes.
+ */
+template <typename ReadOne>
+std::string nameMessages( size_t len, size_t maxMessages, const std::string& separator,
+                          ReadOne&& readOne, bool moreAfter = false )
+{
+    std::string text;
+    size_t named = 0;
+    size_t at = 0;
+    bool more = moreAfter;
+    while ( at < len ) {
+        if ( named == maxMessages ) {
+            more = true;
+            break;
+        }
+        auto message = readOne( at );
+        if ( !message.text.empty() ) {
+            text += ( named == 0 ? "" : separator ) + message.text;
+            ++named;
+        }
+        if ( message.last ) {
+            more = message.more;
+            break;
+        }
+        at += message.length;
+    }
+    if ( more ) {
+        text += ( named == 0 ? "" : separator ) + kEllipsis;
+    }
+    return text;
+}
+
 /// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
 /// that a field can neither break the line nor hide what it contains.
 /// Within quotes, '"' is escaped too.

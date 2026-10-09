@@ -835,58 +835,50 @@ std::string describeMqttPackets( const uint8_t* p, size_t len, size_t wireLen )
     // length of its own.
     Fields segment( FieldReader( p, len ), SIZE_MAX );
     Session session;
-    std::vector<std::string> names;
-    bool more = len < wireLen;
-    while ( segment.captured() > 0 ) {
-        uint8_t first = 0;
-        uint32_t length = 0;
-        if ( names.size() == kMaxMqttPackets ) {
-            more = true;
-            break;
-        }
-        segment.u8( first );
-        const unsigned type = first >> 4;
-        const unsigned flags = first & 0x0F;
-        if ( type == 0 || !validFlags( type, flags ) ) {
-            if ( names.empty() ) {
-                return {};
+    bool none = false;
+    auto text = nameMessages(
+        len, kMaxMqttPackets, ", ",
+        [ & ]( size_t at ) {
+            const auto before = segment.captured();
+            uint8_t first = 0;
+            uint32_t length = 0;
+            segment.u8( first );
+            const unsigned type = first >> 4;
+            const unsigned flags = first & 0x0F;
+            if ( type == 0 || !validFlags( type, flags ) ) {
+                none = at == 0;
+                return NamedMessage{ "[Malformed Packet]", 0, true };
             }
-            names.emplace_back( "[Malformed Packet]" );
-            more = false;
-            break;
-        }
-        const char* name = kMqttPacketNames[ type ];
-        Fields body( FieldReader( nullptr, 0 ), 0 );
-        auto status = segment.varint( length );
-        if ( status == Read::Ok ) {
-            status = segment.take( length, body );
-        }
-        if ( status != Read::Ok ) {
-            // The fixed header is cut, or its length does not fit.
-            if ( names.empty() ) {
-                return {};
+            const char* name = kMqttPacketNames[ type ];
+            Fields body( FieldReader( nullptr, 0 ), 0 );
+            auto status = segment.varint( length );
+            if ( status == Read::Ok ) {
+                status = segment.take( length, body );
             }
-            names.push_back( status == Read::Cut ? std::string( name ) + " \xe2\x80\xa6"
-                                                 : std::string( "[Malformed Packet]" ) );
-            more = false;
-            break;
-        }
-        Packet packet;
-        status = describeBody( type, flags, body, session, packet );
-        if ( status == Read::Malformed ) {
-            if ( names.empty() && ( body.cut() || segment.captured() > 0 || len < wireLen ) ) {
-                return {};
+            if ( status != Read::Ok ) {
+                // The fixed header is cut, or its length does not fit.
+                none = at == 0;
+                return NamedMessage{ status == Read::Cut ? std::string( name ) + " " + kEllipsis
+                                                         : std::string( "[Malformed Packet]" ),
+                                     0, true };
             }
-            names.push_back( std::string( name ) + " [Malformed Packet]" );
-            continue;
-        }
-        names.push_back( packetText( name, packet, status == Read::Cut || body.cut() ) );
-        if ( status == Read::Cut || body.cut() ) {
-            more = false; // said by the packet's own ellipsis
-            break;
-        }
-    }
-    return joinNames( std::move( names ), kMaxMqttPackets, more );
+            Packet packet;
+            status = describeBody( type, flags, body, session, packet );
+            if ( status == Read::Malformed ) {
+                if ( at == 0 && ( body.cut() || segment.captured() > 0 || len < wireLen ) ) {
+                    none = true;
+                    return NamedMessage{ {}, 0, true };
+                }
+                return NamedMessage{ std::string( name ) + kMalformed,
+                                     before - segment.captured() };
+            }
+            const bool cut = status == Read::Cut || body.cut();
+            // A cut one says so by its own ellipsis.
+            return NamedMessage{ packetText( name, packet, cut ), before - segment.captured(),
+                                 cut };
+        },
+        len < wireLen );
+    return none ? std::string() : text;
 }
 
 } // namespace

@@ -841,31 +841,26 @@ bool beginsWithSmb( const uint8_t* payload, size_t len )
 SmbDescription detectSmb( const uint8_t* payload, size_t len )
 {
     SmbDescription result;
+    // The commands named, not the messages, are capped.
     size_t budget = kMaxCommands;
-    size_t at = 0;
-    while ( at < len ) {
+    bool none = false;
+    result.text = nameMessages( len, SIZE_MAX, "; ", [ & ]( size_t at ) {
         if ( budget == 0 ) {
-            result.text += "; " + kEllipsis;
-            break;
+            return NamedMessage{ {}, 0, true, true };
         }
         auto message = readMessage( payload + at, len - at, budget );
         if ( at == 0 ) {
             if ( !message.label ) {
-                return {}; // the segment begins with none of NBSS's messages
+                none = true; // the segment begins with none of NBSS's messages
+                return NamedMessage{ {}, 0, true };
             }
             result.label = message.label;
         }
-        result.text += ( result.text.empty() ? "" : "; " ) + message.text;
-        if ( message.more ) {
-            result.text += "; " + kEllipsis;
-            break;
-        }
-        if ( message.last ) {
-            break;
-        }
-        at += static_cast<size_t>( message.length ); // whole, so within len
-    }
-    return result;
+        // Whole unless last, so within len.
+        return NamedMessage{ std::move( message.text ), static_cast<size_t>( message.length ),
+                             message.last || message.more, message.more };
+    } );
+    return none ? SmbDescription{} : result;
 }
 
 std::optional<size_t> frameSmbMessage( const uint8_t* payload, size_t len, bool onSmbPort )

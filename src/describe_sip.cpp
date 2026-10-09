@@ -742,42 +742,30 @@ std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
                        std::vector<SipCall>& calls )
 {
     const uint8_t* const end = payload + len;
-    // Line ends before the first message are skipped as between messages.
-    const uint8_t* at = skipLineEnds( payload, end );
-    auto start = startLineOf( { at, static_cast<size_t>( end - at ) } );
-    if ( !start ) {
-        return {};
-    }
-    std::vector<std::string> messages;
-    bool more = false;
-    while ( start ) {
-        if ( messages.size() == kMaxSipMessages ) {
-            more = true;
-            break;
+    return nameMessages( len, kMaxSipMessages, "; ", [ & ]( size_t offset ) {
+        // Line ends before the first message are skipped as between them.
+        const uint8_t* at = skipLineEnds( payload + offset, end );
+        const Text bytes{ at, static_cast<size_t>( end - at ) };
+        const auto start = startLineOf( bytes );
+        if ( !start ) {
+            // None at all, or bytes after the messages that begin none.
+            return NamedMessage{ {}, 0, true, offset > 0 };
         }
-        const auto message
-            = readMessage( { at, static_cast<size_t>( end - at ) }, *start, overTcp );
+        const auto message = readMessage( bytes, *start, overTcp );
         SipCall call;
-        messages.push_back( messageText( message, call ) );
+        auto text = messageText( message, call );
         if ( call.ends || !call.media.empty() ) {
             calls.push_back( std::move( call ) );
         }
         if ( !overTcp || message.end == end || message.malformed || message.headersCut
              || message.bodyCut ) {
-            break;
+            return NamedMessage{ std::move( text ), 0, true };
         }
-        at = skipLineEnds( message.end, end );
-        if ( at == end ) {
-            break;
-        }
-        start = startLineOf( { at, static_cast<size_t>( end - at ) } );
-        more = !start;
-    }
-    std::string text;
-    for ( const auto& m : messages ) {
-        text += ( text.empty() ? "" : "; " ) + m;
-    }
-    return more ? text + "; " + kEllipsis : text;
+        // The line ends after it go with it.
+        const auto* next = skipLineEnds( message.end, end );
+        return NamedMessage{ std::move( text ),
+                             static_cast<size_t>( next - ( payload + offset ) ) };
+    } );
 }
 
 std::string detectSipKeepAlive( const uint8_t* payload, size_t len )

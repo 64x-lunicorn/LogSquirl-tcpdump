@@ -359,38 +359,35 @@ struct Packets {
 Packets readPackets( const uint8_t* p, size_t len )
 {
     Packets packets;
-    std::vector<std::string> names;
-    bool more = false;
-    size_t at = 0;
-    while ( at < len ) {
-        if ( names.size() == kMaxMessages ) {
-            more = true;
-            break;
-        }
-        const auto packet = readPacket( p + at, len - at );
-        names.push_back( packet.text );
+    size_t named = 0;
+    packets.text = nameMessages( len, kMaxMessages, ", ", [ & ]( size_t at ) {
+        auto packet = readPacket( p + at, len - at );
+        ++named;
         if ( packet.status == Read::Malformed || ( packet.coded && !packet.known ) ) {
             packets.plausible = false;
         }
         if ( packet.status == Read::Cut ) {
-            if ( names.size() == 1 && packet.code != kMsgKexInit ) {
+            if ( at == 0 && packet.code != kMsgKexInit ) {
                 packets.plausible = false;
             }
-            break;
+            return NamedMessage{ std::move( packet.text ), 0, true };
         }
         if ( packet.status != Read::Ok ) {
-            break;
+            return NamedMessage{ std::move( packet.text ), 0, true };
         }
-        at += packet.length; // whole, so within len
+        const auto end = at + packet.length; // whole, so within len
         if ( packet.code == kMsgNewKeys ) {
             packets.newKeys = true;
-            if ( at < len ) {
-                names.push_back( encryptedPacket( len - at ) );
+            if ( end < len ) {
+                // The encrypted rest is named as one more packet, past the
+                // last named only as "…".
+                packet.text
+                    += ", " + ( named == kMaxMessages ? kEllipsis : encryptedPacket( len - end ) );
             }
-            break;
+            return NamedMessage{ std::move( packet.text ), 0, true };
         }
-    }
-    packets.text = joinNames( std::move( names ), kMaxMessages, more );
+        return NamedMessage{ std::move( packet.text ), packet.length };
+    } );
     return packets;
 }
 

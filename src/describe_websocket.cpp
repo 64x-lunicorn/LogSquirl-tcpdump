@@ -267,39 +267,37 @@ std::string describeFrame( const FrameHeader& header, const uint8_t* payload, si
 
 std::string describeWebSocketFrames( const uint8_t* p, size_t len, size_t wireLen )
 {
-    std::vector<std::string> frames;
-    size_t offset = 0;
-    bool more = false;
-    while ( offset < wireLen ) {
-        if ( frames.size() == kMaxFrames || offset >= len ) {
-            more = true;
-            break;
+    return nameMessages( wireLen, kMaxFrames, ", ", [ & ]( size_t offset ) {
+        if ( offset >= len ) {
+            return NamedMessage{ {}, 0, true, true }; // beyond the bytes kept
         }
         FrameHeader header;
         const auto read = readHeader( p + offset, len - offset, header );
         if ( read == Read::Cut ) {
             // The header goes on past the bytes there are, at least one of
             // which is: its opcode.
-            frames.push_back( "WebSocket " + opcodeName( p[ offset ] & kOpcodeBits ) + " "
-                              + kEllipsis );
-            break;
+            return NamedMessage{
+                "WebSocket " + opcodeName( p[ offset ] & kOpcodeBits ) + " " + kEllipsis, 0, true
+            };
         }
         if ( read == Read::Malformed ) {
-            frames.push_back( "WebSocket " + opcodeName( header.opcode() ) + kMalformed );
-            break;
+            return NamedMessage{ "WebSocket " + opcodeName( header.opcode() ) + kMalformed, 0,
+                                 true };
         }
         const size_t payloadAt = offset + header.headerLength;
         const size_t there = len - payloadAt;
         const auto available
             = static_cast<size_t>( std::min<uint64_t>( header.payloadLength, there ) );
         bool malformed = false;
-        frames.push_back( describeFrame( header, p + payloadAt, available, malformed ) );
-        if ( malformed || header.payloadLength > wireLen - payloadAt ) {
-            break; // the rest is not to be read as frames, or the frame goes on in later segments
-        }
-        offset = payloadAt + static_cast<size_t>( header.payloadLength );
-    }
-    return joinNames( std::move( frames ), kMaxFrames, more );
+        auto text = describeFrame( header, p + payloadAt, available, malformed );
+        // The rest is not to be read as frames, or the frame goes on in
+        // later segments.
+        const bool last = malformed || header.payloadLength > wireLen - payloadAt;
+        return NamedMessage{
+            std::move( text ),
+            last ? 0 : header.headerLength + static_cast<size_t>( header.payloadLength ), last
+        };
+    } );
 }
 
 std::optional<size_t> frameWebSocketFrame( const uint8_t* payload, size_t len )

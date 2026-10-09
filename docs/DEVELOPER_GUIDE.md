@@ -482,8 +482,12 @@ frame tells it), `describe_smb.cpp` (SMB2/3 and SMB1 in NetBIOS Session
 Service messages) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
-`hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
-of the detectors and in-stream passes the tables use.
+`hexBytes()`, `hexValue()`, `joinNames()`, `markCut()`, `kEllipsis`,
+`kMalformed`, …), the `Read` outcome of a parser's read, the
+`FieldReader`, `nameMessages()`, the one bounded walk every protocol that
+names several messages of a segment names them with (at most N, read
+one, stop after the last, advance, joined by `; ` or `, `, then `…`), and
+the declarations of the detectors and in-stream passes the tables use.
 - TCP: DNS on port 53, DoIP on port 13400, SMB (on ports 445 and 139, or
   by its protocol ID behind an NBSS header), SOME/IP on its ports, SSH (its
   banner on any port, its key exchange and anything else on port 22), TLS, SIP (before HTTP, whose

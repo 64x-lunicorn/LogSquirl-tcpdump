@@ -749,37 +749,26 @@ SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heurist
     if ( len == 0 ) {
         return result;
     }
-    std::vector<std::string> texts;
-    bool more = false;
-    size_t at = 0;
-    while ( at < len ) {
-        if ( texts.size() == kMaxMessages ) {
-            more = true;
-            if ( !heuristic ) {
+    if ( heuristic ) {
+        // Every message, named or not, whole and by the rules.
+        for ( size_t at = 0; at < len; ) {
+            const auto message = readMessage( payload + at, len - at );
+            if ( !message.valid ) {
+                return {};
+            }
+            if ( message.last ) {
                 break;
             }
+            at += message.length;
         }
-        const auto message = readMessage( payload + at, len - at );
-        if ( heuristic && !message.valid ) {
-            return {};
-        }
-        if ( texts.empty() ) {
+    }
+    result.text = nameMessages( len, kMaxMessages, "; ", [ & ]( size_t at ) {
+        auto message = readMessage( payload + at, len - at );
+        if ( at == 0 ) {
             result.sd = message.sd;
         }
-        if ( !more ) {
-            texts.push_back( message.text );
-        }
-        if ( message.last ) {
-            break;
-        }
-        at += message.length;
-    }
-    for ( const auto& text : texts ) {
-        result.text += ( result.text.empty() ? "" : "; " ) + text;
-    }
-    if ( more ) {
-        result.text += "; " + kEllipsis;
-    }
+        return NamedMessage{ std::move( message.text ), message.length, message.last };
+    } );
     return result;
 }
 

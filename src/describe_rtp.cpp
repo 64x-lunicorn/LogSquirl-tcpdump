@@ -167,31 +167,20 @@ std::string describeRtcp( const uint8_t* p, size_t len, size_t wireLen )
     if ( !isRtcpHeader( p, len ) ) {
         return {};
     }
-    std::vector<std::string> names;
-    bool more = false;
-    size_t at = 0;
-    while ( at < wireLen ) {
-        if ( names.size() == kMaxRtcpPackets ) {
-            more = true;
-            break;
-        }
+    return nameMessages( wireLen, kMaxRtcpPackets, ", ", [ & ]( size_t at ) {
         if ( at >= len || len - at < kRtcpHeaderBytes ) {
-            more = true; // beyond the bytes kept
-            break;
+            return NamedMessage{ {}, 0, true, true }; // beyond the bytes kept
         }
         if ( !isRtcpHeader( p + at, len - at ) ) {
-            names.emplace_back( "[Malformed Packet]" );
-            break;
+            return NamedMessage{ "[Malformed Packet]", 0, true };
         }
         const size_t length = ( static_cast<size_t>( readBE16( p + at + 2 ) ) + 1 ) * 4;
-        names.emplace_back( rtcpTypeName( p[ at + 1 ] ) );
+        std::string name = rtcpTypeName( p[ at + 1 ] );
         if ( length > wireLen - at ) {
-            names.back() += " [Malformed Packet]";
-            break;
+            return NamedMessage{ name + kMalformed, 0, true };
         }
-        at += length;
-    }
-    return joinNames( std::move( names ), kMaxRtcpPackets, more );
+        return NamedMessage{ std::move( name ), length };
+    } );
 }
 
 } // namespace tcpdump::describer
