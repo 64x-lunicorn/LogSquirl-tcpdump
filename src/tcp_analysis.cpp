@@ -130,6 +130,16 @@ void checkAck( TcpDirection& fwd, TcpDirection& rev, const Segment& seg, TcpMark
          && seg.seq == fwd.nextSeq && seg.ack == fwd.lastAck && !synFinRst ) {
         markers.set( TcpMarker::WindowUpdate );
     }
+    // Data up to the right edge of the window the receiver advertised last,
+    // once its scale is known: its SYN was seen, or a SYN without the option
+    // that rules scaling out.
+    const bool revScaleKnown
+        = ( rev.flags & TcpDirection::kSynSeen )
+          || ( ( fwd.flags & TcpDirection::kSynSeen ) && fwd.windowScale == 0 );
+    if ( seg.len > 0 && revScaleKnown && revWindowKnown
+         && seg.seq + seg.len == rev.lastAck + lastWindow( rev ) && !synFinRst ) {
+        markers.set( TcpMarker::WindowFull );
+    }
 
     // The rest repeat the last segment's position and window, without data.
     if ( seg.len != 0 || !fwdWindowKnown || seg.window != fwdWindow || seg.seq != fwd.nextSeq
@@ -247,6 +257,45 @@ std::string markerText( const TcpMarkers& markers, uint32_t dupAckFrame, uint32_
     return text;
 }
 
+/**
+ * Follow the handshake over a segment with @p flags sent at @p time in the
+ * direction @p fwd, before classify() remembers it: the initial round-trip
+ * time, from the SYN (the last one, if it was sent again) to the first
+ * ACK of its sender after the other direction's SYN, as Wireshark's
+ * tcp.analysis.initial_rtt; unset for every other segment.
+ */
+std::optional<uint64_t> followHandshake( TcpDirection& fwd, const TcpDirection& rev, uint8_t flags,
+                                         uint64_t time )
+{
+    if ( flags & kTcpSyn ) {
+        // The first SYN without ACK awaits its handshake's ACK; the same
+        // sent again while it does, too.
+        if ( !( flags & kTcpAck )
+             && ( !( fwd.flags & TcpDirection::kSynSeen )
+                  || ( fwd.flags & TcpDirection::kSynPending ) ) ) {
+            fwd.flags |= TcpDirection::kSynPending;
+        }
+        fwd.flags |= TcpDirection::kSynSeen;
+        return std::nullopt;
+    }
+    const bool pending = ( fwd.flags & TcpDirection::kSynPending ) != 0;
+    fwd.flags &= static_cast<uint8_t>( ~TcpDirection::kSynPending );
+    if ( pending && ( flags & kTcpAck ) && ( rev.flags & TcpDirection::kSynSeen ) ) {
+        return elapsedNs( fwd.lastTime, time );
+    }
+    return std::nullopt;
+}
+
+/// @p ns as Info shows the initial round-trip time: "[iRTT=0.012345]", in
+/// seconds with 6 decimals, or 9 at nanosecond @p precision.
+std::string initialRttText( uint64_t ns, TimePrecision precision )
+{
+    const bool nano = precision == TimePrecision::Nanoseconds;
+    auto fraction = std::to_string( nano ? ns % 1000000000 : ns % 1000000000 / 1000 );
+    fraction.insert( 0, ( nano ? 9 : 6 ) - fraction.size(), '0' );
+    return " [iRTT=" + std::to_string( ns / 1000000000 ) + "." + fraction + "]";
+}
+
 /// Whether a segment with @p flags and sequence number @p seq, sent in the
 /// direction @p fwd, starts a new connection on the same addresses and
 /// ports: a SYN without ACK whose sequence number is not its direction's
@@ -291,6 +340,8 @@ const char* tcpMarkerName( TcpMarker marker )
         return "TCP Previous segment not captured";
     case TcpMarker::WindowUpdate:
         return "TCP Window Update";
+    case TcpMarker::WindowFull:
+        return "TCP Window Full";
     case TcpMarker::KeepAlive:
         return "TCP Keep-Alive";
     case TcpMarker::KeepAliveAck:
@@ -307,7 +358,7 @@ const char* tcpMarkerName( TcpMarker marker )
     return "TCP";
 }
 
-TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
+TcpAnalysis analyseTcp( PacketRecord& pkt, const Stream& stream )
 {
     if ( pkt.transport != Transport::Tcp || !stream.state ) {
         return {};
@@ -321,11 +372,15 @@ TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
     }
     learnBases( fwd, rev, pkt.tcpFlags, pkt.tcpSeq, pkt.tcpAck );
     const bool syn = ( pkt.tcpFlags & kTcpSyn ) != 0;
-    if ( syn && pkt.tcpHeaderLen >= 20 ) {
-        fwd.windowScale
-            = pkt.tcpWindowShift
-                  ? static_cast<uint8_t>( std::min( *pkt.tcpWindowShift, kMaxWindowShift ) + 1 )
-                  : 0;
+    std::optional<uint64_t> initialRtt;
+    if ( pkt.tcpHeaderLen >= 20 ) {
+        initialRtt = followHandshake( fwd, rev, pkt.tcpFlags, timeNs( pkt ) );
+        if ( syn ) {
+            fwd.windowScale
+                = pkt.tcpWindowShift
+                      ? static_cast<uint8_t>( std::min( *pkt.tcpWindowShift, kMaxWindowShift ) + 1 )
+                      : 0;
+        }
     }
 
     const auto seq = pkt.tcpSeq - fwd.baseSeq;
@@ -355,8 +410,11 @@ TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
                     { pkt.number, timeNs( pkt ), seq, ack.value_or( 0 ), pkt.payloadLen,
                       pkt.tcpFlags, pkt.tcpWindow, windowScaled, window },
                     dupAckFrame );
+    if ( initialRtt ) {
+        pkt.info.insert( tcpFieldsEnd( pkt.info ), initialRttText( *initialRtt, pkt.precision ) );
+    }
     pkt.info.insert( 0, markerText( markers, dupAckFrame, fwd.dupAcks ) );
-    return markers;
+    return { markers, initialRtt };
 }
 
 } // namespace tcpdump

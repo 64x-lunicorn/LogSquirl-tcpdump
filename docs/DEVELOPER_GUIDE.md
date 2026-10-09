@@ -489,7 +489,8 @@ a number), and the packet's direction in it, 0 or 1 (the same for every
 packet from the same address and port). Modules that follow a conversation
 keep their fields in the slot and read and update them through that
 pointer. Every field added costs memory once per numbered stream: today a
-`TcpDirection` per direction, 32 bytes (a `static_assert` holds it there),
+`TcpDirection` per direction, 32 bytes (a `static_assert` holds it there,
+and its `flags` and `windowScale` have no bit left but four of the latter),
 the Payload Describer's `QuicConnection` (whether a QUIC long header was
 seen, and the connection ID length of each direction), 3 bytes, whether a
 TCP stream began with the HTTP/2 preface, 1 byte, the stream's label,
@@ -520,11 +521,26 @@ TCP Analysis replaces that text; segments of a stream past the stream cap
 have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
 `tcpAck` stay the raw values.
 
+The parser reads a header's options with `parseTcpOptions()`, walking them
+as Wireshark does: a NOP is one byte, every other kind, an unknown one too,
+the length it gives, and the end of options, or an option whose length is
+below 2 or runs past the header, ends the walk; nothing past the captured
+header is read. An option counts only with its RFC length (MSS 4, window
+scale 3, timestamps 10), except SACK permitted, which Wireshark names
+whatever its length. A SYN's Info gets the options after `Len=`, in the
+order they come in and in Wireshark's words: `[SYN] Seq=0 Win=64240
+MSS=1460 SACK_PERM TSval=12345 TSecr=0 WS=128` (`WS=` is the multiplier,
+`1 << shift` with the shift capped at 14). Other segments show none of
+them, except the timestamps when `ConversionOptions::tcpTimestamps` asks
+for them, as Wireshark does on every segment: the parser keeps them in
+`PacketRecord::tcpTimestamps`, and the Converter calls
+`showTcpTimestamps()`, which puts ` TSval=… TSecr=…` after the TCP fields
+(`tcpFieldsEnd()`, before the payload description), before the TCP
+Analysis runs.
+
 `Win=` is the calculated window, as in Wireshark: the window field shifted
-by the sender's window scale (RFC 7323). The parser reads the shift count of
-a header's window scale option into `PacketRecord::tcpWindowShift`, walking
-the options as Wireshark does (a NOP is one byte; the end of options, or an
-option whose length is bogus or runs past the header, ends the walk). A
+by the sender's window scale (RFC 7323). The parser keeps the shift count of
+a header's window scale option in `PacketRecord::tcpWindowShift`. A
 SYN's option, its shift capped at 14 as RFC 7323 and Wireshark do, is kept
 in its direction's `TcpDirection::windowScale` (the shift plus one, 0 when
 the SYN carried none), and the TCP Analysis shifts the window of every later
@@ -666,6 +682,7 @@ keep-alive or a zero window probe. With `fwd` the segment's direction,
 | `[TCP Previous segment not captured]` | sequence number beyond `fwd.nextSeq`, no RST |
 | `[TCP Keep-Alive]` | `len` 0 or 1 at `fwd.nextSeq - 1`, no SYN, FIN or RST |
 | `[TCP Window Update]` | `len` 0, a new window other than 0, same sequence number (`fwd.nextSeq`) and ACK as before |
+| `[TCP Window Full]` | data, no SYN, FIN or RST, ending at `rev`'s last ACK plus its last window, scaled as `Win=` showed it, once `rev`'s scale is known: `rev`'s SYN was seen, or `fwd`'s without the window scale option |
 | `[TCP Keep-Alive ACK]` | `len` 0, the same window (not 0), sequence number and ACK as before, after a keep-alive from `rev` |
 | `[TCP ZeroWindowProbeAck]` | `len` 0, window still 0, the same sequence number and ACK (or one more) as before, after a probe from `rev` |
 | `[TCP Dup ACK n#m]` | `len` 0, the same window (not 0), sequence number and ACK as before: the `m`th repeat of the ACK of packet `n` |
@@ -675,6 +692,24 @@ keep-alive or a zero window probe. With `fwd` the segment's direction,
 | `[TCP Retransmission]` | otherwise before `fwd.nextSeq` |
 
 Segments with a bogus TCP header length are not analysed, as in Wireshark.
+
+The analysis also follows the handshake, with two bits of each direction's
+`flags`: `kSynSeen` (a SYN of the direction was seen, so its window scale
+is known, also when it has none) and `kSynPending` (its last segment was a
+SYN without ACK, whose time `lastTime` still holds). The first segment
+with ACK and without SYN of a direction whose SYN is pending, once the
+other direction sent its SYN-ACK, completes the handshake: it gets the
+initial round-trip time, from the SYN (the last one, if it was sent again,
+as Wireshark's `ts_mru_syn`) to it, after its TCP fields, `[iRTT=0.012345]`
+in seconds with 6 decimals, or 9 at nanosecond precision, and
+`analyseTcp()` returns it with the markers (`TcpAnalysis`). Wireshark shows
+`tcp.analysis.initial_rtt` in the packet's details only, and on the first
+pure ACK in either direction even without a SYN-ACK; here it is in Info,
+and a stream whose handshake was not captured whole has none. Each stream
+shows it once: a SYN sent after the handshake does not arm it again, a new
+connection on the same ports does. The Converter collects the times in
+`CaptureStats::initialRtts`, 8 bytes per handshake (at most one per
+numbered stream), for the summary's median.
 The limits, all where Wireshark keeps more than a few integers per
 direction:
 
@@ -683,10 +718,11 @@ direction:
   out of order, where Wireshark knows it was seen and calls it a
   retransmission; and `[TCP ACKed unseen segment]` is not shown.
 - The 3 ms out-of-order limit is Wireshark's for a connection whose
-  round-trip time it does not know; Wireshark takes the handshake's when it
-  saw the handshake, this analysis never does.
+  round-trip time it does not know; Wireshark takes the handshake's iRTT
+  when it saw the handshake, this analysis never does: the iRTT is shown,
+  but not kept per stream.
 - SACK blocks are not read, so there is no SACK-based fast
-  retransmission; `[TCP Window Full]` is not shown.
+  retransmission, and Info shows no `SLE=`/`SRE=`.
 - `[TCP Port numbers reused]`, `[TCP Retransmission]`'s RTO and the other
   fields Wireshark shows in its tree only are left out.
 - As in Wireshark, sequence numbers compare modulo 2^32, and a segment
@@ -694,8 +730,9 @@ direction:
   reordering) counts as 0 ms after it.
 
 `CaptureStats` collects the sidebar summary's counts packet by packet
-(among them the packets cut at the snaplen and the TCP segments per
-analysis marker kind),
+(among them the packets cut at the snaplen, the TCP segments per
+analysis marker kind and the handshakes' initial round-trip times, whose
+median `medianInitialRttNs()` gives),
 and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, endpoints and tunnel endpoints together, and those of further
@@ -816,6 +853,8 @@ the payload preview (`preview`, `previewChars`), the stream and endpoint
 caps and the TCP Reassembly's memory (`reassemblyMegabytes`). The defaults write the text of `tests/corpus`; any other choice is
 the payload preview (`preview`, `previewChars`) and the stream and endpoint
 caps; besides, `checkpointInterval`, which tests lower. The defaults write the text of `tests/corpus`; any other choice is
+caps, the TCP Reassembly's memory (`reassemblyMegabytes`) and whether
+every TCP segment shows its timestamps (`tcpTimestamps`). The defaults write the text of `tests/corpus`; any other choice is
 tested by deriving its text from that one, not by more committed text.
 
 While it converts, the Converter notes every packet in a `CaptureIndex`
@@ -853,8 +892,9 @@ Qt UI that provides:
   link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
   (comma-separated when there are several), the number of packets cut
-  at the snaplen when there are any, and under *Analysis* the TCP segments
-  per analysis marker kind when there are any
+  at the snaplen when there are any, and under *Analysis* the median
+  initial round-trip time of the handshakes and how many there were, and
+  the TCP segments per analysis marker kind, when there are any
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load

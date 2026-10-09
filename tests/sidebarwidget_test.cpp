@@ -883,6 +883,21 @@ SCENARIO( "the summary lists the TCP analysis markers", "[sidebar]" )
         }
     }
 
+    GIVEN( "a capture with handshakes and no marker" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.handshakes = 1200;
+        summary.medianInitialRttNs = 12345678;
+
+        THEN( "the median initial round-trip time is under Analysis, in milliseconds" )
+        {
+            const auto html = tcpdump::summaryHtml( "clean.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>Analysis</b><br>" ) );
+            REQUIRE( html.contains( QString( "Median iRTT: 12.346 ms (%1 handshakes)<br>" )
+                                        .arg( QLocale().toString( 1200 ) ) ) );
+        }
+    }
+
     GIVEN( "a capture without any" )
     {
         THEN( "there is no Analysis heading" )

@@ -42,7 +42,8 @@ bool operator==( const ConversionOptions& a, const ConversionOptions& b )
     return a.layout.timeColumns == b.layout.timeColumns
            && a.layout.macColumns == b.layout.macColumns && a.preview == b.preview
            && a.previewChars == b.previewChars && a.maxStreams == b.maxStreams
-           && a.maxEndpoints == b.maxEndpoints && a.reassemblyMegabytes == b.reassemblyMegabytes;
+           && a.maxEndpoints == b.maxEndpoints && a.reassemblyMegabytes == b.reassemblyMegabytes
+           && a.tcpTimestamps == b.tcpTimestamps;
 }
 
 } // namespace tcpdump
@@ -78,6 +79,7 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
         options.maxStreams = 5000;
         options.maxEndpoints = 300;
         options.reassemblyMegabytes = 16;
+        options.tcpTimestamps = true;
 
         WHEN( "they are saved" )
         {

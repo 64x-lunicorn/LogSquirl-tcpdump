@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **TCP details as Wireshark shows them.** A SYN and a SYN-ACK show their
+  options after the window, in the order they were sent: `[SYN] Seq=0
+  Win=64240 MSS=1460 SACK_PERM TSval=1000 TSecr=0 WS=128`; unknown options
+  are skipped by their length, and a malformed length ends the walk
+  without reading past the header. The new option *Show TCP timestamps
+  (TSval, TSecr) on every segment* (off by default) shows the timestamps
+  on the other segments too. The ACK that completes a handshake shows its
+  initial round-trip time, from the SYN, `[iRTT=0.012345]`, and the
+  summary the median of all handshakes captured whole. A segment that
+  fills the window the receiver advertised last, scaled as negotiated, is
+  marked `[TCP Window Full]`, counted in the summary and coloured and
+  filtered with the other TCP problems. `tests/corpus/tcp-analysis.pcap`
+  has a second connection that shows them.
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section or a
   DNS-over-TCP message that spans TCP segments is described once, on the
   segment that completes it, from all its bytes: `Client Hello,

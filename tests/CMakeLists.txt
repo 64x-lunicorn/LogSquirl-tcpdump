@@ -48,6 +48,7 @@ add_executable(logsquirl_tcpdump_tests
     stream_tracker_test.cpp
     stream_labels_test.cpp
     tcp_analysis_test.cpp
+    tcp_options_test.cpp
     tcp_reassembly_test.cpp
     tunnels_test.cpp
     wire_bytes_test.cpp

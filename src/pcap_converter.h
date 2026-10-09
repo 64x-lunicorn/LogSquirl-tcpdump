@@ -75,6 +75,10 @@ struct CaptureSummary {
     /// TCP segments per analysis marker ("TCP Retransmission", …), for the
     /// kinds that occur, in the order of TcpMarker.
     std::vector<std::pair<std::string, uint64_t>> tcpMarkers;
+    /// TCP handshakes captured whole, and the median of their initial
+    /// round-trip times (iRTT) in nanoseconds; unset without any.
+    uint64_t handshakes = 0;
+    std::optional<uint64_t> medianInitialRttNs;
 
     /// Packets captured shorter than on the wire, cut at the snaplen; their
     /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
@@ -134,6 +138,9 @@ struct ConversionOptions {
     size_t reassemblyMegabytes = TcpReassembly::kDefaultMemoryLimit / kMegabyte;
     /// Packets between two checkpoints of the CaptureIndex.
     uint32_t checkpointInterval = CaptureIndex::kCheckpointInterval;
+    /// Whether every TCP segment shows its timestamps option in Info, as
+    /// Wireshark does, rather than the SYNs only (showTcpTimestamps()).
+    bool tcpTimestamps = false;
 };
 
 /**

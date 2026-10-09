@@ -32,6 +32,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace tcpdump {
 
@@ -47,6 +48,7 @@ enum class TcpMarker : uint8_t {
     OutOfOrder,                 ///< Data that arrives shortly after later data.
     PreviousSegmentNotCaptured, ///< Data beyond the next sequence number.
     WindowUpdate,               ///< An ACK that only changes the window.
+    WindowFull,                 ///< Data up to the edge of the receiver's window.
     KeepAlive,                  ///< An empty or one-byte segment one byte behind.
     KeepAliveAck,               ///< The ACK repeated in answer to a keep-alive.
     DupAck,                     ///< An ACK that repeats the previous one.
@@ -56,7 +58,7 @@ enum class TcpMarker : uint8_t {
 };
 
 /// How many kinds of TcpMarker there are.
-constexpr size_t kTcpMarkerKinds = 12;
+constexpr size_t kTcpMarkerKinds = 13;
 
 /// The marker's text without its brackets, as Wireshark writes it in
 /// Info: "TCP Retransmission", "TCP Dup ACK" (without its numbers), …
@@ -91,6 +93,17 @@ private:
     uint16_t bits_ = 0;
 };
 
+/// What the TCP Analysis found in one segment.
+struct TcpAnalysis {
+    TcpMarkers markers;
+    /// The stream's initial round-trip time (iRTT), on the segment that
+    /// completes its handshake: from the client's last SYN to its first
+    /// ACK after the server's SYN-ACK, in nanoseconds.  Unset on every
+    /// other segment, and on all of a stream whose handshake was not
+    /// captured whole.
+    std::optional<uint64_t> initialRttNs;
+};
+
 /**
  * Show @p pkt's sequence and acknowledgement numbers in Info relative to
  * the first ones of each direction of its stream, and its window scaled, as
@@ -118,7 +131,10 @@ private:
  * analysis heuristics (packet-tcp.c, tcp_analyze_sequence_number()), as
  * far as what each direction keeps allows (TcpDirection): its markers are
  * put at the start of Info, "[TCP Retransmission] 80 → 54321 …", in
- * Wireshark's wording and order, and returned.  A segment that cannot be classified, such as the
+ * Wireshark's wording and order, and returned.  The segment that
+ * completes the handshake gets the initial round-trip time after its TCP
+ * fields, "[iRTT=0.012345]" in seconds at the packet's precision, which
+ * Wireshark shows in the packet's details only.  A segment that cannot be classified, such as the
  * first of a stream captured mid-way, gets none.  The Developer Guide
  * lists the rules and where they fall short of Wireshark's.
  *
@@ -127,6 +143,6 @@ private:
  * header length gets relative numbers but no markers, as Wireshark does
  * not analyse it.
  */
-TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream );
+TcpAnalysis analyseTcp( PacketRecord& pkt, const Stream& stream );
 
 } // namespace tcpdump

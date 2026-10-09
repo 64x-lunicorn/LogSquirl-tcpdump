@@ -144,6 +144,36 @@ enum class Transport { Tcp, Udp };
 /// Separates the transport summary in Info from the description of the payload.
 constexpr const char* kDescriptionSeparator = " | ";
 
+/// A TCP timestamps option (RFC 7323), as sent.
+struct TcpTimestamps {
+    uint32_t value;     ///< TSval
+    uint32_t echoReply; ///< TSecr
+};
+
+/**
+ * What a TCP header's options tell, as parseTcpOptions() read them: the
+ * ones Wireshark shows in Info, each only if its length is the one RFC
+ * 9293 and RFC 7323 give it.
+ */
+struct TcpOptions {
+    std::optional<uint16_t> mss;        ///< Maximum segment size.
+    std::optional<uint8_t> windowShift; ///< The window scale option's shift count, as sent.
+    bool sackPermitted = false;         ///< SACK permitted, whatever its length.
+    std::optional<TcpTimestamps> timestamps;
+    /// The options as Wireshark appends them to Info, in the order they
+    /// come in: " MSS=1460 SACK_PERM TSval=1 TSecr=0 WS=128"; empty without any.
+    std::string info;
+};
+
+/**
+ * Read the TCP options at @p options, @p len bytes of them, as Wireshark
+ * walks them: an end-of-options ends the walk, a NOP takes one byte, every
+ * other kind (also an unknown one) takes the length it gives, and a length
+ * below 2 or one that runs past the options ends the walk.  Nothing past
+ * @p len is read.
+ */
+TcpOptions parseTcpOptions( const uint8_t* options, size_t len );
+
 /// What a payload begins that the rest of its stream builds on, as the
 /// Payload Describer recognised it: describeInStream() looks at the
 /// stream's later packets with it in mind.
@@ -202,6 +232,10 @@ struct PacketRecord {
     /// 7323 allows at most 14); unset without the option.  Only a SYN's
     /// counts, see analyseTcp().
     std::optional<uint8_t> tcpWindowShift;
+    /// The header's timestamps option; unset without one.  Info shows it
+    /// on a SYN with the other options, on other segments only through
+    /// showTcpTimestamps().
+    std::optional<TcpTimestamps> tcpTimestamps;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
 
@@ -259,6 +293,18 @@ std::string formatTcpFlags( uint8_t flags );
  * @return String like "Seq=1 Ack=1 Win=65535", or "Seq=0 Win=65535".
  */
 std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window );
+
+/**
+ * Show @p pkt's TCP timestamps option in Info, " TSval=… TSecr=…" after
+ * the TCP fields and before any payload description, as Wireshark does on
+ * every segment; a SYN shows it with its other options already.  Other
+ * packets are left as they are.
+ */
+void showTcpTimestamps( PacketRecord& pkt );
+
+/// Where the TCP fields of @p info end: before the payload description
+/// (kDescriptionSeparator), or at its end without one.
+size_t tcpFieldsEnd( const std::string& info );
 
 /**
  * Dissect one captured packet into @p pkt, from its link-layer header up.

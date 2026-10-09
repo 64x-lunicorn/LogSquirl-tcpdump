@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,9 @@ struct CaptureStats {
 
     /// TCP segments per kind of analysis marker, indexed by TcpMarker.
     std::array<uint64_t, kTcpMarkerKinds> tcpMarkers{};
+    /// The initial round-trip time of each handshake, in nanoseconds: 8
+    /// bytes per TCP stream at most, of the numbered ones.
+    std::vector<uint64_t> initialRtts;
 
     /// Link-layer types (DLT_*) of the capture, each once, in the order they
     /// were first seen.  A capture holds few, so a list is searched.
@@ -86,8 +90,12 @@ struct CaptureStats {
     /// Count @p pkt in, with the link-layer type it was dissected with.
     void add( const PacketRecord& pkt );
 
-    /// Count the markers the TCP Analysis gave a segment.
-    void addTcpMarkers( const TcpMarkers& markers );
+    /// Count the markers the TCP Analysis gave a segment, and the initial
+    /// round-trip time of a handshake it completed.
+    void addTcpAnalysis( const TcpAnalysis& analysis );
+
+    /// The median of initialRtts, which it reorders; unset without any.
+    std::optional<uint64_t> medianInitialRttNs();
 
     /// List @p linkType, unless it is listed already: also for a type the
     /// capture declares without a packet of it.

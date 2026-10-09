@@ -86,11 +86,15 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     previewChars_ = countBox( "previewChars", 1, kMaxPreviewChars );
     previewChars_->setSuffix( QStringLiteral( " characters" ) );
     connect( preview_, &QCheckBox::toggled, previewChars_, &QSpinBox::setEnabled );
+    tcpTimestamps_ = new QCheckBox(
+        QStringLiteral( "Show TCP timestamps (TSval, TSecr) on every segment, not only on SYNs" ) );
+    tcpTimestamps_->setObjectName( "tcpTimestamps" );
 
     auto* previewBox = new QGroupBox( QStringLiteral( "Info" ) );
     auto* previewLayout = new QFormLayout( previewBox );
     previewLayout->addRow( preview_ );
     previewLayout->addRow( QStringLiteral( "At most:" ), previewChars_ );
+    previewLayout->addRow( tcpTimestamps_ );
 
     // Memory caps
     maxStreams_ = countBox( "maxStreams", kMinCap, kMaxStreamCap );
@@ -142,6 +146,7 @@ void ConfigDialog::showOptions( const ConversionOptions& options )
     preview_->setChecked( options.preview );
     previewChars_->setEnabled( options.preview );
     previewChars_->setValue( static_cast<int>( options.previewChars ) );
+    tcpTimestamps_->setChecked( options.tcpTimestamps );
     maxStreams_->setValue( static_cast<int>( options.maxStreams ) );
     maxEndpoints_->setValue( static_cast<int>( options.maxEndpoints ) );
     reassemblyMegabytes_->setValue( static_cast<int>( options.reassemblyMegabytes ) );
@@ -154,6 +159,7 @@ ConversionOptions ConfigDialog::options() const
     options.layout.macColumns = macColumns_->isChecked();
     options.preview = preview_->isChecked();
     options.previewChars = static_cast<size_t>( previewChars_->value() );
+    options.tcpTimestamps = tcpTimestamps_->isChecked();
     options.maxStreams = static_cast<size_t>( maxStreams_->value() );
     options.maxEndpoints = static_cast<size_t>( maxEndpoints_->value() );
     options.reassemblyMegabytes = static_cast<size_t>( reassemblyMegabytes_->value() );

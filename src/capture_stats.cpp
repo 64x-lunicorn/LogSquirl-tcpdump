@@ -67,13 +67,27 @@ void CaptureStats::add( const PacketRecord& pkt )
     }
 }
 
-void CaptureStats::addTcpMarkers( const TcpMarkers& markers )
+void CaptureStats::addTcpAnalysis( const TcpAnalysis& analysis )
 {
     for ( size_t i = 0; i < kTcpMarkerKinds; ++i ) {
-        if ( markers.test( static_cast<TcpMarker>( i ) ) ) {
+        if ( analysis.markers.test( static_cast<TcpMarker>( i ) ) ) {
             ++tcpMarkers[ i ];
         }
     }
+    if ( analysis.initialRttNs ) {
+        initialRtts.push_back( *analysis.initialRttNs );
+    }
+}
+
+std::optional<uint64_t> CaptureStats::medianInitialRttNs()
+{
+    if ( initialRtts.empty() ) {
+        return std::nullopt;
+    }
+    // The upper of the two middle ones of an even count, as an integer.
+    const auto middle = initialRtts.begin() + static_cast<std::ptrdiff_t>( initialRtts.size() / 2 );
+    std::nth_element( initialRtts.begin(), middle, initialRtts.end() );
+    return *middle;
 }
 
 void CaptureStats::addLinkType( uint32_t linkType )

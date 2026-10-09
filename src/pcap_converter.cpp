@@ -81,6 +81,8 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
                                              stats.tcpMarkers[ i ] );
         }
     }
+    summary.handshakes = stats.initialRtts.size();
+    summary.medianInitialRttNs = stats.medianInitialRttNs();
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
@@ -168,8 +170,11 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             return result;
         }
         limitPreview( pkt, options.preview ? options.previewChars : 0 );
+        if ( options.tcpTimestamps ) {
+            showTcpTimestamps( pkt );
+        }
         const auto stream = tracker.track( pkt );
-        stats.addTcpMarkers( analyseTcp( pkt, stream ) );
+        stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
         labels.apply( pkt, stream );
