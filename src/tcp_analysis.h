@@ -106,7 +106,7 @@ private:
  * connection on the same addresses and ports, which counts afresh: the
  * stream's whole state is reset, its label (StreamLabels) too.  The
  * numbers wrap around at 2^32 with the sequence numbers.  Without the ACK
- * flag the acknowledgement field means nothing and Ack=0 is shown.
+ * flag the acknowledgement field means nothing and Ack= is left out.
  *
  * Win= is the window as Wireshark calculates it: once both directions'
  * SYNs carried the window scale option, every later segment's window is
