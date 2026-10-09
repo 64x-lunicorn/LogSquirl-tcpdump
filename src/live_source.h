@@ -76,10 +76,10 @@ class LiveOptionsWidget;
 /// What the user chose to capture: one choice of the live capture UI, as
 /// settings.ini remembers it.
 struct LiveChoice {
-    QString source;    ///< The kind's id(); empty: none chosen.
-    QString device;    ///< The device (a phone's serial, user@host); empty for none.
-    QString interface; ///< The interface's id; empty: the kind's default, if it has one.
-    QString filter;    ///< The capture filter, BPF; empty: everything.
+    QString source;           ///< The kind's id(); empty: none chosen.
+    QString device;           ///< The device (a phone's serial, user@host); empty for none.
+    QString networkInterface; ///< The interface's id; empty: the kind's default, if it has one.
+    QString filter;           ///< The capture filter, BPF; empty: everything.
     int snaplen = kDefaultSnaplen; ///< Bytes kept of each packet.
     /// The source's own options (makeOptionsWidget()); kept per source.
     LiveOptions options;
@@ -87,8 +87,8 @@ struct LiveChoice {
     bool operator==( const LiveChoice& other ) const
     {
         return source == other.source && device == other.device
-               && interface == other.interface && filter == other.filter && snaplen == other.snaplen
-               && options == other.options;
+               && networkInterface == other.networkInterface && filter == other.filter
+               && snaplen == other.snaplen && options == other.options;
     }
     bool operator!=( const LiveChoice& other ) const
     {

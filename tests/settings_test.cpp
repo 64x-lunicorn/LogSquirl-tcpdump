@@ -44,7 +44,7 @@ bool operator==( const ConversionOptions& a, const ConversionOptions& b )
            && a.previewChars == b.previewChars && a.maxStreams == b.maxStreams
            && a.maxEndpoints == b.maxEndpoints && a.reassemblyMegabytes == b.reassemblyMegabytes
            && a.tcpTimestamps == b.tcpTimestamps && a.someIpPorts == b.someIpPorts
-           && a.someIpNamesFile == b.someIpNamesFile;
+           && a.someIpNamesFile == b.someIpNamesFile && a.keyLogPath == b.keyLogPath;
 }
 
 } // namespace tcpdump
@@ -83,6 +83,7 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
         options.tcpTimestamps = true;
         options.someIpPorts = { 30501, 30502 };
         options.someIpNamesFile = QStringLiteral( "/tmp/some ip, names.txt" );
+        options.keyLogPath = configDir.filePath( "sslkeys.log" );
 
         WHEN( "they are saved" )
         {

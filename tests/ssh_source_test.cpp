@@ -222,7 +222,7 @@ SCENARIO( "The SSH source runs ssh with BatchMode, a connect timeout and no tty"
             optionLike.device = "-oProxyCommand=x";
             REQUIRE_FALSE( kind.validate( optionLike ).isEmpty() );
             auto noInterface = choice;
-            noInterface.interface.clear();
+            noInterface.networkInterface.clear();
             REQUIRE_FALSE( kind.validate( noInterface ).isEmpty() );
         }
 
@@ -355,19 +355,19 @@ SCENARIO( "Hostile interfaces and filters reach tcpdump as they are, run nothing
               "for a in \"$@\"; do printf '[%s]\\n' \"$a\" >&2; done" );
     const auto pwned = dir.filePath( "pwned" );
 
-    const QString interface = "eth0'; touch " + pwned + "; echo '";
+    const QString hostileInterface = "eth0'; touch " + pwned + "; echo '";
     const QString filter = "host 10.0.0.1 and not port 22 \"$(touch " + pwned + ")\" `touch "
                            + pwned + "` $HOME ${PATH} \\ ' '' ; | & > " + pwned + " * ?";
 
     for ( const bool excludeOwn : { true, false } ) {
         CAPTURE( excludeOwn );
-        LiveChoice choice{ "ssh", "srv", interface, filter, 96, {} };
+        LiveChoice choice{ "ssh", "srv", hostileInterface, filter, 96, {} };
         choice.options[ kSshExcludeOwnOption ] = excludeOwn ? "true" : "false";
         const auto arguments = argumentsAfterShell( sshRemoteCaptureCommand( choice ), bin );
         const auto expectedFilter
             = excludeOwn ? "(" + filter + ") and not (host 10.9.8.7 and tcp port 2222)" : filter;
         REQUIRE( arguments
-                 == "[-i]\n[" + interface + "]\n[-s]\n[96]\n[-U]\n[-w]\n[-]\n[" + expectedFilter
+                 == "[-i]\n[" + hostileInterface + "]\n[-s]\n[96]\n[-U]\n[-w]\n[-]\n[" + expectedFilter
                         + "]\n" );
         REQUIRE_FALSE( QFileInfo::exists( pwned ) );
     }
@@ -401,7 +401,7 @@ SCENARIO( "The SSH source lists and captures on a server through a fake ssh", "[
         form.setChoice( LiveChoice{ "ssh", "srv", "", "", kDefaultSnaplen, {} } );
         auto* interfaces = form.findChild<QComboBox*>( "liveInterface" );
         REQUIRE( waitFor( [ & ] { return !form.isListing() && interfaces->count() == 2; } ) );
-        REQUIRE( form.choice().interface == "eth0" );
+        REQUIRE( form.choice().networkInterface == "eth0" );
 
         auto* sudo = form.findChild<QCheckBox*>( "sshSudo" );
         auto* excludeOwn = form.findChild<QCheckBox*>( "sshExcludeOwn" );

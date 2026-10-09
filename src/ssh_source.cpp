@@ -321,7 +321,7 @@ QString sshRemoteCaptureCommand( const LiveChoice& choice )
     }
     // -U: each packet written as it comes, not when a buffer is full.
     line += QStringLiteral( "tcpdump -i %1 -s %2 -U -w -" )
-                .arg( shellQuote( choice.interface ) )
+                .arg( shellQuote( choice.networkInterface ) )
                 .arg( choice.snaplen );
     if ( !filter.isEmpty() ) {
         line += QLatin1Char( ' ' ) + filter;
@@ -542,7 +542,7 @@ QString SshSourceKind::validate( const LiveChoice& choice ) const
     if ( const auto problem = SshDestination::parse( choice.device ).problem; !problem.isEmpty() ) {
         return problem;
     }
-    if ( hasControl( choice.interface ) ) {
+    if ( hasControl( choice.networkInterface ) ) {
         return QStringLiteral( "An interface is one line, without control characters." );
     }
     return LiveSourceKind::validate( choice );

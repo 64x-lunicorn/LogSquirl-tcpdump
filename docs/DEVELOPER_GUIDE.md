@@ -902,8 +902,10 @@ are described alone. The segment that completes it is described by
 `describePayload()` from all held bytes, followed by `[reassembled from k
 segments]`, with the calls their SDP bodies announce (`PacketRecord::sipCalls`,
 cleared on the segments before; the `MediaExpectations` run after the
-reassembly for this), and `apply()` returns those bytes (`ReassembledMessages`) for
-a module that wants the whole messages. Bytes are taken in sequence order,
+reassembly for this). `apply()` returns the whole messages each segment
+completed (`ReassembledMessages`), those held over several segments and
+those whole in it alike, in sequence order and never twice, for the TLS
+Decryption. Bytes are taken in sequence order,
 by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
 C++, shared with Follow stream content): `place()` says whether a segment
 is next (and how many of its first bytes were taken), came early or was
@@ -949,6 +951,88 @@ declare it in `describe_common.h` and add `{ "Label", nameFrame }` to
 `kTcpFramers`; its detector then sees whole messages on the completing
 segment. Tests go in `tests/tcp_reassembly_test.cpp`, with the Converter's
 steps run over a capture built with the frame builders.
+
+#### TLS Decryption (`tls_decryption.h/cpp`, `tls_key_log.h/cpp`, `tls_crypto.h/cpp`, `hpack.h/cpp`)
+With a key log (`ConversionOptions::keyLogPath`, the option *TLS
+decryption: key log file*), the Converter runs a `TlsDecryption` (pure
+C++) on every packet right after the TCP Reassembly, with the messages it
+returned: whole TLS records, in sequence order. Without one nothing of
+it runs, and the text is the same as before.
+
+- **Key log** (`tls_key_log.h`): `KeyLog` holds the secrets of the NSS key
+  log format by the ClientHello's random, `CLIENT_RANDOM` (the TLS 1.2
+  master secret) and the four TLS 1.3 traffic secrets; other labels and
+  malformed lines are passed over. `KeyLogFile` reads the file (64 MiB at
+  most) when the conversion starts, and again for a session not in it, at
+  most every 500 ms, from where it stopped: a live capture's browser adds
+  to it. A last line without its line feed is taken but read again. The
+  secrets live in `tls::SecretBytes`, which wipe themselves
+  (`mbedtls_platform_zeroize`); the bytes read are wiped too. Nothing logs
+  or shows a secret; `error()` says only why the file could not be read.
+- **Sessions**: per TCP stream, from its plaintext ClientHello (client
+  random, the client's direction) and ServerHello (server random, cipher
+  suite, version from `supported_versions`, encrypt-then-MAC, ALPN; a
+  HelloRetryRequest is passed over). The keys are set up from the key log
+  at the first protected record (`ensureKeys()`): TLS 1.2's key block from
+  the master secret with the PRF (`tls::tls12Prf`, P_hash over HMAC);
+  TLS 1.3's key and IV from each traffic secret with HKDF-Expand-Label
+  (`tls::hkdfExpandLabel`). A TLS 1.2 direction is protected after its
+  ChangeCipherSpec, a TLS 1.3 one after the ServerHello, by the handshake
+  keys until its decrypted Finished, then by the application keys; a
+  KeyUpdate derives the next ones ("traffic upd"). If the handshake keys
+  do not open a record, the application keys are tried from sequence
+  number 0: the handshake ended unseen, as when the secrets came late.
+- **Records** (`decrypt()`): AEAD with the nonce and additional data of
+  each version (RFC 5288, 7905, 8446), or AES-CBC with its MAC (RFC 5246,
+  RFC 7366), each tried with the next `kSequenceLookahead` (8) sequence
+  numbers, so that a record the capture lost is passed over. After
+  `kMaxFailures` (8) records in a row that would not decrypt, a direction
+  is given up. `tls_crypto.h` is the only file that includes Mbed TLS
+  (`RecordCipher`: GCM, ChaChaPoly, AES-CBC; HMAC; HKDF).
+- **Description**: a segment with a record decrypted is described anew
+  (`redescribe()`): `TLS (decrypted) | ` (`kDecryptedMarker`, then the
+  separator), then each record's part, up to four: a plaintext record as
+  the describer names it, a decrypted handshake message by name
+  (`describeTlsHandshake()`), an alert (`describeTlsAlert()`), and the
+  application data of the segment's records together, once: HTTP/2 when
+  ALPN chose `h2` (ServerHello, or the decrypted EncryptedExtensions) or the
+  client sent the preface, else what `describePayload()` recognises
+  (HTTP/1.x), else `Application Data`. The label is `HTTP`, `HTTP2` or
+  `TLS`. `[reassembled from k segments]` stays. A segment with no record
+  decrypted keeps its description, so wrong or missing keys leave the text
+  as without a key log.
+- **HTTP/2** (`Http2Direction` in `payload_describer.h`, `describe_http.cpp`):
+  one per direction of an HTTP/2 session, fed its decrypted bytes in order.
+  It names every frame whose header comes, and decodes the header blocks
+  (HEADERS, PUSH_PROMISE with CONTINUATION; padding and priority skipped)
+  with an `HpackDecoder` (`hpack.h`: static and dynamic table, Huffman, the
+  table at most 64 KiB, a block that breaks a rule breaks the decoder):
+  `HEADERS[1]: GET example.org/app.js`, `HEADERS[1]: 200, Content-Type: …`.
+  Other frames' payloads are skipped as they come; a header block frame is
+  held until whole, at most 64 KiB, so that the HPACK table stays in step.
+- **Memory**: a session keeps its randoms, keys (Mbed TLS contexts) and
+  sequence numbers, no records; `kMaxSessions` (65,536) are followed, a
+  session is dropped on its connection's RST, both FINs or a new SYN. The
+  HTTP/2 directions together hold at most `kHttp2MemoryLimit` (32 MiB);
+  one that would pass it stops decoding header blocks. The plaintext of a
+  segment is held while it is described, then wiped.
+- **Mbed TLS** comes from `FetchContent` in `CMakeLists.txt`: the 3.6.7
+  release tarball, checked by its SHA-256, built as the static
+  `mbedcrypto` with `third_party/mbedtls_config.h` (AES, GCM, CBC,
+  ChaCha20-Poly1305, SHA-1/256/384, HMAC, HKDF, nothing else), position
+  independent, its symbols hidden (`CMAKE_C_VISIBILITY_PRESET`, and
+  `--exclude-libs` on Linux) and its warnings not fatal
+  (`MBEDTLS_FATAL_WARNINGS OFF`); `EXCLUDE_FROM_ALL` keeps the rest of
+  Mbed TLS out of the build and all of it out of `cmake --install`. To move to a later 3.6 release, change
+  the URL and hash together.
+
+Tests: `tests/tls_crypto_test.cpp` (HKDF-Expand-Label and a record against
+RFC 8448, the TLS 1.2 PRF against the published vectors),
+`tests/hpack_test.cpp` (RFC 7541, Appendix C, malformed and mutated blocks),
+`tests/tls_key_log_test.cpp`, and `tests/tls_decryption_test.cpp`, which
+runs the Converter's steps over `tests/corpus/tls-decrypt.pcap` with its key
+log `tls-decrypt.keys`, without one, with secrets that come late and with
+mutated records, and over HTTP/2 frames cut and mutated.
 
 #### TCP analysis markers
 `analyseTcp()` then classifies the segment as Wireshark's TCP analysis does
@@ -1130,7 +1214,9 @@ steps, in this order: `limitPreview()` cuts its preview, the Stream Tracker
 gives it its stream (`track()`), the TCP Analysis shows its numbers relative
 and marks it (`analyseTcp()`), the Payload Describer looks at it again in
 its stream (`describeInStream()`), the TCP Reassembly describes a message
-that spans segments where it completes (`TcpReassembly::apply()`), the
+that spans segments where it completes (`TcpReassembly::apply()`), with a
+key log the TLS Decryption decrypts the whole records it returned
+(`TlsDecryption::apply()`), the
 `MediaExpectations` describe it as RTP or RTCP where SDP announced them
 (`apply()`), the Stream Labels name it by its stream's protocol
 (`StreamLabels::apply()`), the `ConversationStats` and the `CaptureStats`
@@ -1283,7 +1369,8 @@ also with hostile interfaces and filters.
 `maxEndpoints`), the TCP Reassembly's memory (`reassemblyMegabytes`),
 whether every TCP segment shows its timestamps (`tcpTimestamps`), the ports
 SOME/IP is read on besides 30490 (`someIpPorts`) and its name table
-(`someIpNamesFile`); besides, `checkpointInterval`, the packets between two
+(`someIpNamesFile`), and the TLS key log to decrypt with (`keyLogPath`,
+empty: none; see *TLS Decryption*); besides, `checkpointInterval`, the packets between two
 checkpoints of the `CaptureIndex`, which tests lower. The Converter loads
 the name table (`loadSomeIpNames()`, `someip.h`; a file that cannot be read
 names nothing) and puts the ports and names in place for the Payload
@@ -1312,7 +1399,8 @@ the preview 1 to `kMaxPreviewChars`, the caps `kMinCap` to ten times their
 default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB); the
 SOME/IP ports are a list (`someIpPorts`, read by `parseSomeIpPorts()`: 1 to
 65535, at most `kMaxSomeIpPorts`, anything else skipped), the name table a
-path (`someIpNamesFile`). `ConfigDialog` shows and edits the options and says that an open
+path (`someIpNamesFile`). The key log's path (`tlsKeyLogFile`) is kept as it
+is, its file is not touched until a conversion reads it. `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
@@ -1804,7 +1892,13 @@ power mode over UDP, routing activation and diagnostic messages over TCP
 with UDS sessions, identifiers, a negative response, a response pending, a
 TransferData over two segments, a diagnostic message NACK and an alive
 check, an inverse version that does not match and a payload length its type
-does not allow, by `tests/make_doip_corpus.py`. The link layers' tests,
+does not allow, by `tests/make_doip_corpus.py`. `tls-decrypt.pcap`, TLS 1.2 and
+1.3 sessions with HTTP/1.1 and HTTP/2 inside, and the key log beside it,
+`tls-decrypt.keys`, are made up by `tests/make_tls_decrypt_corpus.py`
+(`uv run`, as it needs the `cryptography` package): randoms and secrets
+from a fixed seed, records encrypted with the keys they give, no one's
+traffic. A capture with a `<name>.keys` beside it is converted with that
+key log by the corpus tests. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

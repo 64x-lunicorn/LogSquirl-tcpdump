@@ -35,7 +35,10 @@
  * tests/make_link_layers_corpus.py, reassembly.pcap by
  * tests/make_reassembly_corpus.py, mqtt.pcap by tests/make_mqtt_corpus.py,
  * sip.pcap by tests/make_sip_corpus.py, someip.pcap by
- * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py.
+ * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py,
+ * tls-decrypt.pcap and the key log beside it, tls-decrypt.keys, by
+ * tests/make_tls_decrypt_corpus.py: a capture with a <name>.keys beside it
+ * is converted with that key log.
  * Captures of real loopback traffic, recorded by tests/make_real_corpus.sh,
  * stay uncommitted in tests/corpus/local and are converted too when present.
  * The malformed-*.pcap files, mutated captures from fuzzing,
@@ -99,7 +102,13 @@ SCENARIO( "The corpus captures convert to their expected text", "[corpus]" )
 
         GIVEN( "the capture " + name.toStdString() )
         {
-            const auto result = convertPcap( capture.filePath(), out.path() );
+            // A key log beside the capture decrypts its TLS sessions.
+            ConversionOptions options;
+            const auto keyLog = capture.dir().filePath( name + ".keys" );
+            if ( QFile::exists( keyLog ) ) {
+                options.keyLogPath = keyLog;
+            }
+            const auto result = convertPcap( capture.filePath(), out.path(), nullptr, {}, options );
             REQUIRE( result.status == ConversionResult::Status::Converted );
             const auto outPath = result.outputPath;
 

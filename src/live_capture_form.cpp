@@ -190,7 +190,7 @@ LiveChoice LiveCaptureForm::choice() const
          kind && kind->devices() != LiveSourceKind::Devices::None ) {
         choice.device = currentId( device_ );
     }
-    choice.interface = currentId( interface_ );
+    choice.networkInterface = currentId( interface_ );
     choice.filter = filter_->text().trimmed();
     choice.snaplen = snaplen_->value();
     if ( options_ ) {
@@ -262,7 +262,7 @@ void LiveCaptureForm::sourceChanged()
         device_->setEditText( wanted_.device );
     }
     if ( kind && wanted_.source == kind->id() ) {
-        interface_->setEditText( wanted_.interface );
+        interface_->setEditText( wanted_.networkInterface );
     }
 
     const auto availability = kind ? kind->availability() : LiveAvailability{};
@@ -333,7 +333,7 @@ void LiveCaptureForm::listInterfaces()
         [ kind, device ] { return kind->listInterfaces( device, LiveSourceKind::kListTimeout ); },
         [ this, kind ]( const LiveListing& listing ) {
             const auto typed = interface_->currentText();
-            const auto wanted = wanted_.source == kind->id() ? wanted_.interface : QString();
+            const auto wanted = wanted_.source == kind->id() ? wanted_.networkInterface : QString();
             fill( interface_, listing, wanted );
             // An interface typed, or remembered, that is not listed stays.
             if ( interface_->findData( wanted ) < 0 && !wanted.isEmpty() ) {

@@ -41,7 +41,7 @@ have the log open in.
 | :--- | :--- |
 | **pcap and pcapng files.** `.pcap`, `.pcapng`, `.cap`, `.dmp`, both endiannesses, microsecond and nanosecond timestamps, with a text preamble scan for `adb exec-out tcpdump` output. pcapng captures from Wireshark or macOS's `tcpdump -P` may mix interfaces of different link types and timestamp resolutions, and hold several sections. Read packet by packet in the background, so multi-GB captures work and can be cancelled. | **Wireshark-style columns.** No., Stream, UTC Time (`2026-10-09 08:41:12.123456Z`, the packet's wall-clock time in UTC), Time (since the first packet), Source, Destination, Protocol, Length (on the wire), Info — TCP flags in bracket notation, sequence and acknowledgement numbers relative to the start of each direction as in Wireshark (the SYN is `Seq=0`), the window scaled once both SYNs negotiated window scaling, a SYN's options as Wireshark shows them (`MSS=1460 SACK_PERM TSval=… TSecr=0 WS=128`), the handshake's initial round-trip time on the ACK that completes it (`[iRTT=0.012345]`), and Wireshark's TCP analysis markers at the start of Info in its words — `[TCP Retransmission]`, `[TCP Fast Retransmission]`, `[TCP Dup ACK 7#1]`, `[TCP Out-Of-Order]`, `[TCP Window Full]`, `[TCP ZeroWindow]`, `[TCP Keep-Alive]` and more — so highlighters and filters written for Wireshark carry over; a packet cut at the snaplen is marked `[cut to N bytes]`. |
 | **Protocol dissection.** IPv4, IPv6 with its extension headers, TCP, UDP, ICMP, ICMPv6 and ARP; IP fragments after the first are shown as such. VXLAN, GRE and IP-in-IP tunnels are unwrapped: a tunnelled packet is shown by the packet inside, its stream keyed by the inner addresses and ports, the tunnel named first in Info (`VXLAN VNI 100 | 50000 → 8080 [SYN] Seq=0 Win=64240`, `GRE | …`, `IPv6-in-IPv4 | …`), at most 4 tunnels deep. ICMP and ICMPv6 in Wireshark's words: echoes with their id and seq (`Echo (ping) request id=0x1234, seq=7`), error messages with their code and the packet they quote (`Destination unreachable (Port unreachable) for 10.0.0.1:51234 → 192.168.1.5:53 UDP`), neighbor discovery with its target, link-layer address and flags. | **Conversations, not packets.** TCP and UDP stream numbers from addresses and ports, so both directions filter together; numbered per transport like Wireshark's `tcp.stream` and `udp.stream`, other packets show `-`. Once a stream's protocol is recognised (TLS, HTTP, …), every later packet of it carries that Protocol label, those in the middle of a body or a record that is not reassembled described as `Continuation`. |
-| **Application layers.** TLS records, every one in a segment, with the server name (SNI), version and ALPN of a hello, QUIC packets on UDP with their type, version and connection IDs (short headers known from their connection's long headers), HTTP requests with their host and responses with their content type and length, HTTP/2 (cleartext) by its connection preface and the frames that follow, with their types and streams, DNS queries and responses with their transaction id, query type and answers, over UDP and TCP, DHCP messages with their type, transaction id, client MAC, address and host name (`DHCP Offer - Transaction ID 0x3903f326, 192.168.1.50 for 00:11:22:33:44:55`), DHCPv6 messages with their type and client DUID, NTP packets with their version, mode and stratum (`NTP Version 4, server, stratum 2`), NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials, MQTT 3.1.1 and 5.0 control packets (TCP 1883, or any port behind a CONNECT), every one in a segment, with client id, topic, QoS, packet id, reason code and a payload preview (`Publish Message (QoS 1, id=2) [alerts/door] "open"`), SIP requests and responses on any port, over UDP and TCP, with CSeq, Call-ID and their SDP bodies (`Status: 200 OK (INVITE), CSeq 1, Call-ID a84b4c76e667…, SDP (audio 3456 RTP/AVP 0)`), RTP and RTCP on the addresses and ports SDP announced (`PT=PCMU, SSRC=0x1234ABCD, Seq=1000, Time=8000`, `Sender Report, Source description`), SOME/IP over UDP and TCP on port 30490, on configured ports and wherever its header fits, every message of a datagram or segment, with its IDs, message type and return code (`Service 0x1234 Method 0x0001 Client 0x0010 Session 0x0001 ERROR (E_NOT_OK), 0 bytes`, names from an optional name table), and SOME/IP-SD entries with their endpoint options (`Offer Service 0x1234 Instance 0x0001 v1.0 TTL=3 (192.0.2.10:30501 UDP)`, `Subscribe Eventgroup Ack …`), and DoIP (ISO 13400-2) on UDP and TCP port 13400, every message of a datagram or segment as Wireshark names it, vehicle announcements with their VIN, logical address, EID and GID, routing activation with its source address, type and response code, and diagnostic messages with their addresses and the UDS service, sub-function and negative response code they carry (`Diagnostic message 0x0E00 → 0x1000, UDS ReadDataByIdentifier 0xF190`, `UDS Negative Response ReadDataByIdentifier NRC=0x31 (requestOutOfRange)`). A TLS record, an HTTP header section, a DNS-over-TCP message, a SIP message, an MQTT packet on port 1883, a SOME/IP message or a DoIP message that spans TCP segments is reassembled and described once, on the segment that completes it (`Client Hello, SNI=example.com, TLS 1.3 [reassembled from 3 segments]`), the segments before it as `[TCP segment of a reassembled PDU]`; segments are put in sequence order, retransmissions and overlaps dropped, within bounded memory. | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
+| **Application layers.** TLS records, every one in a segment, with the server name (SNI), version and ALPN of a hello, QUIC packets on UDP with their type, version and connection IDs (short headers known from their connection's long headers), HTTP requests with their host and responses with their content type and length, HTTP/2 (cleartext) by its connection preface and the frames that follow, with their types and streams, DNS queries and responses with their transaction id, query type and answers, over UDP and TCP, DHCP messages with their type, transaction id, client MAC, address and host name (`DHCP Offer - Transaction ID 0x3903f326, 192.168.1.50 for 00:11:22:33:44:55`), DHCPv6 messages with their type and client DUID, NTP packets with their version, mode and stratum (`NTP Version 4, server, stratum 2`), NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials, MQTT 3.1.1 and 5.0 control packets (TCP 1883, or any port behind a CONNECT), every one in a segment, with client id, topic, QoS, packet id, reason code and a payload preview (`Publish Message (QoS 1, id=2) [alerts/door] "open"`), SIP requests and responses on any port, over UDP and TCP, with CSeq, Call-ID and their SDP bodies (`Status: 200 OK (INVITE), CSeq 1, Call-ID a84b4c76e667…, SDP (audio 3456 RTP/AVP 0)`), RTP and RTCP on the addresses and ports SDP announced (`PT=PCMU, SSRC=0x1234ABCD, Seq=1000, Time=8000`, `Sender Report, Source description`), SOME/IP over UDP and TCP on port 30490, on configured ports and wherever its header fits, every message of a datagram or segment, with its IDs, message type and return code (`Service 0x1234 Method 0x0001 Client 0x0010 Session 0x0001 ERROR (E_NOT_OK), 0 bytes`, names from an optional name table), and SOME/IP-SD entries with their endpoint options (`Offer Service 0x1234 Instance 0x0001 v1.0 TTL=3 (192.0.2.10:30501 UDP)`, `Subscribe Eventgroup Ack …`), and DoIP (ISO 13400-2) on UDP and TCP port 13400, every message of a datagram or segment as Wireshark names it, vehicle announcements with their VIN, logical address, EID and GID, routing activation with its source address, type and response code, and diagnostic messages with their addresses and the UDS service, sub-function and negative response code they carry (`Diagnostic message 0x0E00 → 0x1000, UDS ReadDataByIdentifier 0xF190`, `UDS Negative Response ReadDataByIdentifier NRC=0x31 (requestOutOfRange)`). A TLS record, an HTTP header section, a DNS-over-TCP message, a SIP message, an MQTT packet on port 1883, a SOME/IP message or a DoIP message that spans TCP segments is reassembled and described once, on the segment that completes it (`Client Hello, SNI=example.com, TLS 1.3 [reassembled from 3 segments]`), the segments before it as `[TCP segment of a reassembled PDU]`; segments are put in sequence order, retransmissions and overlaps dropped, within bounded memory. With an `SSLKEYLOGFILE`, TLS 1.2 and 1.3 sessions are [decrypted](#tls-decryption) and the HTTP/1.1 and HTTP/2 inside described, HPACK decoded (`TLS (decrypted) \| GET example.com/ HTTP/1.1`). | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
 | **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback (DLT_NULL, DLT_LOOP); Wi-Fi (802.11, with or without a Radiotap header), PPP, Cisco HDLC and PPPoE; stacked 802.1Q and QinQ tags stripped transparently. 802.11 management and control frames are named as Wireshark names them, between MAC addresses (`Beacon frame, SN=1000, FN=0, BI=100, SSID="HomeNet"`, `Probe Request`, `Authentication`, `Request-to-send`); data frames reach IP through LLC/SNAP, encrypted ones show as `QoS Data, SN=6, FN=0, Protected`. PPP and PPPoE sessions reach IP; LCP, IPCP, IPv6CP, PAP and CHAP are named with their message (`Configuration Request`, `Echo Reply`, `Authenticate-Request`, no credentials), PPPoE discovery with its stage (`Active Discovery Offer (PADO) AC-Name='isp'`). | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second, file size and the TCP analysis markers per kind. |
 
 Packets that are not dissected further are named, not numbered: IP protocols
@@ -351,6 +351,7 @@ opens its options:
 | Show TCP timestamps (TSval, TSecr) on every segment | off: on SYNs only, among their options | on: every segment with the option, as Wireshark shows it |
 | SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
 | SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
+| TLS decryption: key log file | none | an `SSLKEYLOGFILE` to decrypt TLS sessions with, see [TLS decryption](#tls-decryption) |
 | Streams numbered at most (Advanced) | 1,000,000 | 1 to 10,000,000; later streams show `?` |
 | Endpoints counted at most (Advanced) | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
 | TCP reassembly memory at most (Advanced) | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]` |
@@ -381,6 +382,59 @@ read every layout. Two options change the column layout:
 
 The payload preview, the TCP timestamps and the caps change only what Info says or which
 streams are numbered, not the columns.
+
+### TLS decryption
+
+With a key log, the plugin decrypts the TLS sessions it has the secrets
+of, and describes what they carry, as Wireshark does with *(Pre)-Master-
+Secret log filename*:
+
+```
+8      0  …  HTTP      171    50101 → 443 [ACK, PSH] Seq=194 Ack=628 Win=64240 Len=117 | TLS (decrypted) | GET www.example.com/index.html HTTP/1.1
+21     1  …  HTTP2     165    443 → 50102 [ACK, PSH] Seq=677 Ack=293 Win=64240 Len=111 | TLS (decrypted) | SETTINGS[0], SETTINGS[0], HEADERS[1]: 200, Content-Type: application/javascript, Content-Length: 12, DATA[1]
+```
+
+1. Have the client write its secrets: browsers (Firefox, Chrome), curl and
+   applications on OpenSSL write them to the file the environment variable
+   `SSLKEYLOGFILE` names, e.g. `SSLKEYLOGFILE=~/sslkeys.log firefox`
+2. Choose that file under *TLS decryption* in the plugin's
+   [options](#options), and open the capture (again)
+
+A segment with a record decrypted says `TLS (decrypted)` before what the
+records hold: HTTP/1.1 requests and responses, as for plain HTTP, labelled
+`HTTP`; HTTP/2 frames with the requests (`:method`, `:authority`, `:path`)
+and responses (`:status`, `Content-Type`, `Content-Length`) of their header
+blocks decoded (HPACK), labelled `HTTP2`; the encrypted handshake messages
+(`Encrypted Extensions, Certificate, …, Finished`) and alerts
+(`Alert: close_notify`). Sessions the key log has no secrets for, or wrong
+ones, keep their lines as without a key log. The sidebar summary counts the
+sessions decrypted, or says why the key log could not be read.
+
+- **Versions and cipher suites**: TLS 1.2 with AES-GCM, ChaCha20-Poly1305
+  and AES-CBC with HMAC (encrypt-then-MAC too), with any key exchange, as
+  the key log gives the master secret (`CLIENT_RANDOM`); TLS 1.3 with
+  AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (the handshake and
+  application traffic secrets, `*_TRAFFIC_SECRET*`), key updates followed.
+  Not decrypted: TLS 1.0 and 1.1, TLS 1.3 early data (0-RTT), a TLS 1.2
+  renegotiation's new keys, QUIC
+- **Records**, put together across segments by the TCP reassembly; a record
+  the capture lost is passed over, and the next ones are still decrypted
+- **During a live capture** the key log is read again as the browser adds
+  to it (at most twice a second)
+- **Memory**: a session keeps its keys and sequence numbers, no data; at
+  most 65,536 sessions are followed, and HTTP/2 header decoding takes at
+  most 32 MB, all sessions together
+
+**Security.** The key log decrypts every session whose secrets it holds:
+keep it as private as the traffic itself, and delete it when done. The
+plugin only reads it, while converting, and keeps the secrets in memory
+only, wiped when the conversion ends; it never writes, copies, logs or
+shows them. The text it writes holds what was decrypted, in the private
+temporary directory of the converted captures.
+
+The cryptography is [Mbed TLS](https://github.com/Mbed-TLS/mbedtls) 3.6
+(Apache-2.0 or GPL-2.0-or-later, see [NOTICE](NOTICE)), built into the
+plugin: nothing more to install.
 
 ### Log Format
 
@@ -466,7 +520,8 @@ The filters:
 Each pattern reads the columns, so it never matches a word that only
 appears in Info's payload text: a Protocol is read from the Protocol
 column, TCP flags from the bracket right after the ports, an HTTP status
-or a DNS response code from the description after the first ` | `. A
+or a DNS response code from the description after the first ` | ` (after
+`TLS (decrypted) | ` for [decrypted](#tls-decryption) HTTP). A
 tunnelled packet is matched by the packet inside: the tunnels Info names
 first (`VXLAN VNI 100 | `, `GRE | `, …) are skipped. They match in every
 choice of [columns](#options).
@@ -539,6 +594,8 @@ No.    Stream  UTC Time                     Time           Source               
 - **Qt6** (Core, Concurrent, Widgets) — same version LogSquirl was built with
 - **CMake** ≥ 3.16
 - A C++17-capable compiler (GCC ≥ 9, Clang ≥ 14, MSVC ≥ 19.29)
+- Network access at configure time: CMake fetches Mbed TLS 3.6.7 (and,
+  for the tests, Catch2), pinned to its release and checked by its hash
 
 ## Build
 
@@ -607,3 +664,6 @@ GPL-3.0-or-later — see [LICENSE](LICENSE) for the full license text.
 The vendored `include/logsquirl_plugin_api.h` header is MIT-licensed, so
 plugins of any license can build against the LogSquirl Plugin SDK without
 taking on GPL obligations. See [NOTICE](NOTICE) for details.
+
+The plugin links in parts of Mbed TLS (Apache-2.0 or GPL-2.0-or-later,
+taken under the GPL) for the TLS decryption; see [NOTICE](NOTICE).

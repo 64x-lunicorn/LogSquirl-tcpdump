@@ -47,7 +47,7 @@ namespace tcpdump {
 
 QString LiveSourceKind::validate( const LiveChoice& choice ) const
 {
-    if ( choice.interface.trimmed().isEmpty() ) {
+    if ( choice.networkInterface.trimmed().isEmpty() ) {
         return QStringLiteral( "Choose an interface." );
     }
     return {};
@@ -259,7 +259,7 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
 QString liveCaptureName( const LiveChoice& choice )
 {
     QStringList parts;
-    for ( const auto& part : { choice.device.trimmed(), choice.interface.trimmed() } ) {
+    for ( const auto& part : { choice.device.trimmed(), choice.networkInterface.trimmed() } ) {
         if ( !part.isEmpty() ) {
             parts << part;
         }

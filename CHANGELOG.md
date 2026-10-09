@@ -52,6 +52,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (its program is killed) instead of waiting up to its 10 s timeout. A
   source may have options of its own, shown in the form while it is
   chosen and remembered per source in `settings.ini`
+- **TLS decryption with an `SSLKEYLOGFILE`.** The new option *TLS
+  decryption: key log file* takes the key log browsers, curl and OpenSSL
+  applications write (NSS format: `CLIENT_RANDOM` for TLS 1.2, the
+  handshake and application traffic secrets for TLS 1.3). The TLS sessions
+  it has the secrets of are decrypted, record by record as the TCP
+  reassembly puts them together, and described:
+  `TLS (decrypted) | GET www.example.com/index.html HTTP/1.1`, labelled
+  `HTTP`; HTTP/2 frames with their header blocks decoded (HPACK),
+  `HEADERS[1]: GET example.org/app.js`, `HEADERS[1]: 200, Content-Type: …`,
+  labelled `HTTP2`; the encrypted handshake messages and alerts. TLS 1.2
+  with AES-GCM, ChaCha20-Poly1305 and AES-CBC with HMAC (encrypt-then-MAC
+  too), TLS 1.3 with AES-GCM and ChaCha20-Poly1305 and its key updates; a
+  lost record is passed over. Sessions without secrets, or with wrong ones,
+  keep their lines. A live capture reads the key log again as it grows.
+  The secrets are read only, kept in memory for the conversion and wiped,
+  never written or shown; a session keeps its keys and sequence numbers,
+  no data, 65,536 sessions at most. The sidebar summary counts the
+  sessions decrypted. The cryptography is Mbed TLS 3.6.7, fetched by the
+  build at that release and hash and linked in (NOTICE).
 - **Follow stream content.** The Packet Panel's new **Stream** tab shows
   the payload of the selected packet's TCP or UDP conversation, as
   Wireshark's *Follow TCP/UDP Stream* does: the client's bytes in red, the
@@ -315,6 +334,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/make_doip_corpus.py`), shows each case.
 
 ### Changed
+- The *HTTP* filter and the *HTTP 4xx/5xx* highlighter also match
+  decrypted HTTP/1.1 lines, `… | TLS (decrypted) | GET …`.
 - A segment that ends inside a TLS record, an HTTP header section, a
   DNS-over-TCP message, a SIP message or an MQTT packet on port 1883 no
   longer names the message as far as it goes
