@@ -95,8 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
   DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
   control packet on port 1883 (by its Remaining Length), a SOME/IP
-  message (by its Length) or a DoIP message on port 13400 (by its payload
-  length) that spans TCP segments is described once, on the
+  message (by its Length), a DoIP message on port 13400 (by its payload
+  length), an SSH packet of the key exchange (by its packet_length,
+  only before the direction's NEWKEYS), a WebSocket frame (by its
+  payload length, on an upgraded stream) or an SMB message on port 445 or
+  139 (by its NetBIOS Session Service length) that spans TCP segments is
+  described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
   example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
@@ -305,6 +309,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message that spans segments is reassembled by its payload length. A new
   synthetic capture, `tests/corpus/doip.pcap` (written by
   `tests/make_doip_corpus.py`), shows each case.
+- **SSH described: banners, the key exchange and encrypted packets.** SSH
+  is told by its banner on any TCP port, port 22 as a hint, labelled
+  `SSHv2` (`SSHv1` for an SSH 1.x banner), and described as Wireshark
+  describes it, per direction: `Client: Protocol (SSH-2.0-OpenSSH_9.6)`,
+  `Client: Key Exchange Init kex=curve25519-sha256,… hostkey=ssh-ed25519,…
+  cipher=chacha20-poly1305@openssh.com,…` (all ten name-lists read, the
+  key exchange, host key and cipher lists shown by their first name),
+  `Elliptic Curve Diffie-Hellman Key Exchange Init/Reply`, the
+  Diffie-Hellman group exchange, `New Keys`, and every packet a direction
+  sends after its NEWKEYS as `Encrypted packet (len=64)`; the stream
+  remembers each direction's phase. On port 22 a connection whose key
+  exchange the capture lacks is shown as `SSH` `Encrypted packet (len=n)`.
+  A packet_length or padding_length the unencrypted phase does not allow
+  is `[Malformed Packet]`, every field is read within the captured bytes,
+  a cut message ends in `…`, and a KEXINIT or key exchange reply that
+  spans segments is reassembled. A new synthetic capture,
+  `tests/corpus/ssh.pcap` (written by `tests/make_ssh_corpus.py`), shows
+  each case.
+- **WebSocket described: the upgrade and its frames.** The `GET … Upgrade:
+  websocket` request and the `101 Switching Protocols` response stay HTTP,
+  the response showing its `Upgrade` and `Sec-WebSocket-Extensions`
+  (`permessage-deflate`); every later segment of the stream, on any port,
+  is `WebSocket`, its frames named as Wireshark names them, every one of a
+  segment: `WebSocket Text [FIN] [MASKED] len=5 "Hello"` (a client's text
+  unmasked for the preview), `WebSocket Binary [FIN] len=300`,
+  `Continuation`, `Ping`, `Pong`, `WebSocket Connection Close [FIN] len=5
+  Normal Closure (1000) "bye"`, a compressed message `[COMPRESSED]`.
+  Lengths of 7, 16 and 64 bits are read; a control frame without FIN or
+  longer than 125 bytes, a reserved opcode or a close with a one-byte
+  payload is `[Malformed Packet]`, a cut frame ends in `…`, and a frame
+  that spans segments is reassembled. Detection is by the upgrade in the
+  same stream, not by port. A new synthetic capture,
+  `tests/corpus/websocket.pcap` (written by
+  `tests/make_websocket_corpus.py`), shows each case.
+- **SMB2/3 described.** SMB on TCP port 445 and over NetBIOS on 139 (and
+  on any port behind an NBSS header with an SMB protocol ID) is labelled
+  `SMB2` and every command of a segment, compounded ones too, up to eight,
+  is named as Wireshark names it, with its fields: `Negotiate Protocol
+  Request Dialects: 2.0.2, 2.1, 3.0, 3.0.2, 3.1.1`, `Negotiate Protocol
+  Response Dialect: 3.1.1`, `Session Setup Response, Error:
+  STATUS_MORE_PROCESSING_REQUIRED`, `Tree Connect Request Tree:
+  \\server\share`, `Create Request File: dir\file.txt`, `Read Request
+  Len:65536 Off:0`, `Write Request …`, `Ioctl Request
+  FSCTL_VALIDATE_NEGOTIATE_INFO`, `Find Request
+  SMB2_FIND_ID_BOTH_DIRECTORY_INFO Pattern: *`, `Close`, `Notify`,
+  `GetInfo` and the others; a failed response names its NT status
+  (`STATUS_ACCESS_DENIED`, `STATUS_OBJECT_NAME_NOT_FOUND`, …). Names are
+  decoded from UTF-16 and capped. An encrypted message is `Encrypted
+  SMB3`, a compressed one `Compressed SMB3, LZ77, Original size …`, SMB1
+  is labelled `SMB` with its command only, NBSS session setup on port 139
+  `NBSS`. Every length and offset is checked against the message and the
+  captured bytes; a wrong header size, a NextCommand or name beyond the
+  message is `[Malformed Packet]`, a cut message ends in `…`, and a
+  message that spans segments is reassembled. A new synthetic capture,
+  `tests/corpus/smb.pcap` (written by `tests/make_smb_corpus.py`), shows
+  each case.
 
 ### Changed
 - The *HTTP* filter and the *HTTP 4xx/5xx* highlighter also match
@@ -330,6 +390,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The Process Source tests wait for the fake capture programs to signal
   that they are ready instead of timing them, so they no longer fail on a
   loaded machine (#94).
+- **A message past the reassembly limit is skipped to its end.** When a
+  framed message (a WebSocket frame, an MQTT packet, an SMB2 Read
+  response, a TLS record, …) is longer than the 64 KB a stream direction
+  holds, its first segment is still marked `[reassembly limit]`, but the
+  segments after it are no longer read as if a new message began at their
+  first byte (random frames, `[Malformed Packet]`): the direction keeps
+  where the message ends, as its header announced (up to 1 GiB, 128 bytes
+  of the reassembly memory), labels the segments up to there `[continuation
+  of a message past the reassembly limit]` with its protocol, and
+  describes the next message normally, also when it begins inside the
+  segment that ends the large one. Segments lost, out of order or cut at
+  the snaplen inside it change nothing; if the segment where it ends is
+  lost, the stream resynchronises on the next segment that begins a
+  message, as before (#95).
 
 ## [0.3.0] — 2026-10-09
 

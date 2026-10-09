@@ -383,12 +383,18 @@ port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
 `describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`),
 `describe_someip.cpp` (SOME/IP and SOME/IP-SD, and the name table of
 `someip.h`), `describe_doip.cpp` (DoIP and the UDS messages of its
-diagnostic messages) and `describe_nmea.cpp`. They share the internal
+diagnostic messages), `describe_ssh.cpp` (SSH's banner and key exchange,
+and its phases in the stream), `describe_websocket.cpp` (WebSocket frames
+on a stream an HTTP upgrade made WebSocket; no detector, as nothing in a
+frame tells it), `describe_smb.cpp` (SMB2/3 and SMB1 in NetBIOS Session
+Service messages) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, DoIP on port 13400, SOME/IP on its ports, TLS, SIP (before HTTP, whose
+- TCP: DNS on port 53, DoIP on port 13400, SMB (on ports 445 and 139, or
+  by its protocol ID behind an NBSS header), SOME/IP on its ports, SSH (its
+  banner or key exchange on any port, anything on port 22), TLS, SIP (before HTTP, whose
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
@@ -401,7 +407,11 @@ of the detectors and in-stream passes the tables use.
   only in the header section (before the empty line), on a whole line the
   segment holds up to its line feed, its name in any case; its value is
   shown without the blanks around it, escaped and cut like every field.
-  SSDP (UDP 1900) is described the same way
+  A `101` response also shows its `Upgrade` and `Sec-WebSocket-Extensions`
+  headers, `HTTP/1.1 101 Switching Protocols, Upgrade: websocket,
+  Sec-WebSocket-Extensions: permessage-deflate`, and one whose Upgrade is
+  `websocket` (any case) gives its stream `StreamCue::WebSocketUpgrade`
+  (`isWebSocketUpgrade()`). SSDP (UDP 1900) is described the same way
 - HTTP/2: the connection preface, `PRI * HTTP/2.0`, is labelled `HTTP2`
   and described as `Magic`, then the frames behind it in the segment. A
   frame is named with its type and stream, `HEADERS[1]`, Wireshark's way,
@@ -517,6 +527,91 @@ of the detectors and in-stream passes the tables use.
   service needs. Every field is read with a `FieldReader` within the
   message's captured bytes; a message cut at the snaplen or the segment
   ends in ` …`. Over TCP, `frameDoipMessage()` frames a message by its
+  payload length for the TCP Reassembly
+- SMB (MS-SMB2), on TCP ports 445 and 139 (a segment without payload stays
+  TCP), elsewhere only a payload that begins with an NBSS session message
+  holding an SMB protocol ID (`beginsWithSmb()`): every NetBIOS Session
+  Service message of a segment (RFC 1002; direct TCP on 445 has the same
+  4-byte header, its length 24 bits), labelled by the first: `SMB2` (SMB2
+  and SMB 3, as Wireshark labels both), `SMB` (SMB1) or `NBSS` (`Session
+  request`, `Positive session response`, … on port 139). An SMB2 message
+  names every command, compounded ones by their NextCommand too, up to
+  eight in a segment, joined by `; `, then `…`: the command as Wireshark
+  names it (`Negotiate Protocol`, `Session Setup`, `Tree Connect`,
+  `Create`, `Read`, `Write`, `Ioctl`, `Find`, `Notify`, `GetInfo`, …,
+  `Unknown command 0xNNNN`), `Request` or `Response` by the header's
+  flag, then its fields: the dialects offered and the one picked
+  (`Dialects: 2.0.2, 2.1, 3.0, 3.0.2, 3.1.1`, `Dialect: 3.1.1`), `Tree:
+  \\server\share`, `File: dir\file.txt`, `Len:65536 Off:0` of a read or
+  write, the FSCTL of an ioctl, the information class and `Pattern:` of a
+  find, the information type and class of GetInfo and SetInfo. A response
+  with a status other than 0 shows `, Error: ` and its NT status name
+  (`STATUS_MORE_PROCESSING_REQUIRED`, `STATUS_ACCESS_DENIED`, a table of
+  the common ones; another is `Unknown (0xC0001234)`) instead of its
+  fields. Names are UTF-16LE, decoded to UTF-8 with at most kMaxFieldBytes
+  characters, then `…`; a backslash stays one, a control character or an
+  unpaired surrogate is escaped. An SMB 3 transform header is `Encrypted
+  SMB3`, a compression transform header `Compressed SMB3, LZ77, Original
+  size 4096`; SMB1 is named by its command only (`Negotiate Protocol
+  Request`). A header whose structure size is not 64, a NextCommand
+  shorter than a header or beyond the message, a name or dialect list
+  beyond its command is `[Malformed Packet]`, and nothing after it is
+  read; a message cut at the snaplen or the segment ends in ` …`. A
+  segment on SMB's ports that begins with no NBSS message is only
+  guessed SMB (or NBSS), without a preview. Over TCP, `frameSmbMessage()`
+  frames an NBSS message by its length for the TCP Reassembly; a message
+  larger than the reassembly's limit (a big read or write) is not
+  described (#95)
+- SSH (RFC 4253), on TCP: a payload that begins with an identification
+  string, `SSH-` and a protocol version, digits, a dot, digits, and a
+  dash, on any port, is `Client: Protocol (SSH-2.0-OpenSSH_9.6)` (the
+  line without its CR LF, cut as a field; a line that has not ended
+  yet `…`), labelled `SSHv2` for the versions 2.0 and 1.99, `SSHv1` for
+  another 1.x. The side is the server's on port 22, else on the lower
+  port. The binary packets of the unencrypted phase follow the banner or
+  stand alone, each named as Wireshark names its message, up to eight,
+  joined by `, `: `Key Exchange Init` with the first name of its key
+  exchange, host key and client-to-server cipher lists and `,…` when more
+  follow (`kex=curve25519-sha256,… hostkey=ssh-ed25519,…
+  cipher=chacha20-poly1305@openssh.com,…`; all ten name-lists are read
+  and must be printable US-ASCII without spaces), `New Keys`, `Elliptic
+  Curve Diffie-Hellman Key Exchange Init/Reply` for messages 30 and 31
+  (the hybrid and plain Diffie-Hellman methods share their layout and are
+  named so too; a stream keeps no record of the method), the
+  Diffie-Hellman group exchange's `Request (Old)` and `Group` told from
+  them by their layout, its `Request`, `Init` and `Reply`, `Disconnect`,
+  `Ignore`, `Debug`, `Service Request`, `Extension Information` and the
+  rest of the transport layer. A packet's packet_length must be 12 to
+  34,996 and a multiple of 8 less 4, its padding_length 4 or more and
+  within it, else `Invalid packet length n` or `Invalid padding length n
+  [Malformed Packet]`; every field of a message is read with a
+  `FieldReader` within the captured bytes, a message whose fields
+  overrun its payload is `[Malformed Packet]`, one cut short ends in ` …`.
+  After a NEWKEYS the rest of the payload is `Encrypted packet (len=n)`.
+  Without a banner before them, packets are only taken for SSH if every
+  one is whole and of the transport layer (the last may be cut if it is a
+  KEXINIT or follows a whole one); on port 22 anything else is the guess
+  `SSH`, `Client: Encrypted packet (len=n)` (a connection whose key
+  exchange the capture did not see). The banner gives its stream
+  `StreamCue::SshBanner`, a NEWKEYS `StreamCue::SshNewKeys`; see
+  `describeInStream()` and `rememberInStream()` for what the stream makes of
+  them, and the TCP Reassembly for how `frameSshMessage()` frames them
+- WebSocket (RFC 6455), on TCP, only on a stream an HTTP 101 response
+  with `Upgrade: websocket` upgraded (no port, no detector): every frame
+  of a segment as Wireshark names it, up to eight, joined by `, `, then
+  `…`: `WebSocket` and its opcode (`Text`, `Binary`, `Continuation`,
+  `Connection Close`, `Ping`, `Pong`, else `Unknown 0x03`), `[FIN]`,
+  `[MASKED]`, `[COMPRESSED]` (RSV1, a permessage-deflate message, whose
+  bytes are not shown), `len=n` from the 7-, 16- or 64-bit length, then
+  for text the first 40 bytes of the payload, unmasked, quoted and escaped
+  (`"Hello"`, `"…"…` when longer) and for a close its status code, named
+  as Wireshark names it (`Normal Closure (1000)`, else `Status 4000`), and
+  its reason. A control frame without FIN, longer than 125 bytes or
+  compressed, a reserved opcode, a close with a one-byte payload and a
+  64-bit length with its top bit set are `[Malformed Packet]`, and the
+  bytes after them are not read as frames; a frame whose header is cut ends
+  in ` …`. `describeWebSocketFrames()` reads the captured bytes only;
+  `frameWebSocketFrame()` frames a frame by its header (2 to 14 bytes) and
   payload length for the TCP Reassembly
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
@@ -642,7 +737,8 @@ of the detectors and in-stream passes the tables use.
   (fixed bit, no long header bit, long enough for header protection) QUIC,
   `Protected Payload, DCID=…`, replacing the description after the
   ` | ` separator (`kDescriptionSeparator`). Likewise it records in
-  `StreamState::http2` that a TCP stream began with the HTTP/2 preface,
+  `StreamState::protocols` (bit `kHttp2`) that a TCP stream began with
+  the HTTP/2 preface,
   and labels the stream's later segments `HTTP2` when they begin with
   frame headers, naming the frames whose header lies in the kept bytes.
   A segment that begins inside a frame (its first bytes no plausible
@@ -655,6 +751,30 @@ of the detectors and in-stream passes the tables use.
   that, not the label's text, is what `describeInStream()` goes by. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
+- SSH's phases are kept in `StreamState::protocols`: bit
+  `kSshBannerSeen`, an SSH-2 banner was seen; bit `sshEncrypted(d)`,
+  direction d sent its NEWKEYS. Every protocol a stream is found to speak
+  (HTTP/2, MQTT, SSH, WebSocket) takes bits of this one byte, named on
+  `StreamState`, not a field of its own: `StreamState` is paid once per
+  numbered stream (two bytes and the bits 0x40 and 0x80 are left). A NEWKEYS
+  may complete a message the TCP Reassembly put together (a key exchange
+  reply too long for one segment), so the bits are set by
+  `rememberInStream()`, which the Converter runs after the reassembly, from
+  the packet's `StreamCue` as the reassembly left it (`describeMessages()`
+  takes the cue of the reassembled description, a segment of a message
+  has none). `describeInStream()`, before the reassembly, goes by the bits
+  as the stream's earlier packets left them: a direction past its NEWKEYS
+  is `SSHv2`, `Client: Encrypted packet (len=n)`, n the segment's payload
+  length, whatever the detectors made of it; before it, a segment no
+  detector recognised (cut, malformed, on a port other than 22) is read as
+  the binary packets in its first kPayloadHeadBytes
+- WebSocket's upgrade is kept in `StreamState::protocols` too, bit
+  `kWebSocket`, set by `rememberInStream()` from a 101 response's
+  `StreamCue::WebSocketUpgrade` (the response may be reassembled). After
+  it, `describeInStream()` labels every segment with payload `WebSocket`
+  and describes the frames in its first kPayloadHeadBytes, whatever the
+  detectors made of it; the TCP Reassembly then describes them from all
+  the bytes
 - The port hint, the last entry of both tables, names the service of a
   well-known port from the name tables, the source port's before the
   destination port's, and previews the payload: printable ASCII, other
@@ -888,7 +1008,27 @@ another port is not reassembled), a SOME/IP message by its Length (8 + its
 value; on SOME/IP's ports whatever the header says, elsewhere if the header
 keeps to the rules and the message is at most 1 MiB), a DoIP message by its
 payload length (8 + its value; port 13400 only, if the header keeps to the
-pattern of version and inverse version). A framer answers more
+pattern of version and inverse version), an NBSS message by its length (4
++ its value; on ports 445 and 139 any NBSS message, elsewhere a session
+message that holds an SMB protocol ID), SSH as far as the stream's phase
+lets it (`tcpMessageExtent()` takes the `Stream`, `sshPhaseOf()` reads
+`StreamState::protocols`): a banner to its line end on any port, a binary packet
+by its packet_length (4 + its value) once a banner was seen or framed
+before it in the bytes, a NEWKEYS with all the bytes after it, and in a
+direction past its NEWKEYS all its bytes as one whole message, so that no
+other framer takes an encrypted packet for the start of one of its own;
+a stream on port 22 whose banner the capture did not see is not framed,
+as its packets may be encrypted ones whose length is in the clear, and on
+a stream upgraded to WebSocket (`StreamState::kWebSocket`), first and
+alone, as the stream carries nothing else, a WebSocket frame by its header
+and payload length. Nothing in a WebSocket frame tells it, so the parser
+cannot describe it: its framer marks its extents
+`MessageExtent::describedInStream`, and the reassembly describes a
+segment of whole frames too, from all its bytes, and reassembled frames by
+`describeTcpMessages()`, which knows the framer, not by
+`describePayload()`. A frame longer than the direction's limit is
+`[reassembly limit]`, and the rest of it skipped (below), so that its
+later segments are not read as frames from their first byte. A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -933,14 +1073,32 @@ MiB) or the option *TCP reassembly memory at most*
 the messages the last segment completed are kept until the next one (at
 most a direction's limit). A message longer than a direction's limit, or
 one that outgrows it, is not held: its segment keeps its own description,
-followed by `[reassembly limit]`. When the global limit would be passed,
+followed by `[reassembly limit]`. When the message's header announced its
+length (the framer answered more than one byte past those given), the
+direction skips the rest of it instead (`TcpReassembly::skip()`): its
+entry then holds no bytes, only the sequence numbers where the rest begins
+and ends (`Entry::skipFrom`, `skipEnd`), costs `kEntryOverhead`, and is let
+go like any other; at most `kMaxSkip` (1 GiB) is skipped, a longer length
+being likely none. A segment up to the end is described as `[continuation
+of a message past the reassembly limit]` (`kContinuationOfMessage`) with
+the message's label, its stream cue and SIP calls cleared; one that goes
+past it is taken from the end as one that begins messages
+(`startMessage()` with the skipped message's label, which describes those
+bytes alone, as the parser described the segment from its first byte); a
+segment of bytes before the rest is a retransmission, left as it is. As
+the end is a sequence number, segments lost, early or cut at the snaplen
+inside the rest change nothing, and the other side's acknowledgement is no
+gap there; if the segment that holds the end is lost, the next one is
+taken as any, so the stream resynchronises on one that begins a message.
+The entry goes once a segment reaches the end (or on FIN, SYN, RST). The
+per-direction count lives in the table, never in `StreamState`. When the global limit would be passed,
 the directions used longest ago are let go (`std::list` order, O(1)) and
 their next segment carries the marker; the direction being added to is
 never let go for itself. A direction is let go on its FIN, both on a SYN
 (a handshake, perhaps a new connection on the same ports, whose
 `StreamState` the TCP Analysis resets) or an RST; streams past the stream
 cap have no state and are never held. In `StreamState::reassembly`, bit
-`1 << d` says direction d holds bytes, so that the table is looked up only
+`1 << d` says direction d has an entry (holds bytes or skips a message), so that the table is looked up only
 then, and bit `4 << d` that it was let go. HTTP/2 streams are not
 reassembled. Conversion of a file and of a capture still being written
 go through the same loop, so both are reassembled alike.
@@ -1214,7 +1372,9 @@ steps, in this order: `limitPreview()` cuts its preview, the Stream Tracker
 gives it its stream (`track()`), the TCP Analysis shows its numbers relative
 and marks it (`analyseTcp()`), the Payload Describer looks at it again in
 its stream (`describeInStream()`), the TCP Reassembly describes a message
-that spans segments where it completes (`TcpReassembly::apply()`), with a
+that spans segments where it completes (`TcpReassembly::apply()`), the
+Payload Describer notes what the completed message tells its stream (an SSH
+NEWKEYS, a WebSocket upgrade: `rememberInStream()`), with a
 key log the TLS Decryption decrypts the whole records it returned
 (`TlsDecryption::apply()`), the
 `MediaExpectations` describe it as RTP or RTCP where SDP announced them
@@ -1836,7 +1996,28 @@ power mode over UDP, routing activation and diagnostic messages over TCP
 with UDS sessions, identifiers, a negative response, a response pending, a
 TransferData over two segments, a diagnostic message NACK and an alive
 check, an inverse version that does not match and a payload length its type
-does not allow, by `tests/make_doip_corpus.py`. `tls-decrypt.pcap`, TLS 1.2 and
+does not allow, by `tests/make_doip_corpus.py`; `smb.pcap`, an SMB
+connection on port 445 from an SMB1 negotiate and the SMB2 negotiation
+through a session setup in two rounds, tree connects (one refused),
+FSCTL_VALIDATE_NEGOTIATE_INFO, a compounded Create, GetInfo and Close,
+reads, writes, a directory listing, a pending notification, a read
+response over three segments, two messages in a segment, encrypted and
+compressed SMB 3 messages and logoff, a header of the wrong size and a
+NextCommand beyond its message, and SMB over NetBIOS on port 139 with its
+session request, by `tests/make_smb_corpus.py`; `ssh.pcap`, an OpenSSH
+connection on port 22 with its KEXINIT over two segments, the ECDH key
+exchange, NEWKEYS with and without an encrypted packet behind it and
+encrypted packets after, a connection on port 2222 told by its banner with
+the Diffie-Hellman group exchange, encrypted packets of a connection whose
+key exchange the capture lacks, and a packet_length and a padding_length
+the unencrypted phase does not allow, by `tests/make_ssh_corpus.py`;
+`websocket.pcap`, a chat on port 80 from its upgrade to its closing
+handshake with masked and unmasked text, a ping and pong, a fragmented
+message, a binary frame with a 16-bit length, a long text frame over two
+segments and three frames in one segment, a connection that negotiated
+permessage-deflate with compressed frames, a ping without FIN and a close
+with a one-byte payload, and the same frames on a stream without the
+upgrade, by `tests/make_websocket_corpus.py`. `tls-decrypt.pcap`, TLS 1.2 and
 1.3 sessions with HTTP/1.1 and HTTP/2 inside, and the key log beside it,
 `tls-decrypt.keys`, are made up by `tests/make_tls_decrypt_corpus.py`
 (`uv run`, as it needs the `cryptography` package): randoms and secrets

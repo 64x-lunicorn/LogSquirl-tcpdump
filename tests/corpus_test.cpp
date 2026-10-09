@@ -36,6 +36,8 @@
  * tests/make_reassembly_corpus.py, mqtt.pcap by tests/make_mqtt_corpus.py,
  * sip.pcap by tests/make_sip_corpus.py, someip.pcap by
  * tests/make_someip_corpus.py, doip.pcap by tests/make_doip_corpus.py,
+ * ssh.pcap by tests/make_ssh_corpus.py, websocket.pcap by
+ * tests/make_websocket_corpus.py, smb.pcap by tests/make_smb_corpus.py,
  * tls-decrypt.pcap and the key log beside it, tls-decrypt.keys, by
  * tests/make_tls_decrypt_corpus.py: a capture with a <name>.keys beside it
  * is converted with that key log.

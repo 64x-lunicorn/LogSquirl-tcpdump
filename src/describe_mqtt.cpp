@@ -952,10 +952,11 @@ std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort )
 void describeMqttInStream( PacketRecord& pkt, StreamState& state )
 {
     if ( pkt.streamCue == StreamCue::MqttConnect ) {
-        state.mqtt = true;
+        state.protocols |= StreamState::kMqtt;
         return;
     }
-    if ( !state.mqtt || pkt.protocolRecognised || pkt.payloadHeadLen == 0 ) {
+    if ( !( state.protocols & StreamState::kMqtt ) || pkt.protocolRecognised
+         || pkt.payloadHeadLen == 0 ) {
         return;
     }
     const auto packets

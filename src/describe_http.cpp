@@ -121,8 +121,21 @@ std::string httpRequest( const uint8_t* payload, size_t len )
     return line;
 }
 
+/// The response's status line has status code 101, Switching Protocols.
+bool switchesProtocols( const uint8_t* payload, size_t len )
+{
+    // "HTTP/1.1 101 ", the version of any length up to its space.
+    const auto* end = payload + std::min<size_t>( len, 16 );
+    const auto* space = std::find( payload, end, ' ' );
+    return end - space >= 4 && std::memcmp( space + 1, "101", 3 ) == 0
+           && ( end - space == 4 || space[ 4 ] == ' ' || space[ 4 ] == '\r' );
+}
+
 /// The status line, then the Content-Type and Content-Length headers the
-/// response has, "HTTP/1.1 200 OK, Content-Type: text/html, Content-Length: 1234".
+/// response has, "HTTP/1.1 200 OK, Content-Type: text/html, Content-Length: 1234";
+/// for a 101, the protocol it switches to and the WebSocket extensions,
+/// "HTTP/1.1 101 Switching Protocols, Upgrade: websocket,
+/// Sec-WebSocket-Extensions: permessage-deflate".
 std::string httpResponse( const uint8_t* payload, size_t len )
 {
     auto line = firstLine( payload, len );
@@ -130,6 +143,17 @@ std::string httpResponse( const uint8_t* payload, size_t len )
         { "content-type", "Content-Type" },
         { "content-length", "Content-Length" },
     };
+    static const std::pair<const char*, const char*> kShownOnSwitch[] = {
+        { "upgrade", "Upgrade" },
+        { "sec-websocket-extensions", "Sec-WebSocket-Extensions" },
+    };
+    if ( switchesProtocols( payload, len ) ) {
+        for ( const auto& [ key, name ] : kShownOnSwitch ) {
+            if ( const auto value = headerValue( payload, len, key ) ) {
+                line += std::string( ", " ) + name + ": " + fieldText( value->data, value->len );
+            }
+        }
+    }
     for ( const auto& [ key, name ] : kShown ) {
         if ( const auto value = headerValue( payload, len, key ) ) {
             line += std::string( ", " ) + name + ": " + fieldText( value->data, value->len );
@@ -163,6 +187,16 @@ std::string detectHttp( const uint8_t* payload, size_t len )
     }
 
     return {};
+}
+
+bool isWebSocketUpgrade( const uint8_t* payload, size_t len )
+{
+    if ( len < 5 || std::memcmp( payload, "HTTP/", 5 ) != 0
+         || !switchesProtocols( payload, len ) ) {
+        return false;
+    }
+    const auto upgrade = headerValue( payload, len, "upgrade" );
+    return upgrade && upgrade->len == 9 && equalsIgnoringCase( upgrade->data, "websocket", 9 );
 }
 
 /// The HTTP/1.x header section a segment begins with, the start line up to
@@ -341,10 +375,10 @@ std::string detectHttp2Preface( const uint8_t* payload, size_t len )
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state )
 {
     if ( pkt.streamCue == StreamCue::Http2Preface ) {
-        state.http2 = true;
+        state.protocols |= StreamState::kHttp2;
         return;
     }
-    if ( !state.http2 ) {
+    if ( !( state.protocols & StreamState::kHttp2 ) ) {
         return;
     }
     const auto frames = http2Frames( pkt.payloadHead.data(), pkt.payloadHeadLen,

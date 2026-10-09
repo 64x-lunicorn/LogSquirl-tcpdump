@@ -39,7 +39,7 @@ constexpr uint8_t kTcpSyn = 0x02;
 constexpr uint8_t kTcpRst = 0x04;
 constexpr uint8_t kTcpAck = 0x10;
 
-/// StreamState::reassembly: the direction holds bytes.
+/// StreamState::reassembly: the direction has an entry: holds bytes, or skips a message.
 constexpr uint8_t heldBit( unsigned direction )
 {
     return static_cast<uint8_t>( 1u << direction );
@@ -63,12 +63,13 @@ struct Walk {
 
 /// Walk the messages of protocol @p framer in the @p len bytes at @p data,
 /// one after the other from the first.
-Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, uint8_t framer )
+Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, const Stream& stream,
+                   uint8_t framer )
 {
     Walk walk;
     while ( walk.end < len ) {
-        const auto extent
-            = tcpMessageExtent( data + walk.end, len - walk.end, pkt.srcPort, pkt.dstPort, framer );
+        const auto extent = tcpMessageExtent( data + walk.end, len - walk.end, pkt.srcPort,
+                                              pkt.dstPort, framer, &stream );
         if ( extent.framer == 0 ) {
             walk.end = len; // the rest is none of the protocol's: described as it is
             break;
@@ -91,26 +92,38 @@ void mark( PacketRecord& pkt, const char* marker )
 }
 
 /// Describe @p pkt from the @p len bytes at @p data, whole messages of
-/// protocol @p label, put together from @p segments segments.
-void describeMessages( PacketRecord& pkt, const uint8_t* data, size_t len, const char* label,
-                       uint32_t segments )
+/// protocol @p framer, @p label, put together from @p segments segments.
+void describeMessages( PacketRecord& pkt, const uint8_t* data, size_t len, uint8_t framer,
+                       const char* label, uint32_t segments )
 {
-    const auto described = describePayload( Transport::Tcp, data, len, pkt.srcPort, pkt.dstPort );
+    const auto described = describeTcpMessages( data, len, pkt.srcPort, pkt.dstPort, framer );
     auto description = described.description;
     if ( segments > 1 ) {
         description += ( description.empty() ? "" : " " ) + std::string( "[reassembled from " )
                        + std::to_string( segments ) + " segments]";
     }
     redescribe( pkt, described.label.empty() ? label : described.label.c_str(), description );
-    pkt.sipCalls = described.sipCalls; // what the messages' SDP bodies announce
+    pkt.sipCalls = described.sipCalls;   // what the messages' SDP bodies announce
+    pkt.streamCue = described.streamCue; // what they tell the stream's later packets
 }
 
 /// Describe @p pkt as a segment of a message of protocol @p label that
-/// completes later: what its first bytes seemed to announce is not yet so.
-void describeSegment( PacketRecord& pkt, const char* label )
+/// completes later, or, @p what, one past the limit: what its first bytes
+/// seemed to announce is not so.
+void describeSegment( PacketRecord& pkt, const char* label, const char* what = kSegmentOfMessage )
 {
-    redescribe( pkt, label, kSegmentOfMessage );
+    redescribe( pkt, label, what );
     pkt.sipCalls.clear();
+    pkt.streamCue = StreamCue::None;
+}
+
+/// The incomplete message @p extent, @p rest of whose bytes are there, is
+/// longer than @p limit and its header says by how much: the bytes left
+/// are worth skipping.
+bool announcedPast( const MessageExtent& extent, size_t rest, size_t limit )
+{
+    // A framer that cannot tell the length yet answers one more than given.
+    return extent.framer != 0 && extent.length > limit && extent.length > rest + 1;
 }
 
 } // namespace
@@ -237,10 +250,80 @@ bool TcpReassembly::appendEarly( Entry& entry, Key key )
     return true;
 }
 
+void TcpReassembly::skip( const Stream& stream, const char* label, uint32_t from, size_t bytes )
+{
+    const auto key = keyOf( stream, stream.direction );
+    release( key );
+    if ( bytes > kMaxSkip || !makeRoom( kEntryOverhead, key ) ) {
+        return;
+    }
+    auto& entry = entries_[ key ];
+    entry.state = stream.state;
+    entry.direction = stream.direction;
+    entry.label = label;
+    entry.skipping = true;
+    entry.skipFrom = from;
+    entry.skipEnd = from + static_cast<uint32_t>( bytes );
+    entry.lru = lru_.insert( lru_.end(), key );
+    recharge( entry );
+    stream.state->reassembly |= heldBit( stream.direction );
+}
+
+std::optional<ReassembledMessages> TcpReassembly::skipSegment( PacketRecord& pkt,
+                                                               const Stream& stream,
+                                                               ByteView payload, Entry& entry )
+{
+    lru_.splice( lru_.end(), lru_, entry.lru );
+    if ( seqAfter( entry.skipFrom, pkt.tcpSeq ) > 0 ) {
+        return ReassembledMessages{}; // bytes from before the rest: a retransmission
+    }
+    const uint32_t end = pkt.tcpSeq + pkt.payloadLen;
+    const auto* label = entry.label;
+    if ( seqAfter( end, entry.skipEnd ) <= 0 ) {
+        describeSegment( pkt, label, kContinuationOfMessage );
+        if ( end == entry.skipEnd ) {
+            release( keyOf( stream, stream.direction ) ); // the message is over
+        }
+        return ReassembledMessages{};
+    }
+    const auto offset = static_cast<size_t>( entry.skipEnd - pkt.tcpSeq );
+    const bool inside = seqAfter( entry.skipEnd, pkt.tcpSeq ) > 0;
+    release( keyOf( stream, stream.direction ) );
+    if ( !inside ) {
+        return std::nullopt; // past the message, perhaps after a gap: a segment as any
+    }
+    if ( payload.data == nullptr || payload.size != pkt.payloadLen ) {
+        describeSegment( pkt, label, kContinuationOfMessage ); // what comes after it was cut
+        return ReassembledMessages{};
+    }
+    return startMessage( pkt, stream, { payload.data + offset, payload.size - offset }, label );
+}
+
 ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Stream& stream,
                                                     Entry& entry )
 {
-    const auto walk = walkMessages( entry.held.data(), entry.held.size(), pkt, entry.framer );
+    const auto walk
+        = walkMessages( entry.held.data(), entry.held.size(), pkt, stream, entry.framer );
+    const auto rest = entry.held.size() - walk.end;
+    if ( announcedPast( walk.incomplete, rest, streamLimit_ ) ) {
+        // The message being held turns out longer than the limit: its rest
+        // is skipped, whole messages before it described.
+        completed_ = std::move( entry.held );
+        entry.held = std::vector<uint8_t>();
+        const auto segments = walk.end == 0 ? 1 : entry.segments;
+        const auto framer = entry.framer;
+        const auto* label = entry.label;
+        skip( stream, label, entry.order.nextSeq(), walk.incomplete.length - rest );
+        if ( walk.end > 0 ) {
+            completed_.resize( walk.end );
+        }
+        describeMessages( pkt, completed_.data(), completed_.size(), framer, label, segments );
+        mark( pkt, kReassemblyLimit );
+        if ( walk.end == 0 ) {
+            return {};
+        }
+        return { { completed_.data(), completed_.size() }, segments };
+    }
     if ( walk.end == 0 ) {
         describeSegment( pkt, entry.label );
         return {};
@@ -250,13 +333,13 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
     completed_ = std::move( entry.held );
     entry.held = std::vector<uint8_t>();
     const auto segments = entry.segments;
+    const auto framer = entry.framer;
     const auto* label = entry.label;
     const auto key = keyOf( stream, stream.direction );
     if ( walk.incomplete.framer == 0 ) {
         release( key );
     }
     else {
-        const auto rest = completed_.size() - walk.end;
         entry.held.reserve( std::max( rest, std::min( walk.incomplete.length, streamLimit_ ) ) );
         entry.held.assign( completed_.begin() + static_cast<std::ptrdiff_t>( walk.end ),
                            completed_.end() );
@@ -264,19 +347,28 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
         recharge( entry );
     }
     completed_.resize( walk.end );
-    describeMessages( pkt, completed_.data(), completed_.size(), label, segments );
+    describeMessages( pkt, completed_.data(), completed_.size(), framer, label, segments );
     return { { completed_.data(), completed_.size() }, segments };
 }
 
 ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream& stream,
-                                                 ByteView payload )
+                                                 ByteView payload, const char* after )
 {
-    const auto first = tcpMessageExtent( payload.data, payload.size, pkt.srcPort, pkt.dstPort );
+    const auto first
+        = tcpMessageExtent( payload.data, payload.size, pkt.srcPort, pkt.dstPort, 0, &stream );
     if ( first.framer == 0 ) {
+        if ( after ) {
+            describeMessages( pkt, payload.data, payload.size, 0, after, 1 );
+        }
         return {}; // no message the describer frames: described as it is
     }
-    const auto walk = walkMessages( payload.data, payload.size, pkt, first.framer );
+    const auto walk = walkMessages( payload.data, payload.size, pkt, stream, first.framer );
     if ( walk.incomplete.framer == 0 ) {
+        if ( ( first.describedInStream || after ) && walk.end > 0 ) {
+            // Whole messages the parser could not tell: described from all
+            // the bytes, not only the first ones describeInStream() had.
+            describeMessages( pkt, payload.data, walk.end, first.framer, first.label, 1 );
+        }
         // Whole messages: the parser described them.
         return { { payload.data, walk.end }, 1 };
     }
@@ -287,6 +379,12 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     const auto expected = std::min( walk.incomplete.length, streamLimit_ );
     if ( walk.incomplete.length > streamLimit_
          || !makeRoom( kEntryOverhead + std::max( rest, expected ), key ) ) {
+        if ( after ) {
+            describeMessages( pkt, payload.data, payload.size, first.framer, first.label, 1 );
+        }
+        if ( announcedPast( walk.incomplete, rest, streamLimit_ ) ) {
+            skip( stream, first.label, pkt.tcpSeq + pkt.payloadLen, walk.incomplete.length - rest );
+        }
         mark( pkt, kReassemblyLimit );
         return {};
     }
@@ -295,7 +393,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     entry.direction = stream.direction;
     entry.framer = first.framer;
     entry.label = first.label;
-    entry.order.reset( pkt.tcpSeq + static_cast<uint32_t>( payload.size ) );
+    entry.order.reset( pkt.tcpSeq + pkt.payloadLen );
     entry.segments = 1;
     entry.held.reserve( std::max( rest, expected ) );
     entry.held.assign( payload.data + walk.end, payload.data + payload.size );
@@ -307,7 +405,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
         describeSegment( pkt, first.label );
         return {};
     }
-    describeMessages( pkt, payload.data, walk.end, first.label, 1 );
+    describeMessages( pkt, payload.data, walk.end, first.framer, first.label, 1 );
     return { { payload.data, walk.end }, 1 };
 }
 
@@ -318,6 +416,12 @@ ReassembledMessages TcpReassembly::segment( PacketRecord& pkt, const Stream& str
     auto* entry = ( stream.state->reassembly & heldBit( stream.direction ) )
                       ? find( stream, stream.direction )
                       : nullptr;
+    if ( entry && entry->skipping ) {
+        if ( auto taken = skipSegment( pkt, stream, payload, *entry ) ) {
+            return *taken;
+        }
+        entry = nullptr;
+    }
     if ( payload.data == nullptr || payload.size != pkt.payloadLen ) {
         // Bytes the capture lacks, cut at the snaplen: a gap.
         if ( entry ) {
@@ -383,13 +487,13 @@ ReassembledMessages TcpReassembly::apply( PacketRecord& pkt, const Stream& strea
     if ( ( flags & kTcpAck ) && ( state.reassembly & heldBit( 1 - direction ) ) ) {
         // The other side has bytes the capture lacks: a gap there.
         const auto* other = find( stream, 1 - direction );
-        if ( other && seqAfter( pkt.tcpAck, other->order.nextSeq() ) > 0 ) {
+        if ( other && !other->skipping && seqAfter( pkt.tcpAck, other->order.nextSeq() ) > 0 ) {
             release( stream, 1 - direction );
         }
     }
 
     ReassembledMessages result;
-    if ( pkt.payloadLen > 0 && !state.http2 ) {
+    if ( pkt.payloadLen > 0 && !( state.protocols & StreamState::kHttp2 ) ) {
         const bool letGo = ( state.reassembly & letGoBit( direction ) ) != 0;
         state.reassembly &= static_cast<uint8_t>( ~letGoBit( direction ) );
         result = segment( pkt, stream, payload );

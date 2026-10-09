@@ -429,6 +429,7 @@ ConversionResult convertOrThrow( ByteSource& input, const QString& inputPath, co
         stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         const auto messages = reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
+        rememberInStream( pkt, stream ); // after the reassembly, which completes NEWKEYS
         if ( decryption ) {
             decryption->apply( pkt, stream, messages );
         }

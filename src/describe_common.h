@@ -281,10 +281,35 @@ struct SomeIpDescription {
 SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
 /// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
 bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
+/// The SSH banner or binary packets of the unencrypted phase a TCP
+/// payload begins with, on any port, labelled "SSHv2" (describe_ssh.cpp);
+/// on port 22, any other payload as an encrypted packet, a guess.
+std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
+                                             uint16_t dstPort );
+/// An HTTP "101 Switching Protocols" response with "Upgrade: websocket"
+/// in its header section, which makes its stream WebSocket
+/// (describe_http.cpp).
+bool isWebSocketUpgrade( const uint8_t* payload, size_t len );
 /// The DoIP messages (ISO 13400-2) a payload begins with, every one of a
 /// datagram or segment, a diagnostic message with the UDS service it
 /// carries (describe_doip.cpp).
 std::string detectDoip( const uint8_t* payload, size_t len );
+
+/// SMB messages (describe_smb.cpp): their description and their label,
+/// "SMB2" (SMB2 and SMB 3), "SMB" (SMB1) or "NBSS", as the first names it.
+struct SmbDescription {
+    std::string text;
+    const char* label = nullptr;
+};
+/// The NetBIOS Session Service messages a TCP payload begins with, every
+/// one of a segment: the SMB2/3 commands in them as Wireshark names them,
+/// "Create Request File: dir\file.txt", compounded ones too, up to 8 in
+/// all, an encrypted or compressed SMB 3 message, an SMB1 command; empty
+/// if the payload does not begin with an NBSS message.
+SmbDescription detectSmb( const uint8_t* payload, size_t len );
+/// The payload begins with an NBSS session message holding SMB: a protocol
+/// ID of SMB1, SMB2 or an SMB 3 transform header (describe_smb.cpp).
+bool beginsWithSmb( const uint8_t* payload, size_t len );
 
 // ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
 
@@ -321,6 +346,34 @@ std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bo
 /// A DoIP message, by its payload length, if its header keeps to the
 /// pattern of version and inverse version (describe_doip.cpp).
 std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
+/// An NBSS message, by its length (describe_smb.cpp): on SMB's ports
+/// (445, 139) any NBSS message, elsewhere a session message that holds SMB.
+std::optional<size_t> frameSmbMessage( const uint8_t* payload, size_t len, bool onSmbPort );
+
+/// A WebSocket frame, by its payload length (describe_websocket.cpp): on
+/// an upgraded stream only, as nothing in its bytes tells it.
+std::optional<size_t> frameWebSocketFrame( const uint8_t* payload, size_t len );
+
+/// The WebSocket frames at @p p, the @p len captured bytes of a
+/// @p wireLen-byte TCP payload of an upgraded stream, as Wireshark names
+/// them, "WebSocket Text [FIN] [MASKED] len=5 \"hello\"": up to 8, then
+/// "…"; a cut frame ends in "…", a malformed one says so
+/// (describe_websocket.cpp).
+std::string describeWebSocketFrames( const uint8_t* p, size_t len, size_t wireLen );
+
+/// How far one direction of an SSH connection is, as its stream's state
+/// says (StreamState::kSshBannerSeen, StreamState::sshEncrypted()).
+enum class SshPhase {
+    Unknown,   ///< No banner was seen: only a banner is framed.
+    Clear,     ///< Before NEWKEYS: binary packets, by their packet_length.
+    Encrypted, ///< After NEWKEYS: nothing to frame.
+};
+/// The phase of @p direction of the stream @p state is of.
+SshPhase sshPhaseOf( const StreamState& state, unsigned direction );
+/// An SSH banner, to its line end; in the clear phase a binary packet, by
+/// its packet_length, and a NEWKEYS with all after it; in the encrypted
+/// phase, all the bytes (describe_ssh.cpp).
+std::optional<size_t> frameSshMessage( const uint8_t* payload, size_t len, SshPhase phase );
 
 // ── In the stream ────────────────────────────────────────────────────────
 
@@ -335,5 +388,23 @@ void describeHttp2InStream( PacketRecord& pkt, StreamState& state );
 /// A TCP segment in its stream: MQTT packets after a CONNECT on another
 /// port than MQTT's (describe_mqtt.cpp).
 void describeMqttInStream( PacketRecord& pkt, StreamState& state );
+
+/// A TCP segment in its stream: after NEWKEYS an encrypted packet, before
+/// it the packets no detector recognised, as the stream's SSH phase says
+/// (describe_ssh.cpp).
+void describeSshInStream( PacketRecord& pkt, const Stream& stream );
+
+/// A TCP segment in its stream: after the HTTP 101 response that upgraded
+/// it, the WebSocket frames in the payload's first kPayloadHeadBytes
+/// (describe_websocket.cpp).
+void describeWebSocketInStream( PacketRecord& pkt, const Stream& stream );
+
+/// After the TCP Reassembly: a 101 response upgrades its stream to
+/// WebSocket (describe_websocket.cpp).
+void rememberWebSocketInStream( const PacketRecord& pkt, const Stream& stream );
+
+/// After the TCP Reassembly: what a segment's SSH banner or NEWKEYS tells
+/// its stream's later segments (describe_ssh.cpp).
+void rememberSshInStream( const PacketRecord& pkt, const Stream& stream );
 
 } // namespace tcpdump::describer
