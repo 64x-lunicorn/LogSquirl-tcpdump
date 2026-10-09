@@ -47,6 +47,8 @@
 
 namespace tcpdump {
 
+class PacketLayers;
+
 // ── pcap global header ───────────────────────────────────────────────────
 
 /// pcap file magic numbers (host byte order after detection).
@@ -226,6 +228,11 @@ struct PacketRecord {
     /// then describes the innermost packet, as Wireshark's columns do; the
     /// Packet Formatter names the tunnels before info.
     std::vector<Tunnel> tunnels;
+
+    /// Where the dissectors describe every layer they read, with its fields
+    /// and their bytes (packet_layers.h); null, as the Converter leaves it,
+    /// to describe none.  Set by dissectLayers() for the Packet Panel.
+    PacketLayers* layers = nullptr;
 };
 
 /**

@@ -39,6 +39,7 @@ add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/capture_reader.cpp
     src/pcap_parser.cpp
+    src/packet_layers.cpp
     src/icmp.cpp
     src/link_layers.cpp
     src/pcapng_reader.cpp
