@@ -472,6 +472,9 @@ std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len,
     }
 
     const bool onSshPort = srcPort == kSshPort || dstPort == kSshPort;
+    if ( !inSshStream && !onSshPort ) {
+        return std::nullopt; // no banner, no port: not read, as nothing would tell it
+    }
     const auto packets = readPackets( payload, len );
     if ( inSshStream || ( packets.plausible && onSshPort ) ) {
         result.label = "SSHv2";

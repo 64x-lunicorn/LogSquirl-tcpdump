@@ -36,7 +36,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <sstream>
 
 namespace tcpdump {
 
@@ -129,23 +128,31 @@ std::string formatRelativeTime( int64_t deltaSec, int64_t deltaNsec, TimePrecisi
 /// space after it, so that a value as wide as its column, or wider, does not
 /// run into the next one; an empty value as "-", so that the column is not
 /// lost between its neighbours.
-void writeColumn( std::ostream& out, const std::string& value, size_t width )
+void writeColumn( std::string& out, const std::string& value, size_t width )
 {
-    const std::string shown = value.empty() ? "-" : value;
-    const auto padding = shown.size() < width ? width - shown.size() : 1;
-    out << shown << std::string( padding, ' ' );
+    if ( value.empty() ) {
+        out += '-';
+    }
+    else {
+        out += value;
+    }
+    const auto size = std::max<size_t>( value.size(), 1 );
+    out.append( size < width ? width - size : 1, ' ' );
 }
 
-/// The Source or Destination column of @p address, or of @p mac without
-/// one: the address and its name, if @p names has one for it.
-std::string addressColumn( const std::string& address, const std::string& mac,
-                           const HostNames* names )
+/// Writes the Source or Destination column of @p address, or of @p mac
+/// without one: the address and its name, if @p names has one for it.
+void writeAddressColumn( std::string& out, const std::string& address, const std::string& mac,
+                         const HostNames* names )
 {
-    if ( address.empty() ) {
-        return mac;
+    constexpr size_t kWidth = 40;
+    const auto* name = names && !address.empty() ? names->find( address ) : nullptr;
+    if ( name ) {
+        writeColumn( out, address + "(" + *name + ")", kWidth );
     }
-    const auto* name = names ? names->find( address ) : nullptr;
-    return name ? address + "(" + *name + ")" : address;
+    else {
+        writeColumn( out, address.empty() ? mac : address, kWidth );
+    }
 }
 
 } // namespace
@@ -161,26 +168,51 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
     }
     const auto date = civilFromDays( days );
 
-    // Four digits as usual; ISO 8601's expanded year, with its sign, beyond
-    char year[ 24 ];
+    const auto hour = static_cast<unsigned>( secondOfDay / 3600 );
+    const auto minute = static_cast<unsigned>( secondOfDay / 60 % 60 );
+    const auto second = static_cast<unsigned>( secondOfDay % 60 );
+    const bool nano = precision == TimePrecision::Nanoseconds;
+    auto fraction = static_cast<unsigned long>( nano ? nanoseconds : nanoseconds / 1000 );
+
+    // Four digits as usual; ISO 8601's expanded year, with its sign, beyond.
+    std::string text;
     if ( date.year >= 0 && date.year <= 9999 ) {
-        std::snprintf( year, sizeof( year ), "%04lld", static_cast<long long>( date.year ) );
+        text.resize( 4 );
+        auto year = static_cast<unsigned>( date.year );
+        for ( size_t i = 4; i-- > 0; year /= 10 ) {
+            text[ i ] = static_cast<char>( '0' + year % 10 );
+        }
     }
     else {
+        char year[ 24 ];
         std::snprintf( year, sizeof( year ), "%+05lld", static_cast<long long>( date.year ) );
+        text = year;
     }
-
-    const auto hour = static_cast<int>( secondOfDay / 3600 );
-    const auto minute = static_cast<int>( secondOfDay / 60 % 60 );
-    const auto second = static_cast<int>( secondOfDay % 60 );
-    const bool nano = precision == TimePrecision::Nanoseconds;
-    const auto fraction = static_cast<unsigned long>( nano ? nanoseconds : nanoseconds / 1000 );
-    char buf[ 64 ];
-    std::snprintf( buf, sizeof( buf ),
-                   nano ? "%s-%02u-%02u %02d:%02d:%02d.%09luZ"
-                        : "%s-%02u-%02u %02d:%02d:%02d.%06luZ",
-                   year, date.month, date.day, hour, minute, second, fraction );
-    return buf;
+    // The rest by hand, as every packet line has one: "-MM-DD hh:mm:ss.fZ".
+    auto two = [ &text ]( char before, unsigned value ) {
+        text += before;
+        text += static_cast<char>( '0' + value / 10 % 10 );
+        text += static_cast<char>( '0' + value % 10 );
+    };
+    text.reserve( text.size() + 21 );
+    two( '-', date.month );
+    two( '-', date.day );
+    two( ' ', hour );
+    two( ':', minute );
+    two( ':', second );
+    text += '.';
+    const size_t digits = nano ? 9 : 6;
+    if ( fraction >= ( nano ? 1000000000ul : 1000000ul ) ) {
+        // More digits than the precision has, which %0*lu would print too.
+        return text + std::to_string( fraction ) + 'Z';
+    }
+    const auto at = text.size();
+    text.resize( at + digits );
+    for ( size_t i = digits; i-- > 0; fraction /= 10 ) {
+        text[ at + i ] = static_cast<char>( '0' + fraction % 10 );
+    }
+    text += 'Z';
+    return text;
 }
 
 std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
@@ -197,8 +229,10 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
                                   : streamId == kUnnumbered ? "?"
                                                             : "-";
 
-    // Use fixed-width columns like Wireshark's packet list
-    std::ostringstream oss;
+    // Use fixed-width columns like Wireshark's packet list; built in one
+    // string, as every packet has a line
+    std::string oss;
+    oss.reserve( 160 + pkt.info.size() );
     writeColumn( oss, std::to_string( pkt.number ), 7 );
     writeColumn( oss, streamStr, 8 );
     // Each packet's own wall-clock time, also for one recorded before the
@@ -214,8 +248,8 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
     if ( !layout.hostNames ) {
         names = nullptr;
     }
-    writeColumn( oss, addressColumn( pkt.srcIp, pkt.srcMac, names ), 40 );
-    writeColumn( oss, addressColumn( pkt.dstIp, pkt.dstMac, names ), 40 );
+    writeAddressColumn( oss, pkt.srcIp, pkt.srcMac, names );
+    writeAddressColumn( oss, pkt.dstIp, pkt.dstMac, names );
     writeColumn( oss, pkt.protocol, 10 );
     // The length on the wire, as Wireshark's Length column; a packet cut at
     // the snaplen says in Info how much of it was captured, so that a reader
@@ -231,19 +265,22 @@ std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint
     // description of the packet inside them: kept apart from info, whose
     // start the TCP analysis markers and the Stream Labels look at.
     for ( const auto& tunnel : pkt.tunnels ) {
-        oss << tunnel.name << kDescriptionSeparator;
+        oss += tunnel.name;
+        oss += kDescriptionSeparator;
     }
-    oss << pkt.info;
+    oss += pkt.info;
     if ( pkt.capturedLen < pkt.originalLen ) {
-        oss << ( pkt.info.empty() ? "" : " " ) << "[cut to " << pkt.capturedLen << " bytes]";
+        oss += pkt.info.empty() ? "[cut to " : " [cut to ";
+        oss += std::to_string( pkt.capturedLen );
+        oss += " bytes]";
     }
 
-    return oss.str();
+    return oss;
 }
 
 std::string PacketFormatter::header() const
 {
-    std::ostringstream hdr;
+    std::string hdr;
     writeColumn( hdr, "No.", 7 );
     writeColumn( hdr, "Stream", 8 );
     if ( showsUtcTime( layout_ ) ) {
@@ -260,8 +297,8 @@ std::string PacketFormatter::header() const
         writeColumn( hdr, "Source MAC", kMacWidth );
         writeColumn( hdr, "Destination MAC", kMacWidth );
     }
-    hdr << "Info";
-    return hdr.str();
+    hdr += "Info";
+    return hdr;
 }
 
 std::string PacketFormatter::format( const PacketRecord& pkt, int streamId, const HostNames* names )

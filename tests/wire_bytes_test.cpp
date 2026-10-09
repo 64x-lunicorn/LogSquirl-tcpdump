@@ -45,6 +45,24 @@ std::string ipv6Of( const std::array<uint16_t, 8>& groups )
 
 } // namespace
 
+SCENARIO( "IPv4 and MAC addresses are formatted as Wireshark writes them", "[wire_bytes]" )
+{
+    const uint8_t ipv4[][ 4 ] = { { 0, 0, 0, 0 }, { 192, 168, 10, 9 }, { 255, 100, 99, 1 } };
+    const uint8_t mac[ 6 ] = { 0x00, 0x1a, 0x2B, 0xc0, 0xff, 0x09 };
+
+    THEN( "an IPv4 address in dotted decimal, without leading zeros" )
+    {
+        REQUIRE( formatIpv4( ipv4[ 0 ] ) == "0.0.0.0" );
+        REQUIRE( formatIpv4( ipv4[ 1 ] ) == "192.168.10.9" );
+        REQUIRE( formatIpv4( ipv4[ 2 ] ) == "255.100.99.1" );
+    }
+
+    THEN( "a MAC address as six lowercase hexadecimal pairs" )
+    {
+        REQUIRE( formatMac( mac ) == "00:1a:2b:c0:ff:09" );
+    }
+}
+
 SCENARIO( "IPv6 addresses are formatted in RFC 5952 form", "[wire_bytes]" )
 {
     GIVEN( "a link-local address" )

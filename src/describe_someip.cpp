@@ -752,6 +752,17 @@ SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heurist
     if ( heuristic ) {
         // Every message, named or not, whole and by the rules.
         for ( size_t at = 0; at < len; ) {
+            // What readMessage() would not take for valid, told by the
+            // header alone, before its text is made.
+            if ( len - at < kHeaderBytes ) {
+                return {};
+            }
+            const auto h = readHeader( payload + at );
+            if ( !isMagicCookie( h )
+                 && ( !plausible( h ) || h.length > kMaxHeuristicLength
+                      || len - at < kUncountedBytes + static_cast<size_t>( h.length ) ) ) {
+                return {};
+            }
             const auto message = readMessage( payload + at, len - at );
             if ( !message.valid ) {
                 return {};
