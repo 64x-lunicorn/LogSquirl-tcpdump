@@ -337,6 +337,11 @@ struct TlsDecryption::Direction {
     bool encrypted = false;   ///< Its records are protected.
     bool application = false; ///< TLS 1.3: by the application traffic keys.
     uint8_t failures = 0;     ///< Records in a row that did not decrypt.
+    /// Records the last one decrypted came after, lost or not decrypted.
+    uint64_t skipped = 0;
+    /// Application data went missing since the last that was described:
+    /// HTTP/2 is read from a frame's start again (Http2Direction::resync()).
+    bool lost = false;
     std::unique_ptr<Http2Direction> http2;
     size_t http2Charged = 0; ///< Counted in http2Memory_.
 };
@@ -583,6 +588,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
         for ( uint64_t k = 0; direction.cipher && !opened && k <= kSequenceLookahead; ++k ) {
             if ( open( *direction.cipher, direction.iv, direction.seq + k ) ) {
                 direction.seq += k + 1;
+                direction.skipped = k;
                 opened = true;
             }
         }
@@ -597,6 +603,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
                         direction.nextSecret.clear();
                         direction.application = true;
                         direction.seq = k + 1;
+                        direction.skipped = k;
                         opened = true;
                     }
                 }
@@ -649,6 +656,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
             additional( seq, length, aad );
             if ( direction.cipher->open( nonce, { aad, sizeof( aad ) }, ciphertext, plain ) ) {
                 direction.seq = seq + 1;
+                direction.skipped = k;
                 return true;
             }
         }
@@ -695,6 +703,7 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
                 return false;
             }
             direction.seq = seq + 1;
+            direction.skipped = k;
             return true;
         }
         return false;
@@ -717,10 +726,20 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
              && equalBytes( mac, plain.data() + length, macBytes ) ) {
             plain.resize( length );
             direction.seq = seq + 1;
+            direction.skipped = k;
             return true;
         }
     }
     return false;
+}
+
+void TlsDecryption::lost( Session& session, Direction& direction, uint8_t type )
+{
+    // TLS 1.3 hides a record's type: those after the handshake are taken
+    // for application data.
+    if ( session.suite->tls13 ? direction.application : type == kApplicationData ) {
+        direction.lost = true;
+    }
 }
 
 void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messages )
@@ -773,6 +792,7 @@ void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messa
 
 std::pair<const char*, std::string> TlsDecryption::application( Session& session, unsigned d,
                                                                 const std::vector<uint8_t>& data,
+                                                                const std::vector<size_t>& resyncs,
                                                                 const PacketRecord& pkt )
 {
     static constexpr char kPreface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
@@ -786,7 +806,23 @@ std::pair<const char*, std::string> TlsDecryption::application( Session& session
         if ( !direction.http2 ) {
             direction.http2 = std::make_unique<Http2Direction>();
         }
-        auto description = direction.http2->describe( data.data(), data.size() );
+        // The bytes between where data went missing are described each
+        // from a frame's start.
+        std::string description;
+        size_t from = 0;
+        for ( size_t i = 0; i <= resyncs.size(); ++i ) {
+            const auto to = i < resyncs.size() ? resyncs[ i ] : data.size();
+            if ( to > from ) {
+                const auto piece = direction.http2->describe( data.data() + from, to - from );
+                if ( !piece.empty() ) {
+                    description += ( description.empty() ? "" : ", " ) + piece;
+                }
+            }
+            if ( i < resyncs.size() ) {
+                direction.http2->resync();
+            }
+            from = std::max( from, to );
+        }
         auto charge = [ & ] {
             const auto memory = direction.http2->memory();
             http2Memory_ = http2Memory_ - direction.http2Charged + memory;
@@ -816,6 +852,7 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
     const auto d = stream.direction;
     std::vector<std::string> parts;
     std::vector<uint8_t> application;
+    std::vector<size_t> resyncs; ///< Where in it application data went missing.
     size_t applicationPart = SIZE_MAX;
     std::vector<uint8_t> plain;
     bool decrypted = false;
@@ -859,10 +896,14 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
             if ( session->keyed && direction.failures < kMaxFailures ) {
                 ++direction.failures;
             }
+            lost( *session, direction, type );
             parts.emplace_back( protectedName( type ) );
             continue;
         }
         direction.failures = 0;
+        if ( direction.skipped > 0 ) {
+            lost( *session, direction, type );
+        }
         decrypted = true;
         if ( !session->decrypted ) {
             session->decrypted = true;
@@ -883,6 +924,10 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
                 applicationPart = parts.size();
                 parts.emplace_back();
             }
+            if ( direction.lost ) {
+                resyncs.push_back( application.size() );
+                direction.lost = false;
+            }
             application.insert( application.end(), plain.begin(), plain.end() );
             break;
         default:
@@ -900,7 +945,7 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
     if ( applicationPart != SIZE_MAX ) {
         const auto it = sessions_.find( stream.id );
         if ( it != sessions_.end() ) {
-            auto described = this->application( *it->second, d, application, pkt );
+            auto described = this->application( *it->second, d, application, resyncs, pkt );
             label = described.first;
             parts[ applicationPart ] = std::move( described.second );
         }

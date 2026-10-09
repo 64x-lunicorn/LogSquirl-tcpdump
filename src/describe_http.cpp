@@ -601,4 +601,13 @@ void Http2Direction::abandonHeaders()
     }
 }
 
+void Http2Direction::resync()
+{
+    abandonHeaders();
+    std::vector<uint8_t>().swap( frame_ );
+    frameLength_ = 0;
+    frameName_ = SIZE_MAX;
+    skip_ = 0;
+}
+
 } // namespace tcpdump

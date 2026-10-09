@@ -67,7 +67,9 @@ constexpr const char* kDecryptedMarker = "TLS (decrypted)";
  * messages TcpReassembly::apply() returns).  A record the capture lost is
  * passed over: the next one is tried with the next kSequenceLookahead
  * sequence numbers too.  After kMaxFailures records in a row that would not
- * decrypt, a direction is given up.
+ * decrypt, a direction is given up.  HTTP/2 after application data that
+ * went missing so is read from the next record's start, a frame's, its
+ * header blocks no longer decoded (Http2Direction::resync()).
  *
  * Memory is bounded: a session keeps its randoms, its keys and sequence
  * numbers, no records; kMaxSessions are followed at most.  An HTTP/2
@@ -143,9 +145,14 @@ private:
     void afterHandshake( Session& session, unsigned d, ByteView messages );
     /// The label and description of the application data a segment of
     /// direction @p d carried, decrypted.
+    /// The application data went missing where @p resyncs say.
     std::pair<const char*, std::string> application( Session& session, unsigned d,
                                                      const std::vector<uint8_t>& data,
+                                                     const std::vector<size_t>& resyncs,
                                                      const PacketRecord& pkt );
+    /// A record of direction @p direction, of @p type as the record
+    /// header says, was lost or would not decrypt.
+    void lost( Session& session, Direction& direction, uint8_t type );
     void erase( int streamId );
 
     Lookup lookup_;

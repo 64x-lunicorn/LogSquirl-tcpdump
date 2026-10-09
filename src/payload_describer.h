@@ -276,6 +276,14 @@ public:
     /// naming the frames only.
     void abandonHeaders();
 
+    /**
+     * Bytes of the direction went missing (a TLS record lost or one that
+     * would not decrypt): the next bytes begin a frame, and as the header
+     * blocks of the missing bytes changed the HPACK table unseen, no
+     * header block is decoded from now on (abandonHeaders()).
+     */
+    void resync();
+
 private:
     /// A frame whose header is complete, held as far as needed.
     void frameDone( std::vector<std::string>& names, size_t nameIndex );
