@@ -1,5 +1,5 @@
 No.    Stream  UTC Time                     Time           Source                                  Destination                             Protocol  Length Info
-1      0       2025-10-09 08:53:20.000000Z  0.000000       10.0.0.1                                10.0.0.2                                HTTP      54     40000 → 80 [SYN] Seq=0 Ack=0 Win=64240
+1      0       2025-10-09 08:53:20.000000Z  0.000000       10.0.0.1                                10.0.0.2                                HTTP      54     40000 → 80 [SYN] Seq=0 Win=64240
 2      0       2025-10-09 08:53:20.010000Z  0.010000       10.0.0.2                                10.0.0.1                                HTTP      54     80 → 40000 [SYN, ACK] Seq=0 Ack=1 Win=65535
 3      0       2025-10-09 08:53:20.020000Z  0.020000       10.0.0.1                                10.0.0.2                                HTTP      54     40000 → 80 [ACK] Seq=1 Ack=1 Win=64240
 4      0       2025-10-09 08:53:20.021000Z  0.021000       10.0.0.1                                10.0.0.2                                HTTP      154    40000 → 80 [ACK, PSH] Seq=1 Ack=1 Win=64240 Len=100 | aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

@@ -36,11 +36,16 @@
 #include "pcap_parser.h"
 
 #include <cstdint>
+#include <string>
 
 namespace tcpdump {
 
 /// The name of IP protocol @p protocol ("IGMP", "ESP", …), or nullptr.
 const char* ipProtocolName( uint8_t protocol );
+
+/// The name of IP protocol @p protocol, or its number as "IP(200)": the
+/// Protocol column's label for a packet's or a quoted packet's protocol.
+std::string ipProtocolLabel( uint8_t protocol );
 
 /// The name of EtherType @p etherType ("LLDP", "PPPoES", …), or nullptr.
 const char* etherTypeName( uint16_t etherType );

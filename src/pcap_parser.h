@@ -112,6 +112,15 @@ enum class Transport { Tcp, Udp };
 /// Separates the transport summary in Info from the description of the payload.
 constexpr const char* kDescriptionSeparator = " | ";
 
+/// What a payload begins that the rest of its stream builds on, as the
+/// Payload Describer recognised it: describeInStream() looks at the
+/// stream's later packets with it in mind.
+enum class StreamCue : uint8_t {
+    None,
+    QuicLongHeader, ///< A QUIC long header (or Version Negotiation packet).
+    Http2Preface,   ///< The HTTP/2 connection preface.
+};
+
 /// Payload bytes a PacketRecord keeps: enough for a QUIC long header's
 /// connection IDs, 1 + 4 + 1 + 20 + 1 + 20 bytes.
 constexpr size_t kPayloadHeadBytes = 48;
@@ -174,6 +183,8 @@ struct PacketRecord {
     /// payload alone or in its stream (describeInStream).  Such a label
     /// sticks to the packet's stream (StreamLabels).
     bool protocolRecognised = false;
+    /// What the payload begins for its stream (describeInStream).
+    StreamCue streamCue = StreamCue::None;
     /// Info ends in a preview of the payload's text this many bytes long,
     /// after kDescriptionSeparator; 0 without one (limitPreview()).
     size_t previewBytes = 0;
@@ -192,11 +203,13 @@ std::string formatTcpFlags( uint8_t flags );
 
 /**
  * Render a TCP segment's sequence and acknowledgement numbers and its window
- * as Info shows them, after its flags.
+ * as Info shows them, after its flags.  Without an @p ack (a segment
+ * without the ACK flag, whose acknowledgement field means nothing) Ack is
+ * left out, as Wireshark does.
  *
- * @return String like "Seq=1 Ack=1 Win=65535".
+ * @return String like "Seq=1 Ack=1 Win=65535", or "Seq=0 Win=65535".
  */
-std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window );
+std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window );
 
 /**
  * Dissect one captured packet into @p pkt, from its link-layer header up.

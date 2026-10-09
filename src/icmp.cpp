@@ -233,8 +233,7 @@ std::string quotedPacket( const uint8_t* data, size_t len )
     if ( quoted.srcIp.empty() ) {
         return {};
     }
-    const auto* name = ipProtocolName( quoted.ipProtocol );
-    const auto protocol = name ? name : "IP(" + std::to_string( quoted.ipProtocol ) + ")";
+    const auto protocol = ipProtocolLabel( quoted.ipProtocol );
     if ( quoted.transport ) {
         return " for " + endpoint( quoted.srcIp, quoted.srcPort ) + " \xe2\x86\x92 "
                + endpoint( quoted.dstIp, quoted.dstPort ) + " " + protocol;

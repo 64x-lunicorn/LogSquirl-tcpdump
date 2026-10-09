@@ -141,7 +141,8 @@ struct Stream {
  */
 class StreamTracker {
 public:
-    /// Conversations numbered by default: some 150 MB of memory at most.
+    /// Conversations numbered by default: some 150 MB of memory at most.  The
+    /// options may raise it tenfold (kMaxStreamCap, some 1.5 GB) or lower it.
     static constexpr size_t kMaxStreams = 1000000;
 
     explicit StreamTracker( size_t maxStreams = kMaxStreams )

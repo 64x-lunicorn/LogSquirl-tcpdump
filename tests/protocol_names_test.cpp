@@ -69,6 +69,12 @@ SCENARIO( "IP protocol numbers are named", "[names]" )
         REQUIRE( ipProtocolName( 200 ) == nullptr );
         REQUIRE( ipProtocolName( 255 ) == nullptr );
     }
+
+    THEN( "its label is the name, or the number as IP(n) without one" )
+    {
+        REQUIRE( ipProtocolLabel( 47 ) == "GRE" );
+        REQUIRE( ipProtocolLabel( 200 ) == "IP(200)" );
+    }
 }
 
 SCENARIO( "EtherTypes are named", "[names]" )

@@ -25,6 +25,7 @@
 #include "tcp_analysis.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 
 namespace tcpdump {
@@ -328,14 +329,18 @@ TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
     }
 
     const auto seq = pkt.tcpSeq - fwd.baseSeq;
-    const auto ack = ( pkt.tcpFlags & kTcpAck ) ? pkt.tcpAck - rev.baseSeq : 0;
+    // Without the ACK flag the acknowledgement field means nothing: no Ack.
+    const auto ack = ( pkt.tcpFlags & kTcpAck )
+                         ? std::optional<uint32_t>( pkt.tcpAck - rev.baseSeq )
+                         : std::nullopt;
     // Scaling applies once both SYNs carried the option, never to a SYN.
     const bool windowScaled = !syn && fwd.windowScale != 0 && rev.windowScale != 0;
     const auto window = windowOf( fwd, pkt.tcpWindow, windowScaled );
 
     // The parser wrote the numbers as they are, right after the flags: the
     // first "Seq=" of Info, before any payload description.
-    const auto raw = formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck, pkt.tcpWindow );
+    const auto raw = formatTcpNumbers(
+        pkt.tcpSeq, ack ? std::optional<uint32_t>( pkt.tcpAck ) : std::nullopt, pkt.tcpWindow );
     const auto at = pkt.info.find( "Seq=" );
     if ( at != std::string::npos && pkt.info.compare( at, raw.size(), raw ) == 0 ) {
         pkt.info.replace( at, raw.size(), formatTcpNumbers( seq, ack, window ) );
@@ -345,10 +350,11 @@ TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
         return {};
     }
     uint32_t dupAckFrame = 0;
-    const auto markers = classify( fwd, rev,
-                                   { pkt.number, timeNs( pkt ), seq, ack, pkt.payloadLen,
-                                     pkt.tcpFlags, pkt.tcpWindow, windowScaled, window },
-                                   dupAckFrame );
+    const auto markers
+        = classify( fwd, rev,
+                    { pkt.number, timeNs( pkt ), seq, ack.value_or( 0 ), pkt.payloadLen,
+                      pkt.tcpFlags, pkt.tcpWindow, windowScaled, window },
+                    dupAckFrame );
     pkt.info.insert( 0, markerText( markers, dupAckFrame, fwd.dupAcks ) );
     return markers;
 }

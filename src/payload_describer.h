@@ -57,6 +57,9 @@ struct PayloadDescription {
     /// The description is a preview of the payload's text, no detector
     /// having recognised it: printable ASCII, a dot for every other byte.
     bool preview = false;
+    /// What the payload begins for its stream, which describeInStream()
+    /// builds on (PacketRecord::streamCue).
+    StreamCue streamCue = StreamCue::None;
 };
 
 /**

@@ -296,6 +296,10 @@ SCENARIO( "The HTTP/2 connection preface is HTTP2", "[http][http2]" )
             REQUIRE( described.label == "HTTP2" );
             REQUIRE( described.description == "Magic" );
         }
+        THEN( "it cues its stream that an HTTP/2 connection began, by type, not by label" )
+        {
+            REQUIRE( described.streamCue == StreamCue::Http2Preface );
+        }
     }
 
     GIVEN( "the preface with the client's first frames behind it" )

@@ -132,6 +132,17 @@ description, or no match. It is the only module that knows which
 application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
+`payload_describer.cpp` holds the tables, the port hint and preview, and
+`describeInStream()`; the protocols' detectors live in a file each,
+following `icmp.cpp`: `describe_http.cpp` (HTTP, SSDP's messages, HTTP/2
+and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
+(with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
+over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
+`describe_socks.cpp` and `describe_nmea.cpp`. They share the internal
+header `describe_common.h` (namespace `tcpdump::describer`): the payload
+text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
+`hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
+of the detectors and in-stream passes the tables use.
 - TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, NMEA 0183, SOCKS4/5
   (only messages of the exact shape, in the right direction, on proxy
   ports), then the port hint
@@ -190,7 +201,9 @@ tried: each transport has a table of detectors, all of the same shape
   private messages (modes 6 and 7) show their version and mode alone. A
   packet of another version, or shorter than the 48-byte header, is `NTP`
   by its port alone. DNS, mDNS, SSDP, NTP, DHCP and DHCPv6 are named by
-  their ports, not guessed: the label sticks to the stream
+  their ports before any other detector is tried; a payload that parses is
+  recognised and its label sticks to the stream, one that does not is only
+  the port's guess (`PayloadDescription::guessed`), which does not
 - DNS: described like Wireshark, `Standard query response 0x1a2b A
   www.example.com CNAME example.com A 93.184.216.34`: the operation, the
   transaction id, the first question's type and name, a response code
@@ -210,8 +223,14 @@ tried: each transport has a table of detectors, all of the same shape
 - QUIC: by its bytes, not its port. A datagram is QUIC if it begins with a
   long header (header form and fixed bit set) of a version the describer
   knows: v1, v2 (RFC 9369, whose packet types are numbered differently) or
-  draft-22 to draft-34 (`0xff0000xx`; older drafts had another header), or
-  with a Version Negotiation packet (version 0) that lists one of them. It
+  draft-22 to draft-34 (`0xff0000xx`), or with a Version Negotiation
+  packet (version 0) that lists one of them, and with no other version.
+  Only the version tells a long header from any UDP datagram whose first
+  byte has its two top bits set, so an unknown one is not taken for QUIC;
+  and only these versions have the header the describer reads: drafts
+  before 22 packed both connection ID lengths into one byte, Google's QUIC
+  (`Q0xx`) has headers of its own, and a version not yet known may number
+  its packet types differently, as v2 did. It
   is described from its public header, `Initial, Version 1,
   DCID=8394c8f03e515708, SCID=0a0b0c0d`: the packets coalesced in the
   datagram, in order, up to four, then `…`, a short header among them as
@@ -235,7 +254,10 @@ tried: each transport has a table of detectors, all of the same shape
   header) is not described again: segments are not reassembled, and the
   Stream Labels make it an `HTTP2` `Continuation`. A packet labelled here
   counts as recognised (`PacketRecord::protocolRecognised`), so its label
-  sticks to the stream. For this the parser keeps the
+  sticks to the stream. The detectors mark the packet that begins such a
+  connection, a long header or the preface, with a `StreamCue`
+  (`PayloadDescription::streamCue`, kept in `PacketRecord::streamCue`):
+  that, not the label's text, is what `describeInStream()` goes by. For this the parser keeps the
   first `kPayloadHeadBytes` (48) bytes of every TCP and UDP payload in
   `PacketRecord::payloadHead`
 - The port hint, the last entry of both tables, names the service of a
@@ -366,7 +388,8 @@ captured takes one less than its first number seen as base (its first
 segment's sequence number, or the other direction's first acknowledgement
 number, whichever comes first), so a stream captured mid-way starts at
 `Seq=1 Ack=1` like one after its handshake. Without the ACK flag the
-acknowledgement field means nothing and `Ack=0` is shown. The arithmetic
+acknowledgement field means nothing and `Ack=` is left out (`[SYN] Seq=0
+Win=64240`), by the parser and the TCP Analysis alike. The arithmetic
 is modulo 2^32, so the numbers go on counting when the sequence numbers
 wrap. A SYN without ACK whose sequence number differs from its direction's
 base is a new connection on the same addresses and ports: both bases are
@@ -483,9 +506,13 @@ counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
 
 Memory therefore grows with the conversations and addresses in a capture,
-not with its size, and both are capped (at roughly 150 MB and 10 MB), so a
-port scan or a busy NAT cannot exhaust it. The summary says when a cap was
-hit.
+not with its size, and both are capped, so a port scan or a busy NAT cannot
+exhaust it. By default the caps are 1,000,000 streams and 100,000
+addresses, roughly 150 MB and 10 MB; the options (`settings.h`,
+*Advanced* in the dialog) let the user raise each up to tenfold
+(`kMaxStreamCap`, `kMaxEndpointCap`: 10,000,000 streams and 1,000,000
+addresses, roughly 1.5 GB and 100 MB) or lower it to 1. The summary says
+when a cap was hit.
 
 #### The Log Format (`formats/tcpdump_log.json`)
 An lnav-compatible Log Format definition, as LogSquirl's built-in ones in
@@ -728,13 +755,17 @@ new header adds goes into `HostCapabilities` before anything calls it.
 
 ## Adding Protocol Support
 
-An application protocol is one detector function plus one table entry in
-`payload_describer.cpp`:
-1. Write the detector with the common shape,
-   `std::optional<PayloadDescription> name( const Payload& )`: look at the
-   payload bytes and ports, return the label and a description if the
-   payload is yours, `std::nullopt` otherwise. Use `escapeBytes()` or
-   `firstLine()` for any text taken from the payload.
+An application protocol is a detector in a file of its own plus one table
+entry in `payload_describer.cpp`:
+1. Write `detectName( payload, len )` in `src/describe_name.cpp` (added to
+   both CMakeLists), declared in `describe_common.h`: the description if
+   the payload is yours, empty otherwise. Use `escapeBytes()`,
+   `fieldText()` or `firstLine()` for any text taken from the payload, and
+   a `FieldReader` for binary fields. In `payload_describer.cpp`, wrap it
+   in a function of the tables' common shape,
+   `std::optional<PayloadDescription> name( const Payload& )`, that looks
+   at the ports if it must and returns the label and the description, or
+   `std::nullopt`.
 2. Add it to `kTcpDetectors` or `kUdpDetectors`, for the transport it runs
    on, at the place in the order where it belongs: an entry earlier in the
    table wins over a later one, so a detector that recognises its payload

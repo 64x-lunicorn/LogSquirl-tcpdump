@@ -74,6 +74,7 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
         pkt.protocol = described.label;
     }
     pkt.protocolRecognised = !described.label.empty() && !described.guessed;
+    pkt.streamCue = described.streamCue;
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
         pkt.previewBytes = described.preview ? described.description.size() : 0;
@@ -106,19 +107,12 @@ std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
     return std::nullopt;
 }
 
-/// The name of @p pkt's IP protocol, or its number as `IP(200)`.
-std::string ipProtocolLabel( const PacketRecord& pkt )
-{
-    const auto* name = ipProtocolName( pkt.ipProtocol );
-    return name ? name : "IP(" + std::to_string( pkt.ipProtocol ) + ")";
-}
-
 /// The transport layer of a packet quoted in an ICMP error: its protocol's
 /// name and the ports of a TCP or UDP header, the first 4 of the 8 bytes a
 /// router quotes.  Nothing else of it is read.
 void parseQuotedTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 {
-    pkt.protocol = ipProtocolLabel( pkt );
+    pkt.protocol = ipProtocolLabel( pkt.ipProtocol );
     if ( ( pkt.ipProtocol == IpProtoTcp || pkt.ipProtocol == IpProtoUdp ) && remaining >= 4 ) {
         pkt.transport = pkt.ipProtocol == IpProtoTcp ? Transport::Tcp : Transport::Udp;
         pkt.srcPort = readBE16( data );
@@ -156,7 +150,10 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
             << formatTcpFlags( pkt.tcpFlags ) << " "
-            << formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck, pkt.tcpWindow );
+            << formatTcpNumbers( pkt.tcpSeq,
+                                 ( pkt.tcpFlags & 0x10 ) ? std::optional<uint32_t>( pkt.tcpAck )
+                                                         : std::nullopt,
+                                 pkt.tcpWindow );
 
         // A header shorter than its 20 fixed bytes is malformed: where the
         // payload starts is unknown, so none is taken, like Wireshark.
@@ -208,7 +205,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     }
     else {
         // A protocol not dissected further: its name, if it has one.
-        pkt.protocol = ipProtocolLabel( pkt );
+        pkt.protocol = ipProtocolLabel( pkt.ipProtocol );
         pkt.info = "Protocol " + std::to_string( pkt.ipProtocol );
     }
 }
@@ -623,9 +620,9 @@ std::string formatTcpFlags( uint8_t flags )
     return result;
 }
 
-std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window )
+std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window )
 {
-    return "Seq=" + std::to_string( seq ) + " Ack=" + std::to_string( ack )
+    return "Seq=" + std::to_string( seq ) + ( ack ? " Ack=" + std::to_string( *ack ) : "" )
            + " Win=" + std::to_string( window );
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Records the real-capture corpus (tests/corpus/real-*.pcap) on this
-# machine's loopback interface, so that only self-made traffic between local
-# processes is in it. Needs root for tcpdump: run as `sudo bash tests/make_real_corpus.sh`,
+# Records the real-capture corpus (tests/corpus/local/real-*.pcap, git-ignored
+# and never committed) on this machine's loopback interface, so that only
+# self-made traffic between local processes is in it. Needs root for tcpdump: run as `sudo bash tests/make_real_corpus.sh`,
 # or name the captures to redo, e.g. `sudo bash tests/make_real_corpus.sh real-ping`.
 # The TLS payload is cut by a small snaplen to keep the capture tiny.
 set -euo pipefail

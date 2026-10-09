@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **No `Ack=` without the ACK flag.** A segment without the ACK flag, a
+  SYN above all, showed `Ack=0`, though its acknowledgement field means
+  nothing; Info now leaves `Ack=` out, as Wireshark does: `[SYN] Seq=0
+  Win=64240`.
+- **A port alone no longer makes a UDP label stick.** A datagram on the
+  DNS, mDNS, SSDP, NTP, DHCP or DHCPv6 port whose payload does not parse
+  as that protocol is still named by the port, but as a guess: like every
+  port hint, its label no longer sticks to the stream.
 - **Port 8443 is `HTTPS-Alt`.** The port hint named TCP 8443 `HTTP-Alt`,
   like 8080, although it is the usual alternative HTTPS port (IANA's
   `pcsync-https`): the handshake of a TLS connection to 8443, before its
