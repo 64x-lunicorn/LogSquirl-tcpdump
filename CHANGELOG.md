@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Display filters.** **Plugins → tcpdump → Display filter…** (also in
+  the Command Palette) takes a Wireshark-style display filter, such as
+  `ip.addr == 10.0.0.0/8 && tcp.port == 443 || dns`, and opens the Regex
+  Lab with the pattern of the packet lines it selects, in every column
+  layout. Supported: `ip.addr`/`src`/`dst` (an address or an IPv4
+  network), `ipv6.addr`/`src`/`dst`, `tcp.port`/`srcport`/`dstport`, the
+  same of `udp`, `tcp.stream`, `udp.stream` and `frame.len`, compared with
+  `==`, `!=`, `<`, `>`, `<=`, `>=` (or alone), protocol names as in the
+  Protocol column, `tcp`, `udp`, `ip`, `ipv6`, combined with `!`, `&&`,
+  `||` and parentheses. `!=` means what it does in Wireshark. Anything
+  else is rejected below the field with its column and the reason, never
+  approximated. Each condition is a lookahead from the start of the line
+  and a number range an exact pattern, so the pattern selects exactly the
+  lines the filter means; it runs with Qt's regular expressions, as the
+  Regex Lab and LogSquirl's search run a pattern Vectorscan cannot read.
+  Needs LogSquirl ≥ 26.11 (#82)
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section or a
   DNS-over-TCP message that spans TCP segments is described once, on the
   segment that completes it, from all its bytes: `Client Hello,

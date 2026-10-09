@@ -73,6 +73,8 @@ add_library(logsquirl_tcpdump SHARED
     src/sidebarwidget.cpp
     src/follow_stream.cpp
     src/regex_lab.cpp
+    src/display_filter.cpp
+    src/display_filter_dialog.cpp
 )
 
 # Qt MOC needs to know about our Q_OBJECT classes

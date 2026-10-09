@@ -172,7 +172,14 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    The capture is read once from front to back in the background; a
    progress dialog shows how far, and Cancel leaves no file. Needs
    LogSquirl ≥ 26.11
-13. With the [Log Format](#log-format) installed, switch to the table view
+13. To filter as with a Wireshark display filter, choose **Plugins →
+   tcpdump → Display filter…** (also in the Command Palette) and type one,
+   such as `ip.addr == 10.0.0.1 && tcp.port == 443`: the Regex Lab opens
+   with the pattern of the packet lines it selects; apply it to filter the
+   view. A filter outside the [supported subset](#display-filters) is
+   rejected below the field with its column and the reason. Needs
+   LogSquirl ≥ 26.11
+14. With the [Log Format](#log-format) installed, switch to the table view
    with the toolbar's table button
 
 ### Options
@@ -197,7 +204,8 @@ the options it was converted with; open it again to apply new ones.
 The defaults write the packet list shown under [Example Output](#example-output),
 which the Log Format and every highlighter and filter written for it expect.
 The plugin's own patterns, those of [Follow stream](#usage), the summary's
-filters and the [highlighter set and filter group](#highlighters-and-filters),
+filters, the [display filters](#display-filters) and the [highlighter set
+and filter group](#highlighters-and-filters),
 read every layout. Two options change the column layout:
 
 - **Time**: a line has one time column fewer. The [Log Format](#log-format)
@@ -303,6 +311,52 @@ or a DNS response code from the description after the first ` | `. A
 tunnelled packet is matched by the packet inside: the tunnels Info names
 first (`VXLAN VNI 100 | `, `GRE | `, …) are skipped. They match in every
 choice of [columns](#options).
+
+### Display filters
+
+**Plugins → tcpdump → Display filter…** translates a Wireshark-style
+display filter into a Regex Lab pattern over the packet line's columns.
+The supported subset:
+
+| Filter | Selects the packet lines |
+|--------|--------------------------|
+| `ip.addr`, `ip.src`, `ip.dst` | whose Source or Destination, Source, Destination is the IPv4 address, or lies in the network: `ip.addr == 10.0.0.0/8` |
+| `ipv6.addr`, `ipv6.src`, `ipv6.dst` | the same for an IPv6 address, in any of its forms (`2001:DB8:0::1`) |
+| `tcp.port`, `tcp.srcport`, `tcp.dstport` | of TCP packets with either port, the source port, the destination port |
+| `udp.port`, `udp.srcport`, `udp.dstport` | the same of UDP packets |
+| `tcp.stream`, `udp.stream` | of the TCP or UDP stream with that number in the Stream column |
+| `frame.len` | whose Length, the length on the wire, compares |
+| `dns`, `http`, `tls`, `quic`, `arp`, `icmp`, `http-alt`, … | whose Protocol column is the name, case aside |
+| `tcp`, `udp`, `ip`, `ipv6` | of TCP, UDP, IPv4, IPv6 packets, whatever their Protocol column |
+
+Fields compare with `==`, `!=`, `<`, `>`, `<=` and `>=` (or `eq`, `ne`,
+`lt`, `gt`, `le`, `ge`), addresses with `==` and `!=` only; numbers are
+decimal or `0x` hexadecimal. A field alone, `tcp.port`, selects the packets
+that have it. Conditions combine with `!`/`not`, `&&`/`and`, `||`/`or` and
+parentheses, `!` binding tighter than `&&`, and `&&` than `||`. As in
+Wireshark, `!=` selects the packets that have the field and no value of it
+equal: `ip.addr != 10.0.0.1` is the IPv4 packets with neither address
+10.0.0.1, while `!(ip.addr == 10.0.0.1)` also selects every packet without
+IPv4.
+
+The fields are read from the line, not from the capture: the addresses
+from Source and Destination (an ARP packet's IPv4 addresses do not count
+as `ip`), the ports from the start of a TCP or UDP packet's Info, so a
+tunnelled packet is matched by the packet inside, as its line shows it, and
+the ports an ICMP error quotes do not count; a stream past the stream cap
+(`?`) has no number. Anything else is rejected with its position and the
+reason, never approximated: other fields (`tcp.flags`, `http.host`, …),
+strings, `contains`, `matches`, sets (`in {…}`), slices, IPv6 prefixes and
+comparing two fields.
+
+The pattern is a lookahead from the start of the line per condition, so
+that conditions on different columns combine exactly, and a number range
+(`frame.len > 1000`, `tcp.port < 1024`) is spelled out digit by digit. It
+is for the Regex Lab and LogSquirl's search, which run it with Qt's regular
+expressions (with Vectorscan as the engine too: LogSquirl searches a
+pattern Vectorscan cannot read with Qt's engine); Vectorscan alone has no
+lookaheads, which is why the shipped highlighter set and filter group use
+none.
 
 ## Example Output
 

@@ -38,6 +38,7 @@ add_executable(logsquirl_tcpdump_tests
     conversation_table_test.cpp
     follow_stream_test.cpp
     regex_lab_test.cpp
+    display_filter_test.cpp
     corpus_test.cpp
     conversion_options_test.cpp
     settings_test.cpp
@@ -114,6 +115,8 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"
+        "${CMAKE_SOURCE_DIR}/src/display_filter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/display_filter_dialog.cpp"
 )
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format

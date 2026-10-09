@@ -1094,6 +1094,42 @@ each corpus capture, converted in every `LineLayout`, against the columns of
 its lines;
 `sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
 
+#### Display filters (`display_filter.h/cpp`, `display_filter_dialog.h/cpp`)
+`Plugins → tcpdump → Display filter…`, offered on a host with `regexLab`,
+calls `openDisplayFilter()`: a `DisplayFilterDialog` translates the text on
+every change with `displayFilterPattern()`, shows a rejection as "Column N:
+reason" below the field and enables *Open in Regex Lab* only for a valid
+filter; the filter accepted is logged and offered again next time, its
+pattern opened with `openRegexLab()` ("Display filter").
+`parseDisplayFilter()` is a tokenizer and a recursive-descent parser
+(`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
+as a `FilterError` with its index into the filter. Unsupported syntax
+(strings, slices, sets, `contains`, `matches`, `xor`, `=`, `&`, `===`) is
+rejected by the tokenizer, unknown fields, wrong operators and bad values
+(an IPv6 address for `ip.addr`, a port above 65535, two fields) by the
+parser; an address is stored as the column shows it (`formatIpv4()`,
+`formatIpv6()`, an IPv4 network masked to its prefix).
+`filterPattern()` makes each test a pattern from the start of the line:
+`upToSourcePattern()` without its `^`, Source and Destination, Protocol
+and Length, and for a port or stream the start of Info as Follow stream
+reads it (MAC columns, tunnels, `[TCP …]` markers, then `a → b` followed
+by `[` for TCP or `Len=` for UDP, which tells the transport). A filter of
+one test is `^` and that pattern; otherwise each test is a lookahead,
+`&&` their sequence, `||` an alternation of them and `!` a negative
+lookahead, with a lookahead for a packet line first when a negation alone
+could select another line. `!=` is the field present and no value equal,
+as in Wireshark. Numbers compared with `<`, `>`, `<=`, `>=` and IPv4
+networks become exact ranges by `numberRangePattern()`, digit by digit,
+without leading zeros. The patterns need PCRE2's lookaheads, so they are
+for the Regex Lab and searches only (LogSquirl runs a pattern Vectorscan
+rejects with Qt's engine), never for `presets/`. `display_filter_test.cpp`
+checks a table of filters on hand-made lines, a table of rejections with
+their positions, every number range up to 30,000, and, for every corpus
+text in every `LineLayout`, a list of filters plus filters on the values
+the lines have against a reference evaluation of the `FilterExpression`
+over each line's columns, read with the Log Format's regex and Info word
+by word; it drives the dialog and the menu entry through the `FakeHost`.
+
 #### The plugin API header
 `include/logsquirl_plugin_api.h` is the host's
 `src/plugins/include/logsquirl_plugin_api.h`, byte for byte, from the

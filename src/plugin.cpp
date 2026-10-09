@@ -38,8 +38,9 @@
  *      the host capabilities the size tells, create a SidebarWidget,
  *      register it as a sidebar tab, add Plugins > tcpdump >
  *      Open pcap… to the menu (and Follow stream, on a host with the
- *      Regex Lab and the selected lines; Packet details and Export packets…
- *      on a host with the selected lines), and register for the host's active-file
+ *      Regex Lab and the selected lines; Display filter… on a host with the
+ *      Regex Lab; Packet details and Export packets… on a host with the
+ *      selected lines), and register for the host's active-file
  *      notifications, so the sidebar shows the summary and the Packet Panel
  *      the packets of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
@@ -54,6 +55,7 @@
 
 #include "plugin.h"
 #include "configdialog.h"
+#include "display_filter_dialog.h"
 #include "follow_stream.h"
 #include "settings.h"
 #include "sidebarwidget.h"
@@ -164,6 +166,15 @@ static void followStreamFromMenu( void* /* user_data */ )
     guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
 }
 
+/// Plugins > tcpdump > Display filter…: a filter typed, opened in the Regex Lab.
+static void displayFilterFromMenu( void* /* user_data */ )
+{
+    guarded( "opening a display filter", [] {
+        auto* sidebar = tcpdump::g_state.sidebarWidget;
+        tcpdump::openDisplayFilter( sidebar ? sidebar->window() : nullptr );
+    } );
+}
+
 /// Plugins > tcpdump > Packet details: the selected line's packet in the panel.
 static void packetDetailsFromMenu( void* /* user_data */ )
 {
@@ -246,6 +257,12 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
                                        nullptr );
             api->register_menu_action( handle, "tcpdump", "Export packets\xe2\x80\xa6",
                                        &exportPacketsFromMenu, nullptr );
+        }
+        // A display filter opens in the Regex Lab, which only a host of
+        // LogSquirl 26.11 or later has.
+        if ( tcpdump::g_state.hostCapabilities.regexLab ) {
+            api->register_menu_action( handle, "tcpdump", "Display filter\xe2\x80\xa6",
+                                       &displayFilterFromMenu, nullptr );
         }
         // Only a host that has the Regex Lab and tells the selected lines
         // can follow a stream.
