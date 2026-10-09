@@ -118,6 +118,8 @@ SCENARIO( "Well-known ports name their service, per transport", "[names]" )
         REQUIRE( nameOr( servicePortName( Transport::Tcp, 3389 ) ) == "RDP" );
         REQUIRE( nameOr( servicePortName( Transport::Tcp, 5900 ) ) == "VNC" );
         REQUIRE( nameOr( servicePortName( Transport::Tcp, 22 ) ) == "SSH" );
+        REQUIRE( nameOr( servicePortName( Transport::Tcp, 8080 ) ) == "HTTP-Alt" );
+        REQUIRE( nameOr( servicePortName( Transport::Tcp, 8443 ) ) == "HTTPS-Alt" );
     }
 
     THEN( "services on both transports are named on both" )

@@ -169,6 +169,36 @@ SCENARIO( "A protocol a detector recognised sticks to the stream", "[stream_labe
         }
     }
 
+    GIVEN( "TLS on port 8443, whose port hint is HTTPS-Alt, from its handshake to its end" )
+    {
+        const Bytes clientHello{ 0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00 };
+        const Bytes encrypted{ 0x8a, 0x13, 0xf0, 0x42, 0x99, 0x00, 0x7e, 0xc1 };
+        const auto hello = clientHello.size();
+        const auto packets = labelled( {
+            segment( 8443, false, kSyn, 0, 0 ),
+            segment( 8443, true, kSyn | kAck, 0, 1 ),
+            segment( 8443, false, kAck, 1, 1 ),
+            segment( 8443, false, kPshAck, 1, 1, clientHello ),
+            segment( 8443, true, kAck, 1, 1 + hello ),
+            segment( 8443, true, kPshAck, 1, 1 + hello, encrypted ),
+            segment( 8443, false, kAck | 0x01, 1 + hello, 1 + encrypted.size() ),
+        } );
+
+        THEN( "the handshake before the hello is the port's guess, an HTTPS one" )
+        {
+            for ( size_t i = 0; i < 3; ++i ) {
+                REQUIRE( packets[ i ].protocol == "HTTPS-Alt" );
+            }
+        }
+        THEN( "every packet from the hello on is TLS" )
+        {
+            for ( size_t i = 3; i < packets.size(); ++i ) {
+                REQUIRE( packets[ i ].protocol == "TLS" );
+            }
+            REQUIRE( descriptionOf( packets[ 5 ] ) == "Continuation" );
+        }
+    }
+
     GIVEN( "a stream that recognised a protocol, then another detector's match" )
     {
         const Bytes clientHello{ 0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00 };

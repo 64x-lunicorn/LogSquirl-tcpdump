@@ -462,6 +462,19 @@ SCENARIO( "The describer tells a recognised label from a port's guess", "[descri
         }
     }
 
+    GIVEN( "a TLS segment no detector recognises, on the alternative HTTPS port 8443" )
+    {
+        THEN( "the port's guess is HTTPS-Alt, not HTTP-Alt" )
+        {
+            const Bytes encrypted{ 0x8a, 0x13, 0xf0, 0x42, 0x99, 0x00, 0x7e, 0xc1 };
+            const auto toServer = describe( Transport::Tcp, encrypted, 50000, 8443 );
+            const auto toClient = describe( Transport::Tcp, encrypted, 8443, 50000 );
+            REQUIRE( toServer.label == "HTTPS-Alt" );
+            REQUIRE( toServer.guessed );
+            REQUIRE( toClient.label == "HTTPS-Alt" );
+        }
+    }
+
     GIVEN( "a payload no detector recognises, on ports without a hint" )
     {
         THEN( "there is no label to guess" )

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Port 8443 is `HTTPS-Alt`.** The port hint named TCP 8443 `HTTP-Alt`,
+  like 8080, although it is the usual alternative HTTPS port (IANA's
+  `pcsync-https`): the handshake of a TLS connection to 8443, before its
+  Client Hello, said `HTTP-Alt`. It now says `HTTPS-Alt`, and from the
+  Client Hello on the stream is `TLS`, as on 443; 8080 stays `HTTP-Alt`.
 - **The TCP window is shown scaled.** Once both SYNs of a connection
   carried the window scale option, `Win=` is the window shifted by the
   sender's scale, as Wireshark calculates it (`Win=408320` rather than

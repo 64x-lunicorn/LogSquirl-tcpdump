@@ -196,7 +196,8 @@ constexpr Service kServices[] = {
     { 6514, kTcp, "Syslog" }, // Over TLS
     { 6667, kTcp, "IRC" },
     { 8080, kTcp, "HTTP-Alt" },
-    { 8443, kTcp, "HTTP-Alt" },
+    // IANA calls 8443 pcsync-https; it is the usual alternative HTTPS port
+    { 8443, kTcp, "HTTPS-Alt" },
     { 9092, kTcp, "Kafka" },
     { 11211, kBoth, "Memcached" },
     { 27017, kTcp, "MongoDB" },
