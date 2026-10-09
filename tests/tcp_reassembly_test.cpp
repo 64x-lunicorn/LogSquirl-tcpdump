@@ -544,6 +544,25 @@ SCENARIO( "A message split over segments is described once, where it completes",
         }
     }
 
+    GIVEN( "a DoIP diagnostic message split across 2 segments" )
+    {
+        Bytes message{ 0x02, 0xFD, 0x80, 0x01 };
+        putBE32( message, 4 + 2 + 600 );
+        message = message + Bytes{ 0x0E, 0x00, 0x10, 0x00, 0x36, 0x01 } + Bytes( 600, 0x5A );
+        const auto lines
+            = converted( handshake( 13400 ) + cut( message, { 100 }, kClientIsn + 1, 13400 ) );
+
+        THEN( "it is described whole on the second" )
+        {
+            REQUIRE( lines[ 3 ].protocol == "DoIP" );
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines[ 4 ].protocol == "DoIP" );
+            REQUIRE( lines[ 4 ].description
+                     == "Diagnostic message 0x0E00 \xe2\x86\x92 0x1000, UDS TransferData Block 1"
+                            + reassembledFrom( 2 ) );
+        }
+    }
+
     GIVEN( "whole records and the start of another in one segment" )
     {
         const auto first = tlsRecord( 0x17, Bytes( 100, 0xAA ) );

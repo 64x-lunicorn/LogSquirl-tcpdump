@@ -56,6 +56,7 @@ add_library(logsquirl_tcpdump SHARED
     src/describe_sip.cpp
     src/describe_rtp.cpp
     src/describe_someip.cpp
+    src/describe_doip.cpp
     src/media_expectations.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp

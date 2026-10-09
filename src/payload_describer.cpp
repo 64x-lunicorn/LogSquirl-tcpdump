@@ -124,6 +124,9 @@ bool onPort( const Payload& p, uint16_t port )
     return p.srcPort == port || p.dstPort == port;
 }
 
+/// DoIP's port, UDP and TCP (ISO 13400-2); over TLS it is 3496.
+constexpr uint16_t kDoipPort = 13400;
+
 /// DNS over TCP on port 53: described if the segment begins with a message.
 std::optional<PayloadDescription> dnsOverTcpMessage( const Payload& p )
 {
@@ -206,6 +209,17 @@ std::optional<PayloadDescription> someIpByHeader( const Payload& p )
     return describedIfAny( found.sd ? "SOME/IP-SD" : "SOME/IP", found.text );
 }
 
+/// DoIP on port 13400, over UDP and TCP: named by the port, described if
+/// the payload begins with a DoIP header; a segment without payload (a
+/// SYN) stays TCP.
+std::optional<PayloadDescription> doipMessages( const Payload& p )
+{
+    if ( p.len == 0 || !onPort( p, kDoipPort ) ) {
+        return std::nullopt;
+    }
+    return describedOnPort( "DoIP", detectDoip( p.data, p.len ) );
+}
+
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
     return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
@@ -236,9 +250,9 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 
 /// The TCP detectors, in the order they are tried.
 constexpr Detector kTcpDetectors[]
-    = { dnsOverTcpMessage, someIpOnPort, tlsRecord,         sipMessages,
-        httpMessage,       http2Preface, mqttPackets,       someIpByHeader,
-        nmeaSentence,      socksMessage, portHintAndPreview };
+    = { dnsOverTcpMessage, doipMessages, someIpOnPort, tlsRecord,
+        sipMessages,       httpMessage,  http2Preface, mqttPackets,
+        someIpByHeader,    nmeaSentence, socksMessage, portHintAndPreview };
 
 // ── Framing a TCP stream's messages ──────────────────────────────────────
 
@@ -258,6 +272,15 @@ std::optional<size_t> dnsOverTcpFrame( const Payload& p )
         return std::nullopt;
     }
     return frameDnsOverTcp( p.data, p.len );
+}
+
+/// DoIP on its port only.
+std::optional<size_t> doipFrame( const Payload& p )
+{
+    if ( !onPort( p, kDoipPort ) ) {
+        return std::nullopt;
+    }
+    return frameDoipMessage( p.data, p.len );
 }
 
 std::optional<size_t> tlsFrame( const Payload& p )
@@ -293,8 +316,9 @@ std::optional<size_t> mqttFrame( const Payload& p )
 /// on its port aside, which frames by its header too); a
 /// protocol is numbered by its place, from 1 (MessageExtent::framer).
 constexpr Framer kTcpFramers[] = {
-    { "DNS", dnsOverTcpFrame }, { "TLS", tlsFrame },   { "SIP", sipFrame },
-    { "HTTP", httpFrame },      { "MQTT", mqttFrame }, { "SOME/IP", someIpFrame },
+    { "DNS", dnsOverTcpFrame }, { "DoIP", doipFrame }, { "TLS", tlsFrame },
+    { "SIP", sipFrame },        { "HTTP", httpFrame }, { "MQTT", mqttFrame },
+    { "SOME/IP", someIpFrame },
 };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
@@ -348,8 +372,8 @@ std::optional<PayloadDescription> dhcpv6Packet( const Payload& p )
 
 /// The UDP detectors, in the order they are tried: ports first, then content.
 constexpr Detector kUdpDetectors[]
-    = { dnsMessage,  ssdpMessage,    ntpPacket,  dhcpPacket,   dhcpv6Packet,      someIpOnPort,
-        sipMessages, someIpByHeader, quicPacket, nmeaSentence, portHintAndPreview };
+    = { dnsMessage,   ssdpMessage, ntpPacket,      dhcpPacket, dhcpv6Packet, doipMessages,
+        someIpOnPort, sipMessages, someIpByHeader, quicPacket, nmeaSentence, portHintAndPreview };
 
 /// The detectors of a transport, as a range.
 template <size_t N>

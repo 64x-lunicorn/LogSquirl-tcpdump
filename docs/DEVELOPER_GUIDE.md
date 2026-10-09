@@ -259,12 +259,13 @@ over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
 port in the stream), `describe_sip.cpp` (SIP and its SDP bodies),
 `describe_rtp.cpp` (RTP and RTCP, for the `MediaExpectations`),
 `describe_someip.cpp` (SOME/IP and SOME/IP-SD, and the name table of
-`someip.h`) and `describe_nmea.cpp`. They share the internal
+`someip.h`), `describe_doip.cpp` (DoIP and the UDS messages of its
+diagnostic messages) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, SOME/IP on its ports, TLS, SIP (before HTTP, whose
+- TCP: DNS on port 53, DoIP on port 13400, SOME/IP on its ports, TLS, SIP (before HTTP, whose
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
@@ -326,8 +327,8 @@ of the detectors and in-stream passes the tables use.
   is MQTT and gives its stream `StreamCue::MqttConnect`: the stream's later
   segments that no detector recognised are described from their first
   kPayloadHeadBytes in `describeMqttInStream()`. MQTT over TLS (8883) is TLS
-- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, SOME/IP on its
-  ports, SIP, SOME/IP by its header, QUIC, then NMEA and the port hint
+- UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, DoIP on port 13400,
+  SOME/IP on its ports, SIP, SOME/IP by its header, QUIC, then NMEA and the port hint
 - SOME/IP (AUTOSAR PRS_SOMEIPProtocol), on port 30490 (SOME/IP-SD's) and
   the ports the user configured (`someIpPorts`) whatever the header says,
   elsewhere only if every message's header keeps to the rules (protocol
@@ -362,6 +363,38 @@ of the detectors and in-stream passes the tables use.
   `…`; the entries array must hold whole entries, an option index within
   the options, else `[Malformed Packet]`; an endpoint option of the wrong
   length is `[Malformed option]`; an SD message cut short ends in ` …`
+- DoIP (ISO 13400-2), on UDP and TCP port 13400 (a segment without payload
+  stays TCP): every message of a datagram or segment, up to eight, joined
+  by `; `, then `…`, named by its payload type as Wireshark names it, from
+  `Generic DoIP header NACK` and `Vehicle identification request` to
+  `Diagnostic message NACK`; another type is `Reserved payload type
+  0xNNNN` or, from 0xF000, `Manufacturer-specific payload type 0xNNNN`, with
+  its length. The fields follow the name: a vehicle announcement's `VIN`,
+  `Logical address`, `EID` and `GID` (and the further action and VIN/GID
+  sync status unless they are 0), routing activation's `Source 0x0E00,
+  Activation type Default` and `Tester …, Entity …, Routing successfully
+  activated (0x10)` (the response codes in ISO 13400-2's words), the entity
+  status, the power mode, the alive check's source, the NACK codes.
+  Diagnostic messages and their ACK and NACK name their addresses,
+  `Diagnostic message 0x0E00 → 0x1000`, and a diagnostic message the UDS
+  message it carries (ISO 14229-1), the service by its name: `UDS
+  ReadDataByIdentifier 0xF190, 0xF18C` (up to four identifiers, then `…`),
+  `UDS Positive Response DiagnosticSessionControl
+  extendedDiagnosticSession`, `UDS Negative Response ReadDataByIdentifier
+  NRC=0x31 (requestOutOfRange)`, the sub-functions of the services that
+  have one (`requestSeed 0x01`, `startRoutine 0xFF00`, a set suppress bit
+  as `, suppress positive response`), the identifier of the other
+  by-identifier services, the group of ClearDiagnosticInformation and the
+  block of TransferData; any other service is `Service 0xNN`. The header
+  must keep to its pattern, a known version (1 to 4, or 0xFF) followed by
+  its inverse, else the message is `Incorrect pattern format (version …,
+  inverse version …) [Malformed Packet]` and nothing after it is read; a
+  payload length its type does not allow is `Invalid payload length n
+  [Malformed Packet]`, as is a UDS message without the parameter its
+  service needs. Every field is read with a `FieldReader` within the
+  message's captured bytes; a message cut at the snaplen or the segment
+  ends in ` …`. Over TCP, `frameDoipMessage()` frames a message by its
+  payload length for the TCP Reassembly
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
   code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,
@@ -714,7 +747,9 @@ is described as it is), an MQTT control packet by its Remaining Length (port
 1883 only: a framer sees no stream state, so MQTT behind a CONNECT on
 another port is not reassembled), a SOME/IP message by its Length (8 + its
 value; on SOME/IP's ports whatever the header says, elsewhere if the header
-keeps to the rules and the message is at most 1 MiB). A framer answers more
+keeps to the rules and the message is at most 1 MiB), a DoIP message by its
+payload length (8 + its value; port 13400 only, if the header keeps to the
+pattern of version and inverse version). A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -944,8 +979,9 @@ the result becomes Cancelled and the output is removed.
 
 `ConversionOptions` are everything the user can choose: the `LineLayout`,
 the payload preview (`preview`, `previewChars`), the stream and endpoint
-caps, the TCP Reassembly's memory (`reassemblyMegabytes`), the ports SOME/IP
-is read on besides 30490 (`someIpPorts`) and its name table
+caps, the TCP Reassembly's memory (`reassemblyMegabytes`), whether every TCP
+segment shows its timestamps (`tcpTimestamps`), the
+ports SOME/IP is read on besides 30490 (`someIpPorts`) and its name table
 (`someIpNamesFile`); besides, `checkpointInterval`, which tests lower. The
 Converter loads the name table (`loadSomeIpNames()`, `someip.h`; a file that
 cannot be read names nothing) and puts the ports and names in place for the
@@ -1247,7 +1283,13 @@ finds, subscriptions with their acks and a nack and a withdrawn offer,
 SOME/IP over UDP on a port only its headers tell (request, response,
 several notifications in a datagram, an error, a SOME/IP-TP segment), over
 TCP with a magic cookie and a response over two segments, and a message
-with a wrong protocol version, by `tests/make_someip_corpus.py`. The link layers' tests,
+with a wrong protocol version, by `tests/make_someip_corpus.py`; `doip.pcap`,
+vehicle identification requests and announcements, entity status and
+power mode over UDP, routing activation and diagnostic messages over TCP
+with UDS sessions, identifiers, a negative response, a response pending, a
+TransferData over two segments, a diagnostic message NACK and an alive
+check, an inverse version that does not match and a payload length its type
+does not allow, by `tests/make_doip_corpus.py`. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks

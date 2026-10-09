@@ -281,6 +281,10 @@ struct SomeIpDescription {
 SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
 /// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
 bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
+/// The DoIP messages (ISO 13400-2) a payload begins with, every one of a
+/// datagram or segment, a diagnostic message with the UDS service it
+/// carries (describe_doip.cpp).
+std::string detectDoip( const uint8_t* payload, size_t len );
 
 // ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
 
@@ -314,6 +318,9 @@ std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
 /// A SOME/IP message, by its Length: on SOME/IP's port whatever its header
 /// says, elsewhere only if the header keeps to its rules (describe_someip.cpp).
 std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bool onSomeIpPort );
+/// A DoIP message, by its payload length, if its header keeps to the
+/// pattern of version and inverse version (describe_doip.cpp).
+std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
 
 // ── In the stream ────────────────────────────────────────────────────────
 

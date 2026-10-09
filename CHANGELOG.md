@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
   DNS-over-TCP message, a SIP message (by its Content-Length), an MQTT
-  control packet on port 1883 (by its Remaining Length) or a SOME/IP
-  message (by its Length) that spans TCP segments is described once, on the
+  control packet on port 1883 (by its Remaining Length), a SOME/IP
+  message (by its Length) or a DoIP message on port 13400 (by its payload
+  length) that spans TCP segments is described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
   example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
@@ -137,6 +138,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Packet]`; over TCP a message that spans segments is reassembled by its
   Length. A new synthetic capture, `tests/corpus/someip.pcap` (written by
   `tests/make_someip_corpus.py`), shows each case.
+- **DoIP described, with the UDS service of diagnostic messages.** DoIP
+  (Diagnostics over IP, ISO 13400-2) on UDP and TCP port 13400 is labelled
+  `DoIP` and every message of a datagram or segment is named as Wireshark
+  names its payload type, up to eight: `Vehicle identification request`
+  (with EID or VIN), `Vehicle announcement message/vehicle identification
+  response message, VIN …, Logical address 0x1000, EID …, GID …`,
+  `Routing activation request, Source 0x0E00, Activation type Default`,
+  `Routing activation response, … Routing successfully activated (0x10)`,
+  `Alive check request/response`, entity status, diagnostic power mode,
+  `Diagnostic message ACK/NACK` and `Generic DoIP header NACK` with their
+  codes. A diagnostic message names its addresses and the UDS service it
+  carries (ISO 14229-1), with its sub-function, data identifiers or routine
+  and, in a negative response, the NRC: `Diagnostic message 0x0E00 →
+  0x1000, UDS ReadDataByIdentifier 0xF190`, `UDS Positive Response
+  DiagnosticSessionControl extendedDiagnosticSession`, `UDS Negative
+  Response ReadDataByIdentifier NRC=0x31 (requestOutOfRange)`. A header
+  whose inverse version does not match its version is `Incorrect pattern
+  format … [Malformed Packet]`, a payload length its type does not allow
+  `Invalid payload length n [Malformed Packet]`; every length is checked
+  against the captured bytes, a cut message ends in `…`, and over TCP a
+  message that spans segments is reassembled by its payload length. A new
+  synthetic capture, `tests/corpus/doip.pcap` (written by
+  `tests/make_doip_corpus.py`), shows each case.
 
 ### Changed
 - A segment that ends inside a TLS record, an HTTP header section, a
