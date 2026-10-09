@@ -249,6 +249,9 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
     }
     if ( !finished ) {
         endProcessGroup( *group, &process, std::chrono::milliseconds( 0 ) );
+        // Reaped here, whatever the group did.
+        process.kill();
+        process.waitForFinished( 1000 );
         output.error
             = cancelled()
                   ? QStringLiteral( "Listing with %1 cancelled" ).arg( command.displayName() )
