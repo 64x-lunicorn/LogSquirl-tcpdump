@@ -197,10 +197,10 @@ SCENARIO( "Follow stream matches exactly the lines of a packet's stream", "[foll
         const QStringList lines{
             "1      0       2023-11-14 22:13:20.000000Z  0.000000       192.168.1.1   "
             "192.168.1.2   HTTP      54     50000 "
-                + kArrow + " 80 [SYN] Seq=0 Ack=0 Win=65535",
+                + kArrow + " 80 [SYN] Seq=0 Win=65535",
             "2      0       2023-11-14 22:13:21.000000Z  1.000000       192.168.1.1   "
             "192.168.1.2   HTTP      54     [TCP Retransmission] 50000 "
-                + kArrow + " 80 [SYN] Seq=0 Ack=0 Win=65535",
+                + kArrow + " 80 [SYN] Seq=0 Win=65535",
             "3      0       2023-11-14 22:13:21.500000Z  1.500000       192.168.1.1   "
             "192.168.1.2   DNS       71     40000 "
                 + kArrow + " 53 Len=29 | Query example.com",
