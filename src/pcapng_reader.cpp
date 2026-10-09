@@ -107,6 +107,7 @@ void PcapngReader::endBroken()
 bool PcapngReader::readBlockHeader( BlockHeader& block )
 {
     problem_.clear();
+    block.start = bytesRead();
     uint8_t header[ 12 ];
     const auto got = read( header, 8 );
     if ( got == 0 ) {
@@ -128,6 +129,7 @@ bool PcapngReader::readBlockHeader( BlockHeader& block )
             return fail( "unknown byte-order magic" );
         }
         swap_ = magic == kByteOrderMagicSwapped;
+        sectionState_.reset();
     }
     block.length = read32( header + 4, swap_ );
     if ( block.length % 4 != 0 || block.length < minimumLength( block.type ) ) {
@@ -164,6 +166,7 @@ bool PcapngReader::readSectionHeader( BlockHeader& block )
         return false;
     }
     interfaces_.clear();
+    sectionState_.reset();
     return finishBlock( block );
 }
 
@@ -226,6 +229,7 @@ bool PcapngReader::readInterface( BlockHeader& block )
     }
 
     interfaces_.push_back( iface );
+    sectionState_.reset();
     if ( !precisionAnnounced_ ) {
         precision_ = std::max( precision_, iface.precision );
     }
@@ -292,6 +296,8 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
         return false;
     }
 
+    recordOffset_ = block.start;
+    recordLength_ = block.length;
     pkt = PacketRecord();
     pkt.number = ++packetCount_;
     const auto& unit = iface->unit;
@@ -371,6 +377,44 @@ bool PcapngReader::open()
         endBroken();
     }
     precisionAnnounced_ = true;
+    return true;
+}
+
+ReaderCheckpoint PcapngReader::checkpoint() const
+{
+    if ( !sectionState_ ) {
+        auto state = std::make_shared<SectionState>();
+        state->swap = swap_;
+        state->interfaces = interfaces_;
+        sectionState_ = std::move( state );
+    }
+    // Right after open(), the first packet block's header was read already.
+    const auto offset = havePacketBlock_ ? pendingBlock_.start : bytesRead();
+    return { packetCount_, offset, sectionState_ };
+}
+
+bool PcapngReader::resume( const ReaderCheckpoint& checkpoint )
+{
+    const auto* state = dynamic_cast<const SectionState*>( checkpoint.state.get() );
+    if ( !open_ || !state ) {
+        open_ = false;
+        return false;
+    }
+    // A checkpoint at the packet block open() stopped at is where the
+    // reader is; any other lies further on, at the start of a block.
+    if ( havePacketBlock_ && checkpoint.offset == pendingBlock_.start ) {
+        packetCount_ = checkpoint.packetsBefore;
+    }
+    else {
+        havePacketBlock_ = false;
+        if ( !CaptureReader::resume( checkpoint ) ) {
+            open_ = false;
+            return false;
+        }
+    }
+    swap_ = state->swap;
+    interfaces_ = state->interfaces;
+    sectionState_ = std::static_pointer_cast<const SectionState>( checkpoint.state );
     return true;
 }
 

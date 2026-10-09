@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include "capture_index.h"
 #include "capture_stats.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
@@ -36,6 +37,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -106,6 +108,8 @@ struct ConversionResult {
     QString error;          ///< Why it failed, when Failed.
     QString outputPath;     ///< The text file, when Converted; see convertPcap().
     CaptureSummary summary; ///< What was converted, when Converted.
+    /// Where each packet of the text is in the capture file, when Converted.
+    std::shared_ptr<CaptureIndex> index;
 };
 
 /// Settings of a conversion, as the user chose them in the configuration
@@ -122,6 +126,8 @@ struct ConversionOptions {
     size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
+    /// Packets between two checkpoints of the CaptureIndex.
+    uint32_t checkpointInterval = CaptureIndex::kCheckpointInterval;
 };
 
 /**

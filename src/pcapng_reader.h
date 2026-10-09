@@ -92,6 +92,12 @@ public:
         return linkTypes_;
     }
 
+    /// Also keeps the section's byte order and interfaces, shared with the
+    /// checkpoint before as long as no interface was declared between them.
+    ReaderCheckpoint checkpoint() const override;
+
+    bool resume( const ReaderCheckpoint& checkpoint ) override;
+
 private:
     /// A timestamp unit: 10^-exponent or, if binary, 2^-exponent seconds.
     struct TimeUnit {
@@ -110,6 +116,13 @@ private:
         uint32_t type = 0;
         uint32_t length = 0;   ///< The block's total length.
         uint32_t consumed = 0; ///< Bytes of the block read so far.
+        uint64_t start = 0;    ///< Where the block starts in the source.
+    };
+
+    /// What a checkpoint keeps of the section it lies in.
+    struct SectionState : ReaderState {
+        bool swap = false;
+        std::vector<Interface> interfaces;
     };
 
     bool fail( const char* problem );
@@ -122,17 +135,16 @@ private:
     bool readPacket( BlockHeader& block, PacketRecord& pkt );
     bool readBlocksUpToPacket();
 
-    bool swap_ = false; ///< The section is in the other byte order than this host's.
     std::vector<Interface> interfaces_; ///< The current section's.
+    /// The section state the last checkpoint kept, while it is still current.
+    mutable std::shared_ptr<const SectionState> sectionState_;
     std::vector<uint32_t> linkTypes_;
     TimePrecision precision_ = TimePrecision::Microseconds;
     bool precisionAnnounced_ = false;
     bool havePacketBlock_ = false; ///< pendingBlock_ is a packet block read up to its body.
     BlockHeader pendingBlock_;
     std::string problem_; ///< Why the last block could not be read; empty at the end.
-    std::vector<uint8_t> packet_;
     bool open_ = false;
-    uint32_t packetCount_ = 0;
 };
 
 } // namespace tcpdump

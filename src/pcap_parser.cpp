@@ -1132,6 +1132,20 @@ bool CaptureReader::skip( uint64_t n )
     return ok;
 }
 
+ReaderCheckpoint CaptureReader::checkpoint() const
+{
+    return { packetCount_, bytesRead_, nullptr };
+}
+
+bool CaptureReader::resume( const ReaderCheckpoint& checkpoint )
+{
+    if ( checkpoint.offset < bytesRead_ || !skip( checkpoint.offset - bytesRead_ ) ) {
+        return false;
+    }
+    packetCount_ = checkpoint.packetsBefore;
+    return true;
+}
+
 // ── PcapReader ───────────────────────────────────────────────────────────
 
 bool PcapReader::open()
@@ -1165,6 +1179,16 @@ bool PcapReader::open()
     return true;
 }
 
+bool PcapReader::resume( const ReaderCheckpoint& checkpoint )
+{
+    // The global header that open() read is all a pcap's records need.
+    if ( !open_ || !CaptureReader::resume( checkpoint ) ) {
+        open_ = false;
+        return false;
+    }
+    return true;
+}
+
 std::vector<uint32_t> PcapReader::linkTypes() const
 {
     if ( !headerRead_ ) {
@@ -1180,6 +1204,7 @@ bool PcapReader::next( PacketRecord& pkt )
     }
 
     // Packet header: ts_sec(4) ts_usec(4) incl_len(4) orig_len(4)
+    const auto recordStart = bytesRead();
     uint8_t recordHeader[ 16 ];
     const auto got = read( recordHeader, sizeof( recordHeader ) );
     if ( got < sizeof( recordHeader ) ) {
@@ -1203,6 +1228,8 @@ bool PcapReader::next( PacketRecord& pkt )
         return false;
     }
 
+    recordOffset_ = recordStart;
+    recordLength_ = sizeof( recordHeader ) + static_cast<uint64_t>( inclLen );
     pkt = PacketRecord();
     pkt.number = ++packetCount_;
     // The fraction is kept in nanoseconds.  A corrupt one of a second or
