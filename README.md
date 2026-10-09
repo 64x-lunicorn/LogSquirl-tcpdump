@@ -761,7 +761,8 @@ Fields compare with `==`, `!=`, `<`, `>`, `<=` and `>=` (or `eq`, `ne`,
 `lt`, `gt`, `le`, `ge`), addresses with `==` and `!=` only; numbers are
 decimal or `0x` hexadecimal. A field alone, `tcp.port`, selects the packets
 that have it. Conditions combine with `!`/`not`, `&&`/`and`, `||`/`or` and
-parentheses, `!` binding tighter than `&&`, and `&&` than `||`. As in
+parentheses (nested at most 64 deep), `!` binding tighter than `&&`, and
+`&&` than `||`. As in
 Wireshark, `!=` selects the packets that have the field and no value of it
 equal: `ip.addr != 10.0.0.1` is the IPv4 packets with neither address
 10.0.0.1, while `!(ip.addr == 10.0.0.1)` also selects every packet without

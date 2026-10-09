@@ -651,6 +651,9 @@ SCENARIO( "A display filter outside the subset is rejected with its position", "
         { "!", 1, "The filter ends where" },
         { "tcp && || udp", 7, "Expected a field, a protocol or ( here" },
         { "tcp ; udp", 4, "\";\" is not part of a display filter" },
+        { QString( 100000, '(' ) + "tcp" + QString( 100000, ')' ), 64, "nested more than 64 deep" },
+        { QString( 100000, '!' ) + "tcp", 64, "nested more than 64 deep" },
+        { QString( "not " ).repeated( 100 ) + "tcp", 256, "nested more than 64 deep" },
     };
     for ( const auto& rejected : table ) {
         THEN( "\"" + rejected.filter.toStdString() + "\" is rejected" )

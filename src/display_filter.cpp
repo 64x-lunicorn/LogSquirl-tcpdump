@@ -455,10 +455,39 @@ private:
         return combine( FilterExpression::Kind::And, std::move( operands ) );
     }
 
+    /// Parentheses and negations nested at most: each is a call deeper, and
+    /// a filter of many thousand would overflow the stack.
+    static constexpr int kMaxDepth = 64;
+
+    /// One level deeper for the ( or ! at @p token, while it is parsed.
+    class Deeper {
+    public:
+        Deeper( int& depth, const Token& token )
+            : depth_( depth )
+        {
+            if ( ++depth_ > kMaxDepth ) {
+                --depth_;
+                throw FilterError{ QString( "Parentheses and negations are nested more than "
+                                            "%1 deep here." )
+                                       .arg( kMaxDepth ),
+                                   token.position };
+            }
+        }
+        ~Deeper()
+        {
+            --depth_;
+        }
+        Deeper( const Deeper& ) = delete;
+        Deeper& operator=( const Deeper& ) = delete;
+
+    private:
+        int& depth_;
+    };
+
     FilterExpression parseUnary()
     {
         if ( peek().type == Token::Type::Not ) {
-            take();
+            const Deeper deeper( depth_, take() );
             FilterExpression negation;
             negation.kind = FilterExpression::Kind::Not;
             negation.operands.push_back( parseUnary() );
@@ -472,6 +501,7 @@ private:
         const auto& token = take();
         switch ( token.type ) {
         case Token::Type::Open: {
+            const Deeper deeper( depth_, token );
             auto inner = parseOr();
             if ( peek().type != Token::Type::Close ) {
                 throw FilterError{
@@ -638,6 +668,7 @@ private:
 
     std::vector<Token> tokens_;
     size_t next_ = 0;
+    int depth_ = 0; ///< Parentheses and negations open now.
 };
 
 // ── Numbers ──────────────────────────────────────────────────────────────

@@ -2284,7 +2284,9 @@ filter; the filter accepted is logged and offered again next time, its
 pattern opened with `openRegexLab()` ("Display filter").
 `parseDisplayFilter()` is a tokenizer and a recursive-descent parser
 (`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
-as a `FilterError` with its index into the filter. Unsupported syntax
+as a `FilterError` with its index into the filter. Parentheses and
+negations nest at most `Parser::kMaxDepth` (64) deep, each a call deeper,
+so that a filter of many thousand cannot overflow the stack. Unsupported syntax
 (strings, slices, sets, `contains`, `matches`, `xor`, `=`, `&`, `===`) is
 rejected by the tokenizer, unknown fields, wrong operators and bad values
 (an IPv6 address for `ip.addr`, a port above 65535, two fields) by the
