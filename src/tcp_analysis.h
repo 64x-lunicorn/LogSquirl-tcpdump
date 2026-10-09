@@ -93,8 +93,9 @@ private:
 
 /**
  * Show @p pkt's sequence and acknowledgement numbers in Info relative to
- * the first ones of each direction of its stream, as Wireshark does by
- * default, and remember what that takes in @p stream's state.
+ * the first ones of each direction of its stream, and its window scaled, as
+ * Wireshark does by default, and remember what that takes in @p stream's
+ * state.
  *
  * A SYN's sequence number is its direction's base, so the SYN shows Seq=0
  * and the first byte of data Seq=1.  A direction whose SYN was not captured
@@ -107,11 +108,17 @@ private:
  * numbers wrap around at 2^32 with the sequence numbers.  Without the ACK
  * flag the acknowledgement field means nothing and Ack=0 is shown.
  *
- * The segment is then classified by Wireshark's TCP analysis heuristics
- * (packet-tcp.c, tcp_analyze_sequence_number()), as far as what each
- * direction keeps allows (TcpDirection): its markers are put at the start
- * of Info, "[TCP Retransmission] 80 → 54321 …", in Wireshark's wording and
- * order, and returned.  A segment that cannot be classified, such as the
+ * Win= is the window as Wireshark calculates it: once both directions'
+ * SYNs carried the window scale option, every later segment's window is
+ * shifted by its sender's scale (RFC 7323), a SYN's never.  Without both
+ * options, also when the handshake was not captured and the scale is
+ * unknown, it is the window as sent.
+ *
+ * The segment is then classified, on the scaled window, by Wireshark's TCP
+ * analysis heuristics (packet-tcp.c, tcp_analyze_sequence_number()), as
+ * far as what each direction keeps allows (TcpDirection): its markers are
+ * put at the start of Info, "[TCP Retransmission] 80 → 54321 …", in
+ * Wireshark's wording and order, and returned.  A segment that cannot be classified, such as the
  * first of a stream captured mid-way, gets none.  The Developer Guide
  * lists the rules and where they fall short of Wireshark's.
  *

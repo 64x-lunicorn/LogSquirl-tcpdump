@@ -44,19 +44,25 @@ constexpr uint8_t kPshAck = 0x18;
 constexpr uint16_t kClient = 40000;
 constexpr uint16_t kServer = 80;
 
-/// A segment from the client to the server, or back when @p fromServer.
+/// A segment from the client to the server, or back when @p fromServer;
+/// with a window scale option of shift @p windowShift unless that is -1.
 Bytes segment( bool fromServer, uint8_t flags, uint32_t seq, uint32_t ack,
-               const Bytes& payload = {}, uint16_t window = 0xFFFF )
+               const Bytes& payload = {}, uint16_t window = 0xFFFF, int windowShift = -1 )
 {
     auto addresses = Ipv4Options{};
     if ( fromServer ) {
         std::swap( addresses.src, addresses.dst );
     }
-    return eth( EthertypeIpv4,
-                ipv4( IpProtoTcp,
-                      fromServer ? tcp( kServer, kClient, payload, 5, flags, seq, ack, window )
-                                 : tcp( kClient, kServer, payload, 5, flags, seq, ack, window ),
-                      addresses ) );
+    const uint8_t words = windowShift < 0 ? 5 : 6;
+    auto header = fromServer ? tcp( kServer, kClient, {}, words, flags, seq, ack, window )
+                             : tcp( kClient, kServer, {}, words, flags, seq, ack, window );
+    if ( windowShift >= 0 ) {
+        // NOP, then the option: kind 3, length 3, the shift
+        header[ 21 ] = 3;
+        header[ 22 ] = 3;
+        header[ 23 ] = static_cast<uint8_t>( windowShift );
+    }
+    return eth( EthertypeIpv4, ipv4( IpProtoTcp, header + payload, addresses ) );
 }
 
 /// The Info of each segment, after the TCP Analysis followed them in order.
@@ -130,6 +136,15 @@ std::vector<Bytes> operator+( std::vector<Bytes> a, const std::vector<Bytes>& b 
 {
     a.insert( a.end(), b.begin(), b.end() );
     return a;
+}
+
+/// Whether @p info shows @p fields ("Seq=1 Ack=1 Win=4000") right after
+/// the flags, and nothing more of them.
+bool showsWindow( const std::string& info, const std::string& fields )
+{
+    const auto at = info.find( "] " + fields );
+    const auto end = at + 2 + fields.size();
+    return at != std::string::npos && ( end == info.size() || info[ end ] == ' ' );
 }
 
 /// Whether @p info shows @p numbers ("Seq=1 Ack=1") right after the flags.
@@ -654,6 +669,136 @@ SCENARIO( "Data beyond the next sequence number shows a segment was not captured
             REQUIRE( a.markers[ 3 ] == TcpMarkers().set( TcpMarker::PreviousSegmentNotCaptured ) );
             REQUIRE( unmarked( a.infos[ 4 ] ) );
             REQUIRE( unmarked( a.infos[ 5 ] ) );
+        }
+    }
+}
+
+SCENARIO( "The window is shown scaled once both sides agreed on window scaling", "[tcp_analysis]" )
+{
+    GIVEN( "a handshake in which both SYNs carry the window scale option" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 2 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000, 6 ),
+            segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+            segment( true, kPshAck, kS + 1, kC + 1, text( "hi" ), 1000 ),
+        } );
+
+        THEN( "the SYNs show their window as sent" )
+        {
+            REQUIRE( showsWindow( a.infos[ 0 ], "Seq=0 Ack=0 Win=1000" ) );
+            REQUIRE( showsWindow( a.infos[ 1 ], "Seq=0 Ack=1 Win=1000" ) );
+        }
+
+        THEN( "later segments show it shifted by their sender's scale" )
+        {
+            REQUIRE( showsWindow( a.infos[ 2 ], "Seq=1 Ack=1 Win=4000" ) );
+            REQUIRE( showsWindow( a.infos[ 3 ], "Seq=1 Ack=1 Win=64000 Len=2" ) );
+        }
+    }
+
+    GIVEN( "a shift beyond 14" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 15 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000, 0 ),
+            segment( false, kAck, kC + 1, kS + 1, {}, 1 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 1 ),
+        } );
+
+        THEN( "14 is used instead, as RFC 7323 says; a shift of 0 scales by 1" )
+        {
+            REQUIRE( showsWindow( a.infos[ 2 ], "Seq=1 Ack=1 Win=16384" ) );
+            REQUIRE( showsWindow( a.infos[ 3 ], "Seq=1 Ack=1 Win=1" ) );
+        }
+    }
+
+    GIVEN( "a handshake in which only the client's SYN carries the option" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 2 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000 ),
+            segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 1000 ),
+        } );
+
+        THEN( "no window is scaled: the sides did not agree on scaling" )
+        {
+            REQUIRE( showsWindow( a.infos[ 2 ], "Seq=1 Ack=1 Win=1000" ) );
+            REQUIRE( showsWindow( a.infos[ 3 ], "Seq=1 Ack=1 Win=1000" ) );
+        }
+    }
+
+    GIVEN( "a stream captured mid-way, its handshake not seen" )
+    {
+        const auto a = analyse( {
+            segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 1000 ),
+        } );
+
+        THEN( "the window is shown as sent, its scale unknown" )
+        {
+            REQUIRE( showsWindow( a.infos[ 0 ], "Seq=1 Ack=1 Win=1000" ) );
+            REQUIRE( showsWindow( a.infos[ 1 ], "Seq=1 Ack=1 Win=1000" ) );
+        }
+    }
+
+    GIVEN( "a new connection on the same ports whose SYNs carry no option" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 2 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000, 6 ),
+            segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+            segment( false, kSyn, kC + 100000, 0, {}, 1000 ),
+            segment( true, kSyn | kAck, kS + 100000, kC + 100001, {}, 1000 ),
+            segment( false, kAck, kC + 100001, kS + 100001, {}, 1000 ),
+        } );
+
+        THEN( "it does not inherit the old connection's scaling" )
+        {
+            REQUIRE( showsWindow( a.infos[ 2 ], "Seq=1 Ack=1 Win=4000" ) );
+            REQUIRE( showsWindow( a.infos[ 5 ], "Seq=1 Ack=1 Win=1000" ) );
+        }
+    }
+}
+
+SCENARIO( "The analysis markers look at the scaled window", "[tcp_analysis]" )
+{
+    GIVEN( "a server whose first ACK after its SYN-ACK repeats the SYN-ACK's window as sent" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 2 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000, 6 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 1000 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 1000 ),
+        } );
+
+        THEN( "the scaled window is a new one, a window update; the same again is a duplicate "
+              "ACK" )
+        {
+            REQUIRE( startsWith( a.infos[ 2 ], "[TCP Window Update] 80 " ) );
+            REQUIRE( showsWindow( a.infos[ 2 ], "Seq=1 Ack=1 Win=64000" ) );
+            REQUIRE( startsWith( a.infos[ 3 ], "[TCP Dup ACK 2#1] 80 " ) );
+        }
+    }
+
+    GIVEN( "a scaled window closing and opening again" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 2 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000, 6 ),
+            segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+            segment( false, kPshAck, kC + 1, kS + 1, text( "hello" ), 1000 ),
+            segment( true, kAck, kS + 1, kC + 6, {}, 0 ),
+            segment( true, kAck, kS + 1, kC + 6, {}, 2 ),
+        } );
+
+        THEN( "the closed window is a zero window, the opened one a window update" )
+        {
+            REQUIRE( startsWith( a.infos[ 4 ], "[TCP ZeroWindow] 80 " ) );
+            REQUIRE( showsWindow( a.infos[ 4 ], "Seq=1 Ack=6 Win=0" ) );
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP Window Update] 80 " ) );
+            REQUIRE( showsWindow( a.infos[ 5 ], "Seq=1 Ack=6 Win=128" ) );
         }
     }
 }

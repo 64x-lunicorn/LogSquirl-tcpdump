@@ -199,6 +199,25 @@ TCP Analysis replaces that text; segments of a stream past the stream cap
 have no state and keep the numbers as they are. `PacketRecord::tcpSeq` and
 `tcpAck` stay the raw values.
 
+`Win=` is the calculated window, as in Wireshark: the window field shifted
+by the sender's window scale (RFC 7323). The parser reads the shift count of
+a header's window scale option into `PacketRecord::tcpWindowShift`, walking
+the options as Wireshark does (a NOP is one byte; the end of options, or an
+option whose length is bogus or runs past the header, ends the walk). A
+SYN's option, its shift capped at 14 as RFC 7323 and Wireshark do, is kept
+in its direction's `TcpDirection::windowScale` (the shift plus one, 0 when
+the SYN carried none), and the TCP Analysis shifts the window of every later
+segment of a direction by its scale once both directions' SYNs carried the
+option; a SYN's own window is never scaled. Otherwise `Win=` is the window
+as sent: one side did not offer scaling, so neither scales, as RFC 7323
+says; or the handshake was not captured, which Wireshark shows as window
+size scaling factor -1 (unknown) and leaves unscaled with its default
+preferences, as here. Unlike Wireshark, which scales a side's windows by its
+SYN's shift when only that SYN was captured (and the SYN-ACK was not), this
+needs both. A new connection on the same addresses and ports forgets the
+scale with the rest of the stream's state. `PacketRecord::tcpWindow` stays
+the raw value.
+
 #### Stream Labels (`stream_labels.h/cpp`)
 The describer names one payload at a time, and the parser asks it before
 the packet's stream is known, so on its own the Protocol column changes
@@ -234,7 +253,9 @@ them as `TcpMarkers`, which the Converter counts in `CaptureStats` for the
 Capture Summary. Several markers stand in Wireshark's order, the last one
 it adds first: `[TCP ZeroWindow] [TCP Keep-Alive] …`. Each direction keeps
 what Wireshark's `tcp_flow_t` holds for the rules below, in relative numbers
-(0 meaning none seen yet, as in Wireshark): the next sequence number expected
+(0 meaning none seen yet, as in Wireshark) and with windows scaled, as `Win=`
+shows them, so that a window of 0 or a change of it is the same in Info and
+in the rules: the next sequence number expected
 (`nextSeq`, one past the highest sent, a SYN and a FIN counting one), the
 last acknowledgement number, window and time, the number of duplicate ACKs
 and the packet they count from, and whether the last segment was a
@@ -267,9 +288,8 @@ direction:
 - The 3 ms out-of-order limit is Wireshark's for a connection whose
   round-trip time it does not know; Wireshark takes the handshake's when it
   saw the handshake, this analysis never does.
-- SACK blocks and the window scale option are not read, so there is no
-  SACK-based fast retransmission and no `[TCP Window Full]`; windows are
-  compared as sent.
+- SACK blocks are not read, so there is no SACK-based fast
+  retransmission; `[TCP Window Full]` is not shown.
 - `[TCP Port numbers reused]`, `[TCP Retransmission]`'s RTO and the other
   fields Wireshark shows in its tree only are left out.
 - As in Wireshark, sequence numbers compare modulo 2^32, and a segment

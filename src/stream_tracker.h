@@ -61,17 +61,26 @@ struct TcpDirection {
     /// The time of the last segment, in nanoseconds since the epoch,
     /// modulo 2^64.
     uint64_t lastTime = 0;
-    uint32_t dupAcks = 0;    ///< Duplicate ACKs of lastAck so far.
-    uint16_t window = 0;     ///< The window of the last segment, as sent (unscaled).
-    bool baseSeqSet = false; ///< Whether a segment has told baseSeq yet.
-    /// What the last segment was and is known: TcpDirection::k… bits.
+    uint32_t dupAcks = 0; ///< Duplicate ACKs of lastAck so far.
+    /// The window of the last segment, as sent; shifted by windowScale when
+    /// kWindowScaled is set.
+    uint16_t window = 0;
+    /// The window scale option of this direction's SYN: its shift count,
+    /// at most 14, plus one (4 bits); 0 while no SYN with the option was seen.
+    uint8_t windowScale = 0;
+    /// What is known and what the last segment was: TcpDirection::k… bits.
     uint8_t flags = 0;
 
-    static constexpr uint8_t kWindowKnown = 0x01;     ///< window is set.
-    static constexpr uint8_t kKeepAlive = 0x02;       ///< The last segment was a keep-alive.
-    static constexpr uint8_t kZeroWindowProbe = 0x04; ///< The last segment was a probe.
+    static constexpr uint8_t kBaseSeqSet = 0x01;      ///< A segment has told baseSeq.
+    static constexpr uint8_t kWindowKnown = 0x02;     ///< window is set.
+    static constexpr uint8_t kWindowScaled = 0x04;    ///< window is to be shifted.
+    static constexpr uint8_t kKeepAlive = 0x08;       ///< The last segment was a keep-alive.
+    static constexpr uint8_t kZeroWindowProbe = 0x10; ///< The last segment was a probe.
     /// The last segment that raised nextSeq carried data.
-    static constexpr uint8_t kAdvancedWithData = 0x08;
+    static constexpr uint8_t kAdvancedWithData = 0x20;
+    /// The bits each segment sets afresh; kBaseSeqSet stays.
+    static constexpr uint8_t kSegmentFlags
+        = kWindowKnown | kWindowScaled | kKeepAlive | kZeroWindowProbe | kAdvancedWithData;
 };
 
 /**

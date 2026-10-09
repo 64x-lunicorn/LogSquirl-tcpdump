@@ -80,6 +80,32 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
     }
 }
 
+/// The shift count of the window scale option among the TCP options at
+/// @p options, @p len bytes of them; unset without one.  The options are
+/// walked as Wireshark does: a NOP takes one byte, the end of options or an
+/// option whose length is bogus or runs past them ends the walk.
+std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
+{
+    constexpr uint8_t kEndOfOptions = 0;
+    constexpr uint8_t kNop = 1;
+    constexpr uint8_t kWindowScale = 3;
+    size_t at = 0;
+    while ( at < len && options[ at ] != kEndOfOptions ) {
+        if ( options[ at ] == kNop ) {
+            ++at;
+            continue;
+        }
+        if ( at + 1 >= len || options[ at + 1 ] < 2 || at + options[ at + 1 ] > len ) {
+            break;
+        }
+        if ( options[ at ] == kWindowScale && options[ at + 1 ] == 3 ) {
+            return options[ at + 2 ];
+        }
+        at += options[ at + 1 ];
+    }
+    return std::nullopt;
+}
+
 /// Parse the transport layer from the @p remaining captured bytes at
 /// @p data.  @p wireLen is its length on the wire according to the IP
 /// header, more than @p remaining if the capture was cut at the snaplen.
@@ -102,8 +128,8 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         // Build base TCP info line
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
-            << formatTcpFlags( pkt.tcpFlags ) << " " << formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck )
-            << " Win=" << pkt.tcpWindow;
+            << formatTcpFlags( pkt.tcpFlags ) << " "
+            << formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck, pkt.tcpWindow );
 
         // A header shorter than its 20 fixed bytes is malformed: where the
         // payload starts is unknown, so none is taken, like Wireshark.
@@ -112,6 +138,8 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
             pkt.info = oss.str();
             return;
         }
+
+        pkt.tcpWindowShift = tcpWindowShiftOf( data + 20, std::min( dataOffset, remaining ) - 20 );
 
         // Len is the payload on the wire, as Wireshark shows it; only the
         // captured part of it can be looked at.
@@ -594,9 +622,10 @@ std::string formatTcpFlags( uint8_t flags )
     return result;
 }
 
-std::string formatTcpNumbers( uint32_t seq, uint32_t ack )
+std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window )
 {
-    return "Seq=" + std::to_string( seq ) + " Ack=" + std::to_string( ack );
+    return "Seq=" + std::to_string( seq ) + " Ack=" + std::to_string( ack )
+           + " Win=" + std::to_string( window );
 }
 
 // ── Byte sources ─────────────────────────────────────────────────────────

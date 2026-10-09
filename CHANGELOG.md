@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The TCP window is shown scaled.** Once both SYNs of a connection
+  carried the window scale option, `Win=` is the window shifted by the
+  sender's scale, as Wireshark calculates it (`Win=408320` rather than
+  `Win=6380` on macOS, which scales by 64), and the TCP analysis markers
+  compare that window, as Wireshark's do. SYNs, connections where only
+  one side offered scaling and streams captured after their handshake, whose
+  scale is unknown, show the window as sent, as Wireshark does. A shift
+  beyond 14 counts as 14. No more memory per stream.
+
 ### Added
 - **The protocol sticks to the stream.** Once a detector has recognised a
   TCP or UDP stream's protocol (TLS, HTTP, SOCKS, NMEA, …), its later

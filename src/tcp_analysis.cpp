@@ -24,6 +24,7 @@
 
 #include "tcp_analysis.h"
 
+#include <algorithm>
 #include <string>
 
 namespace tcpdump {
@@ -67,6 +68,23 @@ uint64_t elapsedNs( uint64_t then, uint64_t now )
     return delta > 0 ? static_cast<uint64_t>( delta ) : 0;
 }
 
+/// RFC 7323's largest shift count of the window scale option; a larger one
+/// counts as 14, in Wireshark too.
+constexpr uint8_t kMaxWindowShift = 14;
+
+/// A window of @p raw sent in direction @p dir, shifted by its scale if
+/// @p scaled.
+uint32_t windowOf( const TcpDirection& dir, uint16_t raw, bool scaled )
+{
+    return scaled ? static_cast<uint32_t>( raw ) << ( dir.windowScale - 1 ) : raw;
+}
+
+/// The window of the last segment of @p dir, as it was shown.
+uint32_t lastWindow( const TcpDirection& dir )
+{
+    return windowOf( dir, dir.window, ( dir.flags & TcpDirection::kWindowScaled ) != 0 );
+}
+
 /// One segment as the classification sees it: relative numbers.
 struct Segment {
     uint32_t number; ///< The packet number.
@@ -75,7 +93,9 @@ struct Segment {
     uint32_t ack;
     uint32_t len; ///< Payload bytes on the wire.
     uint8_t flags;
-    uint16_t window;
+    uint16_t rawWindow; ///< The window as sent.
+    bool windowScaled;  ///< Whether it is shifted by its direction's scale.
+    uint32_t window;    ///< The window as shown: windowOf() the two.
 };
 
 /**
@@ -89,6 +109,8 @@ void checkAck( TcpDirection& fwd, TcpDirection& rev, const Segment& seg, TcpMark
     const bool synFinRst = ( seg.flags & ( kTcpSyn | kTcpFin | kTcpRst ) ) != 0;
     const bool fwdWindowKnown = ( fwd.flags & TcpDirection::kWindowKnown ) != 0;
     const bool revWindowKnown = ( rev.flags & TcpDirection::kWindowKnown ) != 0;
+    // Windows are compared as shown, scaled, as Wireshark does.
+    const auto fwdWindow = lastWindow( fwd );
 
     if ( seg.len == 1 && seg.seq == fwd.nextSeq && revWindowKnown && rev.window == 0 ) {
         markers.set( TcpMarker::ZeroWindowProbe );
@@ -103,13 +125,13 @@ void checkAck( TcpDirection& fwd, TcpDirection& rev, const Segment& seg, TcpMark
     if ( seg.len <= 1 && fwd.nextSeq != 0 && seg.seq == fwd.nextSeq - 1 && !synFinRst ) {
         markers.set( TcpMarker::KeepAlive );
     }
-    if ( seg.len == 0 && seg.window != 0 && ( !fwdWindowKnown || seg.window != fwd.window )
+    if ( seg.len == 0 && seg.window != 0 && ( !fwdWindowKnown || seg.window != fwdWindow )
          && seg.seq == fwd.nextSeq && seg.ack == fwd.lastAck && !synFinRst ) {
         markers.set( TcpMarker::WindowUpdate );
     }
 
     // The rest repeat the last segment's position and window, without data.
-    if ( seg.len != 0 || !fwdWindowKnown || seg.window != fwd.window || seg.seq != fwd.nextSeq
+    if ( seg.len != 0 || !fwdWindowKnown || seg.window != fwdWindow || seg.seq != fwd.nextSeq
          || synFinRst ) {
         return;
     }
@@ -180,7 +202,8 @@ TcpMarkers classify( TcpDirection& fwd, TcpDirection& rev, const Segment& seg,
 
     // Remember what the segment tells; a probe does not advance nextSeq.
     const auto nextSeq = seg.seq + seg.len + ( synFin ? 1 : 0 );
-    uint8_t flags = TcpDirection::kWindowKnown;
+    uint8_t flags
+        = TcpDirection::kWindowKnown | ( seg.windowScaled ? TcpDirection::kWindowScaled : 0 );
     if ( fwd.nextSeq == 0 || seqAfter( nextSeq, fwd.nextSeq + ( synFin ? 1 : 0 ) ) ) {
         flags |= seg.len > 0 ? TcpDirection::kAdvancedWithData : 0;
     }
@@ -197,8 +220,8 @@ TcpMarkers classify( TcpDirection& fwd, TcpDirection& rev, const Segment& seg,
     if ( markers.test( TcpMarker::ZeroWindowProbe ) ) {
         flags |= TcpDirection::kZeroWindowProbe;
     }
-    fwd.flags = flags;
-    fwd.window = seg.window;
+    fwd.flags = static_cast<uint8_t>( ( fwd.flags & ~TcpDirection::kSegmentFlags ) | flags );
+    fwd.window = seg.rawWindow;
     fwd.lastAck = seg.ack;
     fwd.lastTime = seg.time;
     return markers;
@@ -229,7 +252,8 @@ std::string markerText( const TcpMarkers& markers, uint32_t dupAckFrame, uint32_
 /// base.  A retransmitted SYN is not one.
 bool startsNewConnection( const TcpDirection& fwd, uint8_t flags, uint32_t seq )
 {
-    return ( flags & kTcpSyn ) && !( flags & kTcpAck ) && fwd.baseSeqSet && fwd.baseSeq != seq;
+    return ( flags & kTcpSyn ) && !( flags & kTcpAck ) && ( fwd.flags & TcpDirection::kBaseSeqSet )
+           && fwd.baseSeq != seq;
 }
 
 /// Learn the bases of @p fwd, the packet's direction, and @p rev, the other
@@ -238,14 +262,14 @@ bool startsNewConnection( const TcpDirection& fwd, uint8_t flags, uint32_t seq )
 void learnBases( TcpDirection& fwd, TcpDirection& rev, uint8_t flags, uint32_t seq, uint32_t ack )
 {
     const bool syn = ( flags & kTcpSyn ) != 0;
-    if ( !fwd.baseSeqSet ) {
+    if ( !( fwd.flags & TcpDirection::kBaseSeqSet ) ) {
         fwd.baseSeq = syn ? seq : seq - 1;
-        fwd.baseSeqSet = true;
+        fwd.flags |= TcpDirection::kBaseSeqSet;
     }
     // A SYN's acknowledgement field is not the other side's yet.
-    if ( !rev.baseSeqSet && ( flags & kTcpAck ) ) {
+    if ( !( rev.flags & TcpDirection::kBaseSeqSet ) && ( flags & kTcpAck ) ) {
         rev.baseSeq = ack - 1;
-        rev.baseSeqSet = true;
+        rev.flags |= TcpDirection::kBaseSeqSet;
     }
 }
 
@@ -295,26 +319,36 @@ TcpMarkers analyseTcp( PacketRecord& pkt, const Stream& stream )
         *stream.state = StreamState();
     }
     learnBases( fwd, rev, pkt.tcpFlags, pkt.tcpSeq, pkt.tcpAck );
+    const bool syn = ( pkt.tcpFlags & kTcpSyn ) != 0;
+    if ( syn && pkt.tcpHeaderLen >= 20 ) {
+        fwd.windowScale
+            = pkt.tcpWindowShift
+                  ? static_cast<uint8_t>( std::min( *pkt.tcpWindowShift, kMaxWindowShift ) + 1 )
+                  : 0;
+    }
 
     const auto seq = pkt.tcpSeq - fwd.baseSeq;
     const auto ack = ( pkt.tcpFlags & kTcpAck ) ? pkt.tcpAck - rev.baseSeq : 0;
+    // Scaling applies once both SYNs carried the option, never to a SYN.
+    const bool windowScaled = !syn && fwd.windowScale != 0 && rev.windowScale != 0;
+    const auto window = windowOf( fwd, pkt.tcpWindow, windowScaled );
 
     // The parser wrote the numbers as they are, right after the flags: the
     // first "Seq=" of Info, before any payload description.
-    const auto raw = formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck );
+    const auto raw = formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck, pkt.tcpWindow );
     const auto at = pkt.info.find( "Seq=" );
     if ( at != std::string::npos && pkt.info.compare( at, raw.size(), raw ) == 0 ) {
-        pkt.info.replace( at, raw.size(), formatTcpNumbers( seq, ack ) );
+        pkt.info.replace( at, raw.size(), formatTcpNumbers( seq, ack, window ) );
     }
 
     if ( pkt.tcpHeaderLen < 20 ) {
         return {};
     }
     uint32_t dupAckFrame = 0;
-    const auto markers = classify(
-        fwd, rev,
-        { pkt.number, timeNs( pkt ), seq, ack, pkt.payloadLen, pkt.tcpFlags, pkt.tcpWindow },
-        dupAckFrame );
+    const auto markers = classify( fwd, rev,
+                                   { pkt.number, timeNs( pkt ), seq, ack, pkt.payloadLen,
+                                     pkt.tcpFlags, pkt.tcpWindow, windowScaled, window },
+                                   dupAckFrame );
     pkt.info.insert( 0, markerText( markers, dupAckFrame, fwd.dupAcks ) );
     return markers;
 }

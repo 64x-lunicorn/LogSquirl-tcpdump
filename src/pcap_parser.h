@@ -152,6 +152,10 @@ struct PacketRecord {
     /// The TCP header's length in bytes as its data offset gives it; less
     /// than 20 is bogus, and the segment's payload unknown.
     uint8_t tcpHeaderLen = 0;
+    /// The shift count of the header's window scale option, as sent (RFC
+    /// 7323 allows at most 14); unset without the option.  Only a SYN's
+    /// counts, see analyseTcp().
+    std::optional<uint8_t> tcpWindowShift;
 
     uint32_t payloadLen = 0; ///< Application payload bytes
 
@@ -173,12 +177,12 @@ struct PacketRecord {
 std::string formatTcpFlags( uint8_t flags );
 
 /**
- * Render a TCP segment's sequence and acknowledgement numbers as Info shows
- * them, after its flags.
+ * Render a TCP segment's sequence and acknowledgement numbers and its window
+ * as Info shows them, after its flags.
  *
- * @return String like "Seq=1 Ack=1".
+ * @return String like "Seq=1 Ack=1 Win=65535".
  */
-std::string formatTcpNumbers( uint32_t seq, uint32_t ack );
+std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window );
 
 /**
  * Dissect one captured packet into @p pkt, from its link-layer header up.
