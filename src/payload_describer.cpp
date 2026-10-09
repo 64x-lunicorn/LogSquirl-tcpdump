@@ -317,14 +317,19 @@ struct Framer {
     /// Its messages are told by their stream, which the detectors do not
     /// know (MessageExtent::describedInStream).
     bool inStream = false;
+    /// Tells a message after which the stream carries WebSocket frames
+    /// (MessageExtent::upgradesTo); none if no message does.
+    bool ( *upgrades )( const uint8_t*, size_t ) = nullptr;
 };
 
-/// WebSocket frames on a stream an HTTP 101 response upgraded, and nowhere
-/// else: nothing in their bytes tells them.
+/// WebSocket frames on a stream an HTTP 101 response upgraded, or after
+/// such a response in the bytes walked, and nowhere else: nothing in their
+/// bytes tells them.
 std::optional<size_t> webSocketFrame( const Payload& p )
 {
-    if ( !p.stream || !p.stream->state
-         || !( p.stream->state->protocols & StreamState::kWebSocket ) ) {
+    if ( !p.continuing
+         && ( !p.stream || !p.stream->state
+              || !( p.stream->state->protocols & StreamState::kWebSocket ) ) ) {
         return std::nullopt;
     }
     return frameWebSocketFrame( p.data, p.len );
@@ -412,7 +417,7 @@ constexpr Framer kTcpFramers[] = {
     { "SSHv2", sshFrame },
     { "TLS", tlsFrame },
     { "SIP", sipFrame },
-    { "HTTP", httpFrame },
+    { "HTTP", httpFrame, false, isWebSocketUpgrade },
     { "MQTT", mqttFrame },
     { "SOME/IP", someIpFrame },
 };
@@ -549,6 +554,10 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
             extent.length = *length;
             extent.needsMore = *length > len;
             extent.describedInStream = kTcpFramers[ i ].inStream;
+            if ( kTcpFramers[ i ].upgrades && !extent.needsMore
+                 && kTcpFramers[ i ].upgrades( data, *length ) ) {
+                extent.upgradesTo = kWebSocketFramer;
+            }
             return extent;
         }
     }
@@ -558,12 +567,35 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
 PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_t srcPort,
                                         uint16_t dstPort, uint8_t framer )
 {
-    if ( framer != kWebSocketFramer ) {
+    if ( framer == kWebSocketFramer ) {
+        PayloadDescription result;
+        result.label = "WebSocket";
+        result.description = oneLine( describer::describeWebSocketFrames( data, len, len ) );
+        return result;
+    }
+    // The frames after a message that upgrades the stream are described
+    // after the messages before them.
+    size_t upgraded = 0;
+    while ( framer != 0 && upgraded < len ) {
+        const auto extent
+            = tcpMessageExtent( data + upgraded, len - upgraded, srcPort, dstPort, framer );
+        if ( !extent.complete() ) {
+            upgraded = 0;
+            break;
+        }
+        upgraded += extent.length;
+        if ( extent.upgradesTo != 0 ) {
+            break;
+        }
+    }
+    if ( upgraded == 0 || upgraded >= len ) {
         return describePayload( Transport::Tcp, data, len, srcPort, dstPort );
     }
-    PayloadDescription result;
-    result.label = "WebSocket";
-    result.description = oneLine( describer::describeWebSocketFrames( data, len, len ) );
+    auto result = describePayload( Transport::Tcp, data, upgraded, srcPort, dstPort );
+    result.description += ( result.description.empty() ? "" : "; " )
+                          + oneLine( describer::describeWebSocketFrames(
+                              data + upgraded, len - upgraded, len - upgraded ) );
+    result.streamCue = StreamCue::WebSocketUpgrade;
     return result;
 }
 

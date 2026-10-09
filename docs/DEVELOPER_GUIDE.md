@@ -703,7 +703,12 @@ of the detectors and in-stream passes the tables use.
   bytes after them are not read as frames; a frame whose header is cut ends
   in ` …`. `describeWebSocketFrames()` reads the captured bytes only;
   `frameWebSocketFrame()` frames a frame by its header (2 to 14 bytes) and
-  payload length for the TCP Reassembly
+  payload length for the TCP Reassembly. Frames that share a segment with
+  the 101 response are framed and described after it, `HTTP/1.1 101
+  Switching Protocols, Upgrade: websocket; WebSocket Text [FIN] len=5
+  "hello"`: the HTTP framer's `MessageExtent::upgradesTo` switches the
+  TCP Reassembly's walk to WebSocket from the message on, as the stream
+  learns of the upgrade only after the segment (`rememberInStream()`)
 - SIP (RFC 3261), on any port, by its start line: a request line whose
   version is `SIP/2.0` and whose URI has a scheme, or a status line with a
   code of 100 to 699. A request is `Request: INVITE sip:bob@example.com`,

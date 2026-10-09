@@ -100,6 +100,11 @@ struct MessageExtent {
     /// (WebSocket): the parser could not describe it, so the TCP
     /// Reassembly describes whole messages too, by describeTcpMessages().
     bool describedInStream = false;
+    /// The framer of the bytes after the message, which upgraded the
+    /// stream to another protocol (an HTTP 101 response with "Upgrade:
+    /// websocket", after which WebSocket frames follow, in the same
+    /// segment too); 0: the message's own.
+    uint8_t upgradesTo = 0;
 
     /// A whole message is there.
     bool complete() const
@@ -126,7 +131,9 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
  * Describe the @p len bytes at @p data, whole messages of the protocol
  * tcpMessageExtent() numbered @p framer, sent from @p srcPort to
  * @p dstPort: WebSocket frames as such, any other protocol's messages as
- * describePayload() does.
+ * describePayload() does.  WebSocket frames after a message that upgrades
+ * the stream (MessageExtent::upgradesTo) are described after it, "; " in
+ * between, and the description tells the stream of the upgrade.
  */
 PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_t srcPort,
                                         uint16_t dstPort, uint8_t framer );

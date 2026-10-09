@@ -514,6 +514,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the snaplen inside it change nothing; if the segment where it ends is
   lost, the stream resynchronises on the next segment that begins a
   message, as before (#95).
+- **WebSocket frames in the segment of the 101 response.** A server's
+  `101 Switching Protocols` with `Upgrade: websocket` that shares its
+  segment with the first frames now switches the framing for the rest of
+  the segment: the frames are described after the response
+  (`HTTP/1.1 101 …; WebSocket Text [FIN] len=5 "hello"`), and one cut at
+  the segment's end is held and described whole where it completes,
+  where before its rest was read as new frames and the stream desynced
+  (#102).
 
 ## [0.3.0] — 2026-10-09
 
