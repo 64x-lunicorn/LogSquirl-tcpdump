@@ -1735,13 +1735,22 @@ root`. `listInterfaces()` lists `any` and the device's interfaces, with the
 root or tcpdump guidance as its error. `makeSource()` probes again on the
 capture's worker thread (throwing, as a failed capture, without root or
 tcpdump) and runs `captureCommand()`: `adb -s <serial> exec-out 'exec
-2>/dev/null; [su -c] <script>'`, the script running tcpdump in the
-background with its stderr and pid in `logsquirl-<tag>.err`/`.pid` and
-waiting for it. Every word in a device command line goes through
-`shellQuote()` (POSIX single quotes). The stream is a Process Source that,
-as it goes, kills tcpdump by its pid file on the device (through su when it
-runs as root) and removes its files, and that reads the `.err` file for
-the error of a capture that ended before any byte came.
+2>/dev/null; [su -c] <script>'`, the script (`adbCaptureScript()`)
+running tcpdump in the background with its stderr and pid in
+`logsquirl-<tag>.err`/`.pid` (`AdbCaptureFiles`) and waiting for it. Every
+word in a device command line goes through `shellQuote()` (POSIX single
+quotes). The stream is a Process Source that, as it goes, ends tcpdump on
+the device (through su when it runs as root) and removes its files, and
+that reads the `.err` file for the error of a capture that ended before
+any byte came. While adb still runs, Stop runs `adbStopScript()`: it
+leaves a `.stop` mark first and then kills the pid if the script has left
+it; the script leaves its pid first and then looks for the mark, killing
+its own tcpdump if it is there, so a Stop between `&` and the pid file
+ends tcpdump too (the script removes the mark, the pid and, stopped so,
+the stderr file as it ends). After adb has ended by itself,
+`adbCleanupScript()` kills by the pid if it is still there and removes the
+files. A LogSquirl that crashes leaves tcpdump running until its next
+write to the dead stream, and the files in `/data/local/tmp`.
 `explainFailure()` maps adb's and tcpdump's errors to
 `adbAuthorizeGuidance()`, `adbConnectGuidance()`, `adbRootGuidance()`,
 `adbTcpdumpGuidance()`. `tests/adb_source_test.cpp` uses a fake `adb`

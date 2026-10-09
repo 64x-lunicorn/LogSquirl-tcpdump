@@ -654,11 +654,54 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
         REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
         REQUIRE( waitFor( [ & ] { return adb.tcpdumpLog().contains( "killed" ); } ) );
         REQUIRE( adb.adbLog().contains( "kill $p" ) );
-        REQUIRE( adb.adbLog().contains( "su -c 'p=$(cat" ) == viaSu );
+        REQUIRE( adb.adbLog().contains( "su -c ': >" ) == viaSu );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
         REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
         QFile::remove( adb.path( "adb-root" ) );
         sidebar.reset();
+    }
+}
+
+SCENARIO( "A Stop before tcpdump has left its pid still ends it", "[adb_source]" )
+{
+    FakeAdb adb;
+    adb.adbRoot();
+    adb.tcpdump( true );
+    const auto kind = adb.kind();
+    AdbDeviceAccess access;
+    access.root = true;
+    access.tcpdump = "tcpdump";
+    const auto files = AdbCaptureFiles::of( adb.path( "tmp" ), "race" );
+    const auto capture
+        = kind->captureCommand( { "adb", adb.serial, "any", "", 96 }, access, "race" );
+    const auto shell = [ & ]( const QStringList& arguments ) {
+        QProcess process;
+        process.start( adb.path( "adb" ), arguments );
+        REQUIRE( process.waitForStarted( 5000 ) );
+        return process.waitForFinished( 10000 );
+    };
+
+    GIVEN( "a Stop that comes before the capture's script has left the pid" )
+    {
+        REQUIRE( shell( { "-s", adb.serial, "shell", adbStopScript( files ) } ) );
+
+        WHEN( "the script runs after it" )
+        {
+            const bool ended = shell( capture.arguments );
+
+            THEN( "it ends its tcpdump itself, and leaves no file behind" )
+            {
+                // It waits for tcpdump, which would otherwise run until killed.
+                REQUIRE( ended );
+                REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
+            }
+        }
+    }
+
+    THEN( "a capture that ended by itself is cleaned up without a stop mark" )
+    {
+        REQUIRE( adbCleanupScript( files ).contains( "rm -f" ) );
+        REQUIRE_FALSE( adbCleanupScript( files ).contains( ": >" ) );
     }
 }
 

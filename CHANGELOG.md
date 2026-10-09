@@ -489,6 +489,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes is described by none of its segments.
 
 ### Fixed
+- Android live capture: a Stop in the moment between starting tcpdump on
+  the device and writing its pid file orphaned tcpdump there. Stop now
+  leaves a stop mark that the capture's script looks for after writing
+  the pid, and the capture's files are removed on every path; README says
+  what a LogSquirl crash leaves on the device (#118).
 - SSH live capture lists the server's interfaces with `sudo -n tcpdump -D`
   while *Run tcpdump with sudo -n* is on (anew as it is toggled), and with
   `ip -o link` when tcpdump lists none, as #74 asked; the remote commands

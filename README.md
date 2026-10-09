@@ -324,7 +324,12 @@ The interface and the filter are single-quoted for the device's shell, so
 a filter is always one argument of tcpdump and never shell syntax.
 tcpdump's stderr is kept in a file on the device and shown if the capture
 fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
-and removes its files.
+also when it comes before tcpdump has fully started, and removes its files.
+If LogSquirl crashes or is killed during a capture, nothing tells the
+device: tcpdump runs on until it next writes to the closed stream (its
+next captured packet), and its `logsquirl-*.pid`/`.err` files stay in
+`/data/local/tmp`, which `adb shell rm /data/local/tmp/logsquirl-*` (through
+`su -c` for a root capture) removes.
 
 #### Remote capture over SSH
 
