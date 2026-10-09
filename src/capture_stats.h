@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -54,13 +55,21 @@ struct CaptureStats {
     uint64_t otherEndpointPackets = 0;
     size_t maxEndpoints = kMaxEndpoints;
 
+    /// Link-layer types (DLT_*) of the capture, each once, in the order they
+    /// were first seen.  A capture holds few, so a list is searched.
+    std::vector<uint32_t> linkTypes;
+
     /// Earliest and latest packet time, in nanoseconds since the epoch.
     /// Packets need not be in time order, e.g. in a merged capture.
     int64_t firstTimeNs = 0;
     int64_t lastTimeNs = 0;
 
-    /// Count @p pkt in.
+    /// Count @p pkt in, with the link-layer type it was dissected with.
     void add( const PacketRecord& pkt );
+
+    /// List @p linkType, unless it is listed already: also for a type the
+    /// capture declares without a packet of it.
+    void addLinkType( uint32_t linkType );
 
     /// Whether some addresses were counted as other endpoints.
     bool endpointLimitReached() const

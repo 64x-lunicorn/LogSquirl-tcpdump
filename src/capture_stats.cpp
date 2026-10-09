@@ -42,10 +42,18 @@ void CaptureStats::add( const PacketRecord& pkt )
 
     ++packets;
     bytes += pkt.capturedLen;
+    addLinkType( pkt.linkType );
     ++protocolPackets[ pkt.protocol ];
     protocolBytes[ pkt.protocol ] += pkt.capturedLen;
     countEndpoint( pkt.srcIp );
     countEndpoint( pkt.dstIp );
+}
+
+void CaptureStats::addLinkType( uint32_t linkType )
+{
+    if ( std::find( linkTypes.begin(), linkTypes.end(), linkType ) == linkTypes.end() ) {
+        linkTypes.push_back( linkType );
+    }
 }
 
 void CaptureStats::countEndpoint( const std::string& address )

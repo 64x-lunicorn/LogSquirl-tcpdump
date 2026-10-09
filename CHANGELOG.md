@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Link type and time precision come with each packet.** Internally, every
+  packet carries the link-layer type it was dissected with and the precision
+  of its timestamp, read through one reader interface, so that a capture
+  holding several of each (pcapng) can be read later. The sidebar lists the
+  capture's link types comma-separated; for a pcap that is still one, and the
+  converted text is unchanged.
 - **One separator in the Info column.** The description of a payload follows
   the transport summary after ` | `, whatever the protocol: `Len=9 | Client
   Hello` instead of `Len=9 [Client Hello]` for TLS, and `Len=29 | Query

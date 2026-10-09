@@ -222,6 +222,46 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         }
     }
 
+    GIVEN( "packets recorded to the nanosecond" )
+    {
+        PacketRecord first;
+        first.timestampSec = 1000;
+        first.timestampNsec = 5;
+        first.precision = TimePrecision::Nanoseconds;
+        PacketRecord second = first;
+        second.timestampNsec = 123456789;
+
+        WHEN( "formatting all packets" )
+        {
+            auto lines = formatAllPackets( { first, second } );
+
+            THEN( "the times are shown to the nanosecond, as the packets were recorded" )
+            {
+                REQUIRE( lines[ 2 ].find( " 0.123456784 " ) != std::string::npos );
+            }
+        }
+    }
+
+    GIVEN( "a packet recorded to the nanosecond after one recorded to the microsecond" )
+    {
+        PacketRecord first;
+        first.timestampSec = 1000;
+        PacketRecord second = first;
+        second.timestampNsec = 123456789;
+        second.precision = TimePrecision::Nanoseconds;
+
+        WHEN( "formatting all packets" )
+        {
+            auto lines = formatAllPackets( { first, second } );
+
+            THEN( "every time is shown at the finest precision of the packets" )
+            {
+                REQUIRE( lines[ 1 ].find( " 0.000000000 " ) != std::string::npos );
+                REQUIRE( lines[ 2 ].find( " 0.123456789 " ) != std::string::npos );
+            }
+        }
+    }
+
     GIVEN( "an empty packet list" )
     {
         std::vector<PacketRecord> empty;

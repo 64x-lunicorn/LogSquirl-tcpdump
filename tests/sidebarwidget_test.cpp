@@ -338,6 +338,33 @@ SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary lists the capture's link-layer types", "[sidebar]" )
+{
+    GIVEN( "a capture of one link-layer type" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.linkTypeNames = { "Ethernet" };
+
+        THEN( "it is named" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "a.pcap", 100, summary )
+                         .contains( "Link type: Ethernet<br>" ) );
+        }
+    }
+
+    GIVEN( "a capture of several link-layer types" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.linkTypeNames = { "Linux SLL2", "Ethernet", "<147>" };
+
+        THEN( "they are listed comma-separated, as text" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "a.pcap", 100, summary )
+                         .contains( "Link types: Linux SLL2, Ethernet, &lt;147&gt;<br>" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
 {
     GIVEN( "a capture with ten endpoints" )

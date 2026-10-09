@@ -36,6 +36,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -50,7 +51,9 @@ struct CaptureSummary {
     uint64_t packets = 0;
     uint64_t bytes = 0;           ///< Captured bytes of all packets.
     double durationSeconds = 0.0; ///< Between the earliest and the latest packet.
-    std::string linkTypeName;     ///< The capture's link-layer type by name, or number.
+    /// The capture's link-layer types by name, or number, in the order they
+    /// were first seen: one for a pcap, one per kind of interface otherwise.
+    std::vector<std::string> linkTypeNames;
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
     /// Packets per IP address, for every address that was counted.

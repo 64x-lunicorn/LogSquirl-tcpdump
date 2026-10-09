@@ -26,6 +26,11 @@
  * formatting.  Supports both big-endian and little-endian byte orders
  * (magic number).
  *
+ * The rest of the plugin sees a capture through the CaptureReader seam
+ * only: each PacketRecord carries the link-layer type it was dissected with
+ * and the precision its timestamp was recorded in, so that a format whose
+ * interfaces differ in both (pcapng) reads through the same seam.
+ *
  * This is a pure parser — no Qt dependency.
  */
 
@@ -72,6 +77,15 @@ constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
 /// its number for one this parser does not know.
 std::string linkTypeName( uint32_t linkType );
 
+// ── Timestamp precision ──────────────────────────────────────────────────
+
+/// The resolution a packet's timestamp was recorded in.  Ordered from
+/// coarse to fine, so that std::max picks the finer of two.
+enum class TimePrecision : uint8_t {
+    Microseconds, ///< pcap's classic resolution
+    Nanoseconds,  ///< e.g. tcpdump --time-stamp-precision=nano
+};
+
 // ── Ethernet / IP / TCP / UDP constants ──────────────────────────────────
 
 constexpr uint16_t EthertypeIpv4 = 0x0800;
@@ -95,6 +109,12 @@ struct PacketRecord {
     uint32_t timestampNsec = 0; ///< Fraction of the second, in nanoseconds
     uint32_t capturedLen = 0;   ///< Bytes captured
     uint32_t originalLen = 0;   ///< Original packet length on the wire
+
+    /// Link-layer type (DLT_*) the packet was dissected with.
+    uint32_t linkType = DltEthernet;
+    /// Resolution the timestamp was recorded in; timestampNsec holds it in
+    /// nanoseconds either way.
+    TimePrecision precision = TimePrecision::Microseconds;
 
     // Parsed protocol fields (populated if applicable)
     std::string srcMac;
@@ -137,7 +157,7 @@ constexpr size_t kMaxPreamble = 4096;
 /// Bytes of a packet that are dissected; the rest of a longer record is skipped.
 constexpr uint32_t kMaxDissectedBytes = 262144;
 
-/// Where a PcapReader reads the capture from.
+/// Where a CaptureReader reads the capture from.
 class ByteSource {
 public:
     virtual ~ByteSource() = default;
@@ -168,28 +188,35 @@ private:
 };
 
 /**
- * Reads a pcap capture one packet at a time, so that a capture of any size
- * needs memory for one packet only.
+ * Reads a capture one packet at a time, so that a capture of any size needs
+ * memory for one packet only: the seam between a file format and the rest
+ * of the plugin.
+ *
+ * A reader knows its format's headers; nothing past it does.  Each packet
+ * it returns carries its own link-layer type and timestamp precision,
+ * because one capture may hold several of each (a pcapng file has one per
+ * interface).  What the capture announces as a whole, the finest precision
+ * for the time column and the link-layer types it declares, is known after
+ * open().
  */
-class PcapReader {
+class CaptureReader {
 public:
-    explicit PcapReader( ByteSource& source )
-        : source_( source )
-    {
-    }
+    virtual ~CaptureReader() = default;
 
-    /// Read the global header, after an optional text preamble.
-    /// On failure, error() says why.
-    bool open();
+    /// Read the capture's header.  On failure, error() says why.
+    virtual bool open() = 0;
 
     /// Read and dissect the next packet into @p pkt.  False at the end of the
     /// capture, and when it ends in the middle of a record (see truncated()).
-    bool next( PacketRecord& pkt );
+    virtual bool next( PacketRecord& pkt ) = 0;
 
-    const PcapGlobalHeader& header() const
-    {
-        return header_;
-    }
+    /// The finest timestamp precision the capture announces; no packet's is
+    /// finer.  Valid after a successful open().
+    virtual TimePrecision precision() const = 0;
+
+    /// The link-layer types the capture has declared so far, also those of
+    /// interfaces that recorded no packet, in the order they were declared.
+    virtual std::vector<uint32_t> linkTypes() const = 0;
 
     const std::string& error() const
     {
@@ -209,6 +236,42 @@ public:
         return bytesRead_;
     }
 
+protected:
+    std::string error_;
+    bool truncated_ = false;
+    uint64_t bytesRead_ = 0;
+};
+
+/**
+ * Reads a libpcap capture.  Its one global header gives every packet the
+ * same link-layer type and precision.
+ */
+class PcapReader : public CaptureReader {
+public:
+    explicit PcapReader( ByteSource& source )
+        : source_( source )
+    {
+    }
+
+    /// Read the global header, after an optional text preamble.
+    bool open() override;
+
+    bool next( PacketRecord& pkt ) override;
+
+    /// Nanoseconds for a nanosecond magic number, microseconds otherwise.
+    TimePrecision precision() const override
+    {
+        return header_.nanoseconds ? TimePrecision::Nanoseconds : TimePrecision::Microseconds;
+    }
+
+    /// The global header's link-layer type, once open.
+    std::vector<uint32_t> linkTypes() const override;
+
+    const PcapGlobalHeader& header() const
+    {
+        return header_;
+    }
+
 private:
     size_t read( uint8_t* dst, size_t n );
     bool skip( uint64_t n );
@@ -218,12 +281,10 @@ private:
     size_t headPos_ = 0;        ///< Next unread byte in head_.
     std::vector<uint8_t> packet_;
     PcapGlobalHeader header_;
-    std::string error_;
     bool swap_ = false;
     bool open_ = false;
-    bool truncated_ = false;
+    bool headerRead_ = false;
     uint32_t packetCount_ = 0;
-    uint64_t bytesRead_ = 0;
 };
 
 /// Result of parsing a whole pcap buffer.

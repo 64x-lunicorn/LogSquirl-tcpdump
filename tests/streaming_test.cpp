@@ -145,6 +145,30 @@ SCENARIO( "A record of zero bytes is read without copying anything", "[pcap_pars
 
 SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]" )
 {
+    GIVEN( "packets of two link-layer types, as one capture of several interfaces holds" )
+    {
+        CaptureStats stats;
+        PacketRecord pkt;
+        for ( const uint32_t linkType : { DltLinuxSll2, DltEthernet, DltLinuxSll2, DltRaw } ) {
+            pkt.linkType = linkType;
+            stats.add( pkt );
+        }
+
+        THEN( "each link-layer type is listed once, in the order it was first seen" )
+        {
+            REQUIRE( stats.linkTypes
+                     == std::vector<uint32_t>{ DltLinuxSll2, DltEthernet, DltRaw } );
+        }
+
+        THEN( "a link-layer type announced again is not listed twice" )
+        {
+            stats.addLinkType( DltEthernet );
+            stats.addLinkType( DltNull );
+            REQUIRE( stats.linkTypes
+                     == std::vector<uint32_t>{ DltLinuxSll2, DltEthernet, DltRaw, DltNull } );
+        }
+    }
+
     GIVEN( "packets whose times are not in order, as in a merged capture" )
     {
         CaptureStats stats;
@@ -214,7 +238,7 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
             THEN( "the summary covers every packet, and nothing was cut" )
             {
                 REQUIRE( result.summary.packets == 3 );
-                REQUIRE( result.summary.linkTypeName == "Ethernet" );
+                REQUIRE( result.summary.linkTypeNames == std::vector<std::string>{ "Ethernet" } );
                 REQUIRE( result.summary.protocolPackets.at( "UDP" ) == 3 );
                 REQUIRE( result.summary.endpointPackets.at( "192.168.1.1" ) == 3 );
                 REQUIRE_FALSE( result.summary.endsInsideRecord );
@@ -432,7 +456,7 @@ SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
             {
                 const auto result = convertPcap( input, dir.path() );
                 REQUIRE( result.status == ConversionResult::Status::Converted );
-                REQUIRE( result.summary.linkTypeName == name );
+                REQUIRE( result.summary.linkTypeNames == std::vector<std::string>{ name } );
             }
         }
     }
@@ -470,6 +494,25 @@ private:
 };
 
 } // namespace
+
+SCENARIO( "A capture without packets still names its link-layer type", "[converter]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a Linux SLL2 pcap with a header and no packets" )
+    {
+        const auto input = writeFile( dir, "empty.pcap", pcapOf( {}, DltLinuxSll2 ) );
+
+        THEN( "the summary lists the link-layer type the capture announces" )
+        {
+            const auto result = convertPcap( input, dir.path() );
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.packets == 0 );
+            REQUIRE( result.summary.linkTypeNames == std::vector<std::string>{ "Linux SLL2" } );
+        }
+    }
+}
 
 SCENARIO( "A write that fails in the middle of the capture fails the conversion", "[converter]" )
 {
@@ -574,7 +617,7 @@ SCENARIO( "Stream numbering and endpoint counts stop growing at their cap", "[ca
 
     GIVEN( "a formatter that numbers at most two streams" )
     {
-        PacketFormatter formatter( false, 2 );
+        PacketFormatter formatter( TimePrecision::Microseconds, 2 );
         auto streamOf = [ &formatter ]( const PacketRecord& pkt ) {
             const auto line = formatter.format( pkt );
             const auto column = line.substr( 7, 8 );

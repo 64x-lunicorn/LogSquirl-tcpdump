@@ -78,13 +78,21 @@ private:
 
 /// The summary of a converted capture, from what was collected on the way.
 CaptureSummary summarise( CaptureStats&& stats, const PacketFormatter& formatter,
-                          const PcapReader& reader, size_t maxStreams )
+                          const CaptureReader& reader, size_t maxStreams )
 {
+    // The packets' link-layer types first, then any the capture declares
+    // without a packet of it, such as a pcap's when it holds none.
+    for ( const auto linkType : reader.linkTypes() ) {
+        stats.addLinkType( linkType );
+    }
+
     CaptureSummary summary;
     summary.packets = stats.packets;
     summary.bytes = stats.bytes;
     summary.durationSeconds = stats.durationSeconds();
-    summary.linkTypeName = linkTypeName( reader.header().network );
+    for ( const auto linkType : stats.linkTypes ) {
+        summary.linkTypeNames.push_back( linkTypeName( linkType ) );
+    }
     summary.protocolPackets = std::move( stats.protocolPackets );
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );
@@ -181,7 +189,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         return failed( inputError );
     }
     FileSource source( input );
-    PcapReader reader( source );
+    PcapReader pcapReader( source );
+    CaptureReader& reader = pcapReader; // the rest sees the capture through the seam
     if ( !reader.open() ) {
         return failed( QString::fromStdString( reader.error() ) );
     }
@@ -216,7 +225,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
 
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
-    PacketFormatter formatter( reader.header().nanoseconds, options.maxStreams );
+    PacketFormatter formatter( reader.precision(), options.maxStreams );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }

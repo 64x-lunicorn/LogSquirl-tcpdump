@@ -40,6 +40,7 @@
 #include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -303,8 +304,13 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
-    html += QString( "Link type: %1<br>" )
-                .arg( QString::fromStdString( summary.linkTypeName ).toHtmlEscaped() );
+    QStringList linkTypes;
+    for ( const auto& name : summary.linkTypeNames ) {
+        linkTypes << QString::fromStdString( name ).toHtmlEscaped();
+    }
+    html += QString( "%1: %2<br>" )
+                .arg( linkTypes.size() > 1 ? "Link types" : "Link type" )
+                .arg( linkTypes.join( ", " ) );
     if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }

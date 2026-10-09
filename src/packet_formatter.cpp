@@ -27,6 +27,7 @@
 
 #include "packet_formatter.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <iomanip>
 #include <map>
@@ -37,14 +38,14 @@ namespace tcpdump {
 namespace {
 
 /// Width of the time column, with three more digits for nanoseconds.
-int timeWidth( bool nanoseconds )
+int timeWidth( TimePrecision precision )
 {
-    return nanoseconds ? 18 : 15;
+    return precision == TimePrecision::Nanoseconds ? 18 : 15;
 }
 
 /// @p deltaNs as seconds with 9 or 6 decimals, computed in integers so that
 /// neither precision nor range is lost.
-std::string formatRelativeTime( int64_t deltaNs, bool nanoseconds )
+std::string formatRelativeTime( int64_t deltaNs, TimePrecision precision )
 {
     const bool negative = deltaNs < 0;
     const auto magnitude
@@ -52,7 +53,7 @@ std::string formatRelativeTime( int64_t deltaNs, bool nanoseconds )
     const auto seconds = static_cast<unsigned long long>( magnitude / 1000000000 );
     const auto fraction = magnitude % 1000000000;
     char buf[ 40 ];
-    if ( nanoseconds ) {
+    if ( precision == TimePrecision::Nanoseconds ) {
         std::snprintf( buf, sizeof( buf ), "%s%llu.%09llu", negative ? "-" : "", seconds,
                        static_cast<unsigned long long>( fraction ) );
     }
@@ -66,7 +67,7 @@ std::string formatRelativeTime( int64_t deltaNs, bool nanoseconds )
 } // namespace
 
 std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, bool nanoseconds )
+                              int streamId, TimePrecision precision )
 {
     // Time relative to the first packet; negative for an earlier packet
     const int64_t deltaNs = ( static_cast<int64_t>( pkt.timestampSec ) - baseTimeSec ) * 1000000000
@@ -81,7 +82,7 @@ std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uin
     oss << std::left;
     oss << std::setw( 7 ) << pkt.number;
     oss << std::setw( 8 ) << streamStr;
-    oss << std::setw( timeWidth( nanoseconds ) ) << formatRelativeTime( deltaNs, nanoseconds );
+    oss << std::setw( timeWidth( precision ) ) << formatRelativeTime( deltaNs, precision );
     oss << std::setw( 40 ) << ( pkt.srcIp.empty() ? pkt.srcMac : pkt.srcIp );
     oss << std::setw( 40 ) << ( pkt.dstIp.empty() ? pkt.dstMac : pkt.dstIp );
     oss << std::setw( 10 ) << pkt.protocol;
@@ -97,7 +98,7 @@ std::string PacketFormatter::header() const
     hdr << std::left;
     hdr << std::setw( 7 ) << "No.";
     hdr << std::setw( 8 ) << "Stream";
-    hdr << std::setw( timeWidth( nanoseconds_ ) ) << "Time";
+    hdr << std::setw( timeWidth( precision_ ) ) << "Time";
     hdr << std::setw( 40 ) << "Source";
     hdr << std::setw( 40 ) << "Destination";
     hdr << std::setw( 10 ) << "Protocol";
@@ -113,7 +114,7 @@ std::string PacketFormatter::format( const PacketRecord& pkt )
         baseTimeSec_ = pkt.timestampSec;
         baseTimeNsec_ = pkt.timestampNsec;
     }
-    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId( pkt ), nanoseconds_ );
+    return formatPacketLine( pkt, baseTimeSec_, baseTimeNsec_, streamId( pkt ), precision_ );
 }
 
 int PacketFormatter::streamId( const PacketRecord& pkt )
@@ -142,10 +143,13 @@ int PacketFormatter::streamId( const PacketRecord& pkt )
     return next;
 }
 
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
-                                           bool nanoseconds )
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
 {
-    PacketFormatter formatter( nanoseconds );
+    auto finest = TimePrecision::Microseconds;
+    for ( const auto& pkt : packets ) {
+        finest = std::max( finest, pkt.precision );
+    }
+    PacketFormatter formatter( finest );
     std::vector<std::string> lines;
     lines.reserve( packets.size() + 1 );
     lines.push_back( formatter.header() );

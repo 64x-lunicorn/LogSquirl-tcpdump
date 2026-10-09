@@ -49,12 +49,12 @@ constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
  * @param baseTimeNsec  Nanoseconds fraction of the first packet's timestamp.
  * @param streamId      Conversation/stream index (0-based), kNoStream if not
  *                      applicable, kUnnumbered if not numbered.
- * @param nanoseconds   Show the time to the nanosecond (a nanosecond capture)
- *                      rather than to the microsecond.
+ * @param precision     The capture's finest precision: the time is shown to
+ *                      the nanosecond or to the microsecond.
  * @return Formatted line.
  */
 std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, bool nanoseconds = false );
+                              int streamId, TimePrecision precision = TimePrecision::Microseconds );
 
 /**
  * Formats the packets of one capture, one at a time and in capture order,
@@ -70,10 +70,13 @@ public:
     /// Conversations numbered by default: some 100 MB of memory at most.
     static constexpr size_t kMaxStreams = 1000000;
 
-    /// @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
-    /// @param maxStreams   Conversations to number at most.
-    explicit PacketFormatter( bool nanoseconds = false, size_t maxStreams = kMaxStreams )
-        : nanoseconds_( nanoseconds )
+    /// @param precision   The finest precision the capture announces: every
+    ///                    time is shown with its decimals, so that the time
+    ///                    column lines up and no packet's time is cut.
+    /// @param maxStreams  Conversations to number at most.
+    explicit PacketFormatter( TimePrecision precision = TimePrecision::Microseconds,
+                              size_t maxStreams = kMaxStreams )
+        : precision_( precision )
         , maxStreams_( maxStreams )
     {
     }
@@ -95,7 +98,7 @@ private:
     /// IP layer), kUnnumbered past maxStreams.
     int streamId( const PacketRecord& pkt );
 
-    bool nanoseconds_;
+    TimePrecision precision_;
     size_t maxStreams_;
     bool streamLimitReached_ = false;
     bool haveBase_ = false;
@@ -108,11 +111,11 @@ private:
  * Format all packets into a vector of lines.  Includes a column header
  * as the first line.
  *
- * @param packets      Parsed packet records.
- * @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
+ * Times are shown at the finest precision of the packets.
+ *
+ * @param packets  Parsed packet records.
  * @return Vector of formatted text lines.
  */
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
-                                           bool nanoseconds = false );
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets );
 
 } // namespace tcpdump

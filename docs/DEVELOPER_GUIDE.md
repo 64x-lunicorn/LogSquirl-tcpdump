@@ -6,7 +6,8 @@ The plugin is structured into three layers:
 
 ### 1. pcap Parser (`pcap_parser.h/cpp`)
 Pure C++ (no Qt dependency). `PcapReader` reads libpcap captures from a
-`ByteSource` one record at a time, so the capture is never held in memory:
+`ByteSource` one record at a time, so the capture is never held in memory.
+It is the one `CaptureReader` so far (see *The reader seam* below):
 - Detects byte order and timestamp precision from the magic number
   (`0xa1b2c3d4` µs, `0xa1b23c4d` ns, either byte order)
 - Finds the header behind a text preamble (e.g. `adb exec-out tcpdump`
@@ -29,6 +30,23 @@ Pure C++ (no Qt dependency). `PcapReader` reads libpcap captures from a
   appends the description it gets back to the transport summary after ` | `
 
 `parsePcap()` parses a whole buffer in memory, for tests.
+
+#### The reader seam
+Everything past the reader (Converter, Packet Formatter, `CaptureStats`)
+sees a capture through `CaptureReader` only, never through a file header.
+Each `PacketRecord` carries the link-layer type it was dissected with
+(`linkType`) and the resolution its timestamp was recorded in
+(`precision`, a `TimePrecision`). As a whole, the reader announces after
+`open()` the finest precision of the capture (`precision()`), which sets
+the Time column's decimals before the first packet is read, and the
+link-layer types it declares (`linkTypes()`).
+
+The seam exists for pcapng: there one file holds several interfaces, each
+with its own link-layer type and timestamp resolution, so neither is a
+property of the file. A pcap has one global header, so `PcapReader` fills
+both fields of every packet from it and announces the magic number's
+precision and the header's link-layer type. A pcapng reader fills them
+from the interface each packet was captured on.
 
 ### 2. Payload Describer (`payload_describer.h/cpp`)
 Pure C++. `describePayload()` takes the captured payload bytes, the two
@@ -55,14 +73,17 @@ forgot to escape.
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, Time,
 Source, Destination, Protocol, Len, Info. Times are relative to the first
-packet, with 6 decimals, or 9 for a nanosecond capture.
+packet, with 6 decimals, or 9 when the capture announces nanosecond
+precision for any of its packets (`PacketFormatter` takes the reader's
+`precision()`; `formatAllPackets()` the finest of its packets).
 
 Stream IDs are computed from IP+port 4-tuples — both directions of a
 conversation share the same stream number. Non-TCP/UDP packets (ICMP,
 ARP) show `-` as stream. At most `PacketFormatter::kMaxStreams` (1,000,000)
 conversations are numbered; packets of later ones show `?`.
 
-`CaptureStats` collects the sidebar summary's counts packet by packet. It
+`CaptureStats` collects the sidebar summary's counts packet by packet,
+and the link-layer types of the packets in the order they were first seen. It
 counts packets for at most `CaptureStats::kMaxEndpoints` (100,000) IP
 addresses, and those of further addresses as "other endpoints".
 
@@ -72,13 +93,15 @@ port scan or a busy NAT cannot exhaust it. The summary says when a cap was
 hit.
 
 ### 4. Converter (`pcap_converter.h/cpp`)
-`convertPcap()` reads a capture with `PcapReader`, formats each packet and
+`convertPcap()` reads a capture through a `CaptureReader`, formats each packet and
 appends its line to a new output file, reporting progress and checking a
 cancel flag between packets. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three
-outcomes and a `CaptureSummary`: Converted (with the output path), Failed
+outcomes and a `CaptureSummary`, whose link-layer types are those of the
+packets followed by any the capture declares without a packet of it (so a
+pcap with no packets still names its one): Converted (with the output path), Failed
 (with a message) or Cancelled. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
 failure or any other exception ends as Failed, and nothing is left behind.
@@ -91,7 +114,8 @@ Qt UI that provides:
 - "Open pcap…" button triggering a QFileDialog
 - A progress bar and Cancel button while a capture is converted
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
-  top endpoints, packets per second, file size, link-layer type name
+  top endpoints, packets per second, file size, the link-layer type names
+  (comma-separated when there are several)
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome

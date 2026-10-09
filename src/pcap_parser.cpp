@@ -753,7 +753,16 @@ bool PcapReader::open()
     headPos_ = headerOffset + 24;
     bytesRead_ = headPos_;
     open_ = true;
+    headerRead_ = true;
     return true;
+}
+
+std::vector<uint32_t> PcapReader::linkTypes() const
+{
+    if ( !headerRead_ ) {
+        return {};
+    }
+    return { header_.network };
 }
 
 bool PcapReader::next( PacketRecord& pkt )
@@ -796,7 +805,9 @@ bool PcapReader::next( PacketRecord& pkt )
     pkt.timestampNsec = static_cast<uint32_t>( fractionNs % 1000000000 );
     pkt.capturedLen = inclLen;
     pkt.originalLen = origLen;
-    dissect( pkt, header_.network, swap_, packet_.data(), kept );
+    pkt.linkType = header_.network;
+    pkt.precision = precision();
+    dissect( pkt, pkt.linkType, swap_, packet_.data(), kept );
     return true;
 }
 
