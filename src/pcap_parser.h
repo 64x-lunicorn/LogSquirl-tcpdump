@@ -148,6 +148,7 @@ enum class StreamCue : uint8_t {
     None,
     QuicLongHeader, ///< A QUIC long header (or Version Negotiation packet).
     Http2Preface,   ///< The HTTP/2 connection preface.
+    MqttConnect,    ///< An MQTT CONNECT packet.
 };
 
 /// Payload bytes a PacketRecord keeps: enough for a QUIC long header's

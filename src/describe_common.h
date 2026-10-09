@@ -256,6 +256,11 @@ std::string detectTls( const uint8_t* payload, size_t len );
 std::string detectQuic( const uint8_t* payload, size_t len );
 /// A SOCKS message, told by its ports (describe_socks.cpp).
 std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, uint16_t dstPort );
+/// The MQTT packets of a TCP segment: any on MQTT's port, else only behind
+/// a CONNECT (describe_mqtt.cpp).
+std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort );
+/// The payload begins with an MQTT CONNECT (describe_mqtt.cpp).
+bool isMqttConnect( const uint8_t* payload, size_t len );
 
 // ── In the stream ────────────────────────────────────────────────────────
 
@@ -266,6 +271,10 @@ void describeQuicInStream( PacketRecord& pkt, const Stream& stream );
 /// A TCP segment in its stream: HTTP/2 frames after the preface
 /// (describe_http.cpp).
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state );
+
+/// A TCP segment in its stream: MQTT packets after a CONNECT on another
+/// port than MQTT's (describe_mqtt.cpp).
+void describeMqttInStream( PacketRecord& pkt, StreamState& state );
 
 /// Put @p description in place of the one in @p pkt's Info, and @p label
 /// in place of its protocol: recognised from its content, so the label

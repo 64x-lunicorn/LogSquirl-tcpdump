@@ -51,6 +51,7 @@ add_library(logsquirl_tcpdump SHARED
     src/describe_tls.cpp
     src/describe_quic.cpp
     src/describe_socks.cpp
+    src/describe_mqtt.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp
     src/stream_tracker.cpp

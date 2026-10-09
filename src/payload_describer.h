@@ -88,7 +88,11 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
  * begin with frame headers are labelled HTTP2 and described as
  * "HEADERS[1], DATA[1]", each frame's type and stream.  A packet so
  * labelled counts as recognised (PacketRecord::protocolRecognised), so its
- * label sticks to the stream.  Packets of other
+ * label sticks to the stream.  A TCP stream that began with an MQTT
+ * CONNECT on a port other than MQTT's is an MQTT connection: its segments
+ * no detector recognised that begin with MQTT packets are labelled MQTT
+ * and described as on MQTT's port, as far as the first kPayloadHeadBytes
+ * go.  Packets of other
  * streams, and of streams past the stream cap, which have no state, are
  * left as they are.
  */

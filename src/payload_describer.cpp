@@ -163,6 +163,15 @@ std::optional<PayloadDescription> quicPacket( const Payload& p )
                     StreamCue::QuicLongHeader );
 }
 
+/// MQTT on port 1883, and a connection that begins with a CONNECT on any
+/// other: the CONNECT tells the rest of its stream to be read as MQTT.
+std::optional<PayloadDescription> mqttPackets( const Payload& p )
+{
+    auto result = describedIfAny( "MQTT", detectMqtt( p.data, p.len, onPort( p, 1883 ) ) );
+    return isMqttConnect( p.data, p.len ) ? withCue( std::move( result ), StreamCue::MqttConnect )
+                                          : result;
+}
+
 std::optional<PayloadDescription> nmeaSentence( const Payload& p )
 {
     return describedIfAny( "NMEA", detectNmea( p.data, p.len ) );
@@ -193,8 +202,8 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 
 /// The TCP detectors, in the order they are tried.
 constexpr Detector kTcpDetectors[]
-    = { dnsOverTcpMessage, tlsRecord,    httpMessage,       http2Preface,
-        nmeaSentence,      socksMessage, portHintAndPreview };
+    = { dnsOverTcpMessage, tlsRecord,    httpMessage,  http2Preface,
+        mqttPackets,       nmeaSentence, socksMessage, portHintAndPreview };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the
 /// payload parses as a DNS message.
@@ -325,6 +334,7 @@ void describeInStream( PacketRecord& pkt, const Stream& stream )
     }
     else {
         describer::describeHttp2InStream( pkt, *stream.state );
+        describer::describeMqttInStream( pkt, *stream.state );
     }
 }
 

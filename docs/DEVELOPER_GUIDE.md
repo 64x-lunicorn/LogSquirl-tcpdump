@@ -241,14 +241,15 @@ following `icmp.cpp`: `describe_http.cpp` (HTTP, SSDP's messages, HTTP/2
 and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
 (with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
 over UDP and TCP), `describe_dhcp_ntp.cpp` (DHCP, DHCPv6, NTP),
-`describe_socks.cpp` and `describe_nmea.cpp`. They share the internal
+`describe_socks.cpp`, `describe_mqtt.cpp` (with a connection on another
+port in the stream) and `describe_nmea.cpp`. They share the internal
 header `describe_common.h` (namespace `tcpdump::describer`): the payload
 text helpers of `describe_text.cpp` (`escapeBytes()`, `fieldText()`,
 `hexBytes()`, `joinNames()`, …), the `FieldReader`, and the declarations
 of the detectors and in-stream passes the tables use.
-- TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, NMEA 0183, SOCKS4/5
-  (only messages of the exact shape, in the right direction, on proxy
-  ports), then the port hint
+- TCP: DNS on port 53, TLS, HTTP, the HTTP/2 preface, MQTT (on port 1883,
+  or behind a CONNECT), NMEA 0183, SOCKS4/5 (only messages of the exact
+  shape, in the right direction, on proxy ports), then the port hint
 - HTTP: a request is its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
   path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
@@ -277,6 +278,35 @@ of the detectors and in-stream passes the tables use.
   the snaplen or the segment is described as far as it goes. A version is
   named only if known: a cut hello whose extensions end before a
   `supported_versions` would have shown gets none
+- MQTT (3.1, 3.1.1 and 5.0): every control packet of a segment is named as
+  Wireshark names it, up to four, then `…`: `Connect Command (MQTT 3.1.1,
+  Keep Alive 60, Clean Session, Client ID "sensor-1", User "bob")` (no
+  password, will skipped), `Connect Ack (Connection Accepted)`, `Publish
+  Message (QoS 1, id=2, Retain) [alerts/door] "open"` (the payload cut at
+  32 bytes), `Publish Ack (id=2)`, `Subscribe Request (id=1)
+  [sensors/+/temp, alerts/#]`, `Ping Request`, `Disconnect Req`. MQTT 5.0
+  properties are skipped by their length, each by the size its identifier
+  gives it; a reason code other than success is named in the
+  specification's words, with the reason string behind it, `Publish Ack
+  (id=2, No matching subscribers, "nobody listening")`. A packet carries
+  no version: a CONNECT earlier in the segment says which, else a CONNACK,
+  acknowledgement or DISCONNECT longer than MQTT 3.1.1 allows is MQTT 5.0,
+  and the bytes behind a PUBLISH's topic or a SUBSCRIBE's id are read as
+  properties if they parse as such. The `Fields` reader of
+  `describe_mqtt.cpp`, on a `FieldReader`, tells a field beyond the length
+  its packet declares (malformed) from one beyond the captured bytes (cut):
+  a packet that goes on in the next segment is described as far as it
+  goes and ends in ` …`, its rest is a `Continuation`; one that breaks the
+  rules of its type (flags of its fixed header, a Remaining Length of more
+  than 4 bytes or not minimally encoded, a topic with a control character
+  or a wildcard, a property unknown, bytes left over) is `<name> [Malformed
+  Packet]`. The first packet of a segment must be well formed, or be the
+  only one and fill the segment, else the segment is taken for the middle
+  of a packet and is `MQTT` by its port alone. On another port, a segment
+  that begins with a CONNECT (protocol name and level of an MQTT version)
+  is MQTT and gives its stream `StreamCue::MqttConnect`: the stream's later
+  segments that no detector recognised are described from their first
+  kPayloadHeadBytes in `describeMqttInStream()`. MQTT over TLS (8883) is TLS
 - UDP: DNS and mDNS by port, SSDP, NTP, DHCP, DHCPv6, QUIC, then NMEA and
   the port hint
 - DHCP (UDP 67, 68): the message type of option 53 in Wireshark's words
@@ -922,7 +952,9 @@ written by `tests/make_stream_labels_corpus.py`. `icmp.pcap`, ICMP and
 ICMPv6 echoes, error messages with their quoted packets and neighbor
 discovery, is written by `tests/make_icmp_corpus.py`; `dhcp-ntp.pcap`, a DHCP
 lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
-by `tests/make_dhcp_ntp_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
+by `tests/make_dhcp_ntp_corpus.py`; `mqtt.pcap`, MQTT 3.1.1 and 5.0
+sessions on port 1883, a PUBLISH cut over two segments, and a session on
+another port found by its CONNECT, by `tests/make_mqtt_corpus.py`; `tunnels.pcap`, packets in VXLAN, GRE
 and IP-in-IP tunnels, nested and nested too deep, by
 `tests/make_tunnels_corpus.py`; `wifi.pcap`, a station joining an access
 point behind Radiotap headers, and `ppp.pcapng`, a PPPoE session from

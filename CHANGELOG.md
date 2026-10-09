@@ -46,6 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discovery with its stage, `Active Discovery Offer (PADO)
   AC-Name='isp'`. Before, these captures showed `Unsupported link-layer
   type` on every line, and PPPoE frames only their EtherType.
+- **MQTT described.** MQTT 3.1, 3.1.1 and 5.0 on TCP port 1883, and on
+  any port behind a CONNECT, is described as Wireshark names its control
+  packets, every one in a segment: `Connect Command (MQTT 3.1.1, Keep
+  Alive 60, Clean Session, Client ID "sensor-1", User "bob")`, `Connect
+  Ack (Connection Accepted)`, `Publish Message (QoS 1, id=2, Retain)
+  [alerts/door] "open"`, `Publish Ack/Received/Release/Complete (id=…)`,
+  `Subscribe Request (id=1) [sensors/+/temp, alerts/#]`, `Subscribe Ack`,
+  `Unsubscribe Request/Ack`, `Ping Request/Response`, `Disconnect Req`,
+  `Authentication Exchange`. MQTT 5.0 properties are skipped by their
+  length, reason codes named with their reason strings (`Publish Ack
+  (id=2, No matching subscribers, "nobody listening")`). A packet that
+  goes on in the next segment is described as far as it goes, its rest is
+  a `Continuation`; a malformed one is `[Malformed Packet]`. Every length
+  is checked against the packet and the captured bytes. MQTT over TLS
+  (8883) stays TLS. Before, MQTT was named by its port alone, with a
+  preview of its bytes.
 
 ### Fixed
 - An Ethernet frame carried in VXLAN or GRE is dissected as one on the
