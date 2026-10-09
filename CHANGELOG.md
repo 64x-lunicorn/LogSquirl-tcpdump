@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Live capture UI.** The sidebar's new **Live capture** section, and
+  **Plugins → tcpdump → Start live capture…** (also in the Command
+  Palette) with the same fields in a dialog, start a live capture: a
+  source picker (a source that cannot be used says why), its devices and
+  interfaces, listed in the background with a timeout and refreshable, a
+  BPF capture filter (passed as one argument, never through a shell; a
+  display filter field, a leading `-`, a line break or unbalanced
+  parentheses are pointed out below it) and the snaplen (262144 by
+  default). **Start** is disabled while a capture is read or captured;
+  **Stop** (also **Plugins → tcpdump → Stop live capture**) finalises it.
+  The section shows the live counters, the capture program's stderr lines
+  and, when a capture fails, its error and what the source says to do.
+  The last choice is remembered in `settings.ini` (group `[live]`); no
+  password is ever asked for or stored. One live capture runs at a time:
+  the menu entry offers to stop the running one, and starts the new one
+  once it has ended. Sources plug in through one small interface, the
+  Live Source Kind (#71)
 - **Follow stream content.** The Packet Panel's new **Stream** tab shows
   the payload of the selected packet's TCP or UDP conversation, as
   Wireshark's *Follow TCP/UDP Stream* does: the client's bytes in red, the

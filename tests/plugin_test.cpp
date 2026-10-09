@@ -452,9 +452,13 @@ SCENARIO( "the capture dialog is also in the Plugins menu", "[plugin]" )
             return chosen;
         } );
 
-        THEN( "Plugins > tcpdump > Open pcap\xe2\x80\xa6 is registered" )
+        THEN( "Plugins > tcpdump > Open pcap\xe2\x80\xa6 is registered, and the live capture's "
+              "entries" )
         {
-            REQUIRE( host.menuActions.size() == 1 );
+            REQUIRE( host.menuActions.size() == 3 );
+            REQUIRE( host.menuActions.at( 1 ).label
+                     == QString::fromUtf8( "Start live capture\xe2\x80\xa6" ) );
+            REQUIRE( host.menuActions.at( 2 ).label == "Stop live capture" );
             REQUIRE( host.menuActions.first().menuPath == "tcpdump" );
             REQUIRE( host.menuActions.first().label
                      == QString::fromUtf8( "Open pcap\xe2\x80\xa6" ) );

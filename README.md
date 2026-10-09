@@ -204,6 +204,36 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 ### Live capture
 
+Start a live capture from the **Live capture** section of the plugin's
+sidebar tab, or with **Plugins → tcpdump → Start live capture…** (also in
+the Command Palette), which shows the same fields in a dialog:
+
+- **Source**: where to capture. Each source the plugin offers is listed;
+  one that cannot be used on this computer shows why, e.g. that a program
+  it needs is not installed
+- **Device**, for a source that has devices (a phone, a host), and
+  **Interface**: listed by the source in the background, with a
+  description where the source has one; **Refresh** lists them anew. An
+  interface the source does not list can be typed
+- **Capture filter**: a BPF filter such as `host 10.0.0.1 and tcp port
+  443`, passed to the source as it is (empty captures everything). A line
+  break, a leading `-`, unbalanced parentheses or a Wireshark display
+  filter field such as `ip.addr` are pointed out below the field and keep
+  Start disabled; anything else is checked by the capture program, whose
+  error the section shows
+- **Snaplen**: the bytes kept of each packet, 262144 by default; a packet
+  cut shorter is marked `[cut to N bytes]`
+- **Start** and **Stop** (also **Plugins → tcpdump → Stop live capture**).
+  Start is disabled while a capture file is read or a live capture runs;
+  one live capture runs at a time, and the menu entry offers to stop the
+  running one first
+
+The choices started last are remembered in the plugin's `settings.ini` and
+shown again after a restart. The plugin never asks for or stores a
+password. While the capture runs, the section shows what the capture
+program writes to stderr (also in LogSquirl's log); if it fails, the
+section shows why, with what the source says to do about it.
+
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:
 

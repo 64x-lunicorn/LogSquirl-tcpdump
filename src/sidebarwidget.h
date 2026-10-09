@@ -29,11 +29,13 @@
 
 #include "export_dialog.h"
 #include "live_capture.h"
+#include "live_source.h"
 #include "pcap_converter.h"
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QLabel>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QProgressBar>
 #include <QProgressDialog>
@@ -47,9 +49,11 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 
 namespace tcpdump {
 
+class LiveCaptureForm;
 class PacketPanel;
 
 /// The capture summary shown in the sidebar, as rich text.  With
@@ -73,8 +77,11 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs );
  *     has the Regex Lab and tells the selected lines: g_state.hostCapabilities
  *     when the widget is created
  *   - progress bar and Cancel button, while a capture is converted
- *   - while a live capture runs (startLiveCapture()), its packets, bytes,
- *     packets/s and elapsed time, and a Stop button
+ *   - the Live capture section: the live capture form (source, device,
+ *     interface, capture filter, snaplen; live_capture_form.h) and Start;
+ *     while a capture runs, its packets, bytes, packets/s and elapsed time,
+ *     a Stop button and the capture program's stderr lines; after it
+ *     failed, why, and what the source says to do about it
  *   - "Save capture…", for a live capture's raw file, which lives in the
  *     temporary directory and goes when LogSquirl quits
  *   - Summary label showing the stats of the capture in the tab in front,
@@ -86,6 +93,12 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs );
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
  *     packet of the line selected in the tab in front, and the
  *     Conversations table of the capture in front
+ *
+ * Plugins > tcpdump > Start live capture… shows the same form in a dialog
+ * (LiveCaptureDialog).  The last choice started is kept in settings.ini and
+ * shown again after a restart.  Start is disabled while a capture is read
+ * or captured; from the menu, a running capture is offered to be stopped
+ * first, and the new one starts once it has ended.
  *
  * Plugins > tcpdump > Export packets… writes the packets of the lines
  * selected in the tab in front to a new capture file (packet_export.h), on
@@ -199,6 +212,51 @@ public:
      */
     bool startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource );
 
+    /**
+     * Capture @p choice live: its source (a kind of the live sources, see
+     * setLiveSources()) makes the stream, named after its device and
+     * interface (liveCaptureName()).  The choice is saved in settings.ini.
+     * False, with a notification, if the source is unknown or unavailable,
+     * the choice is not one it can capture, or a capture is being read or
+     * captured.
+     */
+    bool startLiveCapture( const LiveChoice& choice );
+
+    /// Plugins > tcpdump > Start live capture…: offer to stop a capture that
+    /// runs, ask for a choice in the Start live capture dialog, and start
+    /// it, once the running one has ended.
+    void chooseAndStartLiveCapture();
+
+    /// Asks the user for a live capture choice, given the one to show first;
+    /// false if the user does not want to capture.
+    using LiveChoiceAsker = std::function<bool( QWidget* parent, LiveChoice& choice )>;
+
+    /// Ask with @p asker instead of the Start live capture dialog (for tests).
+    void setLiveChoiceAsker( LiveChoiceAsker asker )
+    {
+        askLiveChoice_ = std::move( asker );
+    }
+
+    /// Asks whether to stop the live capture @p running; false: keep it.
+    using StopConfirmer = std::function<bool( QWidget* parent, const QString& running )>;
+
+    /// Ask with @p confirmer instead of a message box (for tests).
+    void setStopConfirmer( StopConfirmer confirmer )
+    {
+        confirmStop_ = std::move( confirmer );
+    }
+
+    /// Offer the kinds of @p sources in the Live capture section and the
+    /// dialog, showing the choice saved in settings.ini (for tests; the
+    /// plugin's own are builtInLiveSources()).
+    void setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
+
+    /// The Live capture section's form.
+    LiveCaptureForm* liveForm() const
+    {
+        return liveForm_;
+    }
+
     /// End the running live capture and keep what was captured.
     void stopLiveCapture();
 
@@ -266,12 +324,20 @@ private:
     void openLiveCapture( const QString& logPath, const QString& rawPath );
     /// The live capture's summary so far.
     void takeLiveSnapshot( const LiveSnapshot& snapshot );
-    /// Show the outcome of a live capture and return to idle.
+    /// Show the outcome of a live capture, return to idle, and start the
+    /// capture Start live capture… asked for meanwhile.
     void finishLiveCapture( const ConversionResult& result );
+    /// Show the outcome of a live capture and return to idle.
+    void reportLiveOutcome( const ConversionResult& result );
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();
     /// Whether a capture is being read or captured, said in a notification.
     bool refuseWhileBusy();
+    /// Enable Start if no capture is read or captured and the form's choice
+    /// can be captured; its tooltip says why not.
+    void updateStartButton();
+    /// Show why the live capture failed, and what its source says to do.
+    void showLiveError( const QString& error );
     /// Report the outcome of the export @p request asked for.
     void finishExport( const ExportRequest& request, ExportResult result );
 
@@ -283,10 +349,14 @@ private:
     QPushButton* stopButton_ = nullptr;
     QPushButton* saveButton_ = nullptr;
     QLabel* liveLabel_ = nullptr;
-    QString lastDir_;              ///< Remembers the last browsed directory.
-    bool formatHintShown_ = false; ///< The Log Format hint was shown once.
-    FileChooser chooseFile_;       ///< Shows the file dialog.
-    SaveChooser chooseSaveFile_;   ///< Shows the save dialog.
+    LiveCaptureForm* liveForm_ = nullptr;
+    QPushButton* startButton_ = nullptr;
+    QPlainTextEdit* liveStderr_ = nullptr; ///< The capture program's stderr lines.
+    QLabel* liveError_ = nullptr;          ///< Why the last live capture failed.
+    QString lastDir_;                      ///< Remembers the last browsed directory.
+    bool formatHintShown_ = false;         ///< The Log Format hint was shown once.
+    FileChooser chooseFile_;               ///< Shows the file dialog.
+    SaveChooser chooseSaveFile_;           ///< Shows the save dialog.
     /// The key in converted_ of the file in the tab in front, as fileKey()
     /// spells it, whether or not it holds a capture.
     QString frontKey_;
@@ -311,6 +381,17 @@ private:
     LiveSnapshot liveSnapshot_; ///< The latest snapshot of the live capture.
     QElapsedTimer liveClock_;   ///< Since the live capture started.
     QTimer liveTicker_;         ///< Moves the elapsed time on.
+    /// Where the live capture form and dialog list devices and interfaces;
+    /// waited for when the widget goes.
+    QThreadPool listingPool_;
+    /// The kinds of live sources offered.
+    std::shared_ptr<const LiveSourceRegistry> liveSources_;
+    /// The kind of the live capture, running or the last one.
+    std::shared_ptr<const LiveSourceKind> liveKind_;
+    /// Started when the running capture has ended (Start live capture…).
+    std::optional<LiveChoice> pendingStart_;
+    LiveChoiceAsker askLiveChoice_; ///< Shows the Start live capture dialog.
+    StopConfirmer confirmStop_;     ///< Asks whether to stop the running capture.
 
     ExportConfirmer confirmExport_; ///< Shows the Export dialog and a file dialog.
     /// Cancels the running export.

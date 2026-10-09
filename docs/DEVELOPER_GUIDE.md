@@ -1296,6 +1296,39 @@ outcome is posted before the source is destroyed, so a program that takes
 up to `kTerminateGrace` to end does not delay it; the destructor stops and
 waits for the worker.
 
+#### Live Source Kinds (`live_source.h/cpp`)
+Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
+SSH, a Wireshark extcap, a custom command) is a `LiveSourceKind`; the UI
+knows none of them. A kind answers:
+
+| Member | Thread | What |
+|--------|--------|------|
+| `id()`, `displayName()` | UI | Its name in `settings.ini` (never changes) and in the source picker |
+| `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
+| `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
+| `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
+| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice`; by default an interface is needed |
+| `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a shell's |
+| `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. An extcap's FIFO overrides it |
+| `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
+
+A kind holds no state that changes, so its listings may run on a worker
+while the UI asks it the rest. `runListing( command, timeout )` runs a
+listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
+device, so one that would prompt fails at once, in a process group of its
+own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
+returns its stdout, stderr and exit code. `captureFilterProblem()` catches
+what would be misread before libpcap sees a filter (a line break, a
+leading `-`, unbalanced parentheses, a display filter field such as
+`ip.addr`); the capture program compiles it. `liveCaptureName( choice )`
+names the capture's files after its device and interface.
+
+`builtInLiveSources()` is the one place a kind is registered: a source
+ticket adds a line there and nothing in the UI. Tests use
+`tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
+capture or a program, a failure with a hint, devices on request) through
+`SidebarWidget::setLiveSources()`.
+
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview
 (`preview`, `previewChars`), the stream and endpoint caps (`maxStreams`,
@@ -1335,7 +1368,10 @@ path (`someIpNamesFile`). `ConfigDialog` shows and edits the options and says th
 capture keeps those it was converted with; it does not save them itself.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
-only.
+only. `loadLiveChoice()` and `saveLiveChoice()` keep the last
+`LiveChoice` started (source, device, interface, filter, snaplen 1 to
+`kMaxSnaplen`) in the group `live` of the same file; no source asks for or
+keeps a password.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:
@@ -1384,6 +1420,30 @@ has a raw file, copies it where `setSaveChooser()`'s dialog says. stderr
 lines go to the host's log. Opening a file and a live capture exclude each
 other; the `LiveCapture` is kept until the next one starts, since its
 worker may still be ending the capture program.
+
+The **Live capture** section holds a `LiveCaptureForm`
+(`live_capture_form.h/cpp`): the source picker over a `LiveSourceRegistry`
+(`builtInLiveSources()`, or `setLiveSources()` in tests), the device and
+the interface (an editable list; a typed interface is taken as it is),
+Refresh, the capture filter with `captureFilterProblem()` below it, and the
+snaplen. Choosing a source shows its `availability()` reason, or lists its
+devices and then the interfaces of the device chosen on the sidebar's
+listing pool, each listing bounded by the kind's timeout; a result for a
+source or device chosen since is dropped (a generation counter). The form
+remembers the choice it was given and selects it once listed. `problem()`
+(no source, unavailable, the filter, the kind's `validate()`) keeps
+**Start** disabled, with the reason as its tooltip, as does a conversion or
+a capture running; the form is locked while a capture runs.
+`startLiveCapture( LiveChoice )` checks the same, saves the choice, and runs
+`startLiveCapture( liveCaptureName( choice ), kind->makeSource( choice ) )`.
+The capture program's stderr lines fill a small read-only view; a failure's
+error, with `explainFailure()`, a label below Stop. **Plugins → tcpdump →
+Start live capture…** (`chooseAndStartLiveCapture()`) asks to stop a
+running capture (`setStopConfirmer()` in tests), shows a
+`LiveCaptureDialog` with the same form (`setLiveChoiceAsker()`), and starts
+the choice, after the running capture's `finished`, from the event loop (it
+destroys the `LiveCapture` that sends the signal). **Stop live capture**
+calls `stopLiveCapture()`.
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
@@ -1585,7 +1645,7 @@ drives Export packets… and the `ExportDialog` through the `FakeHost`.
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
-the menu entries (Open pcap…, and Packet details, Export packets…, Display
+the menu entries (Open pcap…, Start live capture…, Stop live capture, and Packet details, Export packets…, Display
 filter…, Follow stream content and
 Follow stream where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
