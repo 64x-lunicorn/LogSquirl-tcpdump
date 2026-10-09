@@ -322,6 +322,58 @@ SCENARIO( "A gzip stream that is cut off or corrupt ends there", "[gzip]" )
     }
 }
 
+SCENARIO( "Mangled gzip never breaks the source", "[gzip][fuzz]" )
+{
+    const auto data = sampleData( 20 * 1000 );
+    const auto compressed = gzipped( data, 2, 4096 );
+
+    GIVEN( "the stream cut at every length" )
+    {
+        THEN( "what is read is the data's beginning, and the stream is cut off unless it ends "
+              "after a whole member, or in the first two bytes of the next, which are not yet "
+              "one" )
+        {
+            const auto firstMember = gzipped( data.left( data.size() / 2 ), 1, 4096 ).size();
+            for ( qsizetype n = 0; n < compressed.size(); ++n ) {
+                CountingSource input( compressed.left( n ) );
+                GzipSource gzip( input );
+                const auto all = readAll( gzip, 4096 );
+                REQUIRE( data.startsWith( all ) );
+                INFO( n << " of " << compressed.size() << ", first member " << firstMember );
+                REQUIRE( gzip.cutOff() == ( n < firstMember || n > firstMember + 2 ) );
+            }
+        }
+    }
+
+    GIVEN( "the stream with random bytes changed, cut anywhere, read with access points kept" )
+    {
+        THEN( "it reads as the data's beginning, or is reported cut off" )
+        {
+            std::mt19937 random( 1952 );
+            for ( int round = 0; round < 400; ++round ) {
+                auto mutated = compressed;
+                const auto changes = 1 + random() % 4;
+                for ( unsigned c = 0; c < changes; ++c ) {
+                    mutated[ static_cast<qsizetype>( random() % mutated.size() ) ]
+                        = static_cast<char>( random() );
+                }
+                mutated.truncate( static_cast<qsizetype>( random() % ( mutated.size() + 1 ) ) );
+                CountingSource input( mutated );
+                GzipSource gzip( input );
+                gzip.keepAccessPoints( 1024 );
+                const auto all = readAll( gzip, 1 + random() % 8192 );
+                REQUIRE( all.size() <= 1032 * mutated.size() ); // deflate's ratio at most
+                if ( !gzip.cutOff() ) {
+                    REQUIRE( data.startsWith( all ) );
+                }
+                else {
+                    REQUIRE_FALSE( gzip.error().empty() );
+                }
+            }
+        }
+    }
+}
+
 SCENARIO( "Access points let a gzip stream be read from anywhere", "[gzip]" )
 {
     const auto data = sampleData( 1024 * 1024 );

@@ -716,7 +716,7 @@ SCENARIO( "Media expectations are capped and expire", "[sip][rtp]" )
     }
 }
 
-SCENARIO( "A malformed SIP message or RTP packet is never read beyond the payload", "[sip]" )
+SCENARIO( "A malformed SIP message or RTP packet is never read beyond the payload", "[sip][fuzz]" )
 {
     const std::vector<std::string> messages{
         invite( sdp( "192.0.2.10", 49170, "a=rtcp:49180 IN IP4 192.0.2.10\r\n" ) ),
@@ -803,6 +803,101 @@ SCENARIO( "A malformed SIP message or RTP packet is never read beyond the payloa
             }
             for ( const auto& pkt : throughExpectations( packets ) ) {
                 REQUIRE( pkt.info.find( '\n' ) == std::string::npos );
+            }
+        }
+    }
+}
+
+SCENARIO( "Mangled SIP never breaks the describer or its framer", "[sip][fuzz]" )
+{
+    const std::vector<std::string> messages{
+        invite( sdp( "192.0.2.10", 49170, "a=rtcp:49180 IN IP4 192.0.2.10\r\n" ) ),
+        sip( "SIP/2.0 180 Ringing", "1 INVITE" ),
+        sip( "SIP/2.0 200 OK", "1 INVITE",
+             "v=0\r\no=bob 1 1 IN IP6 2001:db8::1\r\nc=IN IP6 2001:db8::1\r\n"
+             "m=audio 4000/2 RTP/AVP 0\r\na=rtcp-mux\r\nm=video 0 RTP/AVP 96\r\n" ),
+        sip( "ACK sip:bob@example.com SIP/2.0", "1 ACK" ),
+        sip( "BYE sip:bob@example.com SIP/2.0", "2 BYE" ),
+        "OPTIONS sip:x SIP/2.0\r\ni: y\r\nCSeq: 1 OPTIONS\r\n l: 5\r\n\r\n",
+    };
+    // Described over UDP and TCP, on SIP's port and another, and framed.
+    auto check = []( const Bytes& bytes ) {
+        for ( const uint16_t port : { kSipPort, uint16_t{ 15060 } } ) {
+            for ( auto transport : { Transport::Udp, Transport::Tcp } ) {
+                const auto result
+                    = describePayload( transport, bytes.data(), bytes.size(), 50600, port );
+                REQUIRE( result.description.find( '\n' ) == std::string::npos );
+                REQUIRE( result.description.size() < 4096 );
+                REQUIRE( result.sipCalls.size() <= kMaxSipMessages );
+                for ( const auto& call : result.sipCalls ) {
+                    REQUIRE( call.media.size() <= kMaxSdpMedia );
+                    REQUIRE( call.callId.size() <= kMaxSipCallIdBytes );
+                    REQUIRE( call.origin.size() <= kMaxSipCallIdBytes );
+                }
+            }
+            const auto extent = tcpMessageExtent( bytes.data(), bytes.size(), 50600, port );
+            REQUIRE( ( extent.framer == 0 || extent.length > 0 ) );
+            REQUIRE( ( extent.framer == 0 || extent.needsMore || extent.length <= bytes.size() ) );
+        }
+    };
+
+    GIVEN( "every prefix of each message, keep-alives before it" )
+    {
+        THEN( "each is described in one line and framed whole once all of it is there" )
+        {
+            for ( const auto& message : messages ) {
+                const auto bytes = text( "\r\n\r\n" + message );
+                for ( size_t n = 0; n <= bytes.size(); ++n ) {
+                    check( prefix( bytes, n ) );
+                }
+                const auto extent = tcpMessageExtent( bytes.data(), bytes.size(), 50600, kSipPort );
+                REQUIRE( extent.complete() );
+                REQUIRE( std::string( extent.label ) == "SIP" );
+                REQUIRE( extent.length == bytes.size() );
+            }
+        }
+    }
+
+    GIVEN( "every single byte of each message set to telling values" )
+    {
+        THEN( "the description is one line, the framing within reason" )
+        {
+            for ( const auto& message : messages ) {
+                const auto bytes = text( message );
+                for ( size_t i = 0; i < bytes.size(); ++i ) {
+                    for ( int value : { 0x00, 0x09, 0x0A, 0x0D, 0x20, 0x2F, 0x30, 0x39, 0x3A, 0x3B,
+                                        0x3D, 0x7F, 0xFF } ) {
+                        auto mutated = bytes;
+                        mutated[ i ] = static_cast<uint8_t>( value );
+                        check( mutated );
+                    }
+                }
+            }
+        }
+    }
+
+    GIVEN( "segments of several messages and keep-alives with random bytes changed, begun "
+           "and cut anywhere" )
+    {
+        std::string all;
+        for ( const auto& message : messages ) {
+            all += message + "\r\n\r\n";
+        }
+        const auto segment = text( all );
+
+        THEN( "the describer and the framer read them without fault" )
+        {
+            std::mt19937 random( 5061 );
+            for ( int round = 0; round < 3000; ++round ) {
+                auto mutated = segment;
+                const auto changes = random() % 8;
+                for ( unsigned c = 0; c < changes; ++c ) {
+                    mutated[ random() % mutated.size() ] = static_cast<uint8_t>( random() );
+                }
+                const auto start = random() % mutated.size();
+                const Bytes from( mutated.begin() + static_cast<std::ptrdiff_t>( start ),
+                                  mutated.end() );
+                check( prefix( from, random() % ( from.size() + 1 ) ) );
             }
         }
     }
