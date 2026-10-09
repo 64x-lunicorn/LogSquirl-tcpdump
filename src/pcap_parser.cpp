@@ -169,49 +169,12 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " Len=" << pkt.payloadLen;
 
-        // DNS detection (port 53 or port 5353 for mDNS)
-        if ( pkt.srcPort == 53 || pkt.dstPort == 53 || pkt.srcPort == 5353
-             || pkt.dstPort == 5353 ) {
-            pkt.protocol = ( pkt.srcPort == 5353 || pkt.dstPort == 5353 ) ? "mDNS" : "DNS";
-            auto dns = detectDns( payload, payloadSize );
-            if ( !dns.empty() ) {
-                oss << " " << dns;
-            }
+        const auto described
+            = describePayload( Transport::Udp, payload, payloadSize, pkt.srcPort, pkt.dstPort );
+        if ( !described.label.empty() ) {
+            pkt.protocol = described.label;
         }
-        else if ( pkt.dstPort == 1900 || pkt.srcPort == 1900 ) {
-            pkt.protocol = "SSDP";
-            auto http = detectHttp( payload, payloadSize );
-            if ( !http.empty() )
-                oss << " | " << http;
-        }
-        else if ( pkt.dstPort == 123 || pkt.srcPort == 123 ) {
-            pkt.protocol = "NTP";
-        }
-        else if ( pkt.dstPort == 67 || pkt.dstPort == 68 || pkt.srcPort == 67
-                  || pkt.srcPort == 68 ) {
-            pkt.protocol = "DHCP";
-        }
-        else {
-            // Try NMEA in UDP payload
-            auto nmea = detectNmea( payload, payloadSize );
-            if ( !nmea.empty() ) {
-                pkt.protocol = "NMEA";
-                oss << " | " << nmea;
-            }
-            else {
-                auto proto = portToProtocol( pkt.srcPort );
-                if ( !proto )
-                    proto = portToProtocol( pkt.dstPort );
-                if ( proto )
-                    pkt.protocol = proto;
-
-                if ( payloadSize > 0 ) {
-                    auto preview = payloadPreview( payload, payloadSize );
-                    if ( !preview.empty() )
-                        oss << " | " << preview;
-                }
-            }
-        }
+        appendDescription( oss, described );
 
         pkt.info = oss.str();
     }

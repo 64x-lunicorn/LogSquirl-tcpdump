@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 namespace tcpdump {
 
@@ -95,6 +96,180 @@ constexpr size_t kMaxPreviewChars = 200;
 bool isAsciiAlpha( uint8_t c )
 {
     return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' );
+}
+
+// ── HTTP ─────────────────────────────────────────────────────────────────
+
+/// Detect HTTP request or response from payload start.
+std::string detectHttp( const uint8_t* payload, size_t len )
+{
+    if ( len < 4 )
+        return {};
+
+    // HTTP methods
+    auto startsWith = [ & ]( const char* prefix ) {
+        auto pLen = std::strlen( prefix );
+        return len >= pLen && std::memcmp( payload, prefix, pLen ) == 0;
+    };
+
+    if ( startsWith( "GET " ) || startsWith( "POST " ) || startsWith( "PUT " )
+         || startsWith( "DELETE " ) || startsWith( "HEAD " ) || startsWith( "PATCH " )
+         || startsWith( "OPTIONS " ) || startsWith( "CONNECT " ) ) {
+        return firstLine( payload, len );
+    }
+
+    if ( startsWith( "HTTP/" ) ) {
+        return firstLine( payload, len ); // the status line
+    }
+
+    return {};
+}
+
+// ── DNS ──────────────────────────────────────────────────────────────────
+
+/// Detect DNS query/response and return a description.
+std::string detectDns( const uint8_t* payload, size_t len )
+{
+    // DNS header is 12 bytes minimum
+    if ( len < 12 )
+        return {};
+
+    auto flags = readBE16( payload + 2 );
+    bool isResponse = ( flags & 0x8000 ) != 0;
+    auto qdcount = readBE16( payload + 4 );
+
+    // Try to extract the queried domain name
+    std::string qname;
+    size_t offset = 12;
+    while ( offset < len ) {
+        auto labelLen = payload[ offset ];
+        if ( labelLen == 0 )
+            break;
+        if ( labelLen > 63 || offset + labelLen >= len )
+            break;
+        if ( !qname.empty() )
+            qname += '.';
+        qname += escapeBytes( payload + offset + 1, labelLen, false );
+        offset += labelLen + 1;
+    }
+
+    std::string desc = isResponse ? "Response" : "Query";
+    if ( qdcount > 0 && !qname.empty() ) {
+        desc += " " + qname;
+    }
+    if ( isResponse ) {
+        auto rcode = flags & 0x000F;
+        if ( rcode == 3 )
+            desc += " [NXDOMAIN]";
+        else if ( rcode != 0 )
+            desc += " [RCODE=" + std::to_string( rcode ) + "]";
+        auto ancount = readBE16( payload + 6 );
+        if ( ancount > 0 )
+            desc += " (" + std::to_string( ancount ) + " answers)";
+    }
+    return desc;
+}
+
+// ── NMEA ─────────────────────────────────────────────────────────────────
+
+/// Detect NMEA 0183 sentences in payload (GPS: $GPGGA, $GNGSA, $GPGSV, etc.)
+/// Requires the mandatory comma after the 5-char sentence ID to avoid false
+/// positives on ADB protocol frames like $WRTE which also match $ + 5 alpha.
+std::string detectNmea( const uint8_t* payload, size_t len )
+{
+    // Scan for '$' + 5 alpha chars + ',' (NMEA 0183 mandatory format)
+    for ( size_t i = 0; i + 7 < len; ++i ) {
+        if ( payload[ i ] == '$' && isAsciiAlpha( payload[ i + 1 ] )
+             && isAsciiAlpha( payload[ i + 2 ] ) && isAsciiAlpha( payload[ i + 3 ] )
+             && isAsciiAlpha( payload[ i + 4 ] ) && isAsciiAlpha( payload[ i + 5 ] )
+             && payload[ i + 6 ] == ',' ) {
+            // Found an NMEA sentence — extract until CR/LF
+            return firstLine( payload + i, len - i );
+        }
+    }
+    return {};
+}
+
+// ── Port hint and preview ────────────────────────────────────────────────
+
+/// Map well-known ports to protocol names.
+const char* portToProtocol( uint16_t port )
+{
+    switch ( port ) {
+    case 20:
+        return "FTP-DATA";
+    case 21:
+        return "FTP";
+    case 22:
+        return "SSH";
+    case 23:
+        return "Telnet";
+    case 25:
+        return "SMTP";
+    case 53:
+        return "DNS";
+    case 80:
+        return "HTTP";
+    case 110:
+        return "POP3";
+    case 143:
+        return "IMAP";
+    case 443:
+        return "HTTPS";
+    case 993:
+        return "IMAPS";
+    case 995:
+        return "POP3S";
+    case 1080:
+        return "SOCKS";
+    case 3306:
+        return "MySQL";
+    case 5432:
+        return "PostgreSQL";
+    case 5555:
+        return "ADB";
+    case 8080:
+    case 8443:
+        return "HTTP-Alt";
+    case 6379:
+        return "Redis";
+    case 27017:
+        return "MongoDB";
+    case 1883:
+        return "MQTT";
+    case 5672:
+        return "AMQP";
+    case 9092:
+        return "Kafka";
+    default:
+        return nullptr;
+    }
+}
+
+/// Build an ASCII preview of a payload: printable bytes as themselves,
+/// every other byte as a dot, at most kMaxPreviewChars characters followed
+/// by an ellipsis.  Returns empty if the payload is predominantly binary
+/// (less than 40% printable), where a preview would only be dots.
+std::string payloadPreview( const uint8_t* payload, size_t len )
+{
+    auto isPrintable = []( uint8_t c ) { return c >= 0x20 && c < 0x7F; };
+
+    const auto printable
+        = static_cast<size_t>( std::count_if( payload, payload + len, isPrintable ) );
+    if ( printable == 0 || printable * 10 < len * 4 ) {
+        return {};
+    }
+
+    const size_t shown = std::min( len, kMaxPreviewChars );
+    std::string preview;
+    preview.reserve( shown + 3 );
+    for ( size_t i = 0; i < shown; ++i ) {
+        preview += isPrintable( payload[ i ] ) ? static_cast<char>( payload[ i ] ) : '.';
+    }
+    if ( len > shown ) {
+        preview += "\xe2\x80\xa6"; // …
+    }
+    return preview;
 }
 
 // ── TLS ──────────────────────────────────────────────────────────────────
@@ -386,9 +561,9 @@ struct Payload {
 using Detector = std::optional<PayloadDescription> ( * )( const Payload& );
 
 /// A description with the given label and text, joined as @p join.
-std::optional<PayloadDescription>
-described( const char* label, std::string description,
-           PayloadDescription::Join join = PayloadDescription::Join::Bar )
+std::optional<PayloadDescription> described( const char* label, std::string description,
+                                             PayloadDescription::Join join
+                                             = PayloadDescription::Join::Bar )
 {
     PayloadDescription result;
     result.label = label;
@@ -453,166 +628,60 @@ std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 constexpr Detector kTcpDetectors[]
     = { tlsRecord, httpMessage, nmeaSentence, socksMessage, portHintAndPreview };
 
+bool onPort( const Payload& p, uint16_t port )
+{
+    return p.srcPort == port || p.dstPort == port;
+}
+
+/// DNS on port 53, mDNS on port 5353: named by the port, described if the
+/// payload parses as a DNS message.
+std::optional<PayloadDescription> dnsMessage( const Payload& p )
+{
+    const bool mdns = onPort( p, 5353 );
+    if ( !mdns && !onPort( p, 53 ) ) {
+        return std::nullopt;
+    }
+    return described( mdns ? "mDNS" : "DNS", detectDns( p.data, p.len ),
+                      PayloadDescription::Join::Space );
+}
+
+/// SSDP on port 1900: HTTP-shaped messages.
+std::optional<PayloadDescription> ssdpMessage( const Payload& p )
+{
+    if ( !onPort( p, 1900 ) ) {
+        return std::nullopt;
+    }
+    return described( "SSDP", detectHttp( p.data, p.len ) );
+}
+
+std::optional<PayloadDescription> ntpPacket( const Payload& p )
+{
+    if ( !onPort( p, 123 ) ) {
+        return std::nullopt;
+    }
+    return described( "NTP", {} );
+}
+
+std::optional<PayloadDescription> dhcpPacket( const Payload& p )
+{
+    if ( !onPort( p, 67 ) && !onPort( p, 68 ) ) {
+        return std::nullopt;
+    }
+    return described( "DHCP", {} );
+}
+
+/// The UDP detectors, in the order they are tried: ports first, then content.
+constexpr Detector kUdpDetectors[]
+    = { dnsMessage, ssdpMessage, ntpPacket, dhcpPacket, nmeaSentence, portHintAndPreview };
+
+/// The detectors of a transport, as a range.
+template <size_t N>
+std::pair<const Detector*, const Detector*> detectorsOf( const Detector ( &table )[ N ] )
+{
+    return { table, table + N };
+}
+
 } // namespace
-
-// ── Detectors the UDP branch of the transport parser still calls itself ──
-// They move into the describer's UDP table next, and out of this interface.
-
-std::string detectHttp( const uint8_t* payload, size_t len )
-{
-    if ( len < 4 )
-        return {};
-
-    // HTTP methods
-    auto startsWith = [ & ]( const char* prefix ) {
-        auto pLen = std::strlen( prefix );
-        return len >= pLen && std::memcmp( payload, prefix, pLen ) == 0;
-    };
-
-    if ( startsWith( "GET " ) || startsWith( "POST " ) || startsWith( "PUT " )
-         || startsWith( "DELETE " ) || startsWith( "HEAD " ) || startsWith( "PATCH " )
-         || startsWith( "OPTIONS " ) || startsWith( "CONNECT " ) ) {
-        return firstLine( payload, len );
-    }
-
-    if ( startsWith( "HTTP/" ) ) {
-        return firstLine( payload, len ); // the status line
-    }
-
-    return {};
-}
-
-std::string detectDns( const uint8_t* payload, size_t len )
-{
-    // DNS header is 12 bytes minimum
-    if ( len < 12 )
-        return {};
-
-    auto flags = readBE16( payload + 2 );
-    bool isResponse = ( flags & 0x8000 ) != 0;
-    auto qdcount = readBE16( payload + 4 );
-
-    // Try to extract the queried domain name
-    std::string qname;
-    size_t offset = 12;
-    while ( offset < len ) {
-        auto labelLen = payload[ offset ];
-        if ( labelLen == 0 )
-            break;
-        if ( labelLen > 63 || offset + labelLen >= len )
-            break;
-        if ( !qname.empty() )
-            qname += '.';
-        qname += escapeBytes( payload + offset + 1, labelLen, false );
-        offset += labelLen + 1;
-    }
-
-    std::string desc = isResponse ? "Response" : "Query";
-    if ( qdcount > 0 && !qname.empty() ) {
-        desc += " " + qname;
-    }
-    if ( isResponse ) {
-        auto rcode = flags & 0x000F;
-        if ( rcode == 3 )
-            desc += " [NXDOMAIN]";
-        else if ( rcode != 0 )
-            desc += " [RCODE=" + std::to_string( rcode ) + "]";
-        auto ancount = readBE16( payload + 6 );
-        if ( ancount > 0 )
-            desc += " (" + std::to_string( ancount ) + " answers)";
-    }
-    return desc;
-}
-
-std::string detectNmea( const uint8_t* payload, size_t len )
-{
-    // Scan for '$' + 5 alpha chars + ',' (NMEA 0183 mandatory format)
-    for ( size_t i = 0; i + 7 < len; ++i ) {
-        if ( payload[ i ] == '$' && isAsciiAlpha( payload[ i + 1 ] )
-             && isAsciiAlpha( payload[ i + 2 ] ) && isAsciiAlpha( payload[ i + 3 ] )
-             && isAsciiAlpha( payload[ i + 4 ] ) && isAsciiAlpha( payload[ i + 5 ] )
-             && payload[ i + 6 ] == ',' ) {
-            // Found an NMEA sentence — extract until CR/LF
-            return firstLine( payload + i, len - i );
-        }
-    }
-    return {};
-}
-
-const char* portToProtocol( uint16_t port )
-{
-    switch ( port ) {
-    case 20:
-        return "FTP-DATA";
-    case 21:
-        return "FTP";
-    case 22:
-        return "SSH";
-    case 23:
-        return "Telnet";
-    case 25:
-        return "SMTP";
-    case 53:
-        return "DNS";
-    case 80:
-        return "HTTP";
-    case 110:
-        return "POP3";
-    case 143:
-        return "IMAP";
-    case 443:
-        return "HTTPS";
-    case 993:
-        return "IMAPS";
-    case 995:
-        return "POP3S";
-    case 1080:
-        return "SOCKS";
-    case 3306:
-        return "MySQL";
-    case 5432:
-        return "PostgreSQL";
-    case 5555:
-        return "ADB";
-    case 8080:
-    case 8443:
-        return "HTTP-Alt";
-    case 6379:
-        return "Redis";
-    case 27017:
-        return "MongoDB";
-    case 1883:
-        return "MQTT";
-    case 5672:
-        return "AMQP";
-    case 9092:
-        return "Kafka";
-    default:
-        return nullptr;
-    }
-}
-
-std::string payloadPreview( const uint8_t* payload, size_t len )
-{
-    auto isPrintable = []( uint8_t c ) { return c >= 0x20 && c < 0x7F; };
-
-    const auto printable
-        = static_cast<size_t>( std::count_if( payload, payload + len, isPrintable ) );
-    if ( printable == 0 || printable * 10 < len * 4 ) {
-        return {};
-    }
-
-    const size_t shown = std::min( len, kMaxPreviewChars );
-    std::string preview;
-    preview.reserve( shown + 3 );
-    for ( size_t i = 0; i < shown; ++i ) {
-        preview += isPrintable( payload[ i ] ) ? static_cast<char>( payload[ i ] ) : '.';
-    }
-    if ( len > shown ) {
-        preview += "\xe2\x80\xa6"; // …
-    }
-    return preview;
-}
 
 // ── The describer ────────────────────────────────────────────────────────
 
@@ -620,11 +689,11 @@ PayloadDescription describePayload( Transport transport, const uint8_t* payload,
                                     uint16_t srcPort, uint16_t dstPort )
 {
     const Payload p{ payload, len, srcPort, dstPort };
-    if ( transport == Transport::Tcp ) {
-        for ( const auto detect : kTcpDetectors ) {
-            if ( auto result = detect( p ) ) {
-                return *result;
-            }
+    const auto [ first, last ]
+        = transport == Transport::Tcp ? detectorsOf( kTcpDetectors ) : detectorsOf( kUdpDetectors );
+    for ( auto detect = first; detect != last; ++detect ) {
+        if ( auto result = ( *detect )( p ) ) {
+            return *result;
         }
     }
     return {};

@@ -64,3 +64,24 @@ SCENARIO( "The describer names a TCP payload from its bytes and ports alone", "[
         }
     }
 }
+
+SCENARIO( "The describer names a UDP payload from its bytes and ports alone", "[describer]" )
+{
+    GIVEN( "a DNS query for example.com sent to port 53" )
+    {
+        const Bytes query{ 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                           0x00, 0x00, 0x07, 'e',  'x',  'a',  'm',  'p',  'l',  'e',
+                           0x03, 'c',  'o',  'm',  0x00, 0x00, 0x01, 0x00, 0x01 };
+
+        WHEN( "it is described" )
+        {
+            const auto described = describe( Transport::Udp, query, 54321, 53 );
+
+            THEN( "the label is DNS and the description names the query" )
+            {
+                REQUIRE( described.label == "DNS" );
+                REQUIRE( described.description == "Query example.com" );
+            }
+        }
+    }
+}

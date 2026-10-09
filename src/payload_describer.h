@@ -67,18 +67,4 @@ struct PayloadDescription {
 PayloadDescription describePayload( Transport transport, const uint8_t* payload, size_t len,
                                     uint16_t srcPort, uint16_t dstPort );
 
-// ── Detectors the UDP branch of the transport parser still calls itself ──
-// They move into the describer's UDP table next, and out of this interface.
-
-/// The request or status line of an HTTP message, or empty.
-std::string detectHttp( const uint8_t* payload, size_t len );
-/// A DNS query or response with the queried name, or empty.
-std::string detectDns( const uint8_t* payload, size_t len );
-/// The NMEA 0183 sentence in the payload, or empty.
-std::string detectNmea( const uint8_t* payload, size_t len );
-/// The protocol a well-known port suggests, or nullptr.
-const char* portToProtocol( uint16_t port );
-/// A preview of the payload's text, or empty for a mostly binary payload.
-std::string payloadPreview( const uint8_t* payload, size_t len );
-
 } // namespace tcpdump
