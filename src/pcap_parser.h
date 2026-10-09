@@ -192,11 +192,13 @@ std::string formatTcpFlags( uint8_t flags );
 
 /**
  * Render a TCP segment's sequence and acknowledgement numbers and its window
- * as Info shows them, after its flags.
+ * as Info shows them, after its flags.  Without an @p ack (a segment
+ * without the ACK flag, whose acknowledgement field means nothing) Ack is
+ * left out, as Wireshark does.
  *
- * @return String like "Seq=1 Ack=1 Win=65535".
+ * @return String like "Seq=1 Ack=1 Win=65535", or "Seq=0 Win=65535".
  */
-std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window );
+std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window );
 
 /**
  * Dissect one captured packet into @p pkt, from its link-layer header up.

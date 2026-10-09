@@ -374,7 +374,8 @@ captured takes one less than its first number seen as base (its first
 segment's sequence number, or the other direction's first acknowledgement
 number, whichever comes first), so a stream captured mid-way starts at
 `Seq=1 Ack=1` like one after its handshake. Without the ACK flag the
-acknowledgement field means nothing and `Ack=0` is shown. The arithmetic
+acknowledgement field means nothing and `Ack=` is left out (`[SYN] Seq=0
+Win=64240`), by the parser and the TCP Analysis alike. The arithmetic
 is modulo 2^32, so the numbers go on counting when the sequence numbers
 wrap. A SYN without ACK whose sequence number differs from its direction's
 base is a new connection on the same addresses and ports: both bases are

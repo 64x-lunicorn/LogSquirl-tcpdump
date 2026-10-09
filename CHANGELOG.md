@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **No `Ack=` without the ACK flag.** A segment without the ACK flag, a
+  SYN above all, showed `Ack=0`, though its acknowledgement field means
+  nothing; Info now leaves `Ack=` out, as Wireshark does: `[SYN] Seq=0
+  Win=64240`.
 - **A port alone no longer makes a UDP label stick.** A datagram on the
   DNS, mDNS, SSDP, NTP, DHCP or DHCPv6 port whose payload does not parse
   as that protocol is still named by the port, but as a guess: like every

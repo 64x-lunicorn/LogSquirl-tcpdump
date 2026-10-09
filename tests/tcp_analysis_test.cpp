@@ -173,7 +173,7 @@ SCENARIO( "TCP sequence and acknowledgement numbers are shown relative per direc
 
         THEN( "each direction counts from its SYN, which is Seq=0" )
         {
-            REQUIRE( shows( infos[ 0 ], "Seq=0 Ack=0" ) );
+            REQUIRE( shows( infos[ 0 ], "Seq=0" ) );
             REQUIRE( shows( infos[ 1 ], "Seq=0 Ack=1" ) );
             REQUIRE( shows( infos[ 2 ], "Seq=1 Ack=1" ) );
             REQUIRE( shows( infos[ 3 ], "Seq=1 Ack=1" ) );
@@ -192,9 +192,9 @@ SCENARIO( "TCP sequence and acknowledgement numbers are shown relative per direc
     {
         const auto infos = infoOf( { segment( false, kSyn, 1000, 777 ) } );
 
-        THEN( "Ack is 0: without the ACK flag the field acknowledges nothing" )
+        THEN( "Ack is left out: without the ACK flag the field acknowledges nothing" )
         {
-            REQUIRE( shows( infos[ 0 ], "Seq=0 Ack=0" ) );
+            REQUIRE( shows( infos[ 0 ], "Seq=0" ) );
         }
     }
 
@@ -223,7 +223,7 @@ SCENARIO( "TCP sequence and acknowledgement numbers are shown relative per direc
 
         THEN( "the other direction takes its base from its own first segment" )
         {
-            REQUIRE( shows( infos[ 0 ], "Seq=1 Ack=0" ) );
+            REQUIRE( shows( infos[ 0 ], "Seq=1" ) );
             REQUIRE( shows( infos[ 1 ], "Seq=1 Ack=2" ) );
         }
     }
@@ -260,7 +260,7 @@ SCENARIO( "TCP sequence and acknowledgement numbers are shown relative per direc
 
         THEN( "its SYN starts counting afresh in both directions" )
         {
-            REQUIRE( shows( infos[ 3 ], "Seq=0 Ack=0" ) );
+            REQUIRE( shows( infos[ 3 ], "Seq=0" ) );
             REQUIRE( shows( infos[ 4 ], "Seq=0 Ack=1" ) );
             REQUIRE( shows( infos[ 5 ], "Seq=1 Ack=1" ) );
         }
@@ -277,7 +277,7 @@ SCENARIO( "TCP sequence and acknowledgement numbers are shown relative per direc
 
         THEN( "it keeps the stream's bases" )
         {
-            REQUIRE( shows( infos[ 2 ], "Seq=0 Ack=0" ) );
+            REQUIRE( shows( infos[ 2 ], "Seq=0" ) );
             REQUIRE( shows( infos[ 3 ], "Seq=1 Ack=1" ) );
         }
     }
@@ -292,7 +292,7 @@ SCENARIO( "TCP sequence and acknowledgement numbers are shown relative per direc
 
         THEN( "its numbers are shown as they are, without a state to count from" )
         {
-            REQUIRE( shows( infos[ 0 ], "Seq=1000 Ack=0" ) );
+            REQUIRE( shows( infos[ 0 ], "Seq=1000" ) );
         }
     }
 }
@@ -305,7 +305,7 @@ SCENARIO( "The whole-capture formatter shows relative numbers too", "[tcp_analys
 
         THEN( "its line shows Seq=0" )
         {
-            REQUIRE( shows( formatAllPackets( packets ).at( 1 ), "Seq=0 Ack=0" ) );
+            REQUIRE( shows( formatAllPackets( packets ).at( 1 ), "Seq=0" ) );
         }
     }
 }
@@ -686,7 +686,7 @@ SCENARIO( "The window is shown scaled once both sides agreed on window scaling",
 
         THEN( "the SYNs show their window as sent" )
         {
-            REQUIRE( showsWindow( a.infos[ 0 ], "Seq=0 Ack=0 Win=1000" ) );
+            REQUIRE( showsWindow( a.infos[ 0 ], "Seq=0 Win=1000" ) );
             REQUIRE( showsWindow( a.infos[ 1 ], "Seq=0 Ack=1 Win=1000" ) );
         }
 

@@ -156,7 +156,10 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         std::ostringstream oss;
         oss << pkt.srcPort << " \xe2\x86\x92 " << pkt.dstPort << " "
             << formatTcpFlags( pkt.tcpFlags ) << " "
-            << formatTcpNumbers( pkt.tcpSeq, pkt.tcpAck, pkt.tcpWindow );
+            << formatTcpNumbers( pkt.tcpSeq,
+                                 ( pkt.tcpFlags & 0x10 ) ? std::optional<uint32_t>( pkt.tcpAck )
+                                                         : std::nullopt,
+                                 pkt.tcpWindow );
 
         // A header shorter than its 20 fixed bytes is malformed: where the
         // payload starts is unknown, so none is taken, like Wireshark.
@@ -623,9 +626,9 @@ std::string formatTcpFlags( uint8_t flags )
     return result;
 }
 
-std::string formatTcpNumbers( uint32_t seq, uint32_t ack, uint32_t window )
+std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_t window )
 {
-    return "Seq=" + std::to_string( seq ) + " Ack=" + std::to_string( ack )
+    return "Seq=" + std::to_string( seq ) + ( ack ? " Ack=" + std::to_string( *ack ) : "" )
            + " Win=" + std::to_string( window );
 }
 
