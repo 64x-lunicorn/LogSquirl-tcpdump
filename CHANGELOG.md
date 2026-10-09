@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Follow stream content.** The Packet Panel's new **Stream** tab shows
+  the payload of the selected packet's TCP or UDP conversation, as
+  Wireshark's *Follow TCP/UDP Stream* does: the client's bytes in red, the
+  server's in blue, as text (UTF-8 kept, control bytes escaped) or a hex
+  dump, both directions or one. TCP bytes come in sequence order, as the
+  TCP reassembly orders them (the ordering is now a module of its own, the
+  Byte Stream Orderer): out-of-order segments wait, retransmitted and
+  overlapping bytes show once, and bytes the capture lacks show as `[n
+  bytes missing]`; UDP streams show their datagrams. The stream is read
+  again from the capture file, in the background with a progress bar and
+  Cancel, from the stream's first packet to its last (the Converter now
+  notes them, 8 bytes per stream); 1 MB is shown at first and **Show more**
+  reads on, up to 16 MB, with a note. **Export…** writes the whole stream,
+  raw bytes per direction or the text as shown, without holding it. Opened
+  with the panel's **Follow stream content** button or **Plugins →
+  tcpdump → Follow stream content**; *Follow stream* still filters the
+  stream's lines in the Regex Lab. Needs LogSquirl ≥ 26.11.
 - **TCP details as Wireshark shows them.** A SYN and a SYN-ACK show their
   options after the window, in the order they were sent: `[SYN] Seq=0
   Win=64240 MSS=1460 SACK_PERM TSval=1000 TSecr=0 WS=128`; unknown options

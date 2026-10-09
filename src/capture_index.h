@@ -31,6 +31,10 @@
  * CaptureCursor reads packet N from the nearest checkpoint before it, at
  * most kCheckpointInterval - 1 packets more, and on from there in order.
  *
+ * It also keeps where each numbered stream begins and ends, the numbers of
+ * its first and last packet, 8 bytes a stream, so that Follow stream
+ * content reads only the packets between the two.
+ *
  * The capture file is told by its path, size and modification time when it
  * was converted: a file changed since is reported, not misread.
  */
@@ -45,6 +49,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace tcpdump {
@@ -69,6 +74,21 @@ public:
     /// packet, the place after it is kept as a checkpoint, and the packets
     /// counted either way.
     void note( const CaptureReader& reader );
+
+    /// The first and the last packet of a stream, by their numbers.
+    struct StreamExtent {
+        uint32_t first = 0;
+        uint32_t last = 0;
+    };
+
+    /// Note that packet @p number belongs to stream @p id of @p transport,
+    /// as the StreamTracker numbered it; packets of no stream or of one
+    /// past the stream cap (a negative id) are not noted.
+    void noteStream( Transport transport, int id, uint32_t number );
+
+    /// The first and last packet of stream @p id of @p transport; unset for
+    /// a stream not noted.
+    std::optional<StreamExtent> streamExtent( Transport transport, int id ) const;
 
     /// Remember the capture file at @p path as it is now, the file the
     /// checkpoints point into.
@@ -108,6 +128,9 @@ private:
     uint32_t interval_;
     uint32_t packets_ = 0;
     std::vector<ReaderCheckpoint> checkpoints_;
+    /// By stream id, per transport: the StreamTracker numbers them from 0.
+    std::vector<StreamExtent> tcpStreams_;
+    std::vector<StreamExtent> udpStreams_;
     QString path_;
     qint64 size_ = -1;
     QDateTime modified_;

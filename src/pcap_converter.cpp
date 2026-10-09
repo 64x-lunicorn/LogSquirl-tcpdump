@@ -174,6 +174,9 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             showTcpTimestamps( pkt );
         }
         const auto stream = tracker.track( pkt );
+        if ( pkt.transport ) {
+            index->noteStream( *pkt.transport, stream.id, reader.packetsRead() );
+        }
         stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );

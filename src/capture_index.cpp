@@ -48,6 +48,32 @@ void CaptureIndex::note( const CaptureReader& reader )
     }
 }
 
+void CaptureIndex::noteStream( Transport transport, int id, uint32_t number )
+{
+    if ( id < 0 ) {
+        return;
+    }
+    auto& streams = transport == Transport::Tcp ? tcpStreams_ : udpStreams_;
+    const auto at = static_cast<size_t>( id );
+    if ( at >= streams.size() ) {
+        // Numbered in order: a new stream is the next one.
+        streams.resize( at + 1 );
+        streams[ at ].first = number;
+    }
+    streams[ at ].last = number;
+}
+
+std::optional<CaptureIndex::StreamExtent> CaptureIndex::streamExtent( Transport transport,
+                                                                      int id ) const
+{
+    const auto& streams = transport == Transport::Tcp ? tcpStreams_ : udpStreams_;
+    if ( id < 0 || static_cast<size_t>( id ) >= streams.size()
+         || streams[ static_cast<size_t>( id ) ].first == 0 ) {
+        return std::nullopt;
+    }
+    return streams[ static_cast<size_t>( id ) ];
+}
+
 void CaptureIndex::setCaptureFile( const QString& path )
 {
     const QFileInfo info( path );
