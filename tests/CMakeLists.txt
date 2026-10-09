@@ -22,6 +22,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     socks_test.cpp
     tls_test.cpp
+    dns_test.cpp
     quic_test.cpp
     streaming_test.cpp
     plugin_test.cpp

@@ -99,8 +99,8 @@ description, or no match. It is the only module that knows which
 application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
-- TCP: TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in
-  the right direction, on proxy ports), then the port hint
+- TCP: DNS on port 53, TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the
+  exact shape, in the right direction, on proxy ports), then the port hint
 - TLS: every record of a segment and every handshake message of a record
   is named, in order, up to four, then `…`; a ClientHello adds its server
   name, the highest version it offers (`supported_versions`, GREASE aside,
@@ -111,6 +111,22 @@ tried: each transport has a table of detectors, all of the same shape
   named only if known: a cut hello whose extensions end before a
   `supported_versions` would have shown gets none
 - UDP: DNS and mDNS by port, SSDP, NTP, DHCP, QUIC, then NMEA and the port hint
+- DNS: described like Wireshark, `Standard query response 0x1a2b A
+  www.example.com CNAME example.com A 93.184.216.34`: the operation, the
+  transaction id, the first question's type and name, a response code
+  other than "no error" (`[NXDOMAIN]`), then the answers' types and data
+  (addresses, names, MX, SRV and TXT data; other types by name alone), up
+  to four; answers not listed, beyond the cap or cut off, are counted,
+  `… (6 answers)`. Names are put together from their compression pointers
+  within the message: a pointer must point before itself, so a chain of
+  them always ends; a pointer forward, to itself or beyond the message, a
+  reserved label type or a name over 255 bytes fails the name, and with it
+  the rest of the message. A name or TXT data is shown up to the field cap
+  (120 bytes). Over TCP every message is behind a 2-byte length; the
+  messages a segment begins with are described in order, up to four, the
+  last as far as the segment holds it. A segment that begins inside a
+  message (its header implausible: an unknown opcode, the Z bit set or more
+  than one question) is `DNS` by its port alone
 - QUIC: by its bytes, not its port. A datagram is QUIC if it begins with a
   long header (header form and fixed bit set) of a version the describer
   knows: v1, v2 (RFC 9369, whose packet types are numbered differently) or
@@ -361,7 +377,9 @@ to rewrite that text after an intended change of the output, and review the
 difference. The pcapng corpus capture, `interfaces.pcapng`, is made up byte
 for byte by `tests/make_pcapng_corpus.py`; `tls.pcap` holds real TLS 1.3 and
 1.2 handshakes, which `tests/make_tls_corpus.py` runs through Python's
-`ssl` module in memory and frames in made-up TCP segments; the pcapng unit tests build their
+`ssl` module in memory and frames in made-up TCP segments; `dns.pcap`
+holds DNS over UDP and TCP, encoded with name compression by
+`tests/make_dns_corpus.py`; the pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in

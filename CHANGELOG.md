@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **DNS reads like Wireshark's.** A query shows its transaction id, query
+  type and name, `Standard query 0x1a2b A www.example.com`; a response adds
+  its answers with their data, `Standard query response 0x1a2b A
+  www.example.com CNAME example.com A 93.184.216.34`, with names put
+  together from their compression pointers. Addresses, names (CNAME, PTR,
+  NS, SOA), MX, SRV and TXT data are shown, other record types by name, up
+  to four answers, then `…` and the count. NOTIFY and UPDATE are named, and
+  `[NXDOMAIN]`, `[SERVFAIL]`, `[REFUSED]` and the other response codes stay.
+  A pointer that loops, points forward or beyond the message ends the
+  description there, never reading past the payload.
+- **DNS over TCP.** Segments to or from TCP port 53 that begin with a DNS
+  message behind its 2-byte length are labelled `DNS` and described like
+  DNS over UDP; several messages in one segment are listed in order.
 - **QUIC on UDP.** A datagram that begins with a QUIC long header of v1, v2
   or a draft version is labelled `QUIC` and described from its public
   header, `Initial, Version 1, DCID=8394c8f03e515708, SCID=0a0b0c0d`: the
@@ -71,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **DNS descriptions in Wireshark's words.** `Query example.com` is now
+  `Standard query 0x1234 A example.com`, and `Response example.com (1
+  answers)` lists the answer instead of counting it in a wrong plural; a
+  count is left only for answers not listed, `(1 answer)`, `(6 answers)`.
+  `[RCODE=2]` and the like are named, `[SERVFAIL]`.
 - **The port hint knows the transport.** A well-known port names its
   service only on the transport the service runs over: TCP 3306 is MySQL,
   UDP 3306 is unnamed; UDP 69 is TFTP, TCP 69 is unnamed. Before, a port

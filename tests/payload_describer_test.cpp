@@ -231,7 +231,7 @@ SCENARIO( "The describer names a UDP payload from its bytes and ports alone", "[
             THEN( "the label is DNS and the description names the query" )
             {
                 REQUIRE( described.label == "DNS" );
-                REQUIRE( described.description == "Query example.com" );
+                REQUIRE( described.description == "Standard query 0x0001 A example.com" );
             }
         }
     }
@@ -387,7 +387,7 @@ SCENARIO( "A description never breaks the one-line-per-packet format", "[describ
 
     const std::vector<Case> cases{
         { "a DNS name with a newline and an escape character", Transport::Udp, dns, 40000, 53,
-          "DNS", "Query a\\x0Ab\\x1Bc.com" },
+          "DNS", "Standard query 0x1234 A a\\x0Ab\\x1Bc.com" },
         { "an HTTP request line with a control character", Transport::Tcp,
           text( "GET /\x1b[2J HTTP/1.1\r\n\r\n" ), 40000, 80, "HTTP", "GET /\\x1B[2J HTTP/1.1" },
         { "an SSDP response with a control character", Transport::Udp,
@@ -418,7 +418,7 @@ SCENARIO( "A description never breaks the one-line-per-packet format", "[describ
         { "an mDNS name with a carriage return", Transport::Udp,
           Bytes{ 0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
               + Bytes{ 2, 'a', '\r', 5, 'l', 'o', 'c', 'a', 'l', 0, 0, 1, 0, 1 },
-          5353, 5353, "mDNS", "Query a\\x0D.local" },
+          5353, 5353, "mDNS", "Standard query 0x1234 A a\\x0D.local" },
         { "a payload of two lines of text", Transport::Tcp,
           text( "first line of the payload\r\nsecond line of the payload\n" ), kUnknownSrc,
           kUnknownDst, "", "first line of the payload..second line of the payload." },
