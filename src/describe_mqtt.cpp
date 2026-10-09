@@ -48,11 +48,6 @@ constexpr size_t kMaxMqttPayloadBytes = 32;
 /// Most bytes of a Remaining Length or another variable byte integer.
 constexpr size_t kMaxMqttVarintBytes = 4;
 
-/// How a read went: the field is there, it lies beyond the captured bytes
-/// (the packet goes on in a later segment, or was cut at the snaplen), or
-/// it does not fit in the length its packet declares.
-enum class Read { Ok, Cut, Malformed };
-
 /**
  * The fields of an MQTT packet, or of a part of one: the length it
  * declares, and as many of its bytes as were captured.  A read beyond the
@@ -819,12 +814,8 @@ std::string packetText( const char* name, const Packet& packet, bool cut )
         text += " (" + joinNames( packet.details, packet.details.size() ) + ")";
     }
     text += packet.tail;
-    static const std::string kEllipsis = "\xe2\x80\xa6";
-    if ( cut
-         && ( text.size() < kEllipsis.size()
-              || text.compare( text.size() - kEllipsis.size(), kEllipsis.size(), kEllipsis )
-                     != 0 ) ) {
-        text += " " + kEllipsis;
+    if ( cut ) {
+        markCut( text );
     }
     return text;
 }

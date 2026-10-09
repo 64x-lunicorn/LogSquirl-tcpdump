@@ -41,9 +41,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-const std::string kMalformed = " [Malformed Packet]";
-
 /// Most frames named in a segment, then "…".
 constexpr size_t kMaxFrames = 8;
 /// Most payload bytes of a text frame or a close reason shown.
@@ -95,8 +92,6 @@ size_t headerLengthOf( uint8_t second )
     const auto length = second & kLengthBits;
     return 2 + ( length == 126 ? 2 : length == 127 ? 8 : 0 ) + ( ( second & kMaskBit ) ? 4 : 0 );
 }
-
-enum class Read { Ok, Cut, Malformed };
 
 /// The header of the frame at @p p, of which @p len bytes are there: cut
 /// if they do not hold it all, malformed if its 64-bit length has the most

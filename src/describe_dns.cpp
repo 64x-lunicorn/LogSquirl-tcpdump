@@ -460,13 +460,6 @@ char asciiLower( char c )
     return c >= 'A' && c <= 'Z' ? static_cast<char>( c - 'A' + 'a' ) : c;
 }
 
-/// The value of the hex digit @p c, or -1.
-int hexDigit( char c )
-{
-    c = asciiLower( c );
-    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
-}
-
 /// The same DNS name, ASCII letters compared without case (RFC 4343).
 bool sameName( const std::string& a, const std::string& b )
 {
@@ -512,7 +505,7 @@ std::string reverseAddress( const std::string& name )
         }
         uint8_t bytes[ 16 ] = {};
         for ( size_t i = 0; i < 32; ++i ) {
-            const int nibble = hexDigit( labels[ 2 * i ] );
+            const int nibble = describer::hexDigit( static_cast<uint8_t>( labels[ 2 * i ] ) );
             if ( nibble < 0 || ( i < 31 && labels[ 2 * i + 1 ] != '.' ) ) {
                 return {};
             }

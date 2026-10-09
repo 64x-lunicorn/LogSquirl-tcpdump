@@ -34,9 +34,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-const std::string kMalformed = " [Malformed Packet]";
-
 /// The generic header: protocol version, inverse protocol version,
 /// payload type, payload length.
 constexpr size_t kHeaderBytes = 8;
@@ -355,14 +352,6 @@ bool hasSubFunction( uint8_t sid )
     default:
         return false;
     }
-}
-
-/// A 16-bit identifier as "0xF190".
-std::string id16( uint16_t value )
-{
-    char buf[ 8 ];
-    std::snprintf( buf, sizeof( buf ), "0x%04X", value );
-    return buf;
 }
 
 /// What follows the service ID of a request or positive response of

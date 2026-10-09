@@ -28,7 +28,6 @@
 #include "describe_common.h"
 
 #include <cstdint>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -127,13 +126,6 @@ const char* rtcpTypeName( uint8_t type )
     }
 }
 
-std::string hex32( uint32_t value )
-{
-    char buf[ 12 ];
-    std::snprintf( buf, sizeof( buf ), "0x%08X", value );
-    return buf;
-}
-
 } // namespace
 
 bool isRtcpHeader( const uint8_t* p, size_t len )
@@ -159,8 +151,8 @@ std::string describeRtp( const uint8_t* p, size_t len, size_t wireLen )
     else {
         text += std::to_string( type );
     }
-    text += ", SSRC=" + hex32( readBE32( p + 8 ) ) + ", Seq=" + std::to_string( readBE16( p + 2 ) )
-            + ", Time=" + std::to_string( readBE32( p + 4 ) );
+    text += ", SSRC=" + hexValue( readBE32( p + 8 ), 8 ) + ", Seq="
+            + std::to_string( readBE16( p + 2 ) ) + ", Time=" + std::to_string( readBE32( p + 4 ) );
     if ( marker ) {
         text += ", Mark";
     }

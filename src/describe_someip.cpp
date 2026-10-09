@@ -29,7 +29,6 @@
 #include "someip.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -239,8 +238,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-
 /// The header: Message ID, Length, Request ID, Protocol and Interface
 /// Version, Message Type, Return Code.
 constexpr size_t kHeaderBytes = 16;
@@ -348,14 +345,6 @@ std::string returnCodeName( uint8_t code )
         return "Service Error " + hexCode( code );
     }
     return "Return Code " + hexCode( code );
-}
-
-/// A 16-bit ID as "0x1234".
-std::string id16( uint16_t value )
-{
-    char buf[ 8 ];
-    std::snprintf( buf, sizeof( buf ), "0x%04X", value );
-    return buf;
 }
 
 /// @p id, and the name the table gives it in parentheses.
@@ -659,10 +648,7 @@ std::string sdText( FieldReader sd )
     auto text = names.empty() ? std::string( "No entries" )
                               : joinNames( std::move( names ), kMaxSdEntriesNamed, more );
     if ( !entriesWhole || ( !sd.complete() && !optionsRead ) ) {
-        if ( text.size() < kEllipsis.size()
-             || text.compare( text.size() - kEllipsis.size(), kEllipsis.size(), kEllipsis ) != 0 ) {
-            text += " " + kEllipsis;
-        }
+        markCut( text );
     }
     else if ( malformed ) {
         text += " [Malformed Packet]";

@@ -46,8 +46,35 @@ namespace tcpdump::describer {
 
 // ── Payload text (describe_text.cpp) ─────────────────────────────────────
 
+/// The ellipsis that ends what is cut or left out, "…".
+inline const std::string kEllipsis = "\xe2\x80\xa6";
+
+/// What follows the name of a message that breaks its protocol's rules.
+inline const std::string kMalformed = " [Malformed Packet]";
+
+/// " …" after @p text, unless it ends in an ellipsis already: what is cut
+/// is said once.
+void markCut( std::string& text );
+
+/// How far a field or a message could be read: all of it, not all as the
+/// bytes are cut (the message goes on in a later segment, or was cut at
+/// the snaplen), or not at all as it breaks the rules.
+enum class Read { Ok, Cut, Malformed };
+
 /// Format a protocol code as "0xNN".
 std::string hexCode( uint8_t code );
+
+/// @p value as "0x" and @p digits uppercase hexadecimal digits, "0x1234".
+std::string hexValue( uint32_t value, int digits );
+
+/// A 16-bit ID as "0x1234".
+inline std::string id16( uint16_t value )
+{
+    return hexValue( value, 4 );
+}
+
+/// The value of the hex digit @p c, of either case, or -1.
+int hexDigit( uint8_t c );
 
 /// @p len bytes as lowercase hexadecimal, as Wireshark shows connection
 /// IDs and DUIDs: at most @p maxBytes of them, then an ellipsis.

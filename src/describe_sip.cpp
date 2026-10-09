@@ -39,8 +39,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-
 /// Header lines of one message, and lines of one SDP body, read at most;
 /// a message with more header lines is malformed, an SDP body's further
 /// lines are not looked at.
@@ -237,20 +235,6 @@ std::optional<std::array<uint8_t, 4>> ipv4Address( Text t )
         }
     }
     return i == t.len ? std::optional( bytes ) : std::nullopt;
-}
-
-int hexDigit( uint8_t c )
-{
-    if ( isDigit( c ) ) {
-        return c - '0';
-    }
-    if ( c >= 'a' && c <= 'f' ) {
-        return c - 'a' + 10;
-    }
-    if ( c >= 'A' && c <= 'F' ) {
-        return c - 'A' + 10;
-    }
-    return -1;
 }
 
 /// An IPv6 address in any of RFC 4291's text forms, `::` and a dotted

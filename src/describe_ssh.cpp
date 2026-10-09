@@ -35,9 +35,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-const std::string kMalformed = " [Malformed Packet]";
-
 /// Longest identification string, CR LF included (RFC 4253, 4.2).
 constexpr size_t kMaxBannerBytes = 255;
 
@@ -82,8 +79,6 @@ std::string encryptedPacket( size_t len )
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────
-
-enum class Read { Ok, Cut, Malformed };
 
 /// A read of @p r that failed: the bytes were cut, or the message is
 /// malformed if all of them are there.

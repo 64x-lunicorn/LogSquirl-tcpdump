@@ -36,9 +36,6 @@ namespace tcpdump::describer {
 
 namespace {
 
-const std::string kEllipsis = "\xe2\x80\xa6";
-const std::string kMalformed = " [Malformed Packet]";
-
 /// The NetBIOS Session Service header: type, flags, 16-bit length; on port
 /// 445 a zero byte and a 24-bit length, the same for a session message.
 constexpr size_t kNbssHeaderBytes = 4;
@@ -76,14 +73,6 @@ uint64_t readLE64( const uint8_t* p )
 {
     return static_cast<uint64_t>( readLE32( p ) )
            | ( static_cast<uint64_t>( readLE32( p + 4 ) ) << 32 );
-}
-
-/// @p value as "0x" and @p digits uppercase hexadecimal digits.
-std::string hexValue( uint32_t value, int digits )
-{
-    char buffer[ 16 ];
-    std::snprintf( buffer, sizeof buffer, "0x%0*X", digits, value );
-    return buffer;
 }
 
 /// The four bytes of a protocol ID: @p first, then "SMB".

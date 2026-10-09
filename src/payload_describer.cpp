@@ -675,7 +675,7 @@ void rememberInStream( const PacketRecord& pkt, const Stream& stream )
 
 void limitPreview( PacketRecord& pkt, size_t maxChars )
 {
-    static const std::string kEllipsis = "\xe2\x80\xa6";
+    const auto& kEllipsis = describer::kEllipsis;
     const std::string separator = kDescriptionSeparator;
     auto& info = pkt.info;
     // The preview and the separator before it end the Info, or there is none.
