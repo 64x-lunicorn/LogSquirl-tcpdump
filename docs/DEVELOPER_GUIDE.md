@@ -1249,6 +1249,34 @@ downloads; no code path runs them, sudo, or anything that prompts. Tests use
 capture or a program, a failure with a hint, devices on request) through
 `SidebarWidget::setLiveSources()`.
 
+The **SSH** kind (`ssh_source.h/cpp`, id `ssh`) is `SshSourceKind(
+SshPrograms )`: `SshPrograms::forThisComputer()` holds the paths tried first
+(Windows: `%SystemRoot%\System32\OpenSSH\ssh.exe`), `PATH` (and `/usr/bin`)
+and `~/.ssh/config`; tests pass a fake `ssh` script and a config file of
+their own. Its devices are `Typed`: `SshDestination::parse()` takes
+`[user@]host[:port]` apart (`[v6]:port`; at the last `@`, as ssh does) and
+refuses what ssh could misread (a leading `-`, spaces, a bad port);
+`listDevices()` suggests `sshConfigHosts()`, the `Host` entries without
+`*`, `?` or `!`, described by their HostName, User and Port.
+`sshArguments()` is always `-T -o BatchMode=yes -o ConnectTimeout=10 [-p
+port] -- <destination> <remote command>`, so ssh never prompts (stdin is
+the null device too). `listInterfaces()` runs `tcpdump -D` remotely;
+`command()` runs `sshRemoteCaptureCommand( choice )`, a POSIX command line
+built with `shellQuote()` (single quotes, `'` as `'\''`): `exec [sudo -n]
+tcpdump -i '<if>' -s N -U -w - '<filter>'`, the filter extended, unless
+the option `excludeOwnConnection` is `false`, by `and not (host
+'"${SSH_CLIENT%% *}"' and tcp port '"${SSH_CLIENT##* }"')`, which the
+server's shell expands inside one argument. The options (`kSshSudoOption`
+`sudo`, `kSshExcludeOwnOption`, both `true` unless set to `false`) are two
+checkboxes, `sshSudo` and `sshExcludeOwn`. `explainSshFailure()` maps ssh's,
+sudo's and tcpdump's stderr (unknown or changed host key, refused keys,
+`sudo: a password is required`, tcpdump not found, a permission error, an
+unreachable host) to what to do; listings add it to their error,
+`explainFailure()` to a failed capture's. Tests run a fake `ssh` that logs
+its argv, insists on `BatchMode=yes` and runs the remote command with
+`/bin/sh`, `$SSH_CLIENT` set and fake `sudo` and `tcpdump` alone on `PATH`,
+also with hostile interfaces and filters.
+
 `ConversionOptions` are everything the user can choose: the `LineLayout`
 (`layout`: the time columns and the MAC columns), the payload preview
 (`preview`, `previewChars`), the stream and endpoint caps (`maxStreams`,

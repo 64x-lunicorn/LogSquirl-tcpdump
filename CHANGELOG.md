@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Remote live capture over SSH.** The **SSH** source captures on a
+  server with its `tcpdump`, over the system's OpenSSH client (Windows:
+  `System32\OpenSSH\ssh.exe`). The host is typed as `[user@]host[:port]`,
+  or picked from the `Host` entries of `~/.ssh/config`; its interfaces are
+  what `tcpdump -D` lists there. ssh always runs with `-o BatchMode=yes -o
+  ConnectTimeout=10 -T` and nothing on stdin, so only keys and the SSH
+  agent are used: no password, passphrase or host key prompt, ever. The
+  capture runs `sudo -n tcpdump -i IF -s N -U -w - FILTER` (sudo can be
+  turned off), the interface and filter single-quoted for the server's
+  shell, and by default excludes its own SSH connection (`not (host
+  <client> and tcp port <SSH port>)`, from `$SSH_CLIENT`). An unknown or
+  changed host key, refused keys, a sudo that wants a password, tcpdump
+  missing or lacking permissions come with what to do (#74)
 - **Local live capture.** The **Local** source captures on this
   computer's interfaces with Wireshark's `dumpcap` (preferred) or
   `tcpdump`, found on `PATH` or where their installers put them; without

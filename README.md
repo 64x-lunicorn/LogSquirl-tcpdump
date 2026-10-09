@@ -271,6 +271,53 @@ your OS; run the command yourself, once:
   Administrators only" unchecked, so that LogSquirl need not run as
   administrator
 
+#### Remote capture over SSH
+
+The **SSH** source captures on a server: it runs `tcpdump` there over
+your system's OpenSSH client (`ssh` on `PATH`; on Windows
+`C:\Windows\System32\OpenSSH\ssh.exe`, the optional feature *OpenSSH
+Client*) and shows the traffic live. Type the **Host** as
+`[user@]host[:port]` (`[address]:port` for an IPv6 address with a port), or
+pick one of the `Host` entries of `~/.ssh/config` that name one host (no
+wildcards); press Enter to list its interfaces, which are what `tcpdump -D`
+lists on the server. Every ssh runs as
+
+```
+ssh -T -o BatchMode=yes -o ConnectTimeout=10 [-p <port>] -- <user@host> <remote command>
+```
+
+with nothing on stdin: **only your keys and the SSH agent are used**. ssh
+never asks for a password, a passphrase or whether to trust a host key, and
+the plugin never asks for or stores one. The remote command is a command
+line for the server's login shell (a POSIX shell: sh, bash, dash, zsh,
+ksh), the interface and the capture filter in single quotes, so nothing in
+them is run:
+
+```
+exec sudo -n tcpdump -i '<interface>' -s <snaplen> -U -w - '(<filter>) and not (host '"<client>"' and tcp port '"<SSH port>"')'
+```
+
+Two options below the fields:
+
+- **Run tcpdump with sudo -n** (on by default): capture as root with
+  `sudo -n`, which never prompts; a sudo that wants a password fails, and
+  the section says how to allow tcpdump without one. On the server, `sudo
+  visudo -f /etc/sudoers.d/tcpdump` and add `<user> ALL=(root) NOPASSWD:
+  /usr/bin/tcpdump` (the path `command -v tcpdump` prints). Off, tcpdump
+  runs as the SSH user, who then needs the capture capabilities: `sudo
+  setcap cap_net_raw,cap_net_admin=eip $(command -v tcpdump)`
+- **Exclude this SSH connection** (on by default): the capture filter gets
+  `and not (host <client> and tcp port <SSH port>)`, the address and port
+  the server sees this connection come from and arrive at (`$SSH_CLIENT`),
+  so that the capture does not capture its own transport
+
+When ssh, sudo or tcpdump fail, the section shows what they wrote and what
+to do: a host key ssh does not know (connect once in a terminal and accept
+it, after checking its fingerprint) or one that changed (`ssh-keygen -R`),
+keys the server refuses (`ssh-add`, `ssh-copy-id`, `IdentityFile`), a sudo
+that wants a password, tcpdump missing on the server or lacking
+permissions, a host that cannot be reached.
+
 A capture read from a running source (a capture program's output, a pipe)
 is converted while it runs:
 

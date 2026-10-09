@@ -26,6 +26,7 @@
 #include "live_source.h"
 
 #include "local_source.h"
+#include "ssh_source.h"
 
 #include <QElapsedTimer>
 #include <QProcess>
@@ -81,6 +82,7 @@ std::shared_ptr<const LiveSourceRegistry> builtInLiveSources()
     // them: Local (#72), Android (#73), SSH (#74), Wireshark extcap (#75),
     // Custom command (#76).
     registry->add( std::make_shared<LocalSourceKind>() );
+    registry->add( std::make_shared<SshSourceKind>() );
     return registry;
 }
 
