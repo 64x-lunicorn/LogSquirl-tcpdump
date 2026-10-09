@@ -30,6 +30,7 @@
 #include "pcap_parser.h"
 
 #include "payload_describer.h"
+#include "protocol_names.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
@@ -61,6 +62,10 @@ std::string formatMac( const uint8_t* p )
                    p[ 3 ], p[ 4 ], p[ 5 ] );
     return buf;
 }
+
+/// The largest value of an Ethernet type field that is the length of an
+/// IEEE 802.3 frame rather than an EtherType.
+constexpr uint16_t kMax8023Length = 1500;
 
 // ── Parse transport layer (TCP / UDP / ICMP) ─────────────────────────────
 
@@ -200,7 +205,9 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
         pkt.info = oss.str();
     }
     else {
-        pkt.protocol = "IP(" + std::to_string( pkt.ipProtocol ) + ")";
+        // A protocol not dissected further: its name, if it has one.
+        const auto* name = ipProtocolName( pkt.ipProtocol );
+        pkt.protocol = name ? name : "IP(" + std::to_string( pkt.ipProtocol ) + ")";
         pkt.info = "Protocol " + std::to_string( pkt.ipProtocol );
     }
 }
@@ -471,10 +478,17 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         else if ( etherType == EthertypeArp ) {
             parseArp( pkt, networkData, networkRemaining );
         }
+        else if ( etherType <= kMax8023Length && linkType == DltEthernet ) {
+            // An IEEE 802.3 frame: the field is the length of its LLC data
+            pkt.protocol = "LLC";
+            pkt.info = "802.3 frame, length " + std::to_string( etherType );
+        }
         else {
+            // An EtherType not dissected further: its name, if it has one.
             char hex[ 8 ];
             std::snprintf( hex, sizeof( hex ), "%04X", etherType );
-            pkt.protocol = std::string( "ETH(0x" ) + hex + ")";
+            const auto* name = etherTypeName( etherType );
+            pkt.protocol = name ? name : std::string( "ETH(0x" ) + hex + ")";
             pkt.info = std::string( "EtherType 0x" ) + hex;
         }
     }

@@ -38,6 +38,11 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
   than 20 bytes is flagged and yields no payload
 - Hands a TCP or UDP payload with its ports to the Payload Describer, and
   appends the description it gets back to the transport summary after ` | `
+- Names an IP protocol or EtherType it does not dissect further from the
+  name tables (`IGMP`, `ESP`, `LLDP`, `PPPoES`), keeping the number in the
+  Info column (`Protocol 2`, `EtherType 0x88CC`); one without a name stays
+  numeric, `IP(200)` or `ETH(0x1234)`. An Ethernet type field of 1500 or
+  less is the length of an IEEE 802.3 frame, shown as `LLC`
 
 `PcapngReader` reads pcapng captures block by block and hands each packet
 to the same dissection (`dissectPacket()`):
@@ -97,8 +102,9 @@ tried: each transport has a table of detectors, all of the same shape
 - TCP: TLS, HTTP, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in
   the right direction, on proxy ports), then the port hint
 - UDP: DNS and mDNS by port, SSDP, NTP, DHCP, then NMEA and the port hint
-- The port hint, the last entry of both tables, names well-known ports
-  (SSH, FTP, ADB, etc.) and previews the payload: printable ASCII, other
+- The port hint, the last entry of both tables, names the service of a
+  well-known port from the name tables, the source port's before the
+  destination port's, and previews the payload: printable ASCII, other
   bytes as dots, at most 200 characters; predominantly binary payloads get
   none
 
@@ -107,6 +113,18 @@ outside printable ASCII as `\xNN`, the first-line cut (120 bytes), the
 preview and its caps. A description is finalised as one line before it
 leaves the describer, so one packet is always one line whatever a detector
 forgot to escape.
+
+#### The name tables (`protocol_names.h/cpp`)
+Pure C++, names only: `ipProtocolName()` for IP protocol numbers,
+`etherTypeName()` for EtherTypes, `servicePortName()` for the service a
+port is assigned to on TCP or on UDP; each answers `nullptr` for a number
+it does not know, and the caller keeps the numeric form. A name is one
+word, without spaces, as the Protocol column and the Log Format need it.
+A service is listed with the transports it runs over (`kTcp`, `kUdp`,
+`kBoth`), so that TFTP is named on UDP 69 but not on TCP 69. The tables
+name what nothing dissects; a detector that recognises a protocol by its
+port or content (DNS, NTP, DHCP) runs before the port hint and decides
+alone, and may take its name from the table to keep the two in step.
 
 ### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
@@ -118,7 +136,7 @@ its packets (`PacketFormatter` takes the reader's `precision()`;
 not rounded.
 
 The widths are a minimum: a value as wide as its column, or wider (packet
-1,000,000, `ETH(0x88CC)`), is still followed by a space, and an empty value
+1,000,000, `MPLS-in-IP`), is still followed by a space, and an empty value
 (Source and Destination of a packet without addresses) is shown as `-`, so
 that a line always splits into its columns at runs of spaces. The Log
 Format relies on it.
@@ -287,8 +305,11 @@ An application protocol is one detector function plus one table entry in
    own. A precedence case (a payload two detectors could claim) is a test
    of the table order, and belongs there too.
 
-A new link or network layer, in contrast, is parsed in `pcap_parser.cpp`
-and tested with the frame builders in `tests/pcapbuilder.h`.
+A protocol that only needs a name, a well-known port, IP protocol number or
+EtherType, is one line in the tables of `protocol_names.cpp`, with a check
+in `tests/protocol_names_test.cpp`. A new link or network layer, in
+contrast, is parsed in `pcap_parser.cpp` and tested with the frame builders
+in `tests/pcapbuilder.h`.
 
 ## Testing
 

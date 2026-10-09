@@ -441,9 +441,10 @@ SCENARIO( "Stacked VLAN tags are stripped", "[pcap_parser]" )
     {
         auto pkt = parseOne( eth( EthertypeVlan, Bytes{ 0x00 } ) );
 
-        THEN( "it is shown by its EtherType, without reading past the frame" )
+        THEN( "it is shown as the tag, without reading past the frame" )
         {
-            REQUIRE( pkt.protocol == "ETH(0x8100)" );
+            REQUIRE( pkt.protocol == "VLAN" );
+            REQUIRE( pkt.info == "EtherType 0x8100" );
         }
     }
 
@@ -585,6 +586,93 @@ SCENARIO( "Len is taken from the IP header when the capture was cut at the snapl
         {
             REQUIRE( result.packets.size() == 1 );
             REQUIRE( result.packets[ 0 ].srcPort == 0 );
+        }
+    }
+}
+
+SCENARIO( "Protocols the Parser does not dissect are shown by name", "[pcap_parser]" )
+{
+    auto parseOne = []( const Bytes& frame ) {
+        auto result = parse( pcapOf( { frame } ) );
+        REQUIRE( result.packets.size() == 1 );
+        return result.packets[ 0 ];
+    };
+    const Bytes body( 8, 0 );
+
+    GIVEN( "an IGMP message over IPv4" )
+    {
+        auto pkt = parseOne( eth( EthertypeIpv4, ipv4( 2, body ) ) );
+
+        THEN( "it is shown as IGMP, with its number in the Info column" )
+        {
+            REQUIRE( pkt.protocol == "IGMP" );
+            REQUIRE( pkt.info == "Protocol 2" );
+            REQUIRE( pkt.srcIp == "192.168.1.1" );
+        }
+    }
+
+    GIVEN( "an ESP packet over IPv6" )
+    {
+        auto pkt = parseOne( eth( EthertypeIpv6, ipv6( 50, body ) ) );
+
+        THEN( "it is shown as ESP" )
+        {
+            REQUIRE( pkt.protocol == "ESP" );
+            REQUIRE( pkt.info == "Protocol 50" );
+        }
+    }
+
+    GIVEN( "an IP protocol number nobody assigned" )
+    {
+        auto pkt = parseOne( eth( EthertypeIpv4, ipv4( 200, body ) ) );
+
+        THEN( "it keeps the numeric form" )
+        {
+            REQUIRE( pkt.protocol == "IP(200)" );
+            REQUIRE( pkt.info == "Protocol 200" );
+        }
+    }
+
+    GIVEN( "an LLDP frame" )
+    {
+        auto pkt = parseOne( eth( 0x88CC, body ) );
+
+        THEN( "it is shown as LLDP, with its EtherType in the Info column" )
+        {
+            REQUIRE( pkt.protocol == "LLDP" );
+            REQUIRE( pkt.info == "EtherType 0x88CC" );
+        }
+    }
+
+    GIVEN( "a PPPoE session frame behind a VLAN tag" )
+    {
+        auto pkt = parseOne( eth( EthertypeVlan, vlanTag( 7, 0x8864, body ) ) );
+
+        THEN( "it is shown as PPPoE session" )
+        {
+            REQUIRE( pkt.protocol == "PPPoES" );
+        }
+    }
+
+    GIVEN( "an EtherType nobody assigned" )
+    {
+        auto pkt = parseOne( eth( 0x1234, body ) );
+
+        THEN( "it keeps the numeric form" )
+        {
+            REQUIRE( pkt.protocol == "ETH(0x1234)" );
+            REQUIRE( pkt.info == "EtherType 0x1234" );
+        }
+    }
+
+    GIVEN( "an IEEE 802.3 frame, whose type field is a length" )
+    {
+        auto pkt = parseOne( eth( 0x0026, body ) );
+
+        THEN( "it is shown as LLC, with its length" )
+        {
+            REQUIRE( pkt.protocol == "LLC" );
+            REQUIRE( pkt.info == "802.3 frame, length 38" );
         }
     }
 }

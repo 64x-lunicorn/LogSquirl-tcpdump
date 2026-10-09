@@ -44,8 +44,14 @@ have the log open in.
 | **Application layers.** TLS handshakes, HTTP requests and responses, DNS with domain names, NMEA 0183 sentences, SOCKS4/5 handshakes with their destinations and credentials. | **Payload you can skim.** Printable text shown, other bytes as dots, cut at 200 characters; mostly-binary payloads suppressed. |
 | **Link layers and tags.** Ethernet, Raw IP, Linux cooked capture v1 and v2, BSD loopback (DLT_NULL, DLT_LOOP); stacked 802.1Q and QinQ tags stripped transparently. | **A capture at a glance.** Sidebar panel with protocol breakdown, top endpoints, duration, packets per second and file size. |
 
-Port-based hints cover SSH, FTP, SMTP, IMAP, MySQL, PostgreSQL, Redis, MongoDB,
-MQTT, AMQP, Kafka, ADB and twenty more.
+Packets that are not dissected further are named, not numbered: IP protocols
+such as IGMP, GRE, ESP, AH, OSPF, PIM, VRRP, L2TP and SCTP, and EtherTypes such
+as LLDP, PPPoE discovery and session, MPLS, 802.1X (EAPOL), PTP and Wake-on-LAN;
+an unknown one keeps its number, `IP(200)` or `ETH(0x1234)`. Port-based hints
+name about a hundred TCP and UDP services: SSH, FTP, SMTP, IMAP, SNMP, Syslog,
+TFTP, STUN/TURN, WireGuard, LLMNR, NBNS, DHCPv6, RTSP, LDAP, SMB, RDP, VNC,
+Kerberos, MySQL, PostgreSQL, Redis, MongoDB, MQTT, AMQP, Kafka, ADB and more,
+each only on the transport it runs over.
 
 ## Install
 

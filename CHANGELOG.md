@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Names for IP protocols, EtherTypes and more ports.** A packet that is not
+  dissected further shows its protocol's name instead of a number: `IGMP`
+  instead of `IP(2)`, and likewise GRE, ESP, AH, OSPF, PIM, VRRP, L2TP, SCTP
+  and others; `LLDP` instead of `ETH(0x88CC)`, and likewise PPPoE discovery
+  and session (`PPPoED`, `PPPoES`), MPLS, 802.1X (`EAPOL`), PTP, Wake-on-LAN
+  (`WOL`) and others. The number stays in the Info column, and an unknown
+  one keeps its numeric form. An IEEE 802.3 frame, whose type field is a
+  length, shows as `LLC`. The port hint learns SNMP, Syslog, TFTP,
+  STUN/TURN, WireGuard, LLMNR, NBNS, DHCPv6, RTSP, LDAP, SMB, RDP, VNC,
+  Kerberos and some sixty more services.
 - **pcapng captures.** Files saved by Wireshark (its default format) or by
   macOS's `tcpdump -P` open like a pcap, in either byte order and with several
   sections. Each packet is dissected with the link type of the interface it
@@ -41,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while a capture is being read, it shows a notification instead.
 
 ### Changed
+- **The port hint knows the transport.** A well-known port names its
+  service only on the transport the service runs over: TCP 3306 is MySQL,
+  UDP 3306 is unnamed; UDP 69 is TFTP, TCP 69 is unnamed. Before, a port
+  named the same service on TCP and UDP.
 - **IPv6 addresses in RFC 5952 form.** IPv6 addresses are shown as Wireshark
   shows them: lowercase hexadecimal, the longest run of zero groups (the
   leftmost on a tie, never a single group) collapsed to `::`, so `fe80::1`

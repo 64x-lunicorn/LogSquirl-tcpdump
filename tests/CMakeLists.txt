@@ -28,6 +28,7 @@ add_executable(logsquirl_tcpdump_tests
     logformat_test.cpp
     packet_formatter_test.cpp
     payload_describer_test.cpp
+    protocol_names_test.cpp
     stream_tracker_test.cpp
     wire_bytes_test.cpp
 )
@@ -58,6 +59,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcapng_reader.cpp"
         "${CMAKE_SOURCE_DIR}/src/payload_describer.cpp"
+        "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"

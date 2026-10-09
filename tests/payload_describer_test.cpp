@@ -294,6 +294,45 @@ SCENARIO( "A payload nobody recognises is previewed as text", "[describer]" )
     }
 }
 
+SCENARIO( "A payload nobody recognises is named by its well-known port", "[describer]" )
+{
+    const auto payload = text( "some payload" );
+
+    GIVEN( "a UDP datagram to the SNMP port" )
+    {
+        THEN( "the label is SNMP and the payload is previewed" )
+        {
+            const auto described = describe( Transport::Udp, payload, kUnknownSrc, 161 );
+            REQUIRE( described.label == "SNMP" );
+            REQUIRE( described.description == "some payload" );
+        }
+    }
+
+    GIVEN( "a TCP segment from the RDP port" )
+    {
+        THEN( "the label is RDP" )
+        {
+            REQUIRE( describe( Transport::Tcp, payload, 3389, kUnknownDst ).label == "RDP" );
+        }
+    }
+
+    GIVEN( "a TCP segment to the port of a UDP-only service" )
+    {
+        THEN( "it gets no label" )
+        {
+            REQUIRE( describe( Transport::Tcp, payload, kUnknownSrc, 69 ).label.empty() );
+        }
+    }
+
+    GIVEN( "a source port that names nothing and a destination port that does" )
+    {
+        THEN( "the destination port names it" )
+        {
+            REQUIRE( describe( Transport::Udp, payload, kUnknownSrc, 514 ).label == "Syslog" );
+        }
+    }
+}
+
 SCENARIO( "Payload text is capped", "[describer]" )
 {
     GIVEN( "1000 bytes of text" )

@@ -29,6 +29,7 @@
 
 #include "payload_describer.h"
 
+#include "protocol_names.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
@@ -190,61 +191,7 @@ std::string detectNmea( const uint8_t* payload, size_t len )
     return {};
 }
 
-// ── Port hint and preview ────────────────────────────────────────────────
-
-/// Map well-known ports to protocol names.
-const char* portToProtocol( uint16_t port )
-{
-    switch ( port ) {
-    case 20:
-        return "FTP-DATA";
-    case 21:
-        return "FTP";
-    case 22:
-        return "SSH";
-    case 23:
-        return "Telnet";
-    case 25:
-        return "SMTP";
-    case 53:
-        return "DNS";
-    case 80:
-        return "HTTP";
-    case 110:
-        return "POP3";
-    case 143:
-        return "IMAP";
-    case 443:
-        return "HTTPS";
-    case 993:
-        return "IMAPS";
-    case 995:
-        return "POP3S";
-    case 1080:
-        return "SOCKS";
-    case 3306:
-        return "MySQL";
-    case 5432:
-        return "PostgreSQL";
-    case 5555:
-        return "ADB";
-    case 8080:
-    case 8443:
-        return "HTTP-Alt";
-    case 6379:
-        return "Redis";
-    case 27017:
-        return "MongoDB";
-    case 1883:
-        return "MQTT";
-    case 5672:
-        return "AMQP";
-    case 9092:
-        return "Kafka";
-    default:
-        return nullptr;
-    }
-}
+// ── Payload preview ──────────────────────────────────────────────────────
 
 /// Build an ASCII preview of a payload: printable bytes as themselves,
 /// every other byte as a dot, at most kMaxPreviewChars characters followed
@@ -555,6 +502,7 @@ struct Payload {
     size_t len;
     uint16_t srcPort;
     uint16_t dstPort;
+    Transport transport;
 };
 
 /// A detector: the description of the payload if it recognises it.
@@ -603,9 +551,9 @@ std::optional<PayloadDescription> socksMessage( const Payload& p )
 std::optional<PayloadDescription> portHintAndPreview( const Payload& p )
 {
     PayloadDescription result;
-    auto proto = portToProtocol( p.srcPort );
+    auto proto = servicePortName( p.transport, p.srcPort );
     if ( !proto ) {
-        proto = portToProtocol( p.dstPort );
+        proto = servicePortName( p.transport, p.dstPort );
     }
     if ( proto ) {
         result.label = proto;
@@ -703,7 +651,7 @@ std::string oneLine( std::string description )
 PayloadDescription describePayload( Transport transport, const uint8_t* payload, size_t len,
                                     uint16_t srcPort, uint16_t dstPort )
 {
-    const Payload p{ payload, len, srcPort, dstPort };
+    const Payload p{ payload, len, srcPort, dstPort, transport };
     const auto [ first, last ]
         = transport == Transport::Tcp ? detectorsOf( kTcpDetectors ) : detectorsOf( kUdpDetectors );
     for ( auto detect = first; detect != last; ++detect ) {
