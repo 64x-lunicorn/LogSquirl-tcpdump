@@ -79,9 +79,9 @@ SCENARIO( "A command line is split like a shell splits it, without running one",
             "  tcpdump  -i 'en 0'\t\"a \\\"b\\\" \\\\ \\c\" x\\ y '' \"\" 'it'\\''s'  " );
         REQUIRE( split.error.isEmpty() );
         REQUIRE( split.shellOperator.isEmpty() );
-        REQUIRE( split.words
-                 == QStringList{ "tcpdump", "-i", "en 0", "a \"b\" \\ \\c", "x y", "", "",
-                                 "it's" } );
+        REQUIRE(
+            split.words
+            == QStringList{ "tcpdump", "-i", "en 0", "a \"b\" \\ \\c", "x y", "", "", "it's" } );
     }
 
     THEN( "nothing is expanded" )
@@ -108,8 +108,7 @@ SCENARIO( "A command line is split like a shell splits it, without running one",
     }
 }
 
-SCENARIO( "The placeholders are replaced inside arguments, never split or run",
-          "[command_source]" )
+SCENARIO( "The placeholders are replaced inside arguments, never split or run", "[command_source]" )
 {
     GIVEN( "a command line with each placeholder, alone and inside an argument" )
     {
@@ -190,7 +189,8 @@ SCENARIO( "Saved commands are kept as an option", "[command_source]" )
 {
     const std::vector<SavedCommand> commands{
         { "router", "ssh router tcpdump -i {interface} -U -w - {filter}", false },
-        { "pipe \"quoted\", with = and / in it", "cat a.pcap | cat", true } };
+        { "pipe \"quoted\", with = and / in it", "cat a.pcap | cat", true }
+    };
     LiveOptions options;
     options[ kCommandSavedOption ] = savedCommandsOption( commands );
     REQUIRE( savedCommands( options ) == commands );
@@ -240,8 +240,7 @@ SCENARIO( "Commands are saved, edited and deleted in the source's options", "[co
 
     THEN( "an example fills the line, and runs nothing" )
     {
-        const auto example = saved->findText( commandExamples()[ 1 ].name,
-                                              Qt::MatchContains );
+        const auto example = saved->findText( commandExamples()[ 1 ].name, Qt::MatchContains );
         REQUIRE( example >= 0 );
         saved->setCurrentIndex( example );
         emit saved->activated( example );
@@ -260,8 +259,8 @@ SCENARIO( "Commands are saved, edited and deleted in the source's options", "[co
             const auto stored = savedCommands( loadLiveOptions( dir, "command" ) );
             REQUIRE( stored.size() == 1 );
             REQUIRE( stored[ 0 ]
-                     == SavedCommand{ "router", "ssh router tcpdump -i {interface} -U -w - {filter}",
-                                      false } );
+                     == SavedCommand{
+                         "router", "ssh router tcpdump -i {interface} -U -w - {filter}", false } );
             REQUIRE( savedCommands( widget->options() ) == stored );
             REQUIRE( saved->findText( "router" ) >= 0 );
             REQUIRE( remove->isEnabled() );
@@ -407,9 +406,9 @@ SCENARIO( "A custom command's capture converts live", "[command_source]" )
 
     GIVEN( "the command run through the shell, with a pipe" )
     {
-        Captured run( commandChoice( shellQuote( script )
-                                         + " -i {interface} -s {snaplen} {filter} | cat",
-                                     true, iface, filter, 77 ) );
+        Captured run(
+            commandChoice( shellQuote( script ) + " -i {interface} -s {snaplen} {filter} | cat",
+                           true, iface, filter, 77 ) );
 
         THEN( "the shell runs the pipe, and the values are quoted for it" )
         {

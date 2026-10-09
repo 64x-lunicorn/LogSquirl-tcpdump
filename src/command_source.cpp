@@ -306,8 +306,7 @@ private:
 
     void saveCommand()
     {
-        const SavedCommand command{ name_->text().trimmed(), line_->text(),
-                                    shell_->isChecked() };
+        const SavedCommand command{ name_->text().trimmed(), line_->text(), shell_->isChecked() };
         if ( command.name.isEmpty() ) {
             return;
         }
@@ -436,8 +435,7 @@ SplitCommand splitCommandLine( const QString& line )
 std::vector<SavedCommand> savedCommands( const LiveOptions& options )
 {
     std::vector<SavedCommand> commands;
-    const auto document
-        = QJsonDocument::fromJson( options.value( kCommandSavedOption ).toUtf8() );
+    const auto document = QJsonDocument::fromJson( options.value( kCommandSavedOption ).toUtf8() );
     for ( const auto& entry : document.array() ) {
         const auto object = entry.toObject();
         SavedCommand command{ object.value( QStringLiteral( "name" ) ).toString().trimmed(),
