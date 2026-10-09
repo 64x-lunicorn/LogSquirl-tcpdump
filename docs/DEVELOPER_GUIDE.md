@@ -2101,7 +2101,10 @@ export, conversation statistics):
   which the bytes before them are taken as missing; an ACK of the other
   direction past its bytes (but not past its FIN, which takes a sequence
   number and no byte) takes the bytes it lacks as missing, and so does the
-  stream's end for what is still held. A chunk is either bytes or a gap
+  stream's end for what is still held. An ACK further past the bytes seen
+  sent than the acknowledging side's window (scaled as its SYN offered, by
+  the most when the handshake was not seen) is bogus and passed over
+  (`plausibleAck()`). A chunk is either bytes or a gap
   (`missing`). `read()` stops at the end of a packet once a budget of bytes
   was handed out (`Status::More`), checks the cancel flag between packets
   and reports progress; it goes on where it stopped. `StreamRenderer`
