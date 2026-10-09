@@ -668,9 +668,9 @@ bool HeadSource::skip( uint64_t n )
     return n == 0 || source_.skip( n );
 }
 
-// ── PcapReader ───────────────────────────────────────────────────────────
+// ── CaptureReader ────────────────────────────────────────────────────────
 
-size_t PcapReader::read( uint8_t* dst, size_t n )
+size_t CaptureReader::read( uint8_t* dst, size_t n )
 {
     // An empty record reads into a buffer whose data() may be null, and
     // memcpy() must not be given a null pointer even for 0 bytes.
@@ -689,12 +689,14 @@ size_t PcapReader::read( uint8_t* dst, size_t n )
     return got;
 }
 
-bool PcapReader::skip( uint64_t n )
+bool CaptureReader::skip( uint64_t n )
 {
-    const bool ok = source_.skip( n );
+    const bool ok = n == 0 || source_.skip( n );
     bytesRead_ += n; // on failure the source is at its end anyway
     return ok;
 }
+
+// ── PcapReader ───────────────────────────────────────────────────────────
 
 bool PcapReader::open()
 {

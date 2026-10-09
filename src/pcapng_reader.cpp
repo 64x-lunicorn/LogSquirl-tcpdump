@@ -89,31 +89,6 @@ uint64_t powerOfTen( uint8_t exponent )
 
 // ── Reading ──────────────────────────────────────────────────────────────
 
-size_t PcapngReader::read( uint8_t* dst, size_t n )
-{
-    // An empty packet reads into a buffer whose data() may be null.
-    if ( n == 0 ) {
-        return 0;
-    }
-    size_t got = 0;
-    while ( got < n ) {
-        const auto more = source_.read( dst + got, n - got );
-        if ( more == 0 ) {
-            break;
-        }
-        got += more;
-    }
-    bytesRead_ += got;
-    return got;
-}
-
-bool PcapngReader::skip( uint64_t n )
-{
-    const bool ok = n == 0 || source_.skip( n );
-    bytesRead_ += n; // on failure the source is at its end anyway
-    return ok;
-}
-
 bool PcapngReader::fail( const char* problem )
 {
     problem_ = std::string( "Not a valid pcapng file (" ) + problem + ")";

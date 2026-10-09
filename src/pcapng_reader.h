@@ -70,7 +70,7 @@ public:
     static constexpr size_t kMaxInterfaces = 65536;
 
     explicit PcapngReader( ByteSource& source )
-        : source_( source )
+        : CaptureReader( source )
     {
     }
 
@@ -110,8 +110,6 @@ private:
         uint32_t consumed = 0; ///< Bytes of the block read so far.
     };
 
-    size_t read( uint8_t* dst, size_t n );
-    bool skip( uint64_t n );
     bool fail( const char* problem );
     void endBroken();
 
@@ -122,7 +120,6 @@ private:
     bool readPacket( BlockHeader& block, PacketRecord& pkt );
     bool readBlocksUpToPacket();
 
-    HeadSource source_; ///< Its start is searched for the first block.
     bool swap_ = false; ///< The section is in the other byte order than this host's.
     std::vector<Interface> interfaces_; ///< The current section's.
     std::vector<uint32_t> linkTypes_;

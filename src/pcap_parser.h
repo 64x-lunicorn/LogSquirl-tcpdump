@@ -310,8 +310,23 @@ public:
     }
 
 protected:
+    explicit CaptureReader( ByteSource& source )
+        : source_( source )
+    {
+    }
+
+    /// Read up to @p n bytes, fewer only at the end of the source, and count
+    /// them in bytesRead().
+    size_t read( uint8_t* dst, size_t n );
+
+    /// Skip @p n bytes, counted in bytesRead(); false if the source ends first.
+    bool skip( uint64_t n );
+
+    HeadSource source_; ///< Its start is searched for the capture's first header.
     std::string error_;
     bool truncated_ = false;
+
+private:
     uint64_t bytesRead_ = 0;
 };
 
@@ -322,7 +337,7 @@ protected:
 class PcapReader : public CaptureReader {
 public:
     explicit PcapReader( ByteSource& source )
-        : source_( source )
+        : CaptureReader( source )
     {
     }
 
@@ -346,10 +361,6 @@ public:
     }
 
 private:
-    size_t read( uint8_t* dst, size_t n );
-    bool skip( uint64_t n );
-
-    HeadSource source_; ///< Its start is searched for the header.
     std::vector<uint8_t> packet_;
     PcapGlobalHeader header_;
     bool swap_ = false;
