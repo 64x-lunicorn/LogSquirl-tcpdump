@@ -43,12 +43,15 @@
 #include <functional>
 #include <stdexcept>
 
+extern "C" void logsquirl_plugin_shutdown( void );
+
 namespace tcpdump_test {
 
 class FakeHost {
 public:
     /** A menu entry the plugin registered. */
     struct MenuAction {
+        QString menuPath;
         QString label;
         void ( *callback )( void* userData );
         void* userData;
@@ -80,10 +83,10 @@ public:
         api_.open_file = []( void* handle, const char* filePath, int ) {
             self( handle )->openedFiles << QString::fromUtf8( filePath );
         };
-        api_.register_menu_action = []( void* handle, const char*, const char* label,
+        api_.register_menu_action = []( void* handle, const char* menuPath, const char* label,
                                         void ( *callback )( void* ), void* userData ) {
             self( handle )->menuActions.append(
-                { QString::fromUtf8( label ), callback, userData } );
+                { QString::fromUtf8( menuPath ), QString::fromUtf8( label ), callback, userData } );
         };
         api_.register_sidebar_tab = []( void* handle, const char*, void* widget ) {
             if ( self( handle )->failSidebarTab ) {
@@ -108,6 +111,17 @@ public:
     FakeHost( const FakeHost& ) = delete;
     FakeHost& operator=( const FakeHost& ) = delete;
 
+    /**
+     * Shut the plugin down and unload it, as LogSquirl does: there is no
+     * call to unregister a menu entry, the host removes the plugin's entries
+     * itself once it is shut down.
+     */
+    void unloadPlugin()
+    {
+        logsquirl_plugin_shutdown();
+        menuActions.clear();
+    }
+
     /** The plugin's config directory (empty until a test writes to it). */
     QString configDir() const
     {
@@ -117,8 +131,8 @@ public:
     QStringList logs;
     QStringList notifications;
     QStringList openedFiles;
-    QList<MenuAction> menuActions;
-    QList<void*> sidebarTabs; ///< Registered and not yet unregistered.
+    QList<MenuAction> menuActions; ///< Registered, until the plugin is unloaded.
+    QList<void*> sidebarTabs;      ///< Registered and not yet unregistered.
 
     /** Make register_sidebar_tab() throw, as a misbehaving host might. */
     bool failSidebarTab = false;

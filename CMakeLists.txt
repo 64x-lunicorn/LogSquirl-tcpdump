@@ -37,9 +37,12 @@ qt_standard_project_setup()
 # ── Plugin shared library ─────────────────────────────────────────────────
 add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
+    src/capture_reader.cpp
     src/pcap_parser.cpp
+    src/pcapng_reader.cpp
     src/payload_describer.cpp
     src/packet_formatter.cpp
+    src/stream_tracker.cpp
     src/capture_stats.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
@@ -81,6 +84,9 @@ set(PLUGIN_INSTALL_DIR
 
 install(TARGETS logsquirl_tcpdump LIBRARY DESTINATION "${PLUGIN_INSTALL_DIR}")
 install(FILES   plugin.json               DESTINATION "${PLUGIN_INSTALL_DIR}")
+# The Log Format of the converted text, next to the library; LogSquirl reads
+# it only from its formats directory, where the user copies it (README).
+install(FILES   formats/tcpdump_log.json  DESTINATION "${PLUGIN_INSTALL_DIR}")
 
 # ── Tests (opt-in) ────────────────────────────────────────────────────────
 option(BUILD_TESTS "Build unit tests" OFF)

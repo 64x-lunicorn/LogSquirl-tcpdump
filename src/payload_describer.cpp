@@ -379,7 +379,7 @@ bool socks5Address( const uint8_t* p, size_t len, std::string& type, std::string
             return false;
         }
         type = "IPv6";
-        address = formatIpv6( p + 1 ) + ":" + std::to_string( readBE16( p + 17 ) );
+        address = "[" + formatIpv6( p + 1 ) + "]:" + std::to_string( readBE16( p + 17 ) );
         return true;
     default:
         return false;

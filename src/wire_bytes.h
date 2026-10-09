@@ -21,13 +21,16 @@
  * @file wire_bytes.h
  * @brief Reading and formatting the fields of a packet, as they lie on the wire.
  *
- * Shared by the pcap Parser and the Payload Describer.  Pure C++.
+ * Shared by the pcap Parser and the Payload Describer.  The capture readers
+ * also read the fields of their file with it, in the byte order the file was
+ * written in.  Pure C++.
  */
 
 #pragma once
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace tcpdump {
@@ -45,6 +48,31 @@ inline uint32_t readBE32( const uint8_t* p )
            | ( static_cast<uint32_t>( p[ 2 ] ) << 8 ) | p[ 3 ];
 }
 
+/// Read a uint16 of a capture file; @p swap: it was written in the other
+/// byte order than this host's.
+inline uint16_t read16( const uint8_t* p, bool swap )
+{
+    uint16_t v;
+    std::memcpy( &v, p, 2 );
+    if ( swap ) {
+        v = static_cast<uint16_t>( ( v >> 8 ) | ( v << 8 ) );
+    }
+    return v;
+}
+
+/// Read a uint32 of a capture file; @p swap: it was written in the other
+/// byte order than this host's.
+inline uint32_t read32( const uint8_t* p, bool swap )
+{
+    uint32_t v;
+    std::memcpy( &v, p, 4 );
+    if ( swap ) {
+        v = ( ( v >> 24 ) & 0xFF ) | ( ( v >> 8 ) & 0xFF00 ) | ( ( v << 8 ) & 0xFF0000 )
+            | ( ( v << 24 ) & 0xFF000000 );
+    }
+    return v;
+}
+
 /// An IPv4 address in dotted decimal.
 inline std::string formatIpv4( const uint8_t* p )
 {
@@ -53,14 +81,46 @@ inline std::string formatIpv4( const uint8_t* p )
     return buf;
 }
 
-/// An IPv6 address as eight hexadecimal groups.
+/// An IPv6 address in the RFC 5952 form: lowercase hexadecimal groups
+/// without leading zeros, the longest run of two or more zero groups (the
+/// leftmost on a tie) collapsed to `::`.  An IPv4-mapped address is shown in
+/// hexadecimal too, as `::ffff:c000:201`.
 inline std::string formatIpv6( const uint8_t* p )
 {
-    char buf[ 40 ];
-    std::snprintf( buf, sizeof( buf ), "%x:%x:%x:%x:%x:%x:%x:%x", readBE16( p ), readBE16( p + 2 ),
-                   readBE16( p + 4 ), readBE16( p + 6 ), readBE16( p + 8 ), readBE16( p + 10 ),
-                   readBE16( p + 12 ), readBE16( p + 14 ) );
-    return buf;
+    uint16_t groups[ 8 ];
+    for ( int i = 0; i < 8; ++i ) {
+        groups[ i ] = readBE16( p + 2 * i );
+    }
+
+    int runStart = -1;
+    int runLength = 1; // a single zero group is never collapsed
+    for ( int i = 0; i < 8; ) {
+        int j = i;
+        while ( j < 8 && groups[ j ] == 0 ) {
+            ++j;
+        }
+        if ( j - i > runLength ) {
+            runStart = i;
+            runLength = j - i;
+        }
+        i = ( j > i ) ? j : i + 1;
+    }
+
+    std::string text;
+    char group[ 5 ];
+    for ( int i = 0; i < 8; ++i ) {
+        if ( i == runStart ) {
+            text += "::";
+            i += runLength - 1;
+            continue;
+        }
+        if ( !text.empty() && text.back() != ':' ) {
+            text += ':';
+        }
+        std::snprintf( group, sizeof( group ), "%x", groups[ i ] );
+        text += group;
+    }
+    return text;
 }
 
 } // namespace tcpdump

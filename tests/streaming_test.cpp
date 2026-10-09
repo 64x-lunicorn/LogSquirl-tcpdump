@@ -145,6 +145,30 @@ SCENARIO( "A record of zero bytes is read without copying anything", "[pcap_pars
 
 SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]" )
 {
+    GIVEN( "packets of two link-layer types, as one capture of several interfaces holds" )
+    {
+        CaptureStats stats;
+        PacketRecord pkt;
+        for ( const uint32_t linkType : { DltLinuxSll2, DltEthernet, DltLinuxSll2, DltRaw } ) {
+            pkt.linkType = linkType;
+            stats.add( pkt );
+        }
+
+        THEN( "each link-layer type is listed once, in the order it was first seen" )
+        {
+            REQUIRE( stats.linkTypes
+                     == std::vector<uint32_t>{ DltLinuxSll2, DltEthernet, DltRaw } );
+        }
+
+        THEN( "a link-layer type announced again is not listed twice" )
+        {
+            stats.addLinkType( DltEthernet );
+            stats.addLinkType( DltNull );
+            REQUIRE( stats.linkTypes
+                     == std::vector<uint32_t>{ DltLinuxSll2, DltEthernet, DltRaw, DltNull } );
+        }
+    }
+
     GIVEN( "packets whose times are not in order, as in a merged capture" )
     {
         CaptureStats stats;
@@ -175,6 +199,103 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
             REQUIRE( stats.protocolBytes.at( "UDP" ) == 40 );
             REQUIRE( stats.endpointPackets.at( "10.0.0.1" ) == 4 );
             REQUIRE( stats.endpointPackets.at( "10.0.0.2" ) == 4 );
+        }
+    }
+}
+
+SCENARIO( "Packets captured shorter than on the wire are counted as cut", "[capture_stats]" )
+{
+    CaptureStats stats;
+    PacketRecord pkt;
+    pkt.capturedLen = 96;
+    pkt.originalLen = 1514;
+    stats.add( pkt );
+    pkt.capturedLen = 60;
+    pkt.originalLen = 60;
+    stats.add( pkt );
+    pkt.capturedLen = 54;
+    pkt.originalLen = 66;
+    stats.add( pkt );
+
+    REQUIRE( stats.packets == 3 );
+    REQUIRE( stats.cutPackets == 2 );
+}
+
+SCENARIO( "The summary counts the packets cut at the snaplen", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a capture whose second packet was cut to 50 of its bytes" )
+    {
+        auto cut = eth( EthertypeIpv4,
+                        ipv4( IpProtoUdp, udp( 40000, 2222, text( std::string( 200, 'a' ) ) ) ) );
+        const auto wireLen = static_cast<int64_t>( cut.size() );
+        cut.resize( 50 );
+        std::vector<Record> records{ { udpPacket( 1111 ) }, { cut }, { udpPacket( 1111 ) } };
+        records[ 1 ].origLen = wireLen;
+        const auto input = writeFile( dir, "cut.pcap", pcapFile( records ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "one packet is counted as cut, and its line says how many bytes were "
+                  "captured" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.packets == 3 );
+                REQUIRE( result.summary.cutPackets == 1 );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( lines.size() == 4 );
+                REQUIRE( lines[ 2 ].endsWith( " [cut to 50 bytes]" ) );
+                REQUIRE_FALSE( lines[ 1 ].contains( "[cut to" ) );
+            }
+        }
+    }
+}
+
+SCENARIO( "The summary names the earliest and latest packet time in UTC", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a nanosecond capture whose packets are not in time order" )
+    {
+        FileOptions nano;
+        nano.nanoseconds = true;
+        std::vector<Record> records{ { udpPacket( 1111 ), 1791535272, 5 },
+                                     { udpPacket( 1111 ), 1791535270, 123456789 },
+                                     { udpPacket( 1111 ), 1791535300, 0 },
+                                     { udpPacket( 1111 ), 1791535290, 0 } };
+        const auto input = writeFile( dir, "merged.pcap", pcapFile( records, nano ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "they are written as the UTC Time column writes them, to the nanosecond" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.firstTimeUtc == "2026-10-09 08:41:10.123456789Z" );
+                REQUIRE( result.summary.lastTimeUtc == "2026-10-09 08:41:40.000000000Z" );
+            }
+        }
+    }
+
+    GIVEN( "a capture without packets" )
+    {
+        const auto input = writeFile( dir, "empty.pcap", pcapOf( {} ) );
+
+        THEN( "there is no time to name" )
+        {
+            const auto result = convertPcap( input, out.path() );
+            REQUIRE( result.summary.firstTimeUtc.empty() );
+            REQUIRE( result.summary.lastTimeUtc.empty() );
         }
     }
 }
@@ -214,10 +335,11 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
             THEN( "the summary covers every packet, and nothing was cut" )
             {
                 REQUIRE( result.summary.packets == 3 );
-                REQUIRE( result.summary.linkTypeName == "Ethernet" );
+                REQUIRE( result.summary.linkTypeNames == std::vector<std::string>{ "Ethernet" } );
                 REQUIRE( result.summary.protocolPackets.at( "UDP" ) == 3 );
                 REQUIRE( result.summary.endpointPackets.at( "192.168.1.1" ) == 3 );
                 REQUIRE_FALSE( result.summary.endsInsideRecord );
+                REQUIRE( result.summary.cutPackets == 0 );
                 REQUIRE_FALSE( result.summary.streamCap );
                 REQUIRE_FALSE( result.summary.otherEndpointPackets );
             }
@@ -432,7 +554,7 @@ SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
             {
                 const auto result = convertPcap( input, dir.path() );
                 REQUIRE( result.status == ConversionResult::Status::Converted );
-                REQUIRE( result.summary.linkTypeName == name );
+                REQUIRE( result.summary.linkTypeNames == std::vector<std::string>{ name } );
             }
         }
     }
@@ -470,6 +592,25 @@ private:
 };
 
 } // namespace
+
+SCENARIO( "A capture without packets still names its link-layer type", "[converter]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a Linux SLL2 pcap with a header and no packets" )
+    {
+        const auto input = writeFile( dir, "empty.pcap", pcapOf( {}, DltLinuxSll2 ) );
+
+        THEN( "the summary lists the link-layer type the capture announces" )
+        {
+            const auto result = convertPcap( input, dir.path() );
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.packets == 0 );
+            REQUIRE( result.summary.linkTypeNames == std::vector<std::string>{ "Linux SLL2" } );
+        }
+    }
+}
 
 SCENARIO( "A write that fails in the middle of the capture fails the conversion", "[converter]" )
 {
@@ -560,7 +701,7 @@ SCENARIO( "Only regular files are converted", "[converter]" )
 }
 #endif
 
-SCENARIO( "Stream numbering and endpoint counts stop growing at their cap", "[capture_stats]" )
+SCENARIO( "Endpoint counts stop growing at their cap", "[capture_stats]" )
 {
     auto packetBetween = []( const std::string& src, uint16_t srcPort ) {
         PacketRecord pkt;
@@ -571,26 +712,6 @@ SCENARIO( "Stream numbering and endpoint counts stop growing at their cap", "[ca
         pkt.dstPort = 80;
         return pkt;
     };
-
-    GIVEN( "a formatter that numbers at most two streams" )
-    {
-        PacketFormatter formatter( false, 2 );
-        auto streamOf = [ &formatter ]( const PacketRecord& pkt ) {
-            const auto line = formatter.format( pkt );
-            const auto column = line.substr( 7, 8 );
-            return column.substr( 0, column.find( ' ' ) );
-        };
-
-        THEN( "a third conversation is marked ?, while known ones keep their number" )
-        {
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 1 ) ) == "0" );
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 2 ) ) == "1" );
-            REQUIRE_FALSE( formatter.streamLimitReached() );
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 3 ) ) == "?" );
-            REQUIRE( streamOf( packetBetween( "10.0.0.2", 1 ) ) == "0" );
-            REQUIRE( formatter.streamLimitReached() );
-        }
-    }
 
     GIVEN( "statistics that keep at most three endpoints" )
     {

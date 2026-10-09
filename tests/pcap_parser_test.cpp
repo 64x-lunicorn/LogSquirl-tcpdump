@@ -27,7 +27,7 @@
 
 #include <catch2/catch.hpp>
 
-#include "pcap_parser.h"
+#include "capture_reader.h"
 
 #include <cstring>
 #include <vector>
@@ -477,6 +477,7 @@ SCENARIO( "Parsing an ICMP Echo Request", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.packets.size() == 1 );
                 REQUIRE( result.packets[ 0 ].protocol == "ICMP" );
+                REQUIRE_FALSE( result.packets[ 0 ].transport );
                 REQUIRE( result.packets[ 0 ].info.find( "Echo request" ) != std::string::npos );
                 REQUIRE( result.packets[ 0 ].srcIp == "10.0.0.1" );
                 REQUIRE( result.packets[ 0 ].dstIp == "10.0.0.2" );
@@ -620,11 +621,11 @@ SCENARIO( "Parsing a big-endian pcap file", "[pcap_parser]" )
     }
 }
 
-// ── pcap-ng Rejection ────────────────────────────────────────────────────
+// ── pcapng Detection ─────────────────────────────────────────────────────
 
-SCENARIO( "pcap-ng files are rejected with a clear error", "[pcap_parser]" )
+SCENARIO( "A broken pcapng section header is rejected with a clear error", "[pcap_parser]" )
 {
-    GIVEN( "a buffer starting with pcap-ng magic" )
+    GIVEN( "a buffer starting with the pcapng magic and no byte-order magic" )
     {
         std::vector<uint8_t> buf( 32, 0 );
         uint32_t magic = PcapNgMagic;
@@ -634,10 +635,10 @@ SCENARIO( "pcap-ng files are rejected with a clear error", "[pcap_parser]" )
         {
             auto result = parsePcap( buf.data(), buf.size() );
 
-            THEN( "parsing fails with pcap-ng error message" )
+            THEN( "parsing fails with a pcapng error message" )
             {
                 REQUIRE_FALSE( result.ok );
-                REQUIRE( result.error.find( "pcap-ng" ) != std::string::npos );
+                REQUIRE( result.error.find( "pcapng" ) != std::string::npos );
             }
         }
     }

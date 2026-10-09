@@ -40,6 +40,7 @@
 #include <QPointer>
 #include <QPromise>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
@@ -49,8 +50,21 @@
 
 namespace tcpdump {
 
+namespace {
+
+/// The README section on installing the Log Format and what it unlocks.
+const char* const kLogFormatHelpUrl
+    = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+
+} // namespace
+
 SidebarWidget::SidebarWidget( QWidget* parent )
     : QWidget( parent )
+    , chooseFile_( []( QWidget* parent, const QString& dir ) {
+        return QFileDialog::getOpenFileName(
+            parent, "Open pcap Capture File", dir,
+            "Capture files (*.pcap *.pcapng *.cap *.dmp);;All files (*)" );
+    } )
     , tempRoot_( tcpdump::tempRoot() )
 {
     pool_.setMaxThreadCount( 1 );
@@ -69,7 +83,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
     layout->addWidget( openButton_ );
 
-    connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::onOpenClicked );
+    connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
 
     // Progress of a running conversion, and a way to stop it
     progressBar_ = new QProgressBar;
@@ -89,6 +103,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
+    summaryLabel_->setOpenExternalLinks( true );
     layout->addWidget( summaryLabel_ );
 
     // Push everything up
@@ -116,8 +131,13 @@ SidebarWidget::~SidebarWidget()
     }
 }
 
-void SidebarWidget::onOpenClicked()
+void SidebarWidget::chooseAndOpen()
 {
+    // The Open button is disabled meanwhile, but the menu entry is not.
+    if ( converting_ ) {
+        hostNotify( "A capture is still being read: wait for it, or cancel it first." );
+        return;
+    }
     if ( lastDir_.isEmpty() ) {
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
@@ -128,9 +148,7 @@ void SidebarWidget::onOpenClicked()
     // is unloaded while the dialog is open: the code this call returns into
     // is gone then, and only the host can prevent that.
     const QPointer<SidebarWidget> self( this );
-    const auto filePath
-        = QFileDialog::getOpenFileName( this, "Open pcap Capture File", lastDir_,
-                                        "pcap files (*.pcap *.cap *.dmp);;All files (*)" );
+    const auto filePath = chooseFile_( this, lastDir_ );
     if ( !self ) {
         return;
     }
@@ -143,7 +161,7 @@ void SidebarWidget::onOpenClicked()
     try {
         openPcapFile( filePath );
     } catch ( const std::exception& e ) {
-        // An exception must not escape a Qt slot.
+        // An exception must not escape into Qt or the host.
         hostLog(
             LOGSQUIRL_LOG_ERROR,
             QString( "Opening %1 failed: %2" ).arg( filePath, QString::fromUtf8( e.what() ) ) );
@@ -246,8 +264,17 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
     }
 
-    summaryLabel_->setText( summaryHtml( QFileInfo( filePath ).fileName(),
-                                         QFileInfo( filePath ).size(), result.summary ) );
+    auto html = summaryHtml( QFileInfo( filePath ).fileName(), QFileInfo( filePath ).size(),
+                             result.summary );
+    // Whether LogSquirl has the Log Format installed is not known to the
+    // plugin, so the hint is shown regardless, but only once per load.
+    if ( !formatHintShown_ ) {
+        formatHintShown_ = true;
+        html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
+                         "Log Format: <a href=\"%1\">install it once</a>.</i>" )
+                    .arg( kLogFormatHelpUrl );
+    }
+    summaryLabel_->setText( html );
 
     hostLog( LOGSQUIRL_LOG_INFO,
              QString( "Opened %1 packets from %2" ).arg( result.summary.packets ).arg( filePath ) );
@@ -300,11 +327,26 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     html += QString( "<b>Overview</b><br>" );
     html += QString( "Packets: <b>%1</b><br>" )
                 .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
+    if ( summary.cutPackets > 0 ) {
+        html += QString( "Cut packets: <b>%1</b> (captured shorter than on the wire)<br>" )
+                    .arg( QLocale().toString( static_cast<qulonglong>( summary.cutPackets ) ) );
+    }
     html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
+    if ( !summary.firstTimeUtc.empty() ) {
+        html += QString( "First packet: %1<br>" )
+                    .arg( QString::fromStdString( summary.firstTimeUtc ) );
+        html += QString( "Last packet: %1<br>" )
+                    .arg( QString::fromStdString( summary.lastTimeUtc ) );
+    }
     html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
     html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
-    html += QString( "Link type: %1<br>" )
-                .arg( QString::fromStdString( summary.linkTypeName ).toHtmlEscaped() );
+    QStringList linkTypes;
+    for ( const auto& name : summary.linkTypeNames ) {
+        linkTypes << QString::fromStdString( name ).toHtmlEscaped();
+    }
+    html += QString( "%1: %2<br>" )
+                .arg( linkTypes.size() > 1 ? "Link types" : "Link type" )
+                .arg( linkTypes.join( ", " ) );
     if ( summary.endsInsideRecord ) {
         html += "<i>The capture was cut off in the middle of a packet.</i><br>";
     }

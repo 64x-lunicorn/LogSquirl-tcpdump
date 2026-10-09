@@ -25,27 +25,39 @@
 #include "capture_stats.h"
 
 #include <algorithm>
+#include <tuple>
 
 namespace tcpdump {
 
 void CaptureStats::add( const PacketRecord& pkt )
 {
-    const auto timeNs = static_cast<int64_t>( pkt.timestampSec ) * 1000000000
-                        + static_cast<int64_t>( pkt.timestampNsec );
-    if ( packets == 0 ) {
-        firstTimeNs = lastTimeNs = timeNs;
+    const auto time = std::tie( pkt.timestampSec, pkt.timestampNsec );
+    if ( packets == 0 || time < std::tie( firstTimeSec, firstTimeNsec ) ) {
+        firstTimeSec = pkt.timestampSec;
+        firstTimeNsec = pkt.timestampNsec;
     }
-    else {
-        firstTimeNs = std::min( firstTimeNs, timeNs );
-        lastTimeNs = std::max( lastTimeNs, timeNs );
+    if ( packets == 0 || time > std::tie( lastTimeSec, lastTimeNsec ) ) {
+        lastTimeSec = pkt.timestampSec;
+        lastTimeNsec = pkt.timestampNsec;
     }
 
     ++packets;
     bytes += pkt.capturedLen;
+    if ( pkt.capturedLen < pkt.originalLen ) {
+        ++cutPackets;
+    }
+    addLinkType( pkt.linkType );
     ++protocolPackets[ pkt.protocol ];
     protocolBytes[ pkt.protocol ] += pkt.capturedLen;
     countEndpoint( pkt.srcIp );
     countEndpoint( pkt.dstIp );
+}
+
+void CaptureStats::addLinkType( uint32_t linkType )
+{
+    if ( std::find( linkTypes.begin(), linkTypes.end(), linkType ) == linkTypes.end() ) {
+        linkTypes.push_back( linkType );
+    }
 }
 
 void CaptureStats::countEndpoint( const std::string& address )
@@ -67,7 +79,8 @@ void CaptureStats::countEndpoint( const std::string& address )
 
 double CaptureStats::durationSeconds() const
 {
-    return static_cast<double>( lastTimeNs - firstTimeNs ) / 1e9;
+    return static_cast<double>( lastTimeSec - firstTimeSec )
+           + ( static_cast<double>( lastTimeNsec ) - static_cast<double>( firstTimeNsec ) ) / 1e9;
 }
 
 } // namespace tcpdump

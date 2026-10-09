@@ -127,6 +127,8 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
                 REQUIRE( result.ok );
                 REQUIRE( result.header.nanoseconds );
                 REQUIRE( result.packets.size() == 2 );
+                REQUIRE( result.packets[ 0 ].precision == TimePrecision::Nanoseconds );
+                REQUIRE( result.packets[ 1 ].precision == TimePrecision::Nanoseconds );
                 REQUIRE( result.packets[ 1 ].timestampSec == 1000 );
                 REQUIRE( result.packets[ 1 ].timestampNsec == 123456789 );
                 REQUIRE( result.packets[ 1 ].srcPort == 1 );
@@ -135,9 +137,9 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
             THEN( "the relative time is shown to the nanosecond" )
             {
                 auto result = parse( file );
-                PacketFormatter formatter( result.header.nanoseconds );
-                formatter.format( result.packets[ 0 ] );
-                const auto line = formatter.format( result.packets[ 1 ] );
+                PacketFormatter formatter( result.packets[ 0 ].precision );
+                formatter.format( result.packets[ 0 ], kNoStream );
+                const auto line = formatter.format( result.packets[ 1 ], kNoStream );
                 REQUIRE( line.find( " 0.123456784 " ) != std::string::npos );
                 REQUIRE( formatter.header().find( "Time" ) != std::string::npos );
             }
@@ -152,10 +154,11 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
         {
             auto result = parse( file );
             REQUIRE_FALSE( result.header.nanoseconds );
+            REQUIRE( result.packets[ 1 ].precision == TimePrecision::Microseconds );
             REQUIRE( result.packets[ 1 ].timestampNsec == 250000000 );
-            PacketFormatter formatter( false );
-            formatter.format( result.packets[ 0 ] );
-            REQUIRE( formatter.format( result.packets[ 1 ] ).find( " 1.249995 " )
+            PacketFormatter formatter( TimePrecision::Microseconds );
+            formatter.format( result.packets[ 0 ], kNoStream );
+            REQUIRE( formatter.format( result.packets[ 1 ], kNoStream ).find( " 1.249995 " )
                      != std::string::npos );
         }
     }
@@ -167,10 +170,28 @@ SCENARIO( "Captures with nanosecond timestamps are read", "[pcap_parser]" )
         THEN( "its relative time is negative instead of wrapping or reading zero" )
         {
             auto result = parse( file );
-            PacketFormatter formatter( false );
-            formatter.format( result.packets[ 0 ] );
-            REQUIRE( formatter.format( result.packets[ 1 ] ).find( " -0.600000 " )
+            PacketFormatter formatter;
+            formatter.format( result.packets[ 0 ], kNoStream );
+            REQUIRE( formatter.format( result.packets[ 1 ], kNoStream ).find( " -0.600000 " )
                      != std::string::npos );
+        }
+    }
+}
+
+SCENARIO( "Each packet carries the link-layer type it was dissected with", "[pcap_parser]" )
+{
+    for ( const uint32_t linkType : { DltNull, DltEthernet, DltRaw, DltLinuxSll2 } ) {
+        GIVEN( "a pcap of link-layer type " + std::to_string( linkType ) )
+        {
+            auto result = parse( pcapOf( { Bytes( 20, 0 ), Bytes( 20, 0 ) }, linkType ) );
+
+            THEN( "every packet carries the header's link-layer type" )
+            {
+                REQUIRE( result.packets.size() == 2 );
+                for ( const auto& pkt : result.packets ) {
+                    REQUIRE( pkt.linkType == linkType );
+                }
+            }
         }
     }
 }
@@ -300,6 +321,7 @@ SCENARIO( "IPv6 extension headers are walked to the transport layer", "[pcap_par
         THEN( "its UDP header is parsed" )
         {
             REQUIRE( pkt.protocol == "UDP" );
+            REQUIRE( pkt.transport == Transport::Udp );
             REQUIRE( pkt.srcPort == 1 );
         }
     }
@@ -312,6 +334,7 @@ SCENARIO( "IPv6 extension headers are walked to the transport layer", "[pcap_par
         THEN( "it is shown as a fragment, without ports" )
         {
             REQUIRE( pkt.protocol == "IPv6" );
+            REQUIRE_FALSE( pkt.transport );
             REQUIRE( pkt.srcPort == 0 );
             REQUIRE( pkt.info == "Fragment of IP protocol 17 (offset 1480, ID 0x0000CAFE)" );
         }
@@ -334,6 +357,7 @@ SCENARIO( "IPv4 fragments after the first are not parsed as TCP or UDP", "[pcap_
 
         THEN( "its TCP header is parsed" )
         {
+            REQUIRE( pkt.transport == Transport::Tcp );
             REQUIRE( pkt.srcPort == 40000 );
         }
     }
@@ -347,6 +371,7 @@ SCENARIO( "IPv4 fragments after the first are not parsed as TCP or UDP", "[pcap_
         THEN( "it is shown as a fragment, without ports" )
         {
             REQUIRE( pkt.protocol == "IPv4" );
+            REQUIRE_FALSE( pkt.transport );
             REQUIRE( pkt.srcPort == 0 );
             REQUIRE( pkt.srcIp == "192.168.1.1" );
             REQUIRE( pkt.info == "Fragment of IP protocol 6 (offset 1480, ID 0x1234)" );

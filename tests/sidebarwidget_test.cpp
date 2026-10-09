@@ -33,6 +33,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
+#include <QLocale>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -177,6 +178,36 @@ SCENARIO( "the sidebar shows why the output could not be written", "[sidebar]" )
     }
 }
 
+SCENARIO( "the Open button asks for a capture and opens it", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar whose file dialog selects a capture" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
+        QWidget* dialogParent = nullptr;
+        widget.setFileChooser( [ &dialogParent, &capture ]( QWidget* parent, const QString& ) {
+            dialogParent = parent;
+            return capture;
+        } );
+
+        WHEN( "the Open button is clicked" )
+        {
+            child<QPushButton>( widget, "openButton" )->click();
+
+            THEN( "the dialog is shown over the sidebar and the capture opened in a tab" )
+            {
+                REQUIRE( dialogParent == &widget );
+                REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
 {
     QTemporaryDir dir;
@@ -312,6 +343,61 @@ SCENARIO( "each conversion writes a new private file", "[sidebar]" )
     }
 }
 
+SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar, as created when the plugin is loaded" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        auto* summary = child<QLabel>( widget, "summary" );
+        const QString readmeSection
+            = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+
+        WHEN( "a first capture is converted" )
+        {
+            widget.openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "the summary links to the README section on installing the Log Format" )
+            {
+                REQUIRE( summary->text().contains( "first.pcap" ) );
+                REQUIRE( summary->text().contains( "href=\"" + readmeSection + "\"" ) );
+                REQUIRE( summary->openExternalLinks() );
+            }
+
+            AND_WHEN( "another capture is converted" )
+            {
+                widget.openPcapFile( writeCapture( dir, "second.pcap", captureOf( 1 ) ) );
+                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+                THEN( "its summary no longer carries the hint" )
+                {
+                    REQUIRE( summary->text().contains( "second.pcap" ) );
+                    REQUIRE_FALSE( summary->text().contains( readmeSection ) );
+                }
+            }
+        }
+
+        WHEN( "a conversion fails first" )
+        {
+            widget.openPcapFile( writeCapture( dir, "bad.pcap", Bytes( 64, 0 ) ) );
+            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+
+            THEN( "the hint waits for the first converted capture" )
+            {
+                REQUIRE_FALSE( summary->text().contains( readmeSection ) );
+                widget.openPcapFile( writeCapture( dir, "good.pcap", captureOf( 1 ) ) );
+                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+                REQUIRE( summary->text().contains( readmeSection ) );
+            }
+        }
+    }
+}
+
 SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
 {
     GIVEN( "a capture whose file name, protocol and endpoint contain markup" )
@@ -334,6 +420,61 @@ SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
                 REQUIRE_FALSE( html.contains( "<img" ) );
                 REQUIRE_FALSE( html.contains( "<i>" ) );
             }
+        }
+    }
+}
+
+SCENARIO( "the summary lists the capture's link-layer types", "[sidebar]" )
+{
+    GIVEN( "a capture of one link-layer type" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.linkTypeNames = { "Ethernet" };
+
+        THEN( "it is named" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "a.pcap", 100, summary )
+                         .contains( "Link type: Ethernet<br>" ) );
+        }
+    }
+
+    GIVEN( "a capture of several link-layer types" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.linkTypeNames = { "Linux SLL2", "Ethernet", "<147>" };
+
+        THEN( "they are listed comma-separated, as text" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "a.pcap", 100, summary )
+                         .contains( "Link types: Linux SLL2, Ethernet, &lt;147&gt;<br>" ) );
+        }
+    }
+}
+
+SCENARIO( "the summary shows the earliest and latest packet time", "[sidebar]" )
+{
+    GIVEN( "a capture with packets" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 2;
+        summary.firstTimeUtc = "2026-10-09 08:41:10.123456Z";
+        summary.lastTimeUtc = "2026-10-09 08:41:40.000000Z";
+
+        THEN( "both are shown in UTC, as the log's UTC Time column has them" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
+            REQUIRE( html.contains( "First packet: 2026-10-09 08:41:10.123456Z<br>" ) );
+            REQUIRE( html.contains( "Last packet: 2026-10-09 08:41:40.000000Z<br>" ) );
+        }
+    }
+
+    GIVEN( "a capture without packets" )
+    {
+        THEN( "neither is shown" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary() );
+            REQUIRE_FALSE( html.contains( "First packet" ) );
+            REQUIRE_FALSE( html.contains( "Last packet" ) );
         }
     }
 }
@@ -400,11 +541,26 @@ SCENARIO( "the summary says what was cut", "[sidebar]" )
         }
     }
 
+    GIVEN( "a capture with packets cut at the snaplen" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 1500;
+        summary.cutPackets = 1200;
+
+        THEN( "the summary counts them" )
+        {
+            const auto html = tcpdump::summaryHtml( "snaplen.pcap", 100, summary );
+            REQUIRE( html.contains(
+                QString( "Cut packets: <b>%1</b>" ).arg( QLocale().toString( 1200 ) ) ) );
+        }
+    }
+
     GIVEN( "a capture with nothing cut" )
     {
-        THEN( "none of the three messages shows" )
+        THEN( "none of the messages shows" )
         {
             const auto html = tcpdump::summaryHtml( "whole.pcap", 100, tcpdump::CaptureSummary() );
+            REQUIRE_FALSE( html.contains( "Cut packets" ) );
             REQUIRE_FALSE( html.contains( "cut off" ) );
             REQUIRE_FALSE( html.contains( "stream ?" ) );
             REQUIRE_FALSE( html.contains( "Other endpoints" ) );

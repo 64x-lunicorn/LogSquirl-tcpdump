@@ -81,6 +81,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pkt1.timestampNsec = 0;
         pkt1.srcIp = "192.168.1.1";
         pkt1.dstIp = "10.0.0.1";
+        pkt1.transport = Transport::Tcp;
         pkt1.srcPort = 80;
         pkt1.dstPort = 443;
         pkt1.protocol = "TCP";
@@ -93,6 +94,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pkt2.timestampNsec = 500000000;
         pkt2.srcIp = "10.0.0.1";
         pkt2.dstIp = "192.168.1.1";
+        pkt2.transport = Transport::Tcp;
         pkt2.srcPort = 443;
         pkt2.dstPort = 80;
         pkt2.protocol = "TCP";
@@ -137,6 +139,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pktA1.timestampNsec = 0;
         pktA1.srcIp = "192.168.1.1";
         pktA1.dstIp = "10.0.0.1";
+        pktA1.transport = Transport::Tcp;
         pktA1.srcPort = 80;
         pktA1.dstPort = 443;
         pktA1.protocol = "TCP";
@@ -149,11 +152,12 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pktB1.timestampNsec = 100000000;
         pktB1.srcIp = "172.16.0.5";
         pktB1.dstIp = "8.8.8.8";
+        pktB1.transport = Transport::Tcp;
         pktB1.srcPort = 54321;
-        pktB1.dstPort = 53;
-        pktB1.protocol = "DNS";
+        pktB1.dstPort = 443;
+        pktB1.protocol = "TCP";
         pktB1.capturedLen = 74;
-        pktB1.info = "Query A example.com";
+        pktB1.info = "54321 > 443 [SYN]";
 
         PacketRecord pktA2;
         pktA2.number = 3;
@@ -161,6 +165,7 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         pktA2.timestampNsec = 200000000;
         pktA2.srcIp = "10.0.0.1";
         pktA2.dstIp = "192.168.1.1";
+        pktA2.transport = Transport::Tcp;
         pktA2.srcPort = 443;
         pktA2.dstPort = 80;
         pktA2.protocol = "TCP";
@@ -222,6 +227,66 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         }
     }
 
+    GIVEN( "an ICMP packet between two hosts" )
+    {
+        PacketRecord icmp;
+        icmp.number = 1;
+        icmp.srcIp = "192.168.1.1";
+        icmp.dstIp = "10.0.0.1";
+        icmp.protocol = "ICMP";
+        icmp.info = "Echo request";
+
+        WHEN( "formatting" )
+        {
+            auto lines = formatAllPackets( { icmp } );
+
+            THEN( "it has no stream: only TCP and UDP have one" )
+            {
+                REQUIRE( lines[ 1 ].substr( 7, 8 ) == "-       " );
+            }
+        }
+    }
+
+    GIVEN( "packets recorded to the nanosecond" )
+    {
+        PacketRecord first;
+        first.timestampSec = 1000;
+        first.timestampNsec = 5;
+        first.precision = TimePrecision::Nanoseconds;
+        PacketRecord second = first;
+        second.timestampNsec = 123456789;
+
+        WHEN( "formatting all packets" )
+        {
+            auto lines = formatAllPackets( { first, second } );
+
+            THEN( "the times are shown to the nanosecond, as the packets were recorded" )
+            {
+                REQUIRE( lines[ 2 ].find( " 0.123456784 " ) != std::string::npos );
+            }
+        }
+    }
+
+    GIVEN( "a packet recorded to the nanosecond after one recorded to the microsecond" )
+    {
+        PacketRecord first;
+        first.timestampSec = 1000;
+        PacketRecord second = first;
+        second.timestampNsec = 123456789;
+        second.precision = TimePrecision::Nanoseconds;
+
+        WHEN( "formatting all packets" )
+        {
+            auto lines = formatAllPackets( { first, second } );
+
+            THEN( "every time is shown at the finest precision of the packets" )
+            {
+                REQUIRE( lines[ 1 ].find( " 0.000000000 " ) != std::string::npos );
+                REQUIRE( lines[ 2 ].find( " 0.123456789 " ) != std::string::npos );
+            }
+        }
+    }
+
     GIVEN( "an empty packet list" )
     {
         std::vector<PacketRecord> empty;
@@ -234,6 +299,277 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
             {
                 REQUIRE( lines.size() == 1 );
             }
+        }
+    }
+}
+
+SCENARIO( "The Packet Formatter shows the stream it is handed", "[packet_formatter]" )
+{
+    PacketFormatter formatter;
+    PacketRecord pkt;
+    pkt.transport = Transport::Udp;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+
+    auto streamColumn
+        = [ & ]( int streamId ) { return formatter.format( pkt, streamId ).substr( 7, 8 ); };
+
+    THEN( "a number is shown alone, without the transport" )
+    {
+        REQUIRE( streamColumn( 7 ) == "7       " );
+    }
+
+    THEN( "no stream is shown as -, an unnumbered one as ?" )
+    {
+        REQUIRE( streamColumn( kNoStream ) == "-       " );
+        REQUIRE( streamColumn( kUnnumbered ) == "?       " );
+    }
+}
+
+SCENARIO( "The Length column shows the length on the wire", "[packet_formatter]" )
+{
+    PacketFormatter formatter;
+    PacketRecord pkt;
+    pkt.number = 1;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+    pkt.protocol = "TCP";
+    pkt.info = "40000 \xe2\x86\x92 443 [ACK] Seq=1 Ack=1 Win=512 Len=1460";
+
+    // The Length column starts after No., Stream, UTC Time, Time, Source,
+    // Destination and Protocol, and is 7 characters wide.
+    const size_t lengthColumn = 7 + 8 + 29 + 15 + 40 + 40 + 10;
+    auto lengthOf = [ & ]( const std::string& line ) {
+        auto sub = line.substr( lengthColumn, 7 );
+        return sub.substr( 0, sub.find( ' ' ) );
+    };
+
+    THEN( "the column is headed Length" )
+    {
+        REQUIRE( lengthOf( formatter.header() ) == "Length" );
+        REQUIRE( formatter.header().substr( lengthColumn + 7 ) == "Info" );
+    }
+
+    GIVEN( "a packet captured whole" )
+    {
+        pkt.capturedLen = 1514;
+        pkt.originalLen = 1514;
+        const auto line = formatter.format( pkt, 0 );
+
+        THEN( "the column shows its length, and Info carries no cut marker" )
+        {
+            REQUIRE( lengthOf( line ) == "1514" );
+            REQUIRE( line.substr( lengthColumn + 7 ) == pkt.info );
+        }
+    }
+
+    GIVEN( "a packet cut at a snaplen of 96 bytes" )
+    {
+        pkt.capturedLen = 96;
+        pkt.originalLen = 1514;
+        const auto line = formatter.format( pkt, 0 );
+
+        THEN( "the column shows the length on the wire, and Info names the bytes captured" )
+        {
+            REQUIRE( lengthOf( line ) == "1514" );
+            REQUIRE( line.substr( lengthColumn + 7 ) == pkt.info + " [cut to 96 bytes]" );
+        }
+    }
+
+    GIVEN( "a cut packet without an Info text" )
+    {
+        pkt.capturedLen = 0;
+        pkt.originalLen = 60;
+        pkt.info.clear();
+        const auto line = formatter.format( pkt, kNoStream );
+
+        THEN( "Info holds the cut marker alone" )
+        {
+            REQUIRE( line.substr( lengthColumn + 7 ) == "[cut to 0 bytes]" );
+        }
+    }
+}
+
+SCENARIO( "formatUtcTime writes a time as an ISO 8601 date and time in UTC", "[packet_formatter]" )
+{
+    THEN( "the epoch is midnight of 1970-01-01, marked Z" )
+    {
+        REQUIRE( formatUtcTime( 0, 0, TimePrecision::Microseconds )
+                 == "1970-01-01 00:00:00.000000Z" );
+    }
+
+    THEN( "a microsecond time has six decimals, the nanoseconds below them cut off" )
+    {
+        REQUIRE( formatUtcTime( 1791535272, 123456789, TimePrecision::Microseconds )
+                 == "2026-10-09 08:41:12.123456Z" );
+    }
+
+    THEN( "a nanosecond time has nine decimals" )
+    {
+        REQUIRE( formatUtcTime( 1791535272, 5, TimePrecision::Nanoseconds )
+                 == "2026-10-09 08:41:12.000000005Z" );
+    }
+
+    THEN( "leap days and the last second a pcap can hold are dated right" )
+    {
+        REQUIRE( formatUtcTime( 1709251199, 0, TimePrecision::Microseconds )
+                 == "2024-02-29 23:59:59.000000Z" );
+        REQUIRE( formatUtcTime( 4294967295, 999999999, TimePrecision::Nanoseconds )
+                 == "2106-02-07 06:28:15.999999999Z" );
+    }
+
+    THEN( "a time before 1970 counts back from the epoch" )
+    {
+        REQUIRE( formatUtcTime( -1, 500000000, TimePrecision::Microseconds )
+                 == "1969-12-31 23:59:59.500000Z" );
+    }
+
+    THEN( "a year outside 0000 to 9999 is written with its sign, as ISO 8601 expands it" )
+    {
+        REQUIRE( formatUtcTime( 253402300800, 0, TimePrecision::Microseconds )
+                 == "+10000-01-01 00:00:00.000000Z" );
+        REQUIRE( formatUtcTime( -62167219200, 0, TimePrecision::Microseconds )
+                 == "0000-01-01 00:00:00.000000Z" );
+        REQUIRE( formatUtcTime( -62167219201, 0, TimePrecision::Microseconds )
+                 == "-0001-12-31 23:59:59.000000Z" );
+    }
+}
+
+SCENARIO( "The UTC Time column shows each packet's wall-clock time", "[packet_formatter]" )
+{
+    // The column follows No. and Stream: 27 characters and two spaces, or 30
+    // and two for nanoseconds.
+    const size_t utcColumn = 7 + 8;
+
+    PacketRecord first;
+    first.number = 1;
+    first.timestampSec = 1791535272;
+    first.timestampNsec = 123456789;
+    first.srcIp = "192.168.1.1";
+    first.dstIp = "10.0.0.1";
+    first.protocol = "ICMP";
+
+    GIVEN( "a capture recorded to the microsecond" )
+    {
+        PacketFormatter formatter;
+
+        THEN( "the header names the column, and the relative Time follows it" )
+        {
+            REQUIRE( formatter.header().substr( utcColumn, 29 )
+                     == "UTC Time                     " );
+            REQUIRE( formatter.header().substr( utcColumn + 29, 4 ) == "Time" );
+        }
+
+        THEN( "a packet line carries its date and time with six decimals" )
+        {
+            REQUIRE( formatter.format( first, kNoStream ).substr( utcColumn, 29 )
+                     == "2026-10-09 08:41:12.123456Z  " );
+        }
+
+        AND_GIVEN( "a later packet recorded before the first one" )
+        {
+            PacketRecord earlier = first;
+            earlier.number = 2;
+            earlier.timestampSec -= 2;
+            formatter.format( first, kNoStream );
+            const auto line = formatter.format( earlier, kNoStream );
+
+            THEN( "it shows its own absolute time, its relative time negative" )
+            {
+                REQUIRE( line.substr( utcColumn, 29 ) == "2026-10-09 08:41:10.123456Z  " );
+                REQUIRE( line.substr( utcColumn + 29, 15 ) == "-2.000000      " );
+            }
+        }
+    }
+
+    GIVEN( "a capture recorded to the nanosecond" )
+    {
+        PacketFormatter formatter( TimePrecision::Nanoseconds );
+
+        THEN( "the column is three characters wider and has nine decimals" )
+        {
+            REQUIRE( formatter.header().substr( utcColumn, 32 )
+                     == "UTC Time                        " );
+            REQUIRE( formatter.format( first, kNoStream ).substr( utcColumn, 32 )
+                     == "2026-10-09 08:41:12.123456789Z  " );
+        }
+    }
+}
+
+SCENARIO( "Every column of a packet line is separated from the next", "[packet_formatter]" )
+{
+    PacketFormatter formatter;
+    PacketRecord pkt;
+    pkt.number = 1;
+    pkt.srcIp = "192.168.1.1";
+    pkt.dstIp = "10.0.0.1";
+    pkt.protocol = "UDP";
+    pkt.capturedLen = 60;
+    pkt.originalLen = 60;
+    pkt.info = "443 \xe2\x86\x92 80 Len=18";
+
+    // The columns of a line, as a reader splits them: at runs of spaces,
+    // Info being the rest.  UTC Time has a space between date and time, so
+    // there are ten.
+    auto columnsOf = [ & ]( const std::string& line ) {
+        std::vector<std::string> columns;
+        size_t pos = 0;
+        for ( int i = 0; i < 10 && pos < line.size(); ++i ) {
+            const auto end = line.find( ' ', pos );
+            columns.push_back( line.substr( pos, end - pos ) );
+            pos = line.find_first_not_of( ' ', end );
+        }
+        return columns;
+    };
+
+    GIVEN( "values as wide as their columns, or wider" )
+    {
+        pkt.number = 1000000;
+        pkt.protocol = "ETH(0x88CC)";
+        pkt.capturedLen = 1234567;
+        pkt.originalLen = 1234567;
+        pkt.srcIp = "2001:db8:aaaa:bbbb:cccc:dddd:eeee:ffff:1";
+        const auto line = formatter.format( pkt, 1234567 );
+
+        THEN( "a space still follows each of them" )
+        {
+            const auto columns = columnsOf( line );
+            REQUIRE( columns.size() == 10 );
+            REQUIRE( columns[ 0 ] == "1000000" );
+            REQUIRE( columns[ 1 ] == "1234567" );
+            REQUIRE( columns[ 5 ] == pkt.srcIp );
+            REQUIRE( columns[ 7 ] == "ETH(0x88CC)" );
+            REQUIRE( columns[ 8 ] == "1234567" );
+            REQUIRE( line.substr( line.find( "1234567 443" ) + 8 ) == pkt.info );
+        }
+    }
+
+    GIVEN( "a packet without addresses or protocol" )
+    {
+        pkt.srcIp.clear();
+        pkt.dstIp.clear();
+        pkt.protocol.clear();
+        const auto line = formatter.format( pkt, kNoStream );
+
+        THEN( "Source, Destination and Protocol show -" )
+        {
+            const auto columns = columnsOf( line );
+            REQUIRE( columns.size() == 10 );
+            REQUIRE( columns[ 5 ] == "-" );
+            REQUIRE( columns[ 6 ] == "-" );
+            REQUIRE( columns[ 7 ] == "-" );
+            REQUIRE( columns[ 8 ] == "60" );
+        }
+    }
+
+    GIVEN( "values that fit" )
+    {
+        const auto line = formatter.format( pkt, 0 );
+
+        THEN( "the columns keep their fixed widths" )
+        {
+            REQUIRE( line.find( "192.168.1.1" ) == 7 + 8 + 29 + 15 );
+            REQUIRE( line.find( pkt.info ) == 7 + 8 + 29 + 15 + 40 + 40 + 10 + 7 );
         }
     }
 }

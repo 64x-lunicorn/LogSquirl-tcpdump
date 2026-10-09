@@ -19,12 +19,19 @@
 
 /**
  * @file pcap_parser.h
- * @brief Parser for pcap and pcap-ng capture files.
+ * @brief Parser for pcap and pcapng capture files.
  *
  * Reads the global header and per-packet records from a pcap capture,
  * one packet at a time, producing PacketRecord structs suitable for
  * formatting.  Supports both big-endian and little-endian byte orders
- * (magic number).
+ * (magic number).  makeCaptureReader() (capture_reader.h) picks the
+ * reader for a capture from its first block: this one, or the PcapngReader
+ * (pcapng_reader.h).
+ *
+ * The rest of the plugin sees a capture through the CaptureReader seam
+ * only: each PacketRecord carries the link-layer type it was dissected with
+ * and the precision its timestamp was recorded in, so that a format whose
+ * interfaces differ in both (pcapng) reads through the same seam.
  *
  * This is a pure parser — no Qt dependency.
  */
@@ -33,6 +40,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,7 +53,7 @@ constexpr uint32_t PcapMagicLE = 0xA1B2C3D4;   ///< pcap in host byte order
 constexpr uint32_t PcapMagicBE = 0xD4C3B2A1;   ///< pcap in swapped byte order
 constexpr uint32_t PcapNsMagicLE = 0xA1B23C4D; ///< Nanosecond pcap in host byte order
 constexpr uint32_t PcapNsMagicBE = 0x4D3CB2A1; ///< Nanosecond pcap in swapped byte order
-constexpr uint32_t PcapNgMagic = 0x0A0D0D0A;   ///< pcap-ng section header
+constexpr uint32_t PcapNgMagic = 0x0A0D0D0A;   ///< pcapng section header block type
 
 /// Parsed pcap global header.
 struct PcapGlobalHeader {
@@ -72,6 +80,15 @@ constexpr uint32_t DltLinuxSll2 = 276; ///< Linux cooked capture v2
 /// its number for one this parser does not know.
 std::string linkTypeName( uint32_t linkType );
 
+// ── Timestamp precision ──────────────────────────────────────────────────
+
+/// The resolution a packet's timestamp was recorded in.  Ordered from
+/// coarse to fine, so that std::max picks the finer of two.
+enum class TimePrecision : uint8_t {
+    Microseconds, ///< pcap's classic resolution
+    Nanoseconds,  ///< e.g. tcpdump --time-stamp-precision=nano
+};
+
 // ── Ethernet / IP / TCP / UDP constants ──────────────────────────────────
 
 constexpr uint16_t EthertypeIpv4 = 0x0800;
@@ -88,13 +105,24 @@ constexpr uint8_t IpProtoIcmpv6 = 58;
 
 // ── Parsed packet ────────────────────────────────────────────────────────
 
+/// The transport a packet's payload was carried by.
+enum class Transport { Tcp, Udp };
+
 /// Represents a single parsed network packet.
 struct PacketRecord {
-    uint32_t number = 0;        ///< 1-based packet index
-    uint32_t timestampSec = 0;  ///< Seconds since epoch
+    uint32_t number = 0; ///< 1-based packet index
+    /// Seconds since the epoch: 64 bits, as a pcapng timestamp counts past
+    /// 2106, where 32 bits of seconds end.
+    int64_t timestampSec = 0;
     uint32_t timestampNsec = 0; ///< Fraction of the second, in nanoseconds
     uint32_t capturedLen = 0;   ///< Bytes captured
     uint32_t originalLen = 0;   ///< Original packet length on the wire
+
+    /// Link-layer type (DLT_*) the packet was dissected with.
+    uint32_t linkType = DltEthernet;
+    /// Resolution the timestamp was recorded in; timestampNsec holds it in
+    /// nanoseconds either way.
+    TimePrecision precision = TimePrecision::Microseconds;
 
     // Parsed protocol fields (populated if applicable)
     std::string srcMac;
@@ -106,6 +134,10 @@ struct PacketRecord {
     uint8_t ipProtocol = 0;
     uint8_t ipTtl = 0;
 
+    /// TCP or UDP when the packet's header of it was read, and with it the
+    /// ports; unset for every other packet, an IP fragment after the first
+    /// and a transport header cut short among them.
+    std::optional<Transport> transport;
     uint16_t srcPort = 0;
     uint16_t dstPort = 0;
 
@@ -129,6 +161,17 @@ struct PacketRecord {
  */
 std::string formatTcpFlags( uint8_t flags );
 
+/**
+ * Dissect one captured packet into @p pkt, from its link-layer header up.
+ *
+ * @param linkType  The link-layer type (DLT_*) the packet was captured with.
+ * @param swap      The capture was written in the other byte order than this
+ *                  host's, which a BSD loopback header (DLT_NULL) is in.
+ * @param data      The captured bytes, @p len of them.
+ */
+void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* data,
+                    size_t len );
+
 // ── Parser ───────────────────────────────────────────────────────────────
 
 /// Longest text preamble (e.g. tcpdump's stderr) searched for the pcap magic.
@@ -137,7 +180,7 @@ constexpr size_t kMaxPreamble = 4096;
 /// Bytes of a packet that are dissected; the rest of a longer record is skipped.
 constexpr uint32_t kMaxDissectedBytes = 262144;
 
-/// Where a PcapReader reads the capture from.
+/// Where a CaptureReader reads the capture from.
 class ByteSource {
 public:
     virtual ~ByteSource() = default;
@@ -168,28 +211,90 @@ private:
 };
 
 /**
- * Reads a pcap capture one packet at a time, so that a capture of any size
- * needs memory for one packet only.
+ * A ByteSource that can look at the first bytes of another before they are
+ * read, so that a capture's format can be told from its first block.  The
+ * bytes looked at are read again from it.
  */
-class PcapReader {
+class HeadSource : public ByteSource {
 public:
-    explicit PcapReader( ByteSource& source )
+    explicit HeadSource( ByteSource& source )
         : source_( source )
     {
     }
+    HeadSource( const HeadSource& ) = delete;
+    HeadSource& operator=( const HeadSource& ) = delete;
 
-    /// Read the global header, after an optional text preamble.
-    /// On failure, error() says why.
-    bool open();
+    /// The next @p n bytes, or fewer at the end of the source, without
+    /// consuming them.
+    const std::vector<uint8_t>& peek( size_t n );
+
+    size_t read( uint8_t* dst, size_t n ) override;
+    bool skip( uint64_t n ) override;
+
+private:
+    ByteSource& source_;
+    std::vector<uint8_t> head_; ///< Bytes looked at and not yet read.
+};
+
+/// The capture file formats there is a reader for.
+enum class CaptureFormat : uint8_t {
+    Pcap,
+    Pcapng,
+};
+
+/**
+ * Find where the capture starts in the first bytes of a file, and its format.
+ *
+ * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
+ * e.g. "tcpdump: listening on …", into the output ahead of the capture.
+ * The header is therefore looked for behind up to kMaxPreamble bytes of
+ * text.  Past offset 0 it is only accepted when everything before it is
+ * text and it is a valid header (a pcap magic and version, or a pcapng
+ * section header with its byte-order magic), not merely 4 magic bytes: a
+ * stray magic in binary data, or in the text, must not be taken for a
+ * capture.  At offset 0 the magic decides, so that an unsupported version
+ * is reported as such.
+ *
+ * @return The offset of the header, or @p size if there is none; @p error
+ *         then says why.
+ */
+size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
+                         std::string& error );
+
+/**
+ * Reads a capture one packet at a time, so that a capture of any size needs
+ * memory for one packet only: the seam between a file format and the rest
+ * of the plugin.
+ *
+ * A reader knows its format's headers; nothing past it does.  Each packet
+ * it returns carries its own link-layer type and timestamp precision,
+ * because one capture may hold several of each (a pcapng file has one per
+ * interface).  What the capture announces as a whole, the finest precision
+ * for the time column and the link-layer types it declares, is known after
+ * open().
+ *
+ * A reader is handed where its format's first header starts, behind any
+ * text preamble: the format is told from the first bytes once, by
+ * makeCaptureReader(), and not again by the reader.
+ */
+class CaptureReader {
+public:
+    virtual ~CaptureReader() = default;
+
+    /// Read the capture's header.  On failure, error() says why.
+    virtual bool open() = 0;
 
     /// Read and dissect the next packet into @p pkt.  False at the end of the
     /// capture, and when it ends in the middle of a record (see truncated()).
-    bool next( PacketRecord& pkt );
+    virtual bool next( PacketRecord& pkt ) = 0;
 
-    const PcapGlobalHeader& header() const
-    {
-        return header_;
-    }
+    /// The finest timestamp precision the capture announces; no packet's is
+    /// finer.  Valid after a successful open().
+    virtual TimePrecision precision() const = 0;
+
+    /// The link-layer types the capture has declared so far, also those of
+    /// interfaces that recorded no packet, in the order they were declared.
+    virtual std::vector<uint32_t> linkTypes() const = 0;
 
     const std::string& error() const
     {
@@ -209,39 +314,69 @@ public:
         return bytesRead_;
     }
 
-private:
+protected:
+    /// @param start  Where the capture's first header starts in @p source.
+    CaptureReader( ByteSource& source, uint64_t start )
+        : start_( start )
+        , source_( source )
+    {
+    }
+
+    /// Read up to @p n bytes, fewer only at the end of the source, and count
+    /// them in bytesRead().
     size_t read( uint8_t* dst, size_t n );
+
+    /// Skip @p n bytes, counted in bytesRead(); false if the source ends first.
     bool skip( uint64_t n );
 
-    ByteSource& source_;
-    std::vector<uint8_t> head_; ///< Start of the source, searched for the magic.
-    size_t headPos_ = 0;        ///< Next unread byte in head_.
-    std::vector<uint8_t> packet_;
-    PcapGlobalHeader header_;
+    const uint64_t start_; ///< Where the first header starts; skipped by open().
     std::string error_;
-    bool swap_ = false;
-    bool open_ = false;
     bool truncated_ = false;
-    uint32_t packetCount_ = 0;
+
+private:
+    ByteSource& source_;
     uint64_t bytesRead_ = 0;
 };
 
-/// Result of parsing a whole pcap buffer.
-struct ParseResult {
-    bool ok = false;
-    std::string error;
-    PcapGlobalHeader header;
-    std::vector<PacketRecord> packets;
-    bool truncated = false; ///< The capture ends in the middle of a record.
-};
-
 /**
- * Parse a pcap capture held in memory, keeping every packet.
- *
- * @param data  Pointer to the raw pcap file contents.
- * @param size  Size of the buffer in bytes.
- * @return ParseResult with packets on success, or an error string.
+ * Reads a libpcap capture.  Its one global header gives every packet the
+ * same link-layer type and precision.
  */
-ParseResult parsePcap( const uint8_t* data, size_t size );
+class PcapReader : public CaptureReader {
+public:
+    /// @param start  Where the global header starts, as findCaptureStart()
+    ///               found it for a pcap.
+    explicit PcapReader( ByteSource& source, uint64_t start = 0 )
+        : CaptureReader( source, start )
+    {
+    }
+
+    /// Read the global header.
+    bool open() override;
+
+    bool next( PacketRecord& pkt ) override;
+
+    /// Nanoseconds for a nanosecond magic number, microseconds otherwise.
+    TimePrecision precision() const override
+    {
+        return header_.nanoseconds ? TimePrecision::Nanoseconds : TimePrecision::Microseconds;
+    }
+
+    /// The global header's link-layer type, once open.
+    std::vector<uint32_t> linkTypes() const override;
+
+    const PcapGlobalHeader& header() const
+    {
+        return header_;
+    }
+
+private:
+    std::vector<uint8_t> packet_;
+    PcapGlobalHeader header_;
+    bool swap_ = false;
+    bool open_ = false;
+    bool headerRead_ = false;
+    uint32_t packetCount_ = 0;
+};
 
 } // namespace tcpdump

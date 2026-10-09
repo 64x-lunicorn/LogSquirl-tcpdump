@@ -24,22 +24,48 @@
  * Each packet is rendered as a single-line summary suitable for display
  * in LogSquirl's log viewer.  The format mimics Wireshark's packet list:
  *
- *   No.  Time         Source          Destination     Protocol  Len  Info
- *   1    0.000000     192.168.1.1     10.0.0.1        TCP       60   443 → 54321 [SYN] Seq=0
+ *   No. Stream UTC Time                    Time     Source      Destination Protocol Length Info
+ *   1   0      2026-10-09 08:41:12.123456Z 0.000000 192.168.1.1 10.0.0.1    TCP      60     443 → …
+ *
+ * The UTC Time is the packet's wall-clock time, so that a capture can be
+ * lined up with a log of the same incident; Time is relative to the first
+ * packet, as Wireshark's.  The absolute time comes first: it is the line's
+ * timestamp, which a Log Format reads, and LogSquirl's table view puts its
+ * Δt column right after it.
+ *
+ * Every column but Info is followed by at least one space, also when its
+ * value is as wide as the column or wider, and an empty value is shown as
+ * "-": a line always splits into its columns at runs of spaces, which a Log
+ * Format's regex relies on.
+ *
+ * Length is the length on the wire (PacketRecord::originalLen).  A packet
+ * captured shorter than that, cut at the snaplen, ends its Info with
+ * "[cut to N bytes]", N the bytes captured.
  */
 
 #pragma once
 
 #include "pcap_parser.h"
+#include "stream_tracker.h"
 
-#include <map>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace tcpdump {
 
-constexpr int kNoStream = -1;   ///< Stream column "-": the packet has no IP layer.
-constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
+/**
+ * A time as an ISO 8601 date and time in UTC, e.g.
+ * "2026-10-09 08:41:12.123456Z": 6 decimals, or 9 at nanosecond precision
+ * (cut, not rounded), and a Z for UTC.  Computed from the calendar alone, so
+ * that neither the time zone nor the platform's time functions play a part.
+ * A time before 1970 counts back from the epoch; a year outside 0000–9999 is
+ * written with its sign, as ISO 8601's expanded years ("+10000", "-0001").
+ *
+ * @param seconds      Seconds since 1970-01-01 00:00:00 UTC.
+ * @param nanoseconds  Fraction of the second, below 1,000,000,000.
+ */
+std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision precision );
 
 /**
  * Format a single packet as a one-line summary string.
@@ -47,72 +73,56 @@ constexpr int kUnnumbered = -2; ///< Stream column "?": past the stream cap.
  * @param pkt           Parsed packet record.
  * @param baseTimeSec   Seconds timestamp of the first packet.
  * @param baseTimeNsec  Nanoseconds fraction of the first packet's timestamp.
- * @param streamId      Conversation/stream index (0-based), kNoStream if not
- *                      applicable, kUnnumbered if not numbered.
- * @param nanoseconds   Show the time to the nanosecond (a nanosecond capture)
- *                      rather than to the microsecond.
+ * @param streamId      The packet's stream number from the Stream Tracker,
+ *                      or kNoStream or kUnnumbered.
+ * @param precision     The capture's finest precision: the time is shown to
+ *                      the nanosecond or to the microsecond.
  * @return Formatted line.
  */
-std::string formatPacketLine( const PacketRecord& pkt, uint32_t baseTimeSec, uint32_t baseTimeNsec,
-                              int streamId, bool nanoseconds = false );
+std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
+                              int streamId, TimePrecision precision = TimePrecision::Microseconds );
 
 /**
  * Formats the packets of one capture, one at a time and in capture order,
  * so that a capture never needs to be held in memory as a whole.
  *
- * Remembers the first packet's time, which all times are relative to, and
- * the conversations seen so far, to number the streams.  At most maxStreams
- * conversations are numbered, so that a port scan or a busy NAT cannot
- * exhaust memory; packets of later ones show "?" as their stream.
+ * Remembers the first packet's time, which all times are relative to.  The
+ * stream number is handed in: conversations are the Stream Tracker's.
  */
 class PacketFormatter {
 public:
-    /// Conversations numbered by default: some 100 MB of memory at most.
-    static constexpr size_t kMaxStreams = 1000000;
-
-    /// @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
-    /// @param maxStreams   Conversations to number at most.
-    explicit PacketFormatter( bool nanoseconds = false, size_t maxStreams = kMaxStreams )
-        : nanoseconds_( nanoseconds )
-        , maxStreams_( maxStreams )
+    /// @param precision   The finest precision the capture announces: every
+    ///                    time is shown with its decimals, so that the time
+    ///                    columns line up and no packet's time is cut.
+    explicit PacketFormatter( TimePrecision precision = TimePrecision::Microseconds )
+        : precision_( precision )
     {
-    }
-
-    /// Whether a conversation went unnumbered because of maxStreams.
-    bool streamLimitReached() const
-    {
-        return streamLimitReached_;
     }
 
     /// The column header line.
     std::string header() const;
 
-    /// The line of the next packet of the capture.
-    std::string format( const PacketRecord& pkt );
+    /// The line of the next packet of the capture, @p streamId its stream
+    /// number from the Stream Tracker, or kNoStream or kUnnumbered.
+    std::string format( const PacketRecord& pkt, int streamId );
 
 private:
-    /// Stream ID of the packet's conversation, kNoStream if it has none (no
-    /// IP layer), kUnnumbered past maxStreams.
-    int streamId( const PacketRecord& pkt );
-
-    bool nanoseconds_;
-    size_t maxStreams_;
-    bool streamLimitReached_ = false;
+    TimePrecision precision_;
     bool haveBase_ = false;
-    uint32_t baseTimeSec_ = 0;
+    int64_t baseTimeSec_ = 0;
     uint32_t baseTimeNsec_ = 0;
-    std::map<std::string, int> streams_;
 };
 
 /**
  * Format all packets into a vector of lines.  Includes a column header
  * as the first line.
  *
- * @param packets      Parsed packet records.
- * @param nanoseconds  Show times to the nanosecond, for a nanosecond capture.
+ * Times are shown at the finest precision of the packets, streams numbered
+ * by a Stream Tracker of their own.
+ *
+ * @param packets  Parsed packet records.
  * @return Vector of formatted text lines.
  */
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets,
-                                           bool nanoseconds = false );
+std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets );
 
 } // namespace tcpdump

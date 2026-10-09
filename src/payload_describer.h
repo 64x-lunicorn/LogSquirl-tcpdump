@@ -31,14 +31,13 @@
 
 #pragma once
 
+#include "pcap_parser.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace tcpdump {
-
-/// The transport a payload was carried by.
-enum class Transport { Tcp, Udp };
 
 /// What the describer knows about a payload.
 struct PayloadDescription {

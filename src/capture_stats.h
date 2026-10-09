@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -45,6 +46,8 @@ struct CaptureStats {
 
     uint64_t packets = 0;
     uint64_t bytes = 0; ///< Captured bytes of all packets.
+    /// Packets captured shorter than on the wire, i.e. cut at the snaplen.
+    uint64_t cutPackets = 0;
     std::map<std::string, uint64_t> protocolPackets;
     std::map<std::string, uint64_t> protocolBytes;
     /// Packets per IP address, for at most maxEndpoints addresses, so that a
@@ -54,13 +57,25 @@ struct CaptureStats {
     uint64_t otherEndpointPackets = 0;
     size_t maxEndpoints = kMaxEndpoints;
 
-    /// Earliest and latest packet time, in nanoseconds since the epoch.
-    /// Packets need not be in time order, e.g. in a merged capture.
-    int64_t firstTimeNs = 0;
-    int64_t lastTimeNs = 0;
+    /// Link-layer types (DLT_*) of the capture, each once, in the order they
+    /// were first seen.  A capture holds few, so a list is searched.
+    std::vector<uint32_t> linkTypes;
 
-    /// Count @p pkt in.
+    /// Earliest and latest packet time, in seconds since the epoch and the
+    /// nanoseconds of that second: kept apart, as a pcapng's times may lie
+    /// further apart than an int64_t of nanoseconds reaches.  Packets need
+    /// not be in time order, e.g. in a merged capture.
+    int64_t firstTimeSec = 0;
+    uint32_t firstTimeNsec = 0;
+    int64_t lastTimeSec = 0;
+    uint32_t lastTimeNsec = 0;
+
+    /// Count @p pkt in, with the link-layer type it was dissected with.
     void add( const PacketRecord& pkt );
+
+    /// List @p linkType, unless it is listed already: also for a type the
+    /// capture declares without a packet of it.
+    void addLinkType( uint32_t linkType );
 
     /// Whether some addresses were counted as other endpoints.
     bool endpointLimitReached() const

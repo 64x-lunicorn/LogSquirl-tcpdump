@@ -24,7 +24,9 @@
 
 #include "pcap_converter.h"
 
+#include "capture_reader.h"
 #include "packet_formatter.h"
+#include "stream_tracker.h"
 #include "tempdirs.h"
 
 #include <QDir>
@@ -77,19 +79,34 @@ private:
 };
 
 /// The summary of a converted capture, from what was collected on the way.
-CaptureSummary summarise( CaptureStats&& stats, const PacketFormatter& formatter,
-                          const PcapReader& reader, size_t maxStreams )
+CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
+                          const CaptureReader& reader, size_t maxStreams )
 {
+    // The packets' link-layer types first, then any the capture declares
+    // without a packet of it, such as a pcap's when it holds none.
+    for ( const auto linkType : reader.linkTypes() ) {
+        stats.addLinkType( linkType );
+    }
+
     CaptureSummary summary;
     summary.packets = stats.packets;
     summary.bytes = stats.bytes;
+    summary.cutPackets = stats.cutPackets;
     summary.durationSeconds = stats.durationSeconds();
-    summary.linkTypeName = linkTypeName( reader.header().network );
+    if ( stats.packets > 0 ) {
+        summary.firstTimeUtc
+            = formatUtcTime( stats.firstTimeSec, stats.firstTimeNsec, reader.precision() );
+        summary.lastTimeUtc
+            = formatUtcTime( stats.lastTimeSec, stats.lastTimeNsec, reader.precision() );
+    }
+    for ( const auto linkType : stats.linkTypes ) {
+        summary.linkTypeNames.push_back( linkTypeName( linkType ) );
+    }
     summary.protocolPackets = std::move( stats.protocolPackets );
     summary.protocolBytes = std::move( stats.protocolBytes );
     summary.endpointPackets = std::move( stats.endpointPackets );
     summary.endsInsideRecord = reader.truncated();
-    if ( formatter.streamLimitReached() ) {
+    if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
     }
     if ( stats.endpointLimitReached() ) {
@@ -180,8 +197,10 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     if ( !openRegularFile( inputPath, input, inputError ) ) {
         return failed( inputError );
     }
-    FileSource source( input );
-    PcapReader reader( source );
+    FileSource file( input );
+    HeadSource source( file );
+    const auto capture = makeCaptureReader( source ); // pcap or pcapng, by the first block
+    CaptureReader& reader = *capture;                 // the rest sees the capture through the seam
     if ( !reader.open() ) {
         return failed( QString::fromStdString( reader.error() ) );
     }
@@ -216,7 +235,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
 
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
-    PacketFormatter formatter( reader.header().nanoseconds, options.maxStreams );
+    StreamTracker tracker( options.maxStreams );
+    PacketFormatter formatter( reader.precision() );
     if ( !writeLine( formatter.header() ) ) {
         return writeFailed();
     }
@@ -231,7 +251,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
             return result;
         }
         stats.add( pkt );
-        if ( !writeLine( formatter.format( pkt ) ) ) {
+        const auto stream = tracker.track( pkt );
+        if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
         }
         if ( progress ) {
@@ -251,7 +272,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     ConversionResult result;
     result.status = ConversionResult::Status::Converted;
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
-    result.summary = summarise( std::move( stats ), formatter, reader, options.maxStreams );
+    result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
     outputDir.setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );
 }

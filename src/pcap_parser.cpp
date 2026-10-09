@@ -21,9 +21,10 @@
  * @file pcap_parser.cpp
  * @brief Implementation of the pcap file parser.
  *
- * Parses pcap (libpcap) files with Ethernet, Raw IP, and Linux cooked
- * capture link layers.  Extracts IPv4/IPv6, TCP, UDP, ICMP, and ARP
- * protocol fields from each packet.
+ * Parses pcap (libpcap) files, and the packets of any capture, with
+ * Ethernet, Raw IP, Linux cooked capture and BSD loopback link layers.
+ * Extracts IPv4/IPv6, TCP, UDP, ICMP, and ARP protocol fields from each
+ * packet.
  */
 
 #include "pcap_parser.h"
@@ -41,29 +42,6 @@ namespace tcpdump {
 namespace {
 
 // ── Byte-order helpers ───────────────────────────────────────────────────
-
-/// Read a uint16 in the file's byte order.
-uint16_t read16( const uint8_t* p, bool swap )
-{
-    uint16_t v;
-    std::memcpy( &v, p, 2 );
-    if ( swap ) {
-        v = static_cast<uint16_t>( ( v >> 8 ) | ( v << 8 ) );
-    }
-    return v;
-}
-
-/// Read a uint32 in the file's byte order.
-uint32_t read32( const uint8_t* p, bool swap )
-{
-    uint32_t v;
-    std::memcpy( &v, p, 4 );
-    if ( swap ) {
-        v = ( ( v >> 24 ) & 0xFF ) | ( ( v >> 8 ) & 0xFF00 ) | ( ( v << 8 ) & 0xFF0000 )
-            | ( ( v << 24 ) & 0xFF000000 );
-    }
-    return v;
-}
 
 /// Read a int32 in the file's byte order.
 int32_t readS32( const uint8_t* p, bool swap )
@@ -112,6 +90,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     wireLen = std::max( wireLen, remaining );
     if ( pkt.ipProtocol == IpProtoTcp && remaining >= 20 ) {
         pkt.protocol = "TCP";
+        pkt.transport = Transport::Tcp;
         pkt.srcPort = readBE16( data );
         pkt.dstPort = readBE16( data + 2 );
         pkt.tcpSeq = readBE32( data + 4 );
@@ -149,6 +128,7 @@ void parseTransport( PacketRecord& pkt, const uint8_t* data, size_t remaining, s
     }
     else if ( pkt.ipProtocol == IpProtoUdp && remaining >= 8 ) {
         pkt.protocol = "UDP";
+        pkt.transport = Transport::Udp;
         pkt.srcPort = readBE16( data );
         pkt.dstPort = readBE16( data + 2 );
         auto udpLen = readBE16( data + 4 );
@@ -392,10 +372,10 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.dstIp = targetIp;
 }
 
-/// Dissect one captured packet of the given link-layer type into @p pkt.
-/// @p swap: the file is in the other byte order than this host.
-void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
-              size_t pktRemaining )
+} // anonymous namespace
+
+void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
+                    size_t pktRemaining )
 {
     uint16_t etherType = 0;
     const uint8_t* networkData = nullptr;
@@ -500,6 +480,8 @@ void dissect( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pk
     }
 }
 
+namespace {
+
 bool isPcapMagic( uint32_t magic )
 {
     return magic == PcapMagicLE || magic == PcapMagicBE || magic == PcapNsMagicLE
@@ -525,7 +507,7 @@ bool isPcapHeader( const uint8_t* p )
     return read16( p + 4, swap ) == 2 && read16( p + 6, swap ) <= 4;
 }
 
-/// Whether @p p (at least 12 bytes) starts a pcap-ng section header block.
+/// Whether @p p (at least 12 bytes) starts a pcapng section header block.
 bool isPcapNgHeader( const uint8_t* p )
 {
     uint32_t magic;
@@ -535,45 +517,31 @@ bool isPcapNgHeader( const uint8_t* p )
     return magic == PcapNgMagic && ( byteOrder == 0x1A2B3C4D || byteOrder == 0x4D3C2B1A );
 }
 
-/**
- * Find the pcap global header in the first bytes of a file.
- *
- * tcpdump run through adb (`adb exec-out tcpdump -w -`) mixes its stderr,
- * e.g. "tcpdump: listening on …", into the output ahead of the capture.
- * The header is therefore looked for behind up to kMaxPreamble bytes of
- * text.  Past offset 0 it is only accepted when everything before it is
- * text and it is a valid pcap header, not merely the 4 magic bytes: a
- * stray magic in binary data, or in the text, must not be taken for a
- * capture.  At offset 0 the magic decides, so that an unsupported version
- * is reported as such.
- *
- * @return The offset of the header, or @p size if there is none; @p error
- *         then says why.
- */
-size_t findPcapHeader( const uint8_t* data, size_t size, std::string& error )
+} // anonymous namespace
+
+// ── Format detection ─────────────────────────────────────────────────────
+
+size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
+                         std::string& error )
 {
     for ( size_t i = 0; i + 24 <= size && i <= kMaxPreamble; ++i ) {
         uint32_t magic;
         std::memcpy( &magic, data + i, 4 );
-        if ( i == 0 && isPcapMagic( magic ) ) {
-            return 0;
+        if ( ( i == 0 && isPcapMagic( magic ) ) || isPcapHeader( data + i ) ) {
+            format = CaptureFormat::Pcap;
+            return i;
         }
         if ( ( i == 0 && magic == PcapNgMagic ) || isPcapNgHeader( data + i ) ) {
-            error = "pcap-ng format is not yet supported";
-            return size;
-        }
-        if ( isPcapHeader( data + i ) ) {
+            format = CaptureFormat::Pcapng;
             return i;
         }
         if ( !isPreambleText( data[ i ] ) ) {
-            break; // binary data that is no pcap header: no text preamble
+            break; // binary data that is no capture header: no text preamble
         }
     }
-    error = "Not a valid pcap file (no pcap magic found)";
+    error = "Not a valid pcap or pcapng file (no pcap magic found)";
     return size;
 }
-
-} // anonymous namespace
 
 // ── Link-layer types ─────────────────────────────────────────────────────
 
@@ -663,9 +631,45 @@ bool MemorySource::skip( uint64_t n )
     return true;
 }
 
-// ── PcapReader ───────────────────────────────────────────────────────────
+const std::vector<uint8_t>& HeadSource::peek( size_t n )
+{
+    while ( head_.size() < n ) {
+        const auto filled = head_.size();
+        head_.resize( n );
+        const auto got = source_.read( head_.data() + filled, n - filled );
+        head_.resize( filled + got );
+        if ( got == 0 ) {
+            break;
+        }
+    }
+    return head_;
+}
 
-size_t PcapReader::read( uint8_t* dst, size_t n )
+size_t HeadSource::read( uint8_t* dst, size_t n )
+{
+    if ( n == 0 ) {
+        return 0;
+    }
+    if ( head_.empty() ) {
+        return source_.read( dst, n );
+    }
+    const auto got = std::min( n, head_.size() );
+    std::memcpy( dst, head_.data(), got );
+    head_.erase( head_.begin(), head_.begin() + static_cast<std::ptrdiff_t>( got ) );
+    return got;
+}
+
+bool HeadSource::skip( uint64_t n )
+{
+    const auto fromHead = static_cast<size_t>( std::min<uint64_t>( n, head_.size() ) );
+    head_.erase( head_.begin(), head_.begin() + static_cast<std::ptrdiff_t>( fromHead ) );
+    n -= fromHead;
+    return n == 0 || source_.skip( n );
+}
+
+// ── CaptureReader ────────────────────────────────────────────────────────
+
+size_t CaptureReader::read( uint8_t* dst, size_t n )
 {
     // An empty record reads into a buffer whose data() may be null, and
     // memcpy() must not be given a null pointer even for 0 bytes.
@@ -673,11 +677,6 @@ size_t PcapReader::read( uint8_t* dst, size_t n )
         return 0;
     }
     size_t got = 0;
-    if ( headPos_ < head_.size() ) {
-        got = std::min( n, head_.size() - headPos_ );
-        std::memcpy( dst, head_.data() + headPos_, got );
-        headPos_ += got;
-    }
     while ( got < n ) {
         const auto more = source_.read( dst + got, n - got );
         if ( more == 0 ) {
@@ -689,48 +688,22 @@ size_t PcapReader::read( uint8_t* dst, size_t n )
     return got;
 }
 
-bool PcapReader::skip( uint64_t n )
+bool CaptureReader::skip( uint64_t n )
 {
-    if ( headPos_ < head_.size() ) {
-        const auto fromHead
-            = static_cast<size_t>( std::min<uint64_t>( n, head_.size() - headPos_ ) );
-        headPos_ += fromHead;
-        bytesRead_ += fromHead;
-        n -= fromHead;
-    }
-    if ( n == 0 ) {
-        return true;
-    }
-    const bool ok = source_.skip( n );
+    const bool ok = n == 0 || source_.skip( n );
     bytesRead_ += n; // on failure the source is at its end anyway
     return ok;
 }
 
+// ── PcapReader ───────────────────────────────────────────────────────────
+
 bool PcapReader::open()
 {
-    // Read what may hold a text preamble and the global header.
-    head_.resize( kMaxPreamble + 24 );
-    size_t filled = 0;
-    while ( filled < head_.size() ) {
-        const auto got = source_.read( head_.data() + filled, head_.size() - filled );
-        if ( got == 0 ) {
-            break;
-        }
-        filled += got;
-    }
-    head_.resize( filled );
-
-    if ( filled < 24 ) {
-        error_ = "File too small to be a valid pcap (< 24 bytes)";
+    uint8_t data[ 24 ];
+    if ( !skip( start_ ) || read( data, sizeof( data ) ) < sizeof( data ) ) {
+        error_ = "Not a valid pcap file (cut off inside the global header)";
         return false;
     }
-
-    // Find the header — may be past a text preamble from tcpdump stderr
-    const size_t headerOffset = findPcapHeader( head_.data(), filled, error_ );
-    if ( headerOffset == filled ) {
-        return false;
-    }
-    const uint8_t* data = head_.data() + headerOffset;
 
     uint32_t magic;
     std::memcpy( &magic, data, 4 );
@@ -750,10 +723,17 @@ bool PcapReader::open()
         return false;
     }
 
-    headPos_ = headerOffset + 24;
-    bytesRead_ = headPos_;
     open_ = true;
+    headerRead_ = true;
     return true;
+}
+
+std::vector<uint32_t> PcapReader::linkTypes() const
+{
+    if ( !headerRead_ ) {
+        return {};
+    }
+    return { header_.network };
 }
 
 bool PcapReader::next( PacketRecord& pkt )
@@ -792,34 +772,14 @@ bool PcapReader::next( PacketRecord& pkt )
     // more is carried into the seconds.
     const uint64_t fractionNs
         = header_.nanoseconds ? tsFraction : static_cast<uint64_t>( tsFraction ) * 1000;
-    pkt.timestampSec = tsSec + static_cast<uint32_t>( fractionNs / 1000000000 );
+    pkt.timestampSec = static_cast<int64_t>( tsSec + fractionNs / 1000000000 );
     pkt.timestampNsec = static_cast<uint32_t>( fractionNs % 1000000000 );
     pkt.capturedLen = inclLen;
     pkt.originalLen = origLen;
-    dissect( pkt, header_.network, swap_, packet_.data(), kept );
+    pkt.linkType = header_.network;
+    pkt.precision = precision();
+    dissectPacket( pkt, pkt.linkType, swap_, packet_.data(), kept );
     return true;
-}
-
-// ── Whole-buffer convenience ─────────────────────────────────────────────
-
-ParseResult parsePcap( const uint8_t* data, size_t size )
-{
-    ParseResult result;
-    MemorySource source( data, size );
-    PcapReader reader( source );
-    if ( !reader.open() ) {
-        result.error = reader.error();
-        return result;
-    }
-    result.header = reader.header();
-
-    PacketRecord pkt;
-    while ( reader.next( pkt ) ) {
-        result.packets.push_back( std::move( pkt ) );
-    }
-    result.truncated = reader.truncated();
-    result.ok = true;
-    return result;
 }
 
 } // namespace tcpdump
