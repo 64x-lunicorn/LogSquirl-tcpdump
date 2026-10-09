@@ -33,6 +33,7 @@
 #include <deque>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -131,6 +132,13 @@ struct Stream {
     unsigned direction = 0;
 };
 
+/// The two ends of a numbered stream, each an address and a port, indexed
+/// by Stream::direction: end d is the source of the packets of direction d.
+struct StreamEndpoints {
+    std::string address[ 2 ];
+    uint16_t port[ 2 ] = { 0, 0 };
+};
+
 /**
  * Follows the conversations of one capture, packet by packet, as the
  * Converter reads them.
@@ -147,7 +155,9 @@ struct Stream {
  */
 class StreamTracker {
 public:
-    /// Conversations numbered by default: some 150 MB of memory at most.  The
+    /// Conversations numbered by default: some 150 MB of memory at most, and
+    /// some 70 MB more for their counts in the Conversations table
+    /// (conversations.h).  The
     /// options may raise it tenfold (kMaxStreamCap, some 1.5 GB) or lower it.
     static constexpr size_t kMaxStreams = 1000000;
 
@@ -158,6 +168,9 @@ public:
 
     /// The stream of @p pkt, numbering its conversation if it is a new one.
     Stream track( const PacketRecord& pkt );
+
+    /// The ends of stream @p id of @p transport, a stream track() numbered.
+    StreamEndpoints endpoints( Transport transport, int id ) const;
 
     /// Whether a conversation went unnumbered because of maxStreams.
     bool limitReached() const
@@ -170,6 +183,8 @@ private:
     struct Conversations {
         std::map<std::string, int> ids; ///< By their endpoints, in either order.
         std::deque<StreamState> states; ///< By stream id; a deque never moves them.
+        /// The key of each in ids, by stream id: a map never moves them.
+        std::vector<const std::string*> keys;
     };
 
     Conversations tcp_;

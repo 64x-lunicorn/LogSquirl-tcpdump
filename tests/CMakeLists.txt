@@ -46,6 +46,7 @@ add_executable(logsquirl_tcpdump_tests
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
+    conversations_test.cpp
     stream_labels_test.cpp
     tcp_analysis_test.cpp
     tcp_reassembly_test.cpp
@@ -97,6 +98,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_reassembly.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
+        "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"

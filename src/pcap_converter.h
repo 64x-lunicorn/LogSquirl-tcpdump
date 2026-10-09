@@ -26,6 +26,7 @@
 
 #include "capture_index.h"
 #include "capture_stats.h"
+#include "conversations.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_parser.h"
@@ -75,6 +76,15 @@ struct CaptureSummary {
     /// TCP segments per analysis marker ("TCP Retransmission", …), for the
     /// kinds that occur, in the order of TcpMarker.
     std::vector<std::pair<std::string, uint64_t>> tcpMarkers;
+    /// The Conversations table: a row per numbered stream.  Shared, as it
+    /// may hold a million rows: a summary taken anew (a live capture's
+    /// next snapshot) holds a table of its own, never a changed one.
+    std::shared_ptr<const std::vector<Conversation>> conversations;
+    /// Packets of the streams past the stream cap (see streamCap), which
+    /// the table counts together as "other streams", and their bytes on the
+    /// wire.
+    uint64_t otherStreamPackets = 0;
+    uint64_t otherStreamBytes = 0;
 
     /// Packets captured shorter than on the wire, cut at the snaplen; their
     /// lines say "[cut to N bytes]".  0 when every packet was captured whole.

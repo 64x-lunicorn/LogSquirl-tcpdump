@@ -49,6 +49,7 @@ namespace {
 
 /// The summary of a converted capture, from what was collected on the way.
 CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
+                          const StreamLabels& labels, const ConversationStats& conversations,
                           const CaptureReader& reader, size_t maxStreams )
 {
     // The packets' link-layer types first, then any the capture declares
@@ -81,6 +82,10 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
                                              stats.tcpMarkers[ i ] );
         }
     }
+    summary.conversations = std::make_shared<const std::vector<Conversation>>(
+        conversations.conversations( tracker, labels, stats.firstTimeSec, stats.firstTimeNsec ) );
+    summary.otherStreamPackets = conversations.otherPackets();
+    summary.otherStreamBytes = conversations.otherBytes();
     summary.endsInsideRecord = reader.truncated();
     if ( tracker.limitReached() ) {
         summary.streamCap = maxStreams;
@@ -151,6 +156,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     stats.maxEndpoints = options.maxEndpoints;
     StreamTracker tracker( options.maxStreams );
     StreamLabels labels;
+    ConversationStats conversations;
     TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
     PacketFormatter formatter( reader.precision(), options.layout );
     if ( !writeLine( formatter.header() ) ) {
@@ -173,6 +179,7 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         describeInStream( pkt, stream );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
         labels.apply( pkt, stream );
+        conversations.add( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {
             return writeFailed();
@@ -195,7 +202,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
     ConversionResult result;
     result.status = ConversionResult::Status::Converted;
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
-    result.summary = summarise( std::move( stats ), tracker, reader, options.maxStreams );
+    result.summary = summarise( std::move( stats ), tracker, labels, conversations, reader,
+                                options.maxStreams );
     index->setCaptureFile( inputPath );
     result.index = std::move( index );
     outputDir.setAutoRemove( false );
