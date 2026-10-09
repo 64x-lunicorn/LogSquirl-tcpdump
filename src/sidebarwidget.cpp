@@ -664,25 +664,29 @@ void SidebarWidget::finishExport( const ExportRequest& request, ExportResult res
 
 void SidebarWidget::showPacketDetails()
 {
-    packetPanel_->refresh();
-    if ( packetPanel_->isVisible() ) {
-        return;
-    }
-    // The sidebar tab is not in front: say what it would show.
-    if ( packetPanel_->shownPacket() == 0 ) {
-        hostNotify( "Packet details: " + packetPanel_->statusText() );
-        return;
-    }
-    QStringList names;
-    for ( const auto& layer : packetPanel_->layers() ) {
-        names << QString::fromStdString( layer.name );
-    }
-    if ( !names.isEmpty() ) {
-        names.removeFirst(); // the frame
-    }
-    hostNotify( QString( "Packet %1: %2. Open the tcpdump sidebar tab for its fields and bytes." )
-                    .arg( packetPanel_->shownPacket() )
-                    .arg( names.join( " / " ) ) );
+    // The packet is read on the panel's worker: what it shows is told once read.
+    const QPointer<PacketPanel> panel( packetPanel_ );
+    packetPanel_->refresh( [ panel ] {
+        if ( !panel || panel->isVisible() ) {
+            return;
+        }
+        // The sidebar tab is not in front: say what it would show.
+        if ( panel->shownPacket() == 0 ) {
+            hostNotify( "Packet details: " + panel->statusText() );
+            return;
+        }
+        QStringList names;
+        for ( const auto& layer : panel->layers() ) {
+            names << QString::fromStdString( layer.name );
+        }
+        if ( !names.isEmpty() ) {
+            names.removeFirst(); // the frame
+        }
+        hostNotify(
+            QString( "Packet %1: %2. Open the tcpdump sidebar tab for its fields and bytes." )
+                .arg( panel->shownPacket() )
+                .arg( names.join( " / " ) ) );
+    } );
 }
 
 void SidebarWidget::followStreamContent()
@@ -696,7 +700,7 @@ void SidebarWidget::followStreamContent()
     if ( !packetPanel_->isVisible() ) {
         hostNotify( QString( "Follow stream content: the stream of packet %1 is shown in the "
                              "tcpdump sidebar tab." )
-                        .arg( packetPanel_->shownPacket() ) );
+                        .arg( packetPanel_->selectedPacket() ) );
     }
 }
 

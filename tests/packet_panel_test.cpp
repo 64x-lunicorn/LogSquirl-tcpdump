@@ -258,6 +258,47 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
     }
 }
 
+SCENARIO( "The Packet Panel reads a packet off the UI thread", "[packet_panel]" )
+{
+    GIVEN( "a converted capture in the tab in front" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+
+        WHEN( "a packet line is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 3 ] };
+            panel->refresh();
+
+            THEN( "the panel says it reads the packet, then shows it" )
+            {
+                REQUIRE( panel->statusText()
+                         == QString::fromUtf8( "Reading packet 3\xe2\x80\xa6" ) );
+                REQUIRE( panel->shownPacket() == 0 );
+                REQUIRE( panel->findChild<QPushButton*>( "followContentButton" )->isEnabled() );
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+                REQUIRE( panel->statusText() == "Packet 3" );
+            }
+        }
+
+        WHEN( "the selection moves on before a packet is read" )
+        {
+            host.selectedLines = { loaded.lines[ 2 ] };
+            panel->refresh();
+            host.selectedLines = { loaded.lines[ 5 ] };
+            panel->refresh();
+
+            THEN( "the packet of the line selected last is shown, and stays" )
+            {
+                REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 5; } ) );
+                runFor( 200 );
+                REQUIRE( panel->shownPacket() == 5 );
+            }
+        }
+    }
+}
+
 SCENARIO( "The Packet Panel polls the selection only while it is visible", "[packet_panel]" )
 {
     GIVEN( "a converted capture in the tab in front and a selected line" )
@@ -365,6 +406,7 @@ SCENARIO( "Packet details reads the selected line at once", "[packet_panel]" )
 
             THEN( "the panel shows the packet, and a notification names its layers" )
             {
+                REQUIRE( waitFor( [ & ] { return !host.notifications.isEmpty(); } ) );
                 REQUIRE( loaded.panel->shownPacket() == 1 );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().startsWith( "Packet 1: Ethernet II / " ) );

@@ -2066,8 +2066,15 @@ export, conversation statistics):
   reason in the status line. The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
-  and ASCII on each line. The packet is read on the UI thread: at most
-  `kCheckpointInterval` records from a local file.
+  and ASCII on each line. The packet is read off the UI thread, up to
+  `kCheckpointInterval` records: `showPacket()` says "Reading packet N…"
+  and hands the read (and `dissectLayers()`) to `pool_`, one thread, so
+  the reads take turns with the panel's `CaptureCursor`; the result comes
+  back through a `QFutureWatcher`. Each read is numbered (`generation_`):
+  one the selection moved on from is dropped when it ends, and not begun
+  when it has not (`latest_`). `refresh( then )` runs `then` once the
+  packet is shown, or why not, which Packet details uses for its
+  notification; the destructor waits for the read that runs.
 
 - **Follow stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a
@@ -2076,7 +2083,9 @@ export, conversation statistics):
   `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
-  panel keeps the Stream column of the line it shows (`shownStream_`).
+  panel keeps the number and Stream column of the line selected
+  (`selectedPacket_`, `shownStream_`), so that a stream can be followed
+  while its packet is still read.
   `StreamContentReader` reads the stream back: `open()` reads the packet
   for its transport, addresses and ports, then `read()` reads the packets
   from the stream's first to its last, which the Converter notes in the

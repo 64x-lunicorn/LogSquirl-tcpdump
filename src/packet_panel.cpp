@@ -31,6 +31,7 @@
 #include "stream_tracker.h"
 
 #include <QFontDatabase>
+#include <QFutureWatcher>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -40,6 +41,7 @@
 #include <QTextCursor>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 #include <exception>
@@ -153,6 +155,7 @@ std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, siz
 PacketPanel::PacketPanel( QWidget* parent )
     : QWidget( parent )
 {
+    pool_.setMaxThreadCount( 1 ); // one read at a time: they share the cursor
     auto* layout = new QVBoxLayout( this );
     layout->setContentsMargins( 0, 0, 0, 0 );
     layout->setSpacing( 4 );
@@ -229,7 +232,24 @@ PacketPanel::PacketPanel( QWidget* parent )
     showReason( QStringLiteral( "No capture in this tab." ) );
 }
 
-PacketPanel::~PacketPanel() = default;
+/// What a read on the worker found: the packet and its layers, or why not.
+struct PacketPanel::PacketRead {
+    uint32_t number = 0;
+    bool skipped = false; ///< The selection moved on before it began.
+    bool ok = false;
+    CapturedPacket packet;
+    std::vector<PacketLayer> layers;
+    QString error;
+};
+
+PacketPanel::~PacketPanel()
+{
+    // The host may unload the library next: no read may still run.
+    if ( latest_ ) {
+        latest_->store( UINT64_MAX );
+    }
+    pool_.waitForDone();
+}
 
 QString PacketPanel::statusText() const
 {
@@ -242,7 +262,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
         return;
     }
     index_ = std::move( index );
-    cursor_.reset();
+    cursor_.reset(); // a read of the capture before keeps its own
     haveLast_ = false;
     // The stream shown was one of the capture of the tab before.
     streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Follow stream "
@@ -261,9 +281,24 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     }
 }
 
-void PacketPanel::refresh()
+void PacketPanel::refresh( std::function<void()> then )
 {
+    if ( then ) {
+        whenSettled_.push_back( std::move( then ) );
+    }
     poll( true );
+    if ( !reading_ ) {
+        settled();
+    }
+}
+
+void PacketPanel::settled()
+{
+    auto waiting = std::move( whenSettled_ );
+    whenSettled_.clear();
+    for ( auto& then : waiting ) {
+        then();
+    }
 }
 
 void PacketPanel::showEvent( QShowEvent* event )
@@ -337,12 +372,12 @@ void PacketPanel::showSelection( const QString& selection )
 bool PacketPanel::followStreamContent( QString* why )
 {
     QString reason;
-    if ( shownPacket_ == 0 ) {
+    if ( selectedPacket_ == 0 ) {
         reason = statusText();
     }
     else if ( shownStream_ == kNoStream ) {
         reason = QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
-                     .arg( shownPacket_ );
+                     .arg( selectedPacket_ );
     }
     if ( !reason.isEmpty() ) {
         if ( why ) {
@@ -350,7 +385,7 @@ bool PacketPanel::followStreamContent( QString* why )
         }
         return false;
     }
-    streamView_->follow( index_, shownPacket_, shownStream_ );
+    streamView_->follow( index_, selectedPacket_, shownStream_ );
     tabs_->setCurrentWidget( streamView_ );
     return true;
 }
@@ -358,16 +393,78 @@ bool PacketPanel::followStreamContent( QString* why )
 void PacketPanel::showPacket( uint32_t number )
 {
     if ( !cursor_ ) {
-        cursor_ = std::make_unique<CaptureCursor>( index_ );
+        cursor_ = std::make_shared<CaptureCursor>( index_ );
     }
-    CapturedPacket packet;
-    if ( !cursor_->read( number, packet ) ) {
-        showReason( QStringLiteral( "Packet %1: %2" ).arg( number ).arg( cursor_->error() ) );
-        return;
+    if ( !latest_ ) {
+        latest_ = std::make_shared<std::atomic<uint64_t>>( 0 );
     }
+    showReason( QStringLiteral( "Reading packet %1\u2026" ).arg( number ) );
+    selectedPacket_ = number;
+    followButton_->setEnabled( shownStream_ != kNoStream );
+    const auto generation = ++generation_;
+    latest_->store( generation );
+    reading_ = true;
 
-    layers_ = dissectLayers( packet.record, packet.bytes.data(), packet.bytes.size(),
-                             packet.byteSwapped );
+    // The watcher lives on this thread, so its signals are delivered here.
+    auto* watcher = new QFutureWatcher<std::shared_ptr<PacketRead>>( this );
+    connect( watcher, &QFutureWatcher<std::shared_ptr<PacketRead>>::finished, this,
+             [ this, watcher, generation ] {
+                 watcher->deleteLater();
+                 if ( generation != generation_ ) {
+                     return; // the selection moved on
+                 }
+                 reading_ = false;
+                 const auto read
+                     = watcher->future().resultCount() > 0 ? watcher->result() : nullptr;
+                 try {
+                     if ( read && read->ok ) {
+                         showRead( *read );
+                     }
+                     else {
+                         showReason( QStringLiteral( "Packet %1: %2" )
+                                         .arg( selectedPacket_ )
+                                         .arg( read ? read->error
+                                                    : QStringLiteral( "The read ended without "
+                                                                      "a result." ) ) );
+                     }
+                     settled();
+                 } catch ( const std::exception& e ) {
+                     // An exception must not escape into Qt or the host.
+                     hostLog( LOGSQUIRL_LOG_ERROR,
+                              "The Packet Panel stopped: " + QString::fromUtf8( e.what() ) );
+                 }
+             } );
+    const auto cursor = cursor_;
+    const auto latest = latest_;
+    watcher->setFuture( QtConcurrent::run( &pool_, [ cursor, latest, generation, number ] {
+        auto read = std::make_shared<PacketRead>();
+        read->number = number;
+        if ( latest->load() != generation ) {
+            read->skipped = true; // the selection moved on before it began
+            return read;
+        }
+        try {
+            read->ok = cursor->read( number, read->packet );
+            if ( read->ok ) {
+                read->layers = dissectLayers( read->packet.record, read->packet.bytes.data(),
+                                              read->packet.bytes.size(), read->packet.byteSwapped );
+            }
+            else {
+                read->error = cursor->error();
+            }
+        } catch ( const std::exception& e ) {
+            read->ok = false;
+            read->error = QString::fromUtf8( e.what() );
+        }
+        return read;
+    } ) );
+}
+
+void PacketPanel::showRead( const PacketRead& read )
+{
+    const auto& packet = read.packet;
+    const auto number = read.number;
+    layers_ = read.layers;
     shownPacket_ = number;
     shownBytes_ = packet.bytes.size();
     followButton_->setEnabled( shownStream_ != kNoStream );
@@ -399,6 +496,15 @@ void PacketPanel::showPacket( uint32_t number )
 
 void PacketPanel::showReason( const QString& reason )
 {
+    // A read still running is of a selection no longer shown.
+    if ( reading_ ) {
+        ++generation_;
+        if ( latest_ ) {
+            latest_->store( generation_ );
+        }
+        reading_ = false;
+    }
+    selectedPacket_ = 0;
     shownPacket_ = 0;
     shownBytes_ = 0;
     followButton_->setEnabled( false );
