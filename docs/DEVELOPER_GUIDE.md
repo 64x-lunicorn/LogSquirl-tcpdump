@@ -252,6 +252,14 @@ preview and its caps. A description is finalised as one line before it
 leaves the describer, so one packet is always one line whatever a detector
 forgot to escape.
 
+A preview is marked as such (`PayloadDescription::preview`), and the parser
+records its length in `PacketRecord::previewBytes`: it ends the Info, after
+the separator. `limitPreview()` cuts it to the length the user chose, with
+an ellipsis, or removes it with its separator. The Converter calls it on
+each packet as the reader hands it out, before the stream steps touch the
+Info, so the dissectors take no options; a packet whose stream continues a
+protocol then reads `Continuation` alone, as one without a preview.
+
 #### The name tables (`protocol_names.h/cpp`)
 Pure C++, names only: `ipProtocolName()` for IP protocol numbers,
 `etherTypeName()` for EtherTypes, `servicePortName()` for the service a
@@ -278,6 +286,18 @@ The widths are a minimum: a value as wide as its column, or wider (packet
 (Source and Destination of a packet without addresses) is shown as `-`, so
 that a line always splits into its columns at runs of spaces. The Log
 Format relies on it.
+
+Which columns a line has is its `LineLayout`, which `PacketFormatter`
+takes: `timeColumns` (`Both`, the default, `AbsoluteOnly` or
+`RelativeOnly`) leaves out Time or UTC Time, and `macColumns` adds Source
+MAC and Destination MAC, 17 characters and two spaces each, `-` for a
+packet without them, between Length and Info. Each column is written on
+its own, so a line in another layout is the default line with a column's
+text cut out or put in (`tests/conversion_options_test.cpp` derives the
+expected text of each time mode that way). The MAC columns go before Info
+rather than next to Source and Destination because the Log Format reads
+Info as the rest of the line: there they need no groups of their own, which
+every table in the default layout would show empty.
 
 UTC Time is the packet's wall-clock time, written by `formatUtcTime()` as
 an ISO 8601 date and time in UTC ending in `Z`:
@@ -481,10 +501,18 @@ Panel's time axis. `length` is the only `integer` value, so the Chart
 Panel's *Numeric Fields* template offers bytes over time and nothing else;
 `number` and `time` are declared `string` for that reason.
 
+The `timestamp` and `time` groups are optional, each with the spaces after
+it, so that the format reads a line of every `LineLayout`: a time column
+the line does not have is empty, a line without `timestamp` has no time for
+LogSquirl, and the MAC columns start `body`. A line of the default layout
+matches exactly as with mandatory groups. Code that parses packet lines
+with a copy of the regex must take this one.
+
 A change of the packet line's columns is a change of the format too:
 `tests/logformat_test.cpp` matches the regex against every line of every
 `tests/corpus/*.txt` (header excluded) and checks each field against the
-line's columns, split at runs of spaces, and reads every timestamp with a
+line's columns, split at runs of spaces, the same for the corpus converted
+in every `LineLayout`, and reads every timestamp with a
 port of LogSquirl's `TimestampReader` rules
 (`src/logformat/src/timestampreader.cpp` in the host). The plugin cannot
 register the format with LogSquirl (#50), nor tell whether it is installed.
@@ -513,6 +541,24 @@ failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
+
+`ConversionOptions` are everything the user can choose: the `LineLayout`,
+the payload preview (`preview`, `previewChars`) and the stream and endpoint
+caps. The defaults write the text of `tests/corpus`; any other choice is
+tested by deriving its text from that one, not by more committed text.
+
+### Settings and configuration dialog (`settings.h/cpp`, `configdialog.h/cpp`)
+`loadConversionOptions()` and `saveConversionOptions()` keep the
+`ConversionOptions` in `settings.ini` (`QSettings`, INI format, group
+`conversion`) in the configuration directory the host names
+(`get_config_dir`, part of the API since 26.10). A value that is missing or
+not one reads as its default, a number out of range as the nearest allowed:
+the preview 1 to `kMaxPreviewChars`, the caps `kMinCap` to ten times their
+default. `ConfigDialog` shows and edits the options and says that an open
+capture keeps those it was converted with; it does not save them itself.
+The sidebar loads the file when a conversion starts, on the GUI thread, and
+hands the options to the worker, so a change applies to the next capture
+only.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 Qt UI that provides:
@@ -553,7 +599,11 @@ through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
 open; the plugin notes `QCoreApplication::aboutToQuit` and removes the
-temporary files only in the first case.
+temporary files only in the first case. `logsquirl_plugin_configure()`,
+which LogSquirl calls for **Configure…** in Plugin Management with its main
+window as the parent, runs the `ConfigDialog` modally and saves the options
+when it is accepted; `hostConfigDir()` is the directory, empty without a
+host, where saving fails with a notification.
 
 ## Adding Protocol Support
 
@@ -610,7 +660,10 @@ lease exchange, DHCPv6 messages and a relay, and NTP requests and replies,
 by `tests/make_dhcp_ntp_corpus.py`. The pcapng unit tests build their
 blocks with `Pcapng` in `tests/pcapbuilder.h`. `logformat_test.cpp` checks
 that the Log Format reads every line of every corpus text, so a new capture
-in the corpus is covered by it, too. Plugin and sidebar tests run against the `FakeHost` in
+in the corpus is covered by it, too, in every `LineLayout`.
+`conversion_options_test.cpp` converts the corpus with each time mode and
+with the preview off or shorter, and checks each line against the default
+text. Plugin, sidebar and configuration dialog tests run against the `FakeHost` in
 `tests/fakehost.h`.
 
 ### Real captures
