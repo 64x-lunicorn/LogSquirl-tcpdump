@@ -173,8 +173,8 @@ ConversionResult convertOrThrow( const QString& inputPath, const QString& output
         const auto stream = tracker.track( pkt );
         stats.addTcpMarkers( analyseTcp( pkt, stream ) );
         describeInStream( pkt, stream );
-        media.apply( pkt );
         reassembly.apply( pkt, stream, reader.payloadOf( pkt ) );
+        media.apply( pkt ); // after the reassembly, which completes SDP bodies
         labels.apply( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id ) ) ) {

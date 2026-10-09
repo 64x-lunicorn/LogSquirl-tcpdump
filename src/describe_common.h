@@ -293,6 +293,11 @@ std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
 std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
 /// An HTTP/1.x header section (describe_http.cpp).
 std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
+/// A SIP message, its body as long as its Content-Length says
+/// (describe_sip.cpp).
+std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len );
+/// An MQTT control packet, by its Remaining Length (describe_mqtt.cpp).
+std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
 
 // ── In the stream ────────────────────────────────────────────────────────
 

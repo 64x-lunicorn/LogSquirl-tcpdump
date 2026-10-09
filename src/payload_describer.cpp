@@ -245,17 +245,30 @@ std::optional<size_t> tlsFrame( const Payload& p )
     return frameTlsRecord( p.data, p.len );
 }
 
+std::optional<size_t> sipFrame( const Payload& p )
+{
+    return frameSipMessage( p.data, p.len );
+}
+
 std::optional<size_t> httpFrame( const Payload& p )
 {
     return frameHttpHeader( p.data, p.len );
 }
 
+/// MQTT on port 1883 only: the framer cannot know of a CONNECT before.
+std::optional<size_t> mqttFrame( const Payload& p )
+{
+    if ( !onPort( p, 1883 ) ) {
+        return std::nullopt;
+    }
+    return frameMqttPacket( p.data, p.len );
+}
+
 /// The TCP framers, in the order of their detectors in kTcpDetectors; a
 /// protocol is numbered by its place, from 1 (MessageExtent::framer).
 constexpr Framer kTcpFramers[] = {
-    { "DNS", dnsOverTcpFrame },
-    { "TLS", tlsFrame },
-    { "HTTP", httpFrame },
+    { "DNS", dnsOverTcpFrame }, { "TLS", tlsFrame },   { "SIP", sipFrame },
+    { "HTTP", httpFrame },      { "MQTT", mqttFrame },
 };
 
 /// DNS on port 53, mDNS on port 5353: named by the port, described if the

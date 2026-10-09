@@ -777,4 +777,23 @@ std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
     return more ? text + "; " + kEllipsis : text;
 }
 
+std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len )
+{
+    const Text bytes{ payload, len };
+    const auto start = startLineOf( bytes );
+    if ( !start ) {
+        return std::nullopt;
+    }
+    const auto message = readMessage( bytes, *start, true );
+    if ( message.malformed ) {
+        return std::nullopt;
+    }
+    if ( message.headersCut ) {
+        return len + 1;
+    }
+    // Over TCP, Content-Length is mandatory (RFC 3261, 18.3): without it,
+    // the body is none.
+    return static_cast<size_t>( message.body.data - payload ) + message.contentLength.value_or( 0 );
+}
+
 } // namespace tcpdump::describer

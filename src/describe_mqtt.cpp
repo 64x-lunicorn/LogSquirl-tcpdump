@@ -916,6 +916,27 @@ bool isMqttConnect( const uint8_t* payload, size_t len )
            && mqttVersion( name, level ) != nullptr;
 }
 
+std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len )
+{
+    if ( len == 0 || ( payload[ 0 ] >> 4 ) == 0
+         || !validFlags( payload[ 0 ] >> 4, payload[ 0 ] & 0x0F ) ) {
+        return std::nullopt;
+    }
+    // The Remaining Length, a variable byte integer (MQTT 5.0, 1.5.5).
+    size_t remaining = 0;
+    for ( size_t i = 0; i < kMaxMqttVarintBytes; ++i ) {
+        if ( 1 + i >= len ) {
+            return len + 1;
+        }
+        const uint8_t digit = payload[ 1 + i ];
+        remaining |= static_cast<size_t>( digit & 0x7F ) << ( 7 * i );
+        if ( ( digit & 0x80 ) == 0 ) {
+            return 2 + i + remaining;
+        }
+    }
+    return std::nullopt;
+}
+
 std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort )
 {
     if ( !onMqttPort && !isMqttConnect( payload, len ) ) {

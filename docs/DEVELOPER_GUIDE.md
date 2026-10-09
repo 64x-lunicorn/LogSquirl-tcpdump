@@ -312,8 +312,9 @@ of the detectors and in-stream passes the tables use.
   properties if they parse as such. The `Fields` reader of
   `describe_mqtt.cpp`, on a `FieldReader`, tells a field beyond the length
   its packet declares (malformed) from one beyond the captured bytes (cut):
-  a packet that goes on in the next segment is described as far as it
-  goes and ends in ` …`, its rest is a `Continuation`; one that breaks the
+  a packet that goes on in the next segment is reassembled on port 1883
+  (`frameMqttPacket()`, see TCP Reassembly), elsewhere described as far as
+  it goes and ending in ` …`, its rest a `Continuation`; one that breaks the
   rules of its type (flags of its fixed header, a Remaining Length of more
   than 4 bytes or not minimally encoded, a topic with a control character
   or a wildcard, a property unknown, bytes left over) is `<name> [Malformed
@@ -337,8 +338,9 @@ of the detectors and in-stream passes the tables use.
   Content-Length (none: no body), line ends between them skipped, up to
   four, joined by `; `, then `…`; over UDP a datagram is one message, its
   body the rest of it without a Content-Length. A message whose header
-  section or body goes on beyond the payload ends in ` …`, its rest in the
-  next segment is SIP by its port (5060) or the stream's label; one
+  section or body goes on in the next segment is reassembled
+  (`frameSipMessage()`, see TCP Reassembly); one cut at the snaplen ends in
+  ` …`; one
   without Call-ID or a CSeq of number and method, with a header line
   without colon, more than 128 header lines or a Content-Length that is no
   number up to 100,000,000 is `[Malformed Packet]`, as is an SDP body that
@@ -669,9 +671,13 @@ Which bytes make a message is the describer's to say:
 `tcpMessageExtent()` (`payload_describer.h`) asks the framers of
 `kTcpFramers`, in the order of their detectors, how many bytes the message
 at the start of some bytes takes: a TLS record (5 + its length, at most
-2^14 + 2048), a DNS message behind its 2-byte length (port 53), an HTTP/1.x
-header section up to its empty line (the body is not held: a segment of
-body begins no message and is described as it is). A framer answers more
+2^14 + 2048), a DNS message behind its 2-byte length (port 53), a SIP
+message up to the end of the body its Content-Length gives (none without
+one, as over TCP it is mandatory), an HTTP/1.x header section up to its
+empty line (the body is not held: a segment of body begins no message and
+is described as it is), an MQTT control packet by its Remaining Length (port
+1883 only: a framer sees no stream state, so MQTT behind a CONNECT on
+another port is not reassembled). A framer answers more
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
@@ -683,7 +689,9 @@ with the message's protocol, recognised, so the label sticks) and the bytes
 from the message's start are held; whole messages before it in the segment
 are described alone. The segment that completes it is described by
 `describePayload()` from all held bytes, followed by `[reassembled from k
-segments]`, and `apply()` returns those bytes (`ReassembledMessages`) for
+segments]`, with the calls their SDP bodies announce (`PacketRecord::sipCalls`,
+cleared on the segments before; the `MediaExpectations` run after the
+reassembly for this), and `apply()` returns those bytes (`ReassembledMessages`) for
 a module that wants the whole messages. Bytes are taken in sequence order:
 a segment ahead of the held bytes is held apart (at most
 `kMaxEarlySegments`, 32) and also described as a segment of the message,
@@ -877,9 +885,9 @@ share a base name), and `cmake --install` puts them there too.
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it, has the Stream Tracker give each packet
 its stream and the TCP Analysis show its numbers relative and mark it,
-lets the Payload Describer look at it again in its stream, the
-`MediaExpectations` as RTP or RTCP where SDP announced them, the TCP
-Reassembly describe a message that spans segments where it completes, and
+lets the Payload Describer look at it again in its stream, the TCP
+Reassembly describe a message that spans segments where it completes, the
+`MediaExpectations` as RTP or RTCP where SDP announced them, and
 the Stream Labels name it by its stream's protocol, counts its markers
 and its protocol, formats the packet and appends its line to a new output file,
 reporting progress and checking a

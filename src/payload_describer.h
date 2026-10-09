@@ -106,7 +106,8 @@ struct MessageExtent {
 /**
  * The extent of the message the @p len bytes at @p data begin with, sent
  * from @p srcPort to @p dstPort over TCP: a TLS record, a DNS message
- * behind its length (port 53), an HTTP/1.x header section.  With @p framer
+ * behind its length (port 53), a SIP message by its Content-Length, an
+ * HTTP/1.x header section, an MQTT control packet (port 1883).  With @p framer
  * other than 0, only that protocol is tried, as a stream's later messages
  * are of the protocol of its first.
  */

@@ -8,8 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **TCP reassembly.** A TLS record, an HTTP/1.x header section or a
-  DNS-over-TCP message that spans TCP segments is described once, on the
+- **TCP reassembly.** A TLS record, an HTTP/1.x header section, a
+  DNS-over-TCP message, a SIP message (by its Content-Length) or an MQTT
+  control packet on port 1883 (by its Remaining Length) that spans TCP
+  segments is described once, on the
   segment that completes it, from all its bytes: `Client Hello,
   SNI=example.com, TLS 1.3 [reassembled from 3 segments]`, `GET
   example.com/index.html HTTP/1.1 [reassembled from 2 segments]`, the
@@ -90,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Authentication Exchange`. MQTT 5.0 properties are skipped by their
   length, reason codes named with their reason strings (`Publish Ack
   (id=2, No matching subscribers, "nobody listening")`). A packet that
-  goes on in the next segment is described as far as it goes, its rest is
+  goes on in the next segment is reassembled on port 1883 (see *TCP
+  reassembly*), and described as far as it goes on another port, its rest
   a `Continuation`; a malformed one is `[Malformed Packet]`. Every length
   is checked against the packet and the captured bytes. MQTT over TLS
   (8883) stays TLS. Before, MQTT was named by its port alone, with a
@@ -100,8 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sip:bob@example.com`, `Status: 200 OK (INVITE)`, with the CSeq number
   and the Call-ID cut short, and an SDP body by its media, `SDP (audio
   49170 RTP/AVP 0 8)`. Over TCP every message of a segment is described,
-  told apart by its Content-Length; a message cut by the segment ends in
-  `…`, a malformed one is `[Malformed Packet]`. The addresses and ports SDP
+  told apart by its Content-Length, and one that spans segments is
+  reassembled (see *TCP reassembly*), the media its SDP body announces
+  expected from the segment that completes it; a message cut at the
+  snaplen ends in `…`, a malformed one is `[Malformed Packet]`. The addresses and ports SDP
   announces (`c=` and `m=` lines of the offer and the answer; RTCP on the
   next port, `a=rtcp:` or `a=rtcp-mux`) are expected for RTP and RTCP, and
   the UDP packets to or from them are described as `RTP` (`PT=PCMU,
@@ -113,8 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a preview of its text, and RTP was plain UDP.
 
 ### Changed
-- A segment that ends inside a TLS record, an HTTP header section or a
-  DNS-over-TCP message no longer names the message as far as it goes
+- A segment that ends inside a TLS record, an HTTP header section, a
+  DNS-over-TCP message, a SIP message or an MQTT packet on port 1883 no
+  longer names the message as far as it goes
   (`Client Hello` without its server name, `Standard query response … (2
   answers)`), and the segment that ends it no longer says `Continuation`:
   the first says `[TCP segment of a reassembled PDU]`, the last describes
