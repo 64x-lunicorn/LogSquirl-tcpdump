@@ -24,6 +24,7 @@
 
 #include "describe_common.h"
 
+#include "host_names.h"
 #include "payload_describer.h"
 
 #include <algorithm>
@@ -519,17 +520,6 @@ std::string reverseAddress( const std::string& name )
 }
 
 } // namespace
-
-bool isHostName( const std::string& name )
-{
-    if ( name.empty() || name.size() > kMaxHostName || name.front() == '.' ) {
-        return false;
-    }
-    return std::all_of( name.begin(), name.end(), []( char c ) {
-        return describer::isAsciiAlpha( static_cast<uint8_t>( c ) ) || ( c >= '0' && c <= '9' )
-               || c == '-' || c == '_' || c == '.';
-    } );
-}
 
 std::vector<ResolvedName> dnsResolvedNames( const uint8_t* message, size_t len, bool mdns )
 {

@@ -31,6 +31,7 @@
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_converter.h"
+#include "regex_lab.h"
 
 #include <QDir>
 #include <QFile>
@@ -357,6 +358,21 @@ SCENARIO( "Only host names stand in a column", "[hostnames]" )
         REQUIRE_FALSE( isHostName( "<Root>" ) );
         REQUIRE_FALSE( isHostName( "caf\xc3\xa9.example" ) );
         REQUIRE_FALSE( isHostName( std::string( kMaxHostName + 1, 'a' ) ) );
+    }
+}
+
+SCENARIO( "The Regex Lab matches the names isHostName() lets stand in a column", "[hostnames]" )
+{
+    THEN( "a character is in the name suffix pattern exactly when a host name may hold it" )
+    {
+        const QRegularExpression suffix( "^" + nameSuffixPattern() + "$" );
+        REQUIRE( suffix.isValid() );
+        for ( int c = 1; c < 256; ++c ) {
+            const std::string name = std::string( "a" ) + static_cast<char>( c );
+            const auto column = QString::fromLatin1( ( "(" + name + ")" ).c_str() );
+            INFO( "character " << c );
+            REQUIRE( isHostName( name ) == suffix.match( column ).hasMatch() );
+        }
     }
 }
 

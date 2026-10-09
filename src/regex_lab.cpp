@@ -23,6 +23,7 @@
  */
 
 #include "regex_lab.h"
+#include "host_names.h"
 #include "plugin.h"
 
 namespace tcpdump {
@@ -79,7 +80,10 @@ QString nameSuffixPattern()
 {
     // As the Packet Formatter writes it: the characters isHostName()
     // allows, in parentheses.
-    return QStringLiteral( R"((?:\([A-Za-z0-9_.-]+\))?)" );
+    static const QString pattern = QStringLiteral( R"((?:\([A-Za-z0-9)" )
+                                   + QString::fromLatin1( kHostNamePunctuation )
+                                   + QStringLiteral( R"(]+\))?)" );
+    return pattern;
 }
 
 QString addressPattern( const QString& address )

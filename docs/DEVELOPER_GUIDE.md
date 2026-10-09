@@ -1351,9 +1351,13 @@ for byte the same as before.
     end.
   - *No validation*: names are shown as the responses give them; a
     spoofed or forged answer names an address as a true one does. Only a
-    name that could break a column is dropped: `isHostName()` allows 1 to
-    `kMaxHostName` (120) letters, digits, `-`, `_` and `.`, not starting
-    with `.` (`readDnsName()` cuts longer names, and escapes other bytes).
+    name that could break a column is dropped: `isHostName()`
+    (`host_names.h`, with `dnsResolvedNames()`) allows 1 to
+    `kMaxHostName` (120) letters, digits and `kHostNamePunctuation` (`_`,
+    `.`, `-`), not starting with `.` (`readDnsName()` cuts longer names,
+    and escapes other bytes); `nameSuffixPattern()` builds its character
+    class from the same constant, and a test checks every byte against
+    both.
   - *Bounded memory*: at most `ConversionOptions::maxHostNames`
     (`HostNames::kMaxNames`, 8,192) addresses keep a name, each at most
     about 300 bytes (address, name, hash and list nodes), about 2.5 MB in

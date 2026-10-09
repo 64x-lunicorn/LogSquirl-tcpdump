@@ -24,10 +24,10 @@
 
 #include "host_names.h"
 
-#include "payload_describer.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace tcpdump {
 
@@ -37,6 +37,17 @@ constexpr uint16_t kDnsPort = 53;
 constexpr uint16_t kMdnsPort = 5353;
 
 } // namespace
+
+bool isHostName( const std::string& name )
+{
+    if ( name.empty() || name.size() > kMaxHostName || name.front() == '.' ) {
+        return false;
+    }
+    return std::all_of( name.begin(), name.end(), []( char c ) {
+        return ( c >= 'A' && c <= 'Z' ) || ( c >= 'a' && c <= 'z' ) || ( c >= '0' && c <= '9' )
+               || ( c != '\0' && std::strchr( kHostNamePunctuation, c ) != nullptr );
+    } );
+}
 
 HostNames::HostNames( size_t maxNames )
     : maxNames_( std::max<size_t>( maxNames, 1 ) )
