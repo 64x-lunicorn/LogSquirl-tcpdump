@@ -574,7 +574,7 @@ of the detectors and in-stream passes the tables use.
   that takes it anyway) is `[Malformed Packet]`, with `Protocol Version n`
   if that is what is wrong. Over TCP, `frameSomeIpMessage()` frames a
   message by its Length for the TCP Reassembly (by the header alone, up to
-  1 MiB, off SOME/IP's ports)
+  1 MiB, off SOME/IP's ports, the cap the heuristic keeps to too)
 - SOME/IP-SD (PRS_SOMEIPServiceDiscoveryProtocol): the entries, as
   Wireshark names them, `Find Service 0x1234`, `Offer Service 0x1234
   Instance 0x0001 v1.0 TTL=3`, `Stop Offer Service`, `Subscribe
@@ -1111,7 +1111,8 @@ at the start of some bytes takes: a TLS record (5 + its length, at most
 message up to the end of the body its Content-Length gives (none without
 one, as over TCP it is mandatory), an HTTP/1.x header section up to its
 empty line (the body is not held: a segment of body begins no message and
-is described as it is), an MQTT control packet by its Remaining Length (port
+is described as it is), an MQTT control packet by its Remaining Length (in as
+few bytes as hold it, as the parser wants it; port
 1883 only: a framer sees no stream state, so MQTT behind a CONNECT on
 another port is not reassembled), a SOME/IP message by its Length (8 + its
 value; on SOME/IP's ports whatever the header says, elsewhere if the header

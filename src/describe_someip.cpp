@@ -266,9 +266,9 @@ constexpr size_t kMaxSdOptionsNamed = 4;
 constexpr size_t kSdEntryBytes = 16;
 constexpr size_t kSdOptionHeaderBytes = 3;
 
-/// Over TCP, by the header alone, a message of more than this many bytes
-/// is taken for none: no SOME/IP message on a port not SOME/IP's is so
-/// long, and random bytes seldom pass for one.
+/// By the header alone (the heuristic, and the framer off SOME/IP's
+/// ports), a message of more than this many bytes is taken for none: no SOME/IP message on a port
+/// not SOME/IP's is so long, and random bytes seldom pass for one.
 constexpr uint32_t kMaxHeuristicLength = 1024 * 1024;
 
 /// The message types (PRS_SOMEIP_00055), as AUTOSAR names them; null for
@@ -749,7 +749,8 @@ Message readMessage( const uint8_t* p, size_t len )
             m.text += " " + kEllipsis;
         }
     }
-    m.valid = whole && plausible( h ) && m.text.find( "[Malformed" ) == std::string::npos;
+    m.valid = whole && plausible( h ) && h.length <= kMaxHeuristicLength
+              && m.text.find( "[Malformed" ) == std::string::npos;
     m.last = !whole;
     return m;
 }

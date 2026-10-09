@@ -931,6 +931,9 @@ std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len )
         const uint8_t digit = payload[ 1 + i ];
         remaining |= static_cast<size_t>( digit & 0x7F ) << ( 7 * i );
         if ( ( digit & 0x80 ) == 0 ) {
+            if ( i > 0 && digit == 0 ) {
+                return std::nullopt; // in more bytes than it needs: malformed, as the parser says
+            }
             return 2 + i + remaining;
         }
     }
