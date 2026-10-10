@@ -475,7 +475,9 @@ application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
 `payload_describer.cpp` holds the tables, the port hint and preview, and
-`describeInStream()`; the protocols' detectors live in a file each,
+the in-stream pass (`describeInStream()` and `rememberInStream()`, private
+members of `InStreamPass` that only the Packet Pipeline, its friend, can
+call); the protocols' detectors live in a file each,
 following `icmp.cpp`: `describe_http.cpp` (HTTP, SSDP's messages, HTTP/2
 and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
 (with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
@@ -854,7 +856,7 @@ the declarations of the detectors and in-stream passes the tables use.
   would take deriving the Initial keys). A short header carries no version
   and its connection ID no length: by its bytes alone it is not QUIC, and
   UDP 443 is still only the port hint `HTTPS`
-- `describeInStream()`, run by the Packet Pipeline after the Stream Tracker, looks
+- `describeInStream()`, run by the Packet Pipeline once the packet has its stream, looks
   at a packet again with its stream's state: it records in the stream's
   `QuicConnection` that a long header was seen and how long the connection
   ID its sender chose is, and labels the stream's short header packets
@@ -1238,13 +1240,13 @@ To frame a new protocol's messages, write `frameName( payload, len )`
 (returning `std::optional<size_t>` as above) in its `describe_name.cpp`,
 declare it in `describe_common.h` and add `{ "Label", nameFrame }` to
 `kTcpFramers`; its detector then sees whole messages on the completing
-segment. Tests go in `tests/tcp_reassembly_test.cpp`, with the Converter's
-steps run over a capture built with the frame builders.
+segment. Tests go in `tests/tcp_reassembly_test.cpp`, through the Packet Pipeline
+(`piped()`) over a capture built with the frame builders.
 
 #### TLS Decryption (`tls_decryption.h/cpp`, `tls_key_log.h/cpp`, `tls_crypto.h/cpp`, `hpack.h/cpp`)
 With a key log (`ConversionOptions::keyLogPath`, the option *TLS
 decryption: key log file*), the Packet Pipeline runs a `TlsDecryption`
-(pure C++) on every packet right after the TCP Reassembly, with the messages it
+(pure C++) on every packet after the TCP Reassembly, with the messages it
 returned: whole TLS records, in sequence order. Without one nothing of
 it runs, and the text is the same as before.
 
@@ -1331,7 +1333,7 @@ Tests: `tests/tls_crypto_test.cpp` (HKDF-Expand-Label and a record against
 RFC 8448, the TLS 1.2 PRF against the published vectors),
 `tests/hpack_test.cpp` (RFC 7541, Appendix C, malformed and mutated blocks),
 `tests/tls_key_log_test.cpp`, and `tests/tls_decryption_test.cpp`, which
-runs the Converter's steps over `tests/corpus/tls-decrypt.pcap` with its key
+takes `tests/corpus/tls-decrypt.pcap` through the Packet Pipeline with its key
 log `tls-decrypt.keys`, without one, with secrets that come late and with
 mutated records, and over HTTP/2 frames cut and mutated.
 
@@ -1688,8 +1690,21 @@ connection from what each end sends, its sequence numbers going on as a
 real one's do. The TCP Reassembly, TLS Decryption, SSH, WebSocket, HTTP,
 MQTT, QUIC and Stream Labels tests use it, and read what the reassembly or
 the decryption holds through the pipeline (`reassembly()`,
-`tlsDecryption()`). A test that needs a stream in some state gets it from a
+`tlsDecryption()`); the Conversations tests count packets as the pipeline
+left them. A test that needs a stream in some state gets it from a
 capture with the packets that put it there, not by setting its bits.
+
+Nothing else runs the steps one by one. The in-stream pass is
+`InStreamPass`'s, private to all but the Packet Pipeline; the Stream
+Tracker, the TCP Analysis, the TCP Reassembly, the TLS Decryption, the
+`MediaExpectations`, the Stream Labels, `limitPreview()` and
+`showTcpTimestamps()` keep an interface of their own, which only the
+Packet Pipeline calls in `src/`. Their own tests may call it to test one of
+them alone (the TCP Analysis behind a Stream Tracker, the
+`MediaExpectations` of SIP and RTP packets, the TLS Decryption of records
+fed to it), never several of them in an order of their own. The order is
+stated in `packet_pipeline.h` and in the list above; a step's own header
+says that the Packet Pipeline runs it, not where.
 
 `formatAllPackets()` (`packet_formatter.h`), which tests use for the lines
 of a capture, reads a capture held in memory the same way: its reader, each

@@ -492,8 +492,8 @@ SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
             REQUIRE( descriptionOf( packets[ 1 ] )
                      == "Client: Elliptic Curve Diffie-Hellman Key Exchange Init " + kEllipsis );
             // Its packet whole, the TCP Reassembly reads all of it, past
-            // what describeInStream() had: the name-list it breaks is
-            // malformed, not cut.
+            // what the in-stream pass had (InStreamPass::describeInStream()):
+            // the name-list it breaks is malformed, not cut.
             REQUIRE( descriptionOf( packets[ 2 ] )
                      == "Client: Key Exchange Init [Malformed Packet]" );
             REQUIRE( descriptionOf( packets[ 3 ] )

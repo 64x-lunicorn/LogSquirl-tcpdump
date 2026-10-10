@@ -25,9 +25,9 @@
  * The Payload Describer names one payload at a time, inside the parser,
  * before the packet's stream is known: a segment in the middle of an HTTP
  * body or a TLS record matches no detector and gets the port's guess
- * (HTTPS, HTTP-Alt) or none.  The Stream Labels, the last step of the
- * Packet Pipeline, give such a packet the label its stream was recognised
- * by, so that the Protocol column names the whole conversation.
+ * (HTTPS, HTTP-Alt) or none.  The Stream Labels, which the Packet Pipeline
+ * runs on every packet, give such a packet the label its stream was
+ * recognised by, so that the Protocol column names the whole conversation.
  *
  * Pure C++ — no Qt dependency.
  */

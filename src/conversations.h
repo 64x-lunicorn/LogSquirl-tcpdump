@@ -117,8 +117,8 @@ private:
  */
 class ConversationStats {
 public:
-    /// Count @p pkt in, of @p stream; run after the Stream Labels.  Packets
-    /// of no stream are not counted.
+    /// Count @p pkt in, of @p stream, as the Packet Pipeline left it.
+    /// Packets of no stream are not counted.
     void add( const PacketRecord& pkt, const Stream& stream );
 
     /// The table as it stands: a row per stream, TCP's first, each by its

@@ -89,11 +89,11 @@ struct PacketOutcome {
  * 3. the Stream Tracker gives the packet its stream;
  * 4. the TCP Analysis, which also forgets the state of a TCP stream's old
  *    connection, before any other step reads that state;
- * 5. describeInStream(), the Payload Describer with what the stream has
- *    shown so far;
+ * 5. InStreamPass::describeInStream(), the Payload Describer with what
+ *    the stream has shown so far;
  * 6. the TCP Reassembly, which describes a message where it completes;
- * 7. rememberInStream(), after the reassembly, which completes the
- *    messages it learns from (an SSH NEWKEYS, a WebSocket upgrade);
+ * 7. InStreamPass::rememberInStream(), after the reassembly, which
+ *    completes the messages it learns from (an SSH NEWKEYS, a WebSocket upgrade);
  * 8. with TLS keys, the TLS Decryption, of the records the reassembly
  *    returned whole;
  * 9. the MediaExpectations, after the reassembly, which completes SDP

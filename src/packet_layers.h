@@ -110,7 +110,7 @@ private:
  * capture's byte order @p swap: a Frame layer for the record itself, then
  * every layer dissectPacket() reads.  The payload's layer is named as the
  * Payload Describer recognises it from the packet alone; what only the
- * packet's stream tells (describeInStream()) is not known here.
+ * packet's stream tells (InStreamPass) is not known here.
  */
 std::vector<PacketLayer> dissectLayers( const PacketRecord& record, const uint8_t* data, size_t len,
                                         bool swap );

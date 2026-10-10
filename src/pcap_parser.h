@@ -176,8 +176,8 @@ struct TcpOptions {
 TcpOptions parseTcpOptions( const uint8_t* options, size_t len );
 
 /// What a payload begins that the rest of its stream builds on, as the
-/// Payload Describer recognised it: describeInStream() looks at the
-/// stream's later packets with it in mind.
+/// Payload Describer recognised it: InStreamPass::describeInStream()
+/// looks at the stream's later packets with it in mind.
 enum class StreamCue : uint8_t {
     None,
     QuicLongHeader, ///< A QUIC long header (or Version Negotiation packet).
@@ -197,8 +197,8 @@ struct MediaEndpoint {
     uint16_t rtcpPort = 0; ///< The RTP port + 1 unless `a=rtcp:` says otherwise
 };
 
-/// What a SIP message says about its call's media, for the Converter's
-/// MediaExpectations (media_expectations.h).
+/// What a SIP message says about its call's media, for the MediaExpectations
+/// (media_expectations.h).
 struct SipCall {
     std::string callId; ///< The Call-ID header's value, at most kMaxSipCallIdBytes
     /// The RTP media streams its SDP body announces, at most kMaxSdpMedia.
@@ -280,7 +280,7 @@ struct PacketRecord {
 
     /// The first captured bytes of the TCP or UDP payload, payloadHeadLen
     /// of them, for the Payload Describer to look at again once the packet's
-    /// stream is known (describeInStream).
+    /// stream is known (InStreamPass).
     std::array<uint8_t, kPayloadHeadBytes> payloadHead{};
     size_t payloadHeadLen = 0;
     /// Where the captured TCP or UDP payload lies in the bytes the packet
@@ -291,10 +291,10 @@ struct PacketRecord {
     uint32_t payloadCaptured = 0;
     /// A detector of the Payload Describer recognised the TCP or UDP payload
     /// and named protocol, rather than the ports suggesting it, by the
-    /// payload alone or in its stream (describeInStream).  Such a label
-    /// sticks to the packet's stream (StreamLabels).
+    /// payload alone or in its stream (InStreamPass).  Such a label sticks
+    /// to the packet's stream (StreamLabels).
     bool protocolRecognised = false;
-    /// What the payload begins for its stream (describeInStream).
+    /// What the payload begins for its stream (InStreamPass).
     StreamCue streamCue = StreamCue::None;
     /// The SIP messages of the payload that announce media or end a call,
     /// at most kMaxSipMessages; empty for any other payload.

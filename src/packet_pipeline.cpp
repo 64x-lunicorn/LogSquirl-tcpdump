@@ -49,9 +49,9 @@ PacketOutcome PacketPipeline::run( PacketRecord& pkt, ByteView payload )
     outcome.stream = tracker_.track( pkt );
     const auto& stream = outcome.stream;
     outcome.analysis = analyseTcp( pkt, stream );
-    describeInStream( pkt, stream );
+    InStreamPass::describeInStream( pkt, stream );
     outcome.messages = reassembly_.apply( pkt, stream, payload );
-    rememberInStream( pkt, stream ); // after the reassembly, which completes NEWKEYS
+    InStreamPass::rememberInStream( pkt, stream ); // after the reassembly, which completes NEWKEYS
     if ( decryption_ ) {
         decryption_->apply( pkt, stream, outcome.messages );
     }

@@ -394,7 +394,8 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     if ( walk.incomplete.framer == 0 ) {
         if ( ( first.describedInStream || walk.upgraded || after ) && walk.end > 0 ) {
             // Whole messages the parser could not tell: described from all
-            // the bytes, not only the first ones describeInStream() had.
+            // the bytes, not only the first ones the in-stream pass had
+            // (InStreamPass::describeInStream()).
             describeMessages( pkt, payload.data, walk.end, first.framer, first.label, 1 );
         }
         // Whole messages: the parser described them.
