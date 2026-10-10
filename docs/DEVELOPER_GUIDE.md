@@ -940,9 +940,8 @@ alone, and may take its name from the table to keep the two in step.
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
 Time, Source, Destination, Protocol, Length, Info. Both times have 6
 decimals, or 9 when the capture announces nanosecond precision for any of
-its packets (`PacketFormatter` takes the reader's `precision()`;
-`formatAllPackets()` the finest of its packets); further digits are cut,
-not rounded.
+its packets (`PacketFormatter` takes the reader's `precision()`); further
+digits are cut, not rounded.
 
 The widths are a minimum: a value as wide as its column, or wider (packet
 1,000,000, `MPLS-in-IP`), is still followed by a space, and an empty value
@@ -1687,6 +1686,16 @@ packet as the pipeline left it, with its stream, its TCP Analysis and the
 messages it completed. The TCP Reassembly, TLS Decryption and SSH tests use
 it, and read what the reassembly or the decryption holds through the
 pipeline (`reassembly()`, `tlsDecryption()`).
+
+`formatAllPackets()` (`packet_formatter.h`), which tests use for the lines
+of a capture, reads a capture held in memory the same way: its reader, each
+packet with its payload through a Packet Pipeline made from the
+`PipelineOptions` it is handed, the Packet Formatter at the reader's
+precision and, with host names in the layout, the `HostNames`. It takes the
+capture's bytes rather than parsed `PacketRecord`s because the TCP
+Reassembly needs the payloads, which only the reader hands out. With
+options to match a conversion's, its lines are the ones the conversion
+writes (`tests/streaming_test.cpp` checks this for every corpus capture).
 
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the

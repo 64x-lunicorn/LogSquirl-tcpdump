@@ -26,8 +26,10 @@
 
 #include "capture_stats.h"
 #include "packet_formatter.h"
+#include "packet_pipeline.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
+#include "tls_key_log.h"
 
 #include <QDir>
 #include <QFile>
@@ -549,7 +551,7 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
                 REQUIRE( QFileInfo( QFileInfo( result.outputPath ).absolutePath() ).absolutePath()
                          == QFileInfo( out.path() ).absoluteFilePath() );
                 QStringList expected;
-                for ( const auto& line : formatAllPackets( parse( bytes ).packets ) ) {
+                for ( const auto& line : formatAllPackets( bytes ) ) {
                     expected << QString::fromStdString( line );
                 }
                 REQUIRE( readLines( result.outputPath ) == expected );
@@ -693,6 +695,62 @@ SCENARIO( "A capture is converted to a text file packet by packet", "[converter]
             const auto result = convertPcap( dir.filePath( "missing.pcap" ), out.path() );
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE_FALSE( result.error.isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "Formatting a capture gives the lines its conversion writes", "[converter]" )
+{
+    QTemporaryDir out;
+    REQUIRE( out.isValid() );
+    const QString corpus = QStringLiteral( TCPDUMP_CORPUS_DIR ) + "/";
+
+    GIVEN( "options other than the defaults, a key log among them" )
+    {
+        ConversionOptions options;
+        options.layout.macColumns = true;
+        options.layout.hostNames = true;
+        options.previewChars = 24;
+        options.tcpTimestamps = true;
+        options.keyLogPath = corpus + "tls-decrypt.keys";
+
+        tls::KeyLogFile keyLog( options.keyLogPath );
+        PipelineOptions pipelineOptions;
+        pipelineOptions.previewChars = options.previewChars;
+        pipelineOptions.tcpTimestamps = options.tcpTimestamps;
+        pipelineOptions.tlsKeys
+            = [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog.find( clientRandom ); };
+        pipelineOptions.tlsKeyLogBytes = [ &keyLog ] { return keyLog.bytesRead(); };
+
+        WHEN( "every capture of the corpus is converted and formatted with the same options" )
+        {
+            // Among them captures whose lines need what only a conversion
+            // did before: the reassembly, the decryption, the media an SDP
+            // announced, names from DNS answers, the precision a pcapng
+            // announces.
+            const auto names = QDir( corpus ).entryList( { "*.pcap", "*.pcapng" }, QDir::Files );
+            REQUIRE( names.size() >= 20 );
+
+            THEN( "the lines are the same" )
+            {
+                for ( const auto& name : names ) {
+                    INFO( name.toStdString() );
+                    QFile file( corpus + name );
+                    REQUIRE( file.open( QIODevice::ReadOnly ) );
+                    const auto content = file.readAll();
+                    const Bytes bytes( content.begin(), content.end() );
+
+                    const auto result
+                        = convertPcap( corpus + name, out.path(), nullptr, {}, options );
+                    REQUIRE( result.status == ConversionResult::Status::Converted );
+                    QStringList formatted;
+                    for ( const auto& line :
+                          formatAllPackets( bytes, pipelineOptions, options.layout ) ) {
+                        formatted << QString::fromStdString( line );
+                    }
+                    REQUIRE( readLines( result.outputPath ) == formatted );
+                }
+            }
         }
     }
 }

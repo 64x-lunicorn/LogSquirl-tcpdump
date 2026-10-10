@@ -30,12 +30,11 @@
 
 #include "packet_formatter.h"
 
-#include "payload_describer.h"
-#include "stream_labels.h"
-#include "tcp_analysis.h"
+#include "capture_reader.h"
 
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 
 namespace tcpdump {
 
@@ -312,26 +311,33 @@ std::string PacketFormatter::format( const PacketRecord& pkt, int streamId, cons
                              names );
 }
 
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets )
+std::vector<std::string> formatAllPackets( const std::vector<uint8_t>& capture,
+                                           const PipelineOptions& options,
+                                           const LineLayout& layout )
 {
-    auto finest = TimePrecision::Microseconds;
-    for ( const auto& pkt : packets ) {
-        finest = std::max( finest, pkt.precision );
+    MemorySource memory( capture.data(), capture.size() );
+    HeadSource source( memory );
+    const auto reader = makeCaptureReader( source );
+    if ( !reader->open() ) {
+        return {};
     }
-    PacketFormatter formatter( finest );
-    StreamTracker tracker;
-    StreamLabels labels;
-    std::vector<std::string> lines;
-    lines.reserve( packets.size() + 1 );
-    lines.push_back( formatter.header() );
+    PacketFormatter formatter( reader->precision(), layout );
+    PacketPipeline pipeline( options );
+    std::optional<HostNames> names;
+    if ( layout.hostNames ) {
+        names.emplace();
+    }
+    std::vector<std::string> lines{ formatter.header() };
 
-    for ( auto pkt : packets ) {
-        const auto stream = tracker.track( pkt );
-        analyseTcp( pkt, stream );
-        describeInStream( pkt, stream );
-        rememberInStream( pkt, stream );
-        labels.apply( pkt, stream );
-        lines.push_back( formatter.format( pkt, stream.id ) );
+    PacketRecord pkt;
+    while ( reader->next( pkt ) ) {
+        const auto payload = reader->payloadOf( pkt );
+        const auto outcome = pipeline.run( pkt, payload );
+        lines.push_back( formatter.format( pkt, outcome.stream.id, names ? &*names : nullptr ) );
+        // Behind its own line, as in a conversion: a name labels the packets after its answer.
+        if ( names ) {
+            names->learn( pkt, payload, outcome.messages.bytes );
+        }
     }
     return lines;
 }

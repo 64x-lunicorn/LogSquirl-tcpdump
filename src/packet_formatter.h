@@ -50,6 +50,7 @@
 #pragma once
 
 #include "host_names.h"
+#include "packet_pipeline.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
@@ -151,18 +152,20 @@ private:
 };
 
 /**
- * Format all packets into a vector of lines.  Includes a column header
- * as the first line.
+ * The lines a conversion writes for @p capture, a pcap or pcapng held in
+ * memory: the column header, then a line per packet.
  *
- * Times are shown at the finest precision of the packets, streams numbered
- * by a Stream Tracker of their own, TCP numbers shown relative by the TCP
- * Analysis, each packet described again in its stream by the Payload
- * Describer, and the protocol a stream was recognised by kept for its later
- * packets by Stream Labels of their own.
- *
- * @param packets  Parsed packet records.
- * @return Vector of formatted text lines.
+ * Each packet is read as the Converter reads it (makeCaptureReader()), with
+ * its captured payload, and taken through a Packet Pipeline made with
+ * @p options, so that it is reassembled, decrypted and labelled as in a
+ * conversion; times are shown at the precision the reader announces, and
+ * with PipelineOptions to match a conversion's ConversionOptions and the
+ * same @p layout the lines are the ones the conversion writes.  With host
+ * names in the layout, the names are learned from the DNS answers as a
+ * conversion learns them.  A capture that cannot be read gives no lines.
  */
-std::vector<std::string> formatAllPackets( const std::vector<PacketRecord>& packets );
+std::vector<std::string> formatAllPackets( const std::vector<uint8_t>& capture,
+                                           const PipelineOptions& options = {},
+                                           const LineLayout& layout = {} );
 
 } // namespace tcpdump
