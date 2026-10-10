@@ -373,6 +373,9 @@ private:
     /// drops it), and the flag that cancels its listings.
     unsigned checks_ = 0;
     std::shared_ptr<std::atomic_bool> cancelCheck_;
+    /// Runs the check, which uses this session from its thread (it posts
+    /// checked() to it): safe only as the destructor cancels the check and
+    /// waits for this pool before anything else of the session goes.
     QThreadPool checkPool_;
 };
 

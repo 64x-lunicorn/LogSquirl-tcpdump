@@ -162,7 +162,8 @@ LiveCaptureSession::LiveCaptureSession( LiveCaptureHost& host, LiveCaptureCatalo
 
 LiveCaptureSession::~LiveCaptureSession()
 {
-    // A check's listing is killed, not waited for to its timeout.
+    // First: the check's worker posts to this session (start()).  Its
+    // listing is killed, not waited for to its timeout.
     if ( cancelCheck_ ) {
         cancelCheck_->store( true );
     }
