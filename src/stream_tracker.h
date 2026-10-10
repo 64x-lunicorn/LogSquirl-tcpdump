@@ -203,6 +203,12 @@ public:
         return limitReached_;
     }
 
+    /// The conversations it numbers at most.
+    size_t maxStreams() const
+    {
+        return maxStreams_;
+    }
+
 private:
     /// The conversations of one transport.
     struct Conversations {

@@ -159,8 +159,7 @@ private:
 
 /// The summary of a converted capture, from what was collected on the way.
 CaptureSummary summarise( CaptureStats&& stats, const PacketPipeline& pipeline,
-                          const ConversationStats& conversations, const CaptureReader& reader,
-                          size_t maxStreams )
+                          const ConversationStats& conversations, const CaptureReader& reader )
 {
     // The packets' link-layer types first, then any the capture declares
     // without a packet of it, such as a pcap's when it holds none.
@@ -201,7 +200,7 @@ CaptureSummary summarise( CaptureStats&& stats, const PacketPipeline& pipeline,
     summary.otherStreamBytes = conversations.otherBytes();
     summary.endsInsideRecord = reader.truncated();
     if ( pipeline.tracker().limitReached() ) {
-        summary.streamCap = maxStreams;
+        summary.streamCap = pipeline.tracker().maxStreams();
     }
     if ( stats.endpointLimitReached() ) {
         summary.otherEndpointPackets = stats.otherEndpointPackets;
@@ -213,10 +212,9 @@ CaptureSummary summarise( CaptureStats&& stats, const PacketPipeline& pipeline,
 /// collected so far: the conversion goes on with @p stats and
 /// @p conversations as they are.
 CaptureSummary summariseSoFar( const CaptureStats& stats, const PacketPipeline& pipeline,
-                               const ConversationStats& conversations, const CaptureReader& reader,
-                               size_t maxStreams )
+                               const ConversationStats& conversations, const CaptureReader& reader )
 {
-    return summarise( CaptureStats( stats ), pipeline, conversations, reader, maxStreams );
+    return summarise( CaptureStats( stats ), pipeline, conversations, reader );
 }
 
 /// A Failed result with @p error.
@@ -472,8 +470,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
             return;
         }
         LiveSnapshot snapshot;
-        snapshot.summary = withDecryption(
-            summariseSoFar( stats, pipeline, conversations, reader, options.maxStreams ) );
+        snapshot.summary
+            = withDecryption( summariseSoFar( stats, pipeline, conversations, reader ) );
         snapshot.elapsed
             = std::chrono::duration_cast<std::chrono::milliseconds>( lastSnapshot - started );
         snapshot.rawBytes = liveInput->bytesRead();
@@ -685,8 +683,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         result.status = ConversionResult::Status::Converted;
     }
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
-    result.summary = withDecryption(
-        summarise( std::move( stats ), pipeline, conversations, reader, options.maxStreams ) );
+    result.summary
+        = withDecryption( summarise( std::move( stats ), pipeline, conversations, reader ) );
     result.summary.packetNumbersUsedUp = numbersUsedUp;
     if ( gzip && gzip->cutOff() ) {
         // The capture ends where its gzip stream does: as one cut off.
