@@ -411,9 +411,6 @@ private:
 
     /// The live capture, running or the last one, and what it comes to.
     std::unique_ptr<LiveCaptureSession> live_;
-    /// The keys in converted_ of the live capture's text files, oldest
-    /// first: a ring buffer's, one per raw file, each in a tab of its own.
-    std::vector<QString> liveKeys_;
     QTimer liveTicker_; ///< Moves the elapsed time on.
     /// Where the live capture form and dialog list devices and interfaces;
     /// cancelled and waited for when the widget goes.

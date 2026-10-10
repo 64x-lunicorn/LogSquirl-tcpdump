@@ -946,7 +946,6 @@ void SidebarWidget::showLiveStart()
     liveStderr_->setHidden( true );
     liveError_->clear();
     liveError_->setHidden( true );
-    liveKeys_.clear();
     // A choice started otherwise than from the form (the dialog, a pending
     // start) is shown in it.
     if ( const auto& choice = live_->choice(); choice && liveForm_->choice() != *choice ) {
@@ -1027,7 +1026,6 @@ void SidebarWidget::addFile( const QString& logPath, const QString& rawPath, con
     capture.withFormatHint = !formatHintShown_;
     formatHintShown_ = true;
     const auto key = fileKey( logPath );
-    liveKeys_.push_back( key );
     converted_.insert_or_assign( key, std::move( capture ) );
     summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6" ).arg( name.toHtmlEscaped() ) );
 }
@@ -1056,8 +1054,11 @@ void SidebarWidget::setFileError( const QString& logPath, const QString& error )
 
 bool SidebarWidget::isLiveKey( const QString& key ) const
 {
+    // The session's files, spelled as converted_ keys them.
+    const auto& files = live_->files();
     return !key.isEmpty()
-           && std::find( liveKeys_.begin(), liveKeys_.end(), key ) != liveKeys_.end();
+           && std::any_of( files.begin(), files.end(),
+                           [ &key ]( const QString& file ) { return fileKey( file ) == key; } );
 }
 
 void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
