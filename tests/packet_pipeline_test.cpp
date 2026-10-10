@@ -26,10 +26,7 @@
 
 #include <catch2/catch.hpp>
 
-#include "capture_reader.h"
-#include "packet_pipeline.h"
-#include "pcapbuilder.h"
-#include "tls_key_log.h"
+#include "pipeline_harness.h"
 
 #include <QFile>
 
@@ -61,42 +58,6 @@ Bytes segment( uint16_t server, bool fromServer, uint32_t seq, uint32_t ack,
                       fromServer ? tcp( server, kClient, payload, 5, flags, seq, ack )
                                  : tcp( kClient, server, payload, 5, flags, seq, ack ),
                       addresses ) );
-}
-
-/// A packet as the Packet Pipeline left it, and what it found out.
-struct Piped {
-    PacketRecord pkt;
-    Stream stream;
-    Bytes completed; ///< The messages it completed (PacketOutcome::messages)
-    uint32_t segments = 0;
-};
-
-/// The packets of @p capture, each taken through @p pipeline with its
-/// payload as the reader gives it.
-std::vector<Piped> piped( const Bytes& capture, PacketPipeline& pipeline )
-{
-    MemorySource memory( capture.data(), capture.size() );
-    HeadSource head( memory );
-    const auto reader = makeCaptureReader( head );
-    REQUIRE( reader->open() );
-    std::vector<Piped> out;
-    PacketRecord pkt;
-    while ( reader->next( pkt ) ) {
-        const auto outcome = pipeline.run( pkt, reader->payloadOf( pkt ) );
-        Piped one{ pkt, outcome.stream, {}, outcome.messages.segments };
-        if ( outcome.messages.bytes.data ) {
-            one.completed.assign( outcome.messages.bytes.data,
-                                  outcome.messages.bytes.data + outcome.messages.bytes.size );
-        }
-        out.push_back( std::move( one ) );
-    }
-    return out;
-}
-
-std::vector<Piped> piped( const Bytes& capture, const PipelineOptions& options = {} )
-{
-    PacketPipeline pipeline( options );
-    return piped( capture, pipeline );
 }
 
 bool contains( const std::string& text, const std::string& part )
@@ -163,10 +124,7 @@ SCENARIO( "The Packet Pipeline decrypts TLS with a key log", "[packet_pipeline]"
         const auto text = corpusFile( "tls-decrypt.keys" );
         tls::KeyLog keys;
         keys.addLines( reinterpret_cast<const char*>( text.data() ), text.size() );
-        PipelineOptions options;
-        options.tlsKeys
-            = [ &keys ]( const uint8_t* clientRandom ) { return keys.find( clientRandom ); };
-        PacketPipeline pipeline( options );
+        PacketPipeline pipeline( withKeyLog( keys ) );
         const auto packets = piped( capture, pipeline );
 
         THEN( "records are decrypted, and what they carry described" )

@@ -132,6 +132,18 @@ public:
     /// The TLS sessions with records decrypted so far; unset without TLS keys.
     std::optional<size_t> tlsSessionsDecrypted() const;
 
+    /// The TCP Reassembly, for what it holds.
+    const TcpReassembly& reassembly() const
+    {
+        return reassembly_;
+    }
+
+    /// The TLS Decryption, for what it holds; null without TLS keys.
+    const TlsDecryption* tlsDecryption() const
+    {
+        return decryption_ ? &*decryption_ : nullptr;
+    }
+
 private:
     size_t previewChars_;
     bool tcpTimestamps_;

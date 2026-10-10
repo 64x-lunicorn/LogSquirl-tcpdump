@@ -27,12 +27,8 @@
 
 #include <catch2/catch.hpp>
 
-#include "capture_reader.h"
 #include "payload_describer.h"
-#include "stream_labels.h"
-#include "stream_tracker.h"
-#include "tcp_analysis.h"
-#include "tcp_reassembly.h"
+#include "pipeline_harness.h"
 #include "tls_decryption.h"
 #include "tls_key_log.h"
 
@@ -69,31 +65,21 @@ tls::KeyLog corpusKeys()
     return keys;
 }
 
-/// Each packet's protocol and Info, as the Converter's steps leave them,
-/// decrypted by @p decryption if there is one.
-std::vector<std::string> lines( const Bytes& capture, TlsDecryption* decryption )
+/// Each packet's protocol and Info, as @p pipeline leaves them.
+std::vector<std::string> lines( const Bytes& capture, PacketPipeline& pipeline )
 {
-    MemorySource memory( capture.data(), capture.size() );
-    HeadSource head( memory );
-    const auto reader = makeCaptureReader( head );
-    REQUIRE( reader->open() );
-    StreamTracker tracker;
-    TcpReassembly reassembly;
-    StreamLabels labels;
     std::vector<std::string> out;
-    PacketRecord pkt;
-    while ( reader->next( pkt ) ) {
-        const auto stream = tracker.track( pkt );
-        analyseTcp( pkt, stream );
-        describeInStream( pkt, stream );
-        const auto messages = reassembly.apply( pkt, stream, reader->payloadOf( pkt ) );
-        if ( decryption ) {
-            decryption->apply( pkt, stream, messages );
-        }
-        labels.apply( pkt, stream );
-        out.push_back( pkt.protocol + "  " + pkt.info );
+    for ( const auto& p : tcpdump_test::piped( capture, pipeline ) ) {
+        out.push_back( p.pkt.protocol + "  " + p.pkt.info );
     }
     return out;
+}
+
+/// Each packet's protocol and Info, without a key log.
+std::vector<std::string> lines( const Bytes& capture )
+{
+    PacketPipeline pipeline;
+    return lines( capture, pipeline );
 }
 
 bool contains( const std::string& line, const std::string& part )
@@ -323,18 +309,17 @@ SCENARIO( "TLS sessions are decrypted with the secrets of the key log", "[tls_de
 {
     const auto capture = readFile( "tls-decrypt.pcap" );
     const auto keys = corpusKeys();
-    const auto plain = lines( capture, nullptr );
+    const auto plain = lines( capture );
 
     GIVEN( "the synthetic sessions and their key log" )
     {
-        TlsDecryption decryption(
-            [ &keys ]( const uint8_t* random ) { return keys.find( random ); } );
-        const auto decrypted = lines( capture, &decryption );
+        PacketPipeline pipeline( tcpdump_test::withKeyLog( keys ) );
+        const auto decrypted = lines( capture, pipeline );
         REQUIRE( decrypted.size() == plain.size() );
 
         THEN( "the sessions with their secrets are decrypted, and HTTP described" )
         {
-            REQUIRE( decryption.sessionsDecrypted() == 6 );
+            REQUIRE( pipeline.tlsSessionsDecrypted() == 6u );
             const auto tls12 = sessionLines( decrypted, "50101" );
             REQUIRE(
                 decrypted[ tls12[ 7 ] ]
@@ -380,25 +365,28 @@ SCENARIO( "TLS sessions are decrypted with the secrets of the key log", "[tls_de
 
     GIVEN( "no secrets at all" )
     {
-        TlsDecryption decryption(
-            []( const uint8_t* ) -> const tls::SessionSecrets* { return nullptr; } );
-        const auto decrypted = lines( capture, &decryption );
+        PipelineOptions options;
+        options.tlsKeys = []( const uint8_t* ) -> const tls::SessionSecrets* { return nullptr; };
+        PacketPipeline pipeline( options );
+        const auto decrypted = lines( capture, pipeline );
 
         THEN( "every line is as without a key log" )
         {
             REQUIRE( decrypted == plain );
-            REQUIRE( decryption.sessionsDecrypted() == 0 );
+            REQUIRE( pipeline.tlsSessionsDecrypted() == 0u );
         }
     }
 
     GIVEN( "secrets that come into the key log late, as in a live capture" )
     {
         int asked = 0;
-        TlsDecryption decryption( [ &keys, &asked ]( const uint8_t* random ) {
+        PipelineOptions options;
+        options.tlsKeys = [ &keys, &asked ]( const uint8_t* random ) {
             // Not there for the first records that ask for them.
             return ++asked <= 2 ? nullptr : keys.find( random );
-        } );
-        const auto decrypted = lines( capture, &decryption );
+        };
+        PacketPipeline pipeline( options );
+        const auto decrypted = lines( capture, pipeline );
 
         THEN( "the records after they came are decrypted" )
         {
@@ -406,7 +394,7 @@ SCENARIO( "TLS sessions are decrypted with the secrets of the key log", "[tls_de
             REQUIRE_FALSE( contains( decrypted[ tls12[ 5 ] ], kDecryptedMarker ) );
             REQUIRE_FALSE( contains( decrypted[ tls12[ 6 ] ], kDecryptedMarker ) );
             REQUIRE( contains( decrypted[ tls12[ 7 ] ], "GET www.example.com/index.html" ) );
-            REQUIRE( decryption.sessionsDecrypted() == 6 );
+            REQUIRE( pipeline.tlsSessionsDecrypted() == 6u );
         }
     }
 }
@@ -430,13 +418,12 @@ SCENARIO( "Mutated TLS records are decrypted or left, within bounds", "[tls_decr
                     const auto at = kHeaders + random() % ( mutated.size() - kHeaders );
                     mutated[ at ] ^= static_cast<uint8_t>( 1 + random() % 255 );
                 }
-                TlsDecryption decryption( [ &keys ]( const uint8_t* clientRandom ) {
-                    return keys.find( clientRandom );
-                } );
-                const auto converted = lines( mutated, &decryption );
+                PacketPipeline pipeline( tcpdump_test::withKeyLog( keys ) );
+                const auto converted = lines( mutated, pipeline );
                 REQUIRE( converted.size() > 0 );
-                REQUIRE( decryption.sessions() <= 8 );
-                REQUIRE( decryption.http2Memory() <= TlsDecryption::kHttp2MemoryLimit );
+                const auto* decryption = pipeline.tlsDecryption();
+                REQUIRE( decryption->sessions() <= 8 );
+                REQUIRE( decryption->http2Memory() <= TlsDecryption::kHttp2MemoryLimit );
             }
         }
     }

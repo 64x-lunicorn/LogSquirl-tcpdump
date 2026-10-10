@@ -25,13 +25,8 @@
 
 #include <catch2/catch.hpp>
 
-#include "capture_reader.h"
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_labels.h"
-#include "stream_tracker.h"
-#include "tcp_analysis.h"
-#include "tcp_reassembly.h"
+#include "pipeline_harness.h"
 
 #include <algorithm>
 #include <cstring>
@@ -89,9 +84,9 @@ struct Line {
     size_t sipCalls = 0; ///< The calls whose media its SDP bodies announce
 };
 
-/// Run @p segments through the Converter's steps, the payload taken from the
-/// reader as the Converter takes it.
-std::vector<Line> converted( const std::vector<Segment>& segments, TcpReassembly& reassembly )
+/// Run @p segments through @p pipeline as a conversion runs them, the
+/// payload taken from the reader as a conversion takes it.
+std::vector<Line> converted( const std::vector<Segment>& segments, PacketPipeline& pipeline )
 {
     std::vector<Record> records;
     uint32_t sec = 1000;
@@ -105,30 +100,12 @@ std::vector<Line> converted( const std::vector<Segment>& segments, TcpReassembly
         }
         records.push_back( r );
     }
-    const auto file = pcapFile( records );
-    MemorySource memory( file.data(), file.size() );
-    HeadSource head( memory );
-    const auto reader = makeCaptureReader( head );
-    REQUIRE( reader->open() );
-
-    StreamTracker tracker;
-    StreamLabels labels;
     std::vector<Line> lines;
-    PacketRecord pkt;
-    while ( reader->next( pkt ) ) {
-        const auto stream = tracker.track( pkt );
-        analyseTcp( pkt, stream );
-        describeInStream( pkt, stream );
-        const auto done = reassembly.apply( pkt, stream, reader->payloadOf( pkt ) );
-        rememberInStream( pkt, stream );
-        labels.apply( pkt, stream );
-        Line line{ pkt.protocol, pkt.info, {}, {}, done.segments, pkt.sipCalls.size() };
-        const auto at = pkt.info.find( kDescriptionSeparator );
+    for ( const auto& p : piped( pcapFile( records ), pipeline ) ) {
+        Line line{ p.pkt.protocol, p.pkt.info, {}, p.completed, p.segments, p.pkt.sipCalls.size() };
+        const auto at = p.pkt.info.find( kDescriptionSeparator );
         if ( at != std::string::npos ) {
-            line.description = pkt.info.substr( at + std::strlen( kDescriptionSeparator ) );
-        }
-        if ( done.bytes.data ) {
-            line.completed.assign( done.bytes.data, done.bytes.data + done.bytes.size );
+            line.description = p.pkt.info.substr( at + std::strlen( kDescriptionSeparator ) );
         }
         lines.push_back( line );
     }
@@ -138,8 +115,18 @@ std::vector<Line> converted( const std::vector<Segment>& segments, TcpReassembly
 
 std::vector<Line> converted( const std::vector<Segment>& segments )
 {
-    TcpReassembly reassembly;
-    return converted( segments, reassembly );
+    PacketPipeline pipeline;
+    return converted( segments, pipeline );
+}
+
+/// The options of a Packet Pipeline whose reassembly holds @p memory bytes
+/// at most, and @p streamLimit of one direction.
+PipelineOptions reassemblyLimits( size_t memory, size_t streamLimit = TcpReassembly::kStreamLimit )
+{
+    PipelineOptions options;
+    options.reassemblyMemory = memory;
+    options.reassemblyStreamLimit = streamLimit;
+    return options;
 }
 
 /// What the describer says of @p payload, sent from the client to @p port.
@@ -887,9 +874,9 @@ SCENARIO( "A message split over segments is described once, where it completes",
         const auto first = tlsRecord( 0x17, Bytes( 100, 0xAA ) );
         const auto second = tlsRecord( 0x17, Bytes( 300, 0xBB ) );
         const auto stream = first + first + second;
-        TcpReassembly reassembly;
+        PacketPipeline pipeline;
         const auto lines
-            = converted( handshake() + cut( stream, { first.size() * 2 + 50 } ), reassembly );
+            = converted( handshake() + cut( stream, { first.size() * 2 + 50 } ), pipeline );
 
         THEN( "the first names the whole records only" )
         {
@@ -900,23 +887,23 @@ SCENARIO( "A message split over segments is described once, where it completes",
         {
             REQUIRE( lines[ 4 ].description == "Application Data" + reassembledFrom( 2 ) );
             REQUIRE( lines[ 4 ].completed == second );
-            REQUIRE( reassembly.directionsHeld() == 0 );
-            REQUIRE( reassembly.memoryUsed() == 0 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
         }
     }
 
     GIVEN( "segments of whole messages" )
     {
         const auto record = tlsRecord( 0x17, Bytes( 100, 0xAA ) );
-        TcpReassembly reassembly;
+        PacketPipeline pipeline;
         const auto lines
-            = converted( handshake() + cut( record + record, { record.size() } ), reassembly );
+            = converted( handshake() + cut( record + record, { record.size() } ), pipeline );
 
         THEN( "each keeps its own description, and nothing is held" )
         {
             REQUIRE( lines[ 3 ].description == "Application Data" );
             REQUIRE( lines[ 4 ].description == "Application Data" );
-            REQUIRE( reassembly.memoryUsed() == 0 );
+            REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
         }
 
         THEN( "each hands out its own message, as the TLS Decryption reads them" )
@@ -986,15 +973,15 @@ SCENARIO( "Segments are taken in sequence order", "[tcp_reassembly]" )
         ack.seq = kServerIsn + 1;
         ack.ack = next[ 0 ].seq;
         ack.flags = kAck;
-        TcpReassembly reassembly;
+        PacketPipeline pipeline;
         const auto lines = converted(
-            handshake() + std::vector<Segment>{ parts[ 0 ], parts[ 2 ], ack } + next, reassembly );
+            handshake() + std::vector<Segment>{ parts[ 0 ], parts[ 2 ], ack } + next, pipeline );
 
         THEN( "the hello is given up and the next record is described as it is" )
         {
             REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
             REQUIRE( lines.at( 6 ).description == "Application Data" );
-            REQUIRE( reassembly.directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
         }
     }
 
@@ -1004,10 +991,10 @@ SCENARIO( "Segments are taken in sequence order", "[tcp_reassembly]" )
         cutShort.capturedPayload = 20;
         auto again = cut( hello, { 300 },
                           parts[ 2 ].seq + static_cast<uint32_t>( parts[ 2 ].payload.size() ) );
-        TcpReassembly reassembly;
+        PacketPipeline pipeline;
         const auto lines = converted(
             handshake() + std::vector<Segment>{ parts[ 0 ], cutShort, parts[ 2 ] } + again,
-            reassembly );
+            pipeline );
 
         THEN( "it is a gap, and the stream resynchronises on the next hello" )
         {
@@ -1034,8 +1021,8 @@ SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_rea
 
         WHEN( "all of them are captured" )
         {
-            TcpReassembly reassembly;
-            const auto lines = converted( webSocketUpgrade() + segments, reassembly );
+            PacketPipeline pipeline;
+            const auto lines = converted( webSocketUpgrade() + segments, pipeline );
 
             THEN( "the frame's first segment is marked, the others are its continuation, and "
                   "the text frame is described" )
@@ -1050,8 +1037,8 @@ SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_rea
                 }
                 REQUIRE( lines.back().description
                          == "WebSocket Text [FIN] [MASKED] len=5 \"Hello\"" );
-                REQUIRE( reassembly.directionsHeld() == 0 );
-                REQUIRE( reassembly.memoryUsed() == 0 );
+                REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+                REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
             }
         }
 
@@ -1169,9 +1156,9 @@ SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_rea
     {
         const auto big = tlsRecord( 0x17, Bytes( 1000, 0xAA ) );
         const auto small = tlsRecord( 0x17, Bytes( 10, 0xBB ) );
-        TcpReassembly reassembly( TcpReassembly::kDefaultMemoryLimit, 300 );
+        PacketPipeline pipeline( reassemblyLimits( TcpReassembly::kDefaultMemoryLimit, 300 ) );
         const auto lines
-            = converted( handshake() + cut( big + small, { 200, 600, big.size() } ), reassembly );
+            = converted( handshake() + cut( big + small, { 200, 600, big.size() } ), pipeline );
 
         THEN( "the record's other segments are its continuation, and the short one is "
               "described" )
@@ -1181,7 +1168,7 @@ SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_rea
             REQUIRE( lines[ 4 ].description == kContinuationOfMessage );
             REQUIRE( lines[ 5 ].description == kContinuationOfMessage );
             REQUIRE( lines[ 6 ].description == "Application Data" );
-            REQUIRE( reassembly.directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
         }
     }
 
@@ -1189,11 +1176,11 @@ SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_rea
     {
         const auto big = mqttPublish( 1000 );
         const auto small = mqttPublish( 5 );
-        TcpReassembly reassembly( TcpReassembly::kDefaultMemoryLimit, 256 );
+        PacketPipeline pipeline( reassemblyLimits( TcpReassembly::kDefaultMemoryLimit, 256 ) );
         const auto lines = converted(
             handshake( 1883 )
                 + cut( big + small, { 1, 100, 400, 800, big.size() }, kClientIsn + 1, 1883 ),
-            reassembly );
+            pipeline );
 
         THEN( "the segment that tells the length is marked, the later ones are the "
               "continuation, and the short one is described" )
@@ -1204,7 +1191,7 @@ SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_rea
             REQUIRE( lines[ 6 ].description == kContinuationOfMessage );
             REQUIRE( lines[ 7 ].description == kContinuationOfMessage );
             REQUIRE( lines[ 8 ].description == describedWhole( small, 1883 ) );
-            REQUIRE( reassembly.directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
         }
     }
 
@@ -1229,15 +1216,15 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
 
     GIVEN( "a per-stream limit below the message" )
     {
-        TcpReassembly reassembly( TcpReassembly::kDefaultMemoryLimit, 300 );
-        const auto lines = converted( handshake() + cut( hello, { 200, 400 } ), reassembly );
+        PacketPipeline pipeline( reassemblyLimits( TcpReassembly::kDefaultMemoryLimit, 300 ) );
+        const auto lines = converted( handshake() + cut( hello, { 200, 400 } ), pipeline );
 
         THEN( "its segments keep their own descriptions, with the limit marker on the first" )
         {
             REQUIRE( lines[ 3 ].description
                      == describedWhole( slice( hello, 0, 200 ) ) + " " + kReassemblyLimit );
             REQUIRE( lines[ 5 ].description.find( "reassembled" ) == std::string::npos );
-            REQUIRE( reassembly.directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
         }
     }
 
@@ -1245,9 +1232,9 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
     {
         const auto request
             = text( "GET / HTTP/1.1\r\nX-Long: " + std::string( 400, 'a' ) + "\r\n\r\n" );
-        TcpReassembly reassembly( TcpReassembly::kDefaultMemoryLimit, 256 );
+        PacketPipeline pipeline( reassemblyLimits( TcpReassembly::kDefaultMemoryLimit, 256 ) );
         const auto lines = converted(
-            handshake( 80 ) + cut( request, { 100, 200, 300 }, kClientIsn + 1, 80 ), reassembly );
+            handshake( 80 ) + cut( request, { 100, 200, 300 }, kClientIsn + 1, 80 ), pipeline );
 
         THEN( "the segment that passes it is marked and nothing stays held" )
         {
@@ -1257,8 +1244,8 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
                 marked = marked || lines[ i ].info.find( kReassemblyLimit ) != std::string::npos;
             }
             REQUIRE( marked );
-            REQUIRE( reassembly.directionsHeld() == 0 );
-            REQUIRE( reassembly.memoryUsed() == 0 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
         }
     }
 
@@ -1269,11 +1256,12 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
             s.clientPort = 50001;
         }
         const auto first = cut( hello, { 200 } );
-        TcpReassembly reassembly( hello.size() + TcpReassembly::kEntryOverhead + 100 );
+        PacketPipeline pipeline(
+            reassemblyLimits( hello.size() + TcpReassembly::kEntryOverhead + 100 ) );
         const auto lines = converted( handshake() + std::vector<Segment>{ first[ 0 ] }
                                           + std::vector<Segment>( other.begin(), other.end() - 1 )
                                           + std::vector<Segment>{ first[ 1 ], other.back() },
-                                      reassembly );
+                                      pipeline );
 
         THEN( "the stream that waited longest is let go, its next segment marked" )
         {
@@ -1282,7 +1270,7 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
             REQUIRE( lines[ 8 ].info.find( kReassemblyLimit ) != std::string::npos );
             REQUIRE( lines[ 8 ].segments == 0 );
             REQUIRE( lines[ 9 ].description == describedWhole( hello ) + reassembledFrom( 2 ) );
-            REQUIRE( reassembly.memoryUsed()
+            REQUIRE( pipeline.reassembly().memoryUsed()
                      <= hello.size() + TcpReassembly::kEntryOverhead + 100 );
         }
     }
@@ -1292,30 +1280,30 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
         const auto first = tlsRecord( 0x17, Bytes( 2000, 0xAA ) );
         const auto next = tlsRecord( 0x17, Bytes( 16000, 0xBB ) );
         const size_t limit = TcpReassembly::kEntryOverhead + 4000;
-        TcpReassembly reassembly( limit );
+        PacketPipeline pipeline( reassemblyLimits( limit ) );
         auto parts = cut( first + next, { 1000, first.size() + 10 } );
         parts.pop_back();
-        const auto lines = converted( handshake() + parts, reassembly );
+        const auto lines = converted( handshake() + parts, pipeline );
 
         THEN( "the next message is held only as far as the limit lets it" )
         {
             REQUIRE( lines[ 4 ].description.find( reassembledFrom( 2 ) ) != std::string::npos );
-            REQUIRE( reassembly.memoryUsed() <= limit );
+            REQUIRE( pipeline.reassembly().memoryUsed() <= limit );
         }
     }
 
     GIVEN( "a stream that ends inside a message" )
     {
         auto parts = cut( hello, { 200 } );
-        TcpReassembly reassembly;
+        PacketPipeline pipeline;
         WHEN( "its sender closes it" )
         {
             parts[ 0 ].flags = kFinAck;
-            converted( handshake() + std::vector<Segment>{ parts[ 0 ] }, reassembly );
+            converted( handshake() + std::vector<Segment>{ parts[ 0 ] }, pipeline );
             THEN( "its bytes are let go" )
             {
-                REQUIRE( reassembly.directionsHeld() == 0 );
-                REQUIRE( reassembly.memoryUsed() == 0 );
+                REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+                REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
             }
         }
         WHEN( "it is reset" )
@@ -1324,10 +1312,10 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
             reset.fromClient = false;
             reset.seq = kServerIsn + 1;
             reset.flags = kRst;
-            converted( handshake() + std::vector<Segment>{ parts[ 0 ], reset }, reassembly );
+            converted( handshake() + std::vector<Segment>{ parts[ 0 ], reset }, pipeline );
             THEN( "its bytes are let go" )
             {
-                REQUIRE( reassembly.directionsHeld() == 0 );
+                REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
             }
         }
     }
@@ -1395,17 +1383,17 @@ SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]"
         reset.flags = kRst;
         reset.serverPort = port;
 
-        TcpReassembly reassembly( kLimit, 2048 );
-        const auto lines = converted( handshake( port ) + mangled, reassembly );
+        PacketPipeline pipeline( reassemblyLimits( kLimit, 2048 ) );
+        const auto lines = converted( handshake( port ) + mangled, pipeline );
         INFO( "round " << round );
         for ( const auto& line : lines ) {
             REQUIRE( line.info.find( '\n' ) == std::string::npos );
         }
-        REQUIRE( reassembly.memoryUsed() <= kLimit );
+        REQUIRE( pipeline.reassembly().memoryUsed() <= kLimit );
 
-        TcpReassembly resetOne( kLimit, 2048 );
+        PacketPipeline resetOne( reassemblyLimits( kLimit, 2048 ) );
         converted( handshake( port ) + mangled + std::vector<Segment>{ reset }, resetOne );
-        REQUIRE( resetOne.directionsHeld() == 0 );
-        REQUIRE( resetOne.memoryUsed() == 0 );
+        REQUIRE( resetOne.reassembly().directionsHeld() == 0 );
+        REQUIRE( resetOne.reassembly().memoryUsed() == 0 );
     }
 }

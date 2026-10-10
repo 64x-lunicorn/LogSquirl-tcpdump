@@ -1678,6 +1678,16 @@ the names, the index, the live output) stays the Converter's. Tests go in
 `tests/packet_pipeline_test.cpp`, through `run()` over a capture built with
 the frame builders or a corpus capture.
 
+The tests of the steps it runs take their captures through it too, so that
+they test what a conversion does rather than a loop of their own with some
+of the steps: `piped()` in `tests/pipeline_harness.h` reads a capture built
+in the test, runs each packet through a `PacketPipeline` with its payload
+(`withKeyLog()` gives it the secrets of a key log) and hands back each
+packet as the pipeline left it, with its stream, its TCP Analysis and the
+messages it completed. The TCP Reassembly, TLS Decryption and SSH tests use
+it, and read what the reassembly or the decryption holds through the
+pipeline (`reassembly()`, `tlsDecryption()`).
+
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the
 reader writes every byte read, unchanged, to the raw capture next to the
