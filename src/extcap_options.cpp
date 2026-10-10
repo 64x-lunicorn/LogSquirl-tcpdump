@@ -28,7 +28,6 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFileDialog>
-#include <QFileInfo>
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
@@ -37,14 +36,12 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QRadioButton>
-#include <QRegularExpression>
 #include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
-#include <cstdint>
 #include <exception>
 
 namespace tcpdump {
@@ -61,46 +58,6 @@ bool isNumber( ExtcapArgType type )
 {
     return type == ExtcapArgType::Integer || type == ExtcapArgType::Unsigned
            || type == ExtcapArgType::Long || type == ExtcapArgType::Double;
-}
-
-/// Why @p value is no number of @p arg's type and range; empty if it is.
-QString numberProblem( const ExtcapArg& arg, const QString& value )
-{
-    bool ok = false;
-    double number = 0;
-    switch ( arg.type ) {
-    case ExtcapArgType::Integer: {
-        const auto whole = value.toLongLong( &ok );
-        ok = ok && whole >= INT32_MIN && whole <= INT32_MAX;
-        number = static_cast<double>( whole );
-        break;
-    }
-    case ExtcapArgType::Unsigned:
-        number = static_cast<double>( value.toULongLong( &ok ) );
-        break;
-    case ExtcapArgType::Long:
-        number = static_cast<double>( value.toLongLong( &ok ) );
-        break;
-    default:
-        number = value.toDouble( &ok );
-        break;
-    }
-    if ( !ok ) {
-        return QStringLiteral( "%1 must be %2." )
-            .arg( arg.display, arg.type == ExtcapArgType::Double ? QStringLiteral( "a number" )
-                               : arg.type == ExtcapArgType::Unsigned
-                                   ? QStringLiteral( "a whole number, not negative" )
-                                   : QStringLiteral( "a whole number" ) );
-    }
-    bool hasMin = false;
-    bool hasMax = false;
-    const auto min = arg.rangeMin.toDouble( &hasMin );
-    const auto max = arg.rangeMax.toDouble( &hasMax );
-    if ( ( hasMin && number < min ) || ( hasMax && number > max ) ) {
-        return QStringLiteral( "%1 must be from %2 to %3." )
-            .arg( arg.display, arg.rangeMin, arg.rangeMax );
-    }
-    return {};
 }
 
 /// The values of a multicheck, a child after its parent, indented.
@@ -483,47 +440,13 @@ void ExtcapOptionsWidget::store( const ExtcapArg& arg, const QString& value )
     emit changed();
 }
 
-QString ExtcapOptionsWidget::valueOf( const ExtcapArg& arg ) const
-{
-    return options_.value( extcapOptionName( shownInterface_, arg ) );
-}
-
 QString ExtcapOptionsWidget::problem() const
 {
+    // The arguments' rules are the kind's validate(): what is left is
+    // whether this widget knows them yet.
     if ( isListing() && !device_.isEmpty() && !interface_.isEmpty() ) {
         return QStringLiteral( "Asking %1 for the arguments of %2\xe2\x80\xa6" )
             .arg( device_, interface_ );
-    }
-    if ( shownDevice_ != device_ || shownInterface_ != interface_ ) {
-        return {};
-    }
-    for ( const auto& arg : config_.args ) {
-        const auto value = valueOf( arg );
-        if ( arg.type == ExtcapArgType::Boolean || arg.type == ExtcapArgType::BoolFlag ) {
-            continue;
-        }
-        if ( value.isEmpty() ) {
-            if ( arg.required ) {
-                return QStringLiteral( "%1 is required." ).arg( arg.display );
-            }
-            continue;
-        }
-        if ( isNumber( arg.type ) ) {
-            if ( auto wrong = numberProblem( arg, value ); !wrong.isEmpty() ) {
-                return wrong;
-            }
-        }
-        if ( !arg.validation.isEmpty() ) {
-            const QRegularExpression pattern(
-                QRegularExpression::anchoredPattern( arg.validation ) );
-            if ( pattern.isValid() && !pattern.match( value ).hasMatch() ) {
-                return QStringLiteral( "%1 is not valid." ).arg( arg.display );
-            }
-        }
-        if ( arg.type == ExtcapArgType::FileSelect && arg.mustExist
-             && !QFileInfo::exists( value ) ) {
-            return QStringLiteral( "%1: %2 does not exist." ).arg( arg.display, value );
-        }
     }
     return {};
 }

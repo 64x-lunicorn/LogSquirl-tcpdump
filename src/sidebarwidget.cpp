@@ -875,30 +875,12 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
     if ( refuseWhileBusy() ) {
         return false;
     }
-    const auto kind = liveSources_ ? liveSources_->find( choice.source ) : nullptr;
-    QString problem;
-    if ( !kind ) {
-        problem = QString( "There is no live capture source \"%1\"." ).arg( choice.source );
-    }
-    else if ( const auto availability = kind->availability(); !availability.available ) {
-        problem = availability.reason;
-    }
-    else if ( choice.snaplen < 1 || choice.snaplen > kMaxSnaplen ) {
-        problem = QString( "The snaplen must be 1 to %1 bytes." ).arg( kMaxSnaplen );
-    }
-    else {
-        problem = captureFilterProblem( choice.filter );
-        if ( problem.isEmpty() ) {
-            problem = liveLimitsProblem( choice.limits );
-        }
-        if ( problem.isEmpty() ) {
-            problem = kind->validate( choice );
-        }
-    }
-    if ( !problem.isEmpty() ) {
+    if ( const auto problem = liveChoiceProblem( liveSources_.get(), choice );
+         !problem.isEmpty() ) {
         hostNotify( "Cannot start the live capture: " + problem );
         return false;
     }
+    const auto kind = liveSources_->find( choice.source );
 
     // The last choice started is the one shown after a restart.
     if ( !saveLiveChoice( hostConfigDir(), choice ) ) {

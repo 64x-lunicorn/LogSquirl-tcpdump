@@ -35,6 +35,7 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <stdexcept>
 
@@ -72,6 +73,52 @@ bool isTrue( const QString& value )
 QString encodedInterface( const QString& networkInterface )
 {
     return QString::fromLatin1( QUrl::toPercentEncoding( networkInterface ) );
+}
+
+bool isNumber( ExtcapArgType type )
+{
+    return type == ExtcapArgType::Integer || type == ExtcapArgType::Unsigned
+           || type == ExtcapArgType::Long || type == ExtcapArgType::Double;
+}
+
+/// Why @p value is no number of @p arg's type and range; empty if it is.
+QString numberProblem( const ExtcapArg& arg, const QString& value )
+{
+    bool ok = false;
+    double number = 0;
+    switch ( arg.type ) {
+    case ExtcapArgType::Integer: {
+        const auto whole = value.toLongLong( &ok );
+        ok = ok && whole >= INT32_MIN && whole <= INT32_MAX;
+        number = static_cast<double>( whole );
+        break;
+    }
+    case ExtcapArgType::Unsigned:
+        number = static_cast<double>( value.toULongLong( &ok ) );
+        break;
+    case ExtcapArgType::Long:
+        number = static_cast<double>( value.toLongLong( &ok ) );
+        break;
+    default:
+        number = value.toDouble( &ok );
+        break;
+    }
+    if ( !ok ) {
+        return QStringLiteral( "%1 must be %2." )
+            .arg( arg.display, arg.type == ExtcapArgType::Double ? QStringLiteral( "a number" )
+                               : arg.type == ExtcapArgType::Unsigned
+                                   ? QStringLiteral( "a whole number, not negative" )
+                                   : QStringLiteral( "a whole number" ) );
+    }
+    bool hasMin = false;
+    bool hasMax = false;
+    const auto min = arg.rangeMin.toDouble( &hasMin );
+    const auto max = arg.rangeMax.toDouble( &hasMax );
+    if ( ( hasMin && number < min ) || ( hasMax && number > max ) ) {
+        return QStringLiteral( "%1 must be from %2 to %3." )
+            .arg( arg.display, arg.rangeMin, arg.rangeMax );
+    }
+    return {};
 }
 
 } // namespace
@@ -309,6 +356,40 @@ QStringList extcapArguments( const LiveOptions& options, const QString& networkI
         }
     }
     return arguments;
+}
+
+QString extcapArgumentProblem( const std::vector<ExtcapArg>& args, const LiveOptions& options,
+                               const QString& networkInterface )
+{
+    for ( const auto& arg : args ) {
+        if ( arg.type == ExtcapArgType::Boolean || arg.type == ExtcapArgType::BoolFlag ) {
+            continue;
+        }
+        const auto value = options.value( extcapOptionName( networkInterface, arg ) );
+        if ( value.isEmpty() ) {
+            if ( arg.required ) {
+                return QStringLiteral( "%1 is required." ).arg( arg.display );
+            }
+            continue;
+        }
+        if ( isNumber( arg.type ) ) {
+            if ( auto wrong = numberProblem( arg, value ); !wrong.isEmpty() ) {
+                return wrong;
+            }
+        }
+        if ( !arg.validation.isEmpty() ) {
+            const QRegularExpression pattern(
+                QRegularExpression::anchoredPattern( arg.validation ) );
+            if ( pattern.isValid() && !pattern.match( value ).hasMatch() ) {
+                return QStringLiteral( "%1 is not valid." ).arg( arg.display );
+            }
+        }
+        if ( arg.type == ExtcapArgType::FileSelect && arg.mustExist
+             && !QFileInfo::exists( value ) ) {
+            return QStringLiteral( "%1: %2 does not exist." ).arg( arg.display, value );
+        }
+    }
+    return {};
 }
 
 // ── Places ───────────────────────────────────────────────────────────────
@@ -605,6 +686,16 @@ ExtcapConfig ExtcapSourceKind::config( const QString& device, const QString& net
     } catch ( const std::exception& e ) {
         config.error = QString::fromUtf8( e.what() );
     }
+    {
+        const std::lock_guard<std::mutex> lock( knownArgs_->mutex );
+        const auto key = std::make_pair( device, networkInterface );
+        if ( config.error.isEmpty() ) {
+            knownArgs_->byInterface.insert_or_assign( key, config.args );
+        }
+        else {
+            knownArgs_->byInterface.erase( key );
+        }
+    }
     return config;
 }
 
@@ -622,9 +713,17 @@ QString ExtcapSourceKind::validate( const LiveChoice& choice ) const
     // A .bat or .cmd extcap is run by cmd.exe, which reads its arguments
     // again: startProcess() refuses them too, this says so before Start.
     if ( places_.os == CaptureOs::Windows ) {
-        return batchArgumentProblem( command( choice ) );
+        if ( auto problem = batchArgumentProblem( command( choice ) ); !problem.isEmpty() ) {
+            return problem;
+        }
     }
-    return {};
+    const std::lock_guard<std::mutex> lock( knownArgs_->mutex );
+    const auto known
+        = knownArgs_->byInterface.find( std::make_pair( choice.device, choice.networkInterface ) );
+    if ( known == knownArgs_->byInterface.end() ) {
+        return {};
+    }
+    return extcapArgumentProblem( known->second, choice.options, choice.networkInterface );
 }
 
 LiveOptionsWidget* ExtcapSourceKind::makeOptionsWidget() const

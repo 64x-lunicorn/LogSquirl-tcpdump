@@ -96,6 +96,29 @@ QString liveLimitsProblem( const LiveLimits& limits )
     return {};
 }
 
+QString liveChoiceProblem( const LiveSourceRegistry* sources, const LiveChoice& choice )
+{
+    const auto kind = sources ? sources->find( choice.source ) : nullptr;
+    if ( !kind ) {
+        return choice.source.isEmpty() ? QStringLiteral( "No live capture source is available." )
+                                       : QStringLiteral( "There is no live capture source \"%1\"." )
+                                             .arg( choice.source );
+    }
+    if ( const auto availability = kind->availability(); !availability.available ) {
+        return availability.reason;
+    }
+    if ( choice.snaplen < 1 || choice.snaplen > kMaxSnaplen ) {
+        return QStringLiteral( "The snaplen must be 1 to %1 bytes." ).arg( kMaxSnaplen );
+    }
+    if ( auto filter = captureFilterProblem( choice.filter ); !filter.isEmpty() ) {
+        return filter;
+    }
+    if ( auto limits = liveLimitsProblem( choice.limits ); !limits.isEmpty() ) {
+        return limits;
+    }
+    return kind->validate( choice );
+}
+
 bool isRunnableProgram( const QString& path )
 {
     const QFileInfo file( path );

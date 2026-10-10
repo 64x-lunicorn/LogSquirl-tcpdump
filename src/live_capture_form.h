@@ -104,8 +104,10 @@ public:
         (void)networkInterface;
     }
 
-    /// Why options() cannot be captured with (a required field is empty),
-    /// for LiveCaptureForm::problem(); empty (the default) if they can.
+    /// Why the widget cannot tell yet whether options() can be captured
+    /// with (it is asking for what they are), for LiveCaptureForm::problem();
+    /// empty (the default) if it can.  Whether they can is the kind's
+    /// validate(), which needs no widget.
     virtual QString problem() const
     {
         return {};
@@ -150,9 +152,9 @@ public:
     /// The source chosen, or null if there is none.
     std::shared_ptr<const LiveSourceKind> currentKind() const;
 
-    /// Why choice() cannot be captured: no source, an unavailable one, a bad
-    /// capture filter, limits that do not go together, what the source's
-    /// validate() says, or what its options widget does; empty if it can.
+    /// Why choice() cannot be captured (liveChoiceProblem(), as a start
+    /// checks it), else why the form cannot tell yet (its options widget's
+    /// problem(), an extcap being asked for its arguments); empty if it can.
     QString problem() const;
 
     /// Whether a listing runs.

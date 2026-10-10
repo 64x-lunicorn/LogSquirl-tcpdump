@@ -292,6 +292,70 @@ QString readText( const QString& path )
 
 } // namespace
 
+SCENARIO( "An extcap interface's arguments are checked by their rules, without a form",
+          "[extcap_source]" )
+{
+    const auto args = parseExtcapConfig( kConfig );
+    // What the form keeps for fake0 when its fields hold their defaults.
+    LiveOptions options{ { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "22" },
+                         { "fake0:--count", "-1" },         { "fake0:--ratio", "0.5" },
+                         { "fake0?--verbose", "true" },     { "fake0:--promisc", "false" } };
+
+    THEN( "values that keep every rule have no problem" )
+    {
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" ).isEmpty() );
+    }
+
+    THEN( "a required argument left empty, or not kept at all, is named" )
+    {
+        options[ "fake0:--remote-host" ] = "";
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" ) == "Remote host is required." );
+        options.remove( "fake0:--remote-host" );
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" ) == "Remote host is required." );
+        // Another interface's value is not this one's.
+        options.insert( "fake1:--remote-host", "host" );
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" ) == "Remote host is required." );
+    }
+
+    THEN( "a number of the wrong kind or out of its range is named" )
+    {
+        options[ "fake0:--remote-port" ] = "70000";
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" )
+                 == "Port must be from 1 to 65535." );
+        options[ "fake0:--remote-port" ] = "-1";
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" )
+                 == "Port must be a whole number, not negative." );
+        options[ "fake0:--remote-port" ] = "22";
+        options[ "fake0:--count" ] = "3000000000";
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" )
+                 == "Count must be a whole number." );
+        options[ "fake0:--count" ] = "1";
+        options[ "fake0:--ratio" ] = "half";
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" ) == "Ratio must be a number." );
+    }
+
+    THEN( "a value its validation pattern does not match, whole, is named" )
+    {
+        auto withPattern = args;
+        withPattern.front().validation = "[a-z]+";
+        REQUIRE( extcapArgumentProblem( withPattern, options, "fake0" ).isEmpty() );
+        options[ "fake0:--remote-host" ] = "host1";
+        REQUIRE( extcapArgumentProblem( withPattern, options, "fake0" )
+                 == "Remote host is not valid." );
+    }
+
+    THEN( "a file that must exist and does not is named" )
+    {
+        QTemporaryDir files;
+        const auto keyFile = files.filePath( "key" );
+        options.insert( "fake0:--keyfile", keyFile );
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" )
+                 == QString( "Key file: %1 does not exist." ).arg( keyFile ) );
+        writeFile( keyFile, text( "k" ) );
+        REQUIRE( extcapArgumentProblem( args, options, "fake0" ).isEmpty() );
+    }
+}
+
 SCENARIO( "Extcaps are found in their directories", "[extcap_source]" )
 {
     THEN( "this computer's places start with WIRESHARK_EXTCAP_DIR, then the personal one, each "
@@ -729,6 +793,89 @@ SCENARIO( "The extcap source lists extcaps, their interfaces and an interface's 
                      .contains( "not in the extcap directories" ) );
         REQUIRE_FALSE( kind->validate( { "extcap", "fakedump", "", "", 96 } ).isEmpty() );
         REQUIRE( kind->validate( { "extcap", "fakedump", "fake0", "", 96 } ).isEmpty() );
+    }
+
+    THEN( "once an interface's arguments were asked, a choice is checked by their rules" )
+    {
+        LiveChoice choice{ "extcap", "fakedump", "fake0", "", 96 };
+        REQUIRE( kind->validate( choice ).isEmpty() );
+        // Asked through a copy, as the form's options widget asks.
+        const ExtcapSourceKind copy( *kind );
+        REQUIRE( copy.config( "fakedump", "fake0", LiveSourceKind::kListTimeout ).error.isEmpty() );
+        REQUIRE( kind->validate( choice ) == "Remote host is required." );
+        choice.options = { { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "0" } };
+        REQUIRE( kind->validate( choice ) == "Port must be from 1 to 65535." );
+        choice.options[ "fake0:--remote-port" ] = "22";
+        REQUIRE( kind->validate( choice ).isEmpty() );
+        // fake1's were not asked: the extcap itself says what it lacks.
+        choice.networkInterface = "fake1";
+        choice.options = { { "fake1:--level", "high" } };
+        REQUIRE( kind->validate( choice ).isEmpty() );
+    }
+}
+
+SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as the form "
+          "refuses it",
+          "[extcap_source]" )
+{
+    FakeHost host;
+    FakeExtcaps extcaps;
+    QTemporaryDir tempRoot;
+
+    GIVEN( "a saved choice whose port is out of its range" )
+    {
+        LiveChoice saved{ "extcap", "fakedump", "fake0", "", 4096 };
+        saved.options = { { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "70000" } };
+        REQUIRE( saveLiveChoice( host.configDir(), saved ) );
+        auto sidebar = sidebarFor( extcaps, tempRoot );
+        optionsOf( sidebar.get() );
+
+        THEN( "the form shows the problem, and starting the saved choice is refused with it" )
+        {
+            const auto shown = sidebar->liveForm()->problem();
+            REQUIRE( shown == "Port must be from 1 to 65535." );
+            REQUIRE( liveChoiceProblem( sidebar->liveForm()->sources().get(), saved ) == shown );
+            REQUIRE_FALSE( sidebar->startLiveCapture( loadLiveChoice( host.configDir() ) ) );
+            REQUIRE( host.notifications
+                     == QStringList{ "Cannot start the live capture: " + shown } );
+            REQUIRE_FALSE( sidebar->isCapturing() );
+            REQUIRE( extcaps.captures().isEmpty() );
+        }
+
+        THEN( "a choice without a required argument is refused as the form shows it" )
+        {
+            auto choice = saved;
+            choice.options = { { "fake0:--remote-port", "22" } };
+            auto* form = sidebar->liveForm();
+            form->setChoice( choice );
+            // Its device and interface are shown once listed again.
+            REQUIRE( waitFor( [ & ] {
+                return form->choice().device == "fakedump"
+                       && form->choice().networkInterface == "fake0";
+            } ) );
+            INFO( form->problem().toStdString() );
+            REQUIRE( form->problem() == "Remote host is required." );
+            REQUIRE_FALSE( sidebar->startLiveCapture( choice ) );
+            REQUIRE( host.notifications
+                     == QStringList{ "Cannot start the live capture: Remote host is required." } );
+            REQUIRE( extcaps.captures().isEmpty() );
+        }
+    }
+
+    GIVEN( "an options widget asking the extcap for an interface's arguments" )
+    {
+        ExtcapOptionsWidget options( extcaps.kind() );
+        options.setTarget( "fakedump", "fake0" );
+
+        THEN( "the form is told to wait, but the choice is not invalid for it" )
+        {
+            REQUIRE( options.isListing() );
+            REQUIRE( options.problem().startsWith( "Asking fakedump for the arguments of fake0" ) );
+            LiveSourceRegistry registry;
+            registry.add( extcaps.kind() );
+            REQUIRE( liveChoiceProblem( &registry, { "extcap", "fakedump", "fake0", "", 96 } )
+                         .isEmpty() );
+        }
     }
 }
 

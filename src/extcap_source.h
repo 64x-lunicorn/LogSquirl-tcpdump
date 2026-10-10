@@ -69,6 +69,10 @@
 #include <QStringList>
 
 #include <chrono>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <utility>
 #include <vector>
 
 namespace tcpdump {
@@ -193,6 +197,18 @@ QString extcapOptionName( const QString& networkInterface, const ExtcapArg& arg 
 /// and calls that are no long option, are skipped.
 QStringList extcapArguments( const LiveOptions& options, const QString& networkInterface );
 
+/**
+ * Why the options of @p networkInterface in @p options break a rule of
+ * the interface's arguments @p args, for the Start button; empty if they
+ * break none: a required argument without a value (or none kept), a
+ * number that is none or out of its `{range=}`, a value its
+ * `{validation=}` pattern does not match as a whole, or a `{mustexist=true}`
+ * file that is not there.  A check box (boolean, boolflag) breaks none.
+ * The first argument, in their order, that breaks one is named.
+ */
+QString extcapArgumentProblem( const std::vector<ExtcapArg>& args, const LiveOptions& options,
+                               const QString& networkInterface );
+
 /// Where the extcap source looks for extcaps.
 struct ExtcapPlaces {
     CaptureOs os = runningCaptureOs(); ///< Windows: .exe, .bat and .cmd files.
@@ -227,7 +243,9 @@ public:
     QString program( const QString& name ) const;
 
     /// The arguments and link types of @p networkInterface of the extcap
-    /// @p device, at most @p timeout; on a worker thread.
+    /// @p device, at most @p timeout; on a worker thread.  The arguments
+    /// are remembered for validate(), by this kind and its copies; a
+    /// question that fails forgets those asked before.
     ExtcapConfig config( const QString& device, const QString& networkInterface,
                          std::chrono::milliseconds timeout ) const;
 
@@ -246,6 +264,9 @@ public:
     LiveListing listDevices( std::chrono::milliseconds timeout ) const override;
     LiveListing listInterfaces( const QString& device,
                                 std::chrono::milliseconds timeout ) const override;
+    /// An extcap that is there and an interface; then the rules of the
+    /// interface's arguments (extcapArgumentProblem()), once config() was
+    /// asked for them: until then the extcap itself says what it lacks.
     QString validate( const LiveChoice& choice ) const override;
     LiveOptionsWidget* makeOptionsWidget() const override;
     /// The capture of @p choice but its `--fifo <pipe>`, which makeSource()
@@ -260,7 +281,16 @@ private:
     QString ask( const QString& path, const QStringList& arguments,
                  std::chrono::milliseconds timeout ) const;
 
+    /// The arguments config() was told last, by extcap and interface:
+    /// shared by the copies of this kind (the options widget asks through
+    /// one), written on a worker thread and read on the UI thread.
+    struct KnownArgs {
+        std::mutex mutex;
+        std::map<std::pair<QString, QString>, std::vector<ExtcapArg>> byInterface;
+    };
+
     ExtcapPlaces places_;
+    std::shared_ptr<KnownArgs> knownArgs_ = std::make_shared<KnownArgs>();
 };
 
 } // namespace tcpdump

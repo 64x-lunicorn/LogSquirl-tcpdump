@@ -158,6 +158,58 @@ SCENARIO( "A capture filter is checked for what would be misread before BPF", "[
     }
 }
 
+SCENARIO( "Whether a live choice can start is answered in one place", "[live_source]" )
+{
+    const auto fake = std::make_shared<FakeSourceKind>();
+    LiveSourceRegistry registry;
+    registry.add( fake );
+    LiveChoice choice{ "fake", "", "fake0", "port 53", 100 };
+
+    THEN( "a choice of an available source, with a good filter and limits, can" )
+    {
+        REQUIRE( liveChoiceProblem( &registry, choice ).isEmpty() );
+    }
+
+    THEN( "a source that is none, not there, or unavailable cannot" )
+    {
+        REQUIRE( liveChoiceProblem( nullptr, choice )
+                 == "There is no live capture source "
+                    "\"fake\"." );
+        choice.source.clear();
+        REQUIRE( liveChoiceProblem( &registry, choice ) == "No live capture source is available." );
+        choice.source = "gone";
+        REQUIRE( liveChoiceProblem( &registry, choice )
+                 == "There is no live capture source \"gone\"." );
+        choice.source = "fake";
+        fake->unavailableReason = "fakecap not found";
+        REQUIRE( liveChoiceProblem( &registry, choice ) == "fakecap not found" );
+    }
+
+    THEN( "a snaplen out of range cannot" )
+    {
+        for ( const int snaplen : { 0, -1, kMaxSnaplen + 1 } ) {
+            CAPTURE( snaplen );
+            choice.snaplen = snaplen;
+            REQUIRE( liveChoiceProblem( &registry, choice )
+                     == "The snaplen must be 1 to 262144 bytes." );
+        }
+        choice.snaplen = kMaxSnaplen;
+        REQUIRE( liveChoiceProblem( &registry, choice ).isEmpty() );
+    }
+
+    THEN( "the capture filter's, the limits' and the source's own problems are told" )
+    {
+        choice.filter = "ip.addr == 10.0.0.1";
+        REQUIRE( liveChoiceProblem( &registry, choice ) == captureFilterProblem( choice.filter ) );
+        choice.filter.clear();
+        choice.limits.ringFiles = 3;
+        REQUIRE( liveChoiceProblem( &registry, choice ) == liveLimitsProblem( choice.limits ) );
+        choice.limits = {};
+        choice.options = { { "note", "bad" } };
+        REQUIRE( liveChoiceProblem( &registry, choice ) == "The note is bad." );
+    }
+}
+
 SCENARIO( "A live capture is named after its device and interface", "[live_source]" )
 {
     LiveChoice choice;

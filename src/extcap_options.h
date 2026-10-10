@@ -37,9 +37,9 @@
  * once, named by extcapOptionName(), so that the capture passes every
  * value the user sees, defaults too, as Wireshark does.  The options of
  * other interfaces are kept as they are; those of this interface that it
- * no longer takes are dropped.  problem() names a required field left
- * empty, a number that is none or out of range, a value its validation
- * pattern does not match, or a file that must exist and does not.
+ * no longer takes are dropped.  Whether the values keep the arguments'
+ * rules is not the widget's to say: the kind's validate() checks them
+ * (extcapArgumentProblem()), with the arguments its listing was told.
  */
 
 #pragma once
@@ -104,8 +104,6 @@ private:
     QString initialValue( const ExtcapArg& arg ) const;
     /// Keep @p value for @p arg, and say so.
     void store( const ExtcapArg& arg, const QString& value );
-    /// The value kept for @p arg.
-    QString valueOf( const ExtcapArg& arg ) const;
     /// Show @p text above the fields; empty hides it.
     void showStatus( const QString& text );
 

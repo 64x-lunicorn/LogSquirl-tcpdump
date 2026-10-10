@@ -1805,14 +1805,15 @@ knows none of them. A kind answers:
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
 | `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
-| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
-| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
+| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` whether it can tell yet (an extcap's widget asking for the arguments); whether the options can be captured with is `validate()`'s |
+| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too), the last part of `liveChoiceProblem()`; by default an interface is needed |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a local shell's. Where a remote shell must read it (adb's device shell, the server's over ssh, which get one joined command line), every value is `shellQuote()`d for it, so that it is one argument there too: the Android and SSH kinds build their device and server scripts so, and a custom command says `{filter:sh}` |
 | `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
 
 A kind holds no state that changes, so its listings may run on a worker
-while the UI asks it the rest. `runListing( command, timeout )` runs a
+while the UI asks it the rest (the extcap kind remembers the arguments its
+listing was told, for `validate()`, behind a mutex). `runListing( command, timeout )` runs a
 listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
 device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
@@ -1821,7 +1822,12 @@ kills its group within moments: `cancelListings()` cancels every running
 one (the sidebar's destructor, so that the plugin's shutdown does not wait
 for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
 worker thread cancels those run under it once the flag is set (the form
-cancels its own listings as it goes); the kinds need not know of either. `captureFilterProblem()` catches
+cancels its own listings as it goes); the kinds need not know of either. `liveChoiceProblem( sources, choice )`
+is the one answer to "can this choice start?", for the form's Start button
+and for `startLiveCapture( LiveChoice )` alike, with no widget: a source
+that is there and available, a snaplen of 1 to `kMaxSnaplen`, the capture
+filter, the limits (`liveLimitsProblem()`), then the kind's `validate()`.
+`captureFilterProblem()` catches
 what would be misread before libpcap sees a filter (a line break, a
 leading `-`, unbalanced parentheses, a display filter field such as
 `ip.addr`); the capture program compiles it. `liveCaptureName( choice )`
@@ -1984,10 +1990,17 @@ radio buttons, a checkable `QListWidget` (multicheck, children indented
 under their parent), a path with Browse… (fileselect). Fields start with the
 option kept, else the default, and write through to the options, so that
 the capture passes every value shown; the interface's options it no longer
-takes are dropped, other interfaces' kept. `problem()` says the extcap is
-being asked, or names a required field left empty, a number that is none or
-out of `{range=}`, a value its `{validation=}` does not match, or a
-`{mustexist=true}` file that is not there. `tests/extcap_source_test.cpp`
+takes are dropped, other interfaces' kept. Its `problem()` says only that
+the extcap is being asked. The arguments' rules are
+`extcapArgumentProblem( args, options, interface )`, which needs no widget:
+a required argument without a value, a number that is none or out of
+`{range=}`, a value its `{validation=}` does not match, or a
+`{mustexist=true}` file that is not there. `config()` remembers the
+arguments it was told per extcap and interface (shared by the kind's
+copies, so the widget's listing counts), and `validate()` checks a choice
+by them: a saved choice started without the form is refused as the form
+refuses it. An interface never asked is not checked; the extcap says what
+it lacks. `tests/extcap_source_test.cpp`
 runs fake extcap scripts (`fakedump` answering from files and writing a
 synthetic pcap into the FIFO it is given, `brokendump` failing), so that
 discovery, every argument type, hostile values (passed as one word, no
@@ -2146,10 +2159,10 @@ source or device chosen since is dropped (a generation counter). The form
 remembers the choice it was given and selects it once listed. A kind's
 options widget is made anew whenever the kind is chosen, and its options
 are kept per source when another is chosen. `problem()`
-(no source, unavailable, the filter, the kind's `validate()`) keeps
+(`liveChoiceProblem()`, then an options widget that cannot tell yet) keeps
 **Start** disabled, with the reason as its tooltip, as does a conversion or
 a capture running; the form is locked while a capture runs.
-`startLiveCapture( LiveChoice )` checks the same, saves the choice, and runs
+`startLiveCapture( LiveChoice )` refuses with `liveChoiceProblem()`'s message, saves the choice, and runs
 `startLiveCapture( liveCaptureName( choice ), kind->makeSource( choice ) )`.
 The capture program's stderr lines fill a small read-only view; a failure's
 error, with `explainFailure()`, a label below Stop. **Plugins → tcpdump →
