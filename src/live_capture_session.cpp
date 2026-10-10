@@ -496,7 +496,10 @@ void LiveCaptureSession::runDone( unsigned run )
 {
     // Start live capture… asked for another one: once the last one is done,
     // its program ended too, so that two never capture at once.  Starting
-    // it lets go of the run that tells this, which goes on living.
+    // it lets go of the run that tells this: a WorkerRun's LiveCapture, done,
+    // is destroyed here, inside its own done() (a direct call on this
+    // thread).  That is safe: nothing of it runs after its emit, and Qt
+    // calls no further slots of a sender destroyed in one.
     if ( run != runs_ || !pending_ ) {
         return;
     }
