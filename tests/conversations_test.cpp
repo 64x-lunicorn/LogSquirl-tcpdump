@@ -28,8 +28,8 @@
 #include "conversations.h"
 #include "corpus_layouts.h"
 #include "follow_stream.h"
+#include "packet_pipeline.h"
 #include "pcap_converter.h"
-#include "stream_labels.h"
 #include "stream_tracker.h"
 
 #include <QFile>
@@ -62,27 +62,37 @@ PacketRecord tcpPacket( const std::string& src, uint16_t srcPort, const std::str
     return pkt;
 }
 
-/// What the Converter runs before the counts, and the counts.
+/// The Packet Pipeline, which a conversion runs before the counts, and the counts.
 struct Pipeline {
     explicit Pipeline( size_t maxStreams = StreamTracker::kMaxStreams )
-        : tracker( maxStreams )
+        : steps( optionsFor( maxStreams ) )
     {
     }
 
     void add( PacketRecord pkt )
     {
-        const auto stream = tracker.track( pkt );
-        labels.apply( pkt, stream );
-        stats.add( pkt, stream );
+        const auto outcome = steps.run( pkt, {} );
+        stats.add( pkt, outcome.stream );
     }
 
     std::vector<Conversation> table( int64_t sec = 100, uint32_t nsec = 0 ) const
     {
-        return stats.conversations( tracker, labels, sec, nsec );
+        return stats.conversations( steps.tracker(), steps.labels(), sec, nsec );
     }
 
-    StreamTracker tracker;
-    StreamLabels labels;
+    std::shared_ptr<const ConversationRows> rows( int64_t sec, uint32_t nsec ) const
+    {
+        return stats.rows( steps.tracker(), steps.labels(), sec, nsec );
+    }
+
+    static PipelineOptions optionsFor( size_t maxStreams )
+    {
+        PipelineOptions options;
+        options.maxStreams = maxStreams;
+        return options;
+    }
+
+    PacketPipeline steps;
     ConversationStats stats;
 };
 
@@ -241,7 +251,7 @@ SCENARIO( "The Conversations table taken again shares the rows that did not chan
             pipeline.add( tcpPacket( "10.0.0.2", static_cast<uint16_t>( 1024 + i ), "10.0.0.1", 80,
                                      100, 0, 60 ) );
         }
-        const auto first = pipeline.stats.rows( pipeline.tracker, pipeline.labels, 100, 0 );
+        const auto first = pipeline.rows( 100, 0 );
         REQUIRE( first->size() == streams );
         REQUIRE( first->chunks().size() == 2 );
 
@@ -249,7 +259,7 @@ SCENARIO( "The Conversations table taken again shares the rows that did not chan
         {
             pipeline.add( tcpPacket( "10.0.0.1", 80, "10.0.0.2",
                                      static_cast<uint16_t>( 1024 + streams - 1 ), 101, 0, 1500 ) );
-            const auto second = pipeline.stats.rows( pipeline.tracker, pipeline.labels, 100, 0 );
+            const auto second = pipeline.rows( 100, 0 );
 
             THEN( "the first chunk is the same, the second one made anew" )
             {
@@ -263,7 +273,7 @@ SCENARIO( "The Conversations table taken again shares the rows that did not chan
 
         WHEN( "a packet earlier than the capture's first comes" )
         {
-            const auto second = pipeline.stats.rows( pipeline.tracker, pipeline.labels, 99, 0 );
+            const auto second = pipeline.rows( 99, 0 );
 
             THEN( "every row's start is told anew" )
             {
