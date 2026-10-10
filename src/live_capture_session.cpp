@@ -410,8 +410,9 @@ void LiveCaptureSession::finish( unsigned run, const ConversionResult& result )
 
     switch ( result.status ) {
     case ConversionResult::Status::Cancelled:
-        // Nothing cancels a live capture (LiveCapture has no cancel); were
-        // one to, nothing would be left, as for a capture stopped early.
+        // Never comes: LiveCapture has no cancel, its finished() is never
+        // Cancelled.  The status is the conversion's, shared with a file's;
+        // listed only for the switch to name every status.
     case ConversionResult::Status::Stopped: {
         // Stopped before the header came: nothing went wrong, and nothing
         // was written, so there is nothing to open or remove.
