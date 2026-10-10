@@ -166,7 +166,7 @@ struct StreamEndpoints {
 
 /**
  * Follows the conversations of one capture, packet by packet, as the
- * Converter reads them.
+ * Packet Pipeline takes them.
  *
  * Only TCP and UDP packets belong to a conversation: those sharing the same
  * addresses and ports, in either direction.  TCP and UDP are numbered on

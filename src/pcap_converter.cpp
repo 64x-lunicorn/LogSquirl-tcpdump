@@ -29,18 +29,12 @@
 #include "capture_source.h"
 #include "gzip_source.h"
 #include "host_names.h"
-#include "media_expectations.h"
 #include "packet_formatter.h"
-#include "payload_describer.h"
+#include "packet_pipeline.h"
 #include "pcapng_reader.h"
 #include "raw_capture.h"
 #include "someip.h"
-#include "stream_labels.h"
-#include "stream_tracker.h"
-#include "tcp_analysis.h"
-#include "tcp_reassembly.h"
 #include "tempdirs.h"
-#include "tls_decryption.h"
 #include "tls_key_log.h"
 
 #include <QDir>
@@ -164,9 +158,9 @@ private:
 };
 
 /// The summary of a converted capture, from what was collected on the way.
-CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
-                          const StreamLabels& labels, const ConversationStats& conversations,
-                          const CaptureReader& reader, size_t maxStreams )
+CaptureSummary summarise( CaptureStats&& stats, const PacketPipeline& pipeline,
+                          const ConversationStats& conversations, const CaptureReader& reader,
+                          size_t maxStreams )
 {
     // The packets' link-layer types first, then any the capture declares
     // without a packet of it, such as a pcap's when it holds none.
@@ -201,12 +195,12 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
     summary.handshakes = stats.initialRtts.count();
     summary.medianInitialRttNs = stats.medianInitialRttNs();
     // Rows of streams without a packet since the last summary are shared with it.
-    summary.conversations
-        = conversations.rows( tracker, labels, stats.firstTimeSec, stats.firstTimeNsec );
+    summary.conversations = conversations.rows( pipeline.tracker(), pipeline.labels(),
+                                                stats.firstTimeSec, stats.firstTimeNsec );
     summary.otherStreamPackets = conversations.otherPackets();
     summary.otherStreamBytes = conversations.otherBytes();
     summary.endsInsideRecord = reader.truncated();
-    if ( tracker.limitReached() ) {
+    if ( pipeline.tracker().limitReached() ) {
         summary.streamCap = maxStreams;
     }
     if ( stats.endpointLimitReached() ) {
@@ -218,11 +212,11 @@ CaptureSummary summarise( CaptureStats&& stats, const StreamTracker& tracker,
 /// The summary of a capture still being converted, from a copy of what was
 /// collected so far: the conversion goes on with @p stats and
 /// @p conversations as they are.
-CaptureSummary summariseSoFar( const CaptureStats& stats, const StreamTracker& tracker,
-                               const StreamLabels& labels, const ConversationStats& conversations,
-                               const CaptureReader& reader, size_t maxStreams )
+CaptureSummary summariseSoFar( const CaptureStats& stats, const PacketPipeline& pipeline,
+                               const ConversationStats& conversations, const CaptureReader& reader,
+                               size_t maxStreams )
 {
-    return summarise( CaptureStats( stats ), tracker, labels, conversations, reader, maxStreams );
+    return summarise( CaptureStats( stats ), pipeline, conversations, reader, maxStreams );
 }
 
 /// A Failed result with @p error.
@@ -287,11 +281,9 @@ using Clock = std::chrono::steady_clock;
  * capture, stopped by @p limits as measured by @p clock.
  *
  * Every packet goes through the same steps for a file and a stream: the
- * Parser's record (its preview limited), the stream it belongs to, its TCP
- * analysis, its payload described in the stream, reassembled and, with a key
- * log, decrypted, the media an SDP announced, its stream labels, the
- * conversations' and the summary's counts, its line, the names its DNS
- * answers give (with host names shown), and its place in the CaptureIndex.
+ * Parser's record through the Packet Pipeline, then the conversations' and
+ * the summary's counts, its line, the names its DNS answers give (with host
+ * names shown), and its place in the CaptureIndex.
  */
 ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QString& inputPath,
                                  const QString& name, const QString& outputRoot,
@@ -418,21 +410,22 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
 
     CaptureStats stats;
     stats.maxEndpoints = options.maxEndpoints;
-    StreamTracker tracker( options.maxStreams );
-    StreamLabels labels;
     ConversationStats conversations;
-    MediaExpectations media;
-    TcpReassembly reassembly( options.reassemblyMegabytes * kMegabyte );
     // TLS sessions are decrypted only with a key log, read now and as it
     // grows; its secrets go with it when the conversion ends.
     std::optional<tls::KeyLogFile> keyLog;
-    std::optional<TlsDecryption> decryption;
+    PipelineOptions pipelineOptions;
+    pipelineOptions.previewChars = options.preview ? options.previewChars : 0;
+    pipelineOptions.tcpTimestamps = options.tcpTimestamps;
+    pipelineOptions.maxStreams = options.maxStreams;
+    pipelineOptions.reassemblyMemory = options.reassemblyMegabytes * kMegabyte;
     if ( !options.keyLogPath.isEmpty() ) {
         keyLog.emplace( options.keyLogPath );
-        decryption.emplace(
-            [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog->find( clientRandom ); },
-            [ &keyLog ] { return keyLog->bytesRead(); } );
+        pipelineOptions.tlsKeys
+            = [ &keyLog ]( const uint8_t* clientRandom ) { return keyLog->find( clientRandom ); };
+        pipelineOptions.tlsKeyLogBytes = [ &keyLog ] { return keyLog->bytesRead(); };
     }
+    PacketPipeline pipeline( pipelineOptions );
     // The names DNS answers gave addresses, only when they are shown.
     std::optional<HostNames> names;
     if ( options.layout.hostNames ) {
@@ -440,8 +433,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     }
     // The summary with what the decryption did and the endpoints' names.
     auto withDecryption = [ & ]( CaptureSummary summary ) {
-        if ( decryption ) {
-            summary.tlsSessionsDecrypted = decryption->sessionsDecrypted();
+        if ( keyLog ) {
+            summary.tlsSessionsDecrypted = pipeline.tlsSessionsDecrypted();
             summary.keyLogError = keyLog->error().toStdString();
         }
         if ( names ) {
@@ -480,7 +473,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         }
         LiveSnapshot snapshot;
         snapshot.summary = withDecryption(
-            summariseSoFar( stats, tracker, labels, conversations, reader, options.maxStreams ) );
+            summariseSoFar( stats, pipeline, conversations, reader, options.maxStreams ) );
         snapshot.elapsed
             = std::chrono::duration_cast<std::chrono::milliseconds>( lastSnapshot - started );
         snapshot.rawBytes = liveInput->bytesRead();
@@ -579,21 +572,10 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
                 return std::move( *failure );
             }
         }
-        limitPreview( pkt, options.preview ? options.previewChars : 0 );
-        if ( options.tcpTimestamps ) {
-            showTcpTimestamps( pkt );
-        }
-        const auto stream = tracker.track( pkt );
-        stats.addTcpAnalysis( analyseTcp( pkt, stream ) );
-        describeInStream( pkt, stream );
         const auto payload = reader.payloadOf( pkt );
-        const auto messages = reassembly.apply( pkt, stream, payload );
-        rememberInStream( pkt, stream ); // after the reassembly, which completes NEWKEYS
-        if ( decryption ) {
-            decryption->apply( pkt, stream, messages );
-        }
-        media.apply( pkt ); // after the reassembly, which completes SDP bodies
-        labels.apply( pkt, stream );
+        const auto outcome = pipeline.run( pkt, payload );
+        const auto& stream = outcome.stream;
+        stats.addTcpAnalysis( outcome.analysis );
         conversations.add( pkt, stream );
         stats.add( pkt );
         if ( !writeLine( formatter.format( pkt, stream.id, names ? &*names : nullptr ) ) ) {
@@ -601,7 +583,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         }
         // Behind its own line: a name labels the packets after its answer.
         if ( names ) {
-            names->learn( pkt, payload, messages.bytes );
+            names->learn( pkt, payload, outcome.messages.bytes );
         }
         if ( pkt.transport ) {
             index->noteStream( *pkt.transport, stream.id, reader.packetsRead() );
@@ -703,8 +685,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         result.status = ConversionResult::Status::Converted;
     }
     result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
-    result.summary = withDecryption( summarise( std::move( stats ), tracker, labels, conversations,
-                                                reader, options.maxStreams ) );
+    result.summary = withDecryption(
+        summarise( std::move( stats ), pipeline, conversations, reader, options.maxStreams ) );
     result.summary.packetNumbersUsedUp = numbersUsedUp;
     if ( gzip && gzip->cutOff() ) {
         // The capture ends where its gzip stream does: as one cut off.

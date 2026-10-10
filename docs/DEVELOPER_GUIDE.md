@@ -767,8 +767,8 @@ the declarations of the detectors and in-stream passes the tables use.
   and nowhere else: RTP has no port of its own and no header that tells
   it from any other UDP payload. The `MediaExpectations`
   (`media_expectations.h/cpp`) are that capture-wide state, a side table
-  the Converter owns next to the Stream Tracker and runs on every packet
-  after `describeInStream()`, before the Stream Labels: not in
+  the Packet Pipeline owns next to the Stream Tracker and runs on every
+  packet after the TCP Reassembly, before the Stream Labels: not in
   `StreamState`, since the signalling and the media are different
   conversations and an endpoint is expected before its stream exists. It
   maps "address port" to the call's Call-ID, whether RTP or RTCP is
@@ -854,7 +854,7 @@ the declarations of the detectors and in-stream passes the tables use.
   would take deriving the Initial keys). A short header carries no version
   and its connection ID no length: by its bytes alone it is not QUIC, and
   UDP 443 is still only the port hint `HTTPS`
-- `describeInStream()`, run by the Converter after the Stream Tracker, looks
+- `describeInStream()`, run by the Packet Pipeline after the Stream Tracker, looks
   at a packet again with its stream's state: it records in the stream's
   `QuicConnection` that a long header was seen and how long the connection
   ID its sender chose is, and labels the stream's short header packets
@@ -883,7 +883,7 @@ the declarations of the detectors and in-stream passes the tables use.
   numbered stream (two bytes and the bits 0x40 and 0x80 are left). A NEWKEYS
   may complete a message the TCP Reassembly put together (a key exchange
   reply too long for one segment), so the bits are set by
-  `rememberInStream()`, which the Converter runs after the reassembly, from
+  `rememberInStream()`, which the Packet Pipeline runs after the reassembly, from
   the packet's `StreamCue` as the reassembly left it (`describeMessages()`
   takes the cue of the reassembled description, a segment of a message
   has none). `describeInStream()`, before the reassembly, goes by the bits
@@ -918,8 +918,8 @@ forgot to escape.
 A preview is marked as such (`PayloadDescription::preview`), and the parser
 records its length in `PacketRecord::previewBytes`: it ends the Info, after
 the separator. `limitPreview()` cuts it to the length the user chose, with
-an ellipsis, or removes it with its separator. The Converter calls it on
-each packet as the reader hands it out, before the stream steps touch the
+an ellipsis, or removes it with its separator. The Packet Pipeline calls it
+on each packet as the reader hands it out, before the stream steps touch the
 Info, so the dissectors take no options; a packet whose stream continues a
 protocol then reads `Continuation` alone, as one without a preview.
 
@@ -995,7 +995,7 @@ The Formatter keeps no conversations: the Stream column shows the stream
 number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
 `kUnnumbered`.
 
-`StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Converter,
+`StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Packet Pipeline,
 follows the conversations of a capture. Only TCP and UDP packets have a
 stream: those the parser read a TCP or UDP header of (`PacketRecord::transport`
 is set) and that share addresses and ports, in either direction. TCP and
@@ -1026,7 +1026,7 @@ them in a bounded table of its own and a bit or two here. A UDP stream pays for 
 ones, as both transports share `StreamState`.
 
 `analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
-by the Converter after the Stream Tracker, shows a TCP segment's `Seq=` and
+by the Packet Pipeline after the Stream Tracker, shows a TCP segment's `Seq=` and
 `Ack=` relative to the start of each direction, as Wireshark does by
 default. It follows Wireshark's rules: a SYN's sequence number is its
 direction's base, so the SYN shows `Seq=0`; a direction whose SYN was not
@@ -1057,7 +1057,7 @@ MSS=1460 SACK_PERM TSval=12345 TSecr=0 WS=128` (`WS=` is the multiplier,
 `1 << shift` with the shift capped at 14). Other segments show none of
 them, except the timestamps when `ConversionOptions::tcpTimestamps` asks
 for them, as Wireshark does on every segment: the parser keeps them in
-`PacketRecord::tcpTimestamps`, and the Converter calls
+`PacketRecord::tcpTimestamps`, and the Packet Pipeline calls
 `showTcpTimestamps()`, which puts ` TSval=… TSecr=…` after the TCP fields
 (`tcpFieldsEnd()`, before the payload description), before the TCP
 Analysis runs.
@@ -1085,9 +1085,9 @@ the packet's stream is known, so on its own the Protocol column changes
 within a conversation: a 443 stream alternates between `TLS` (a segment
 that starts a record) and `HTTPS` (the port's guess for one in the middle
 of a record), an HTTP body on port 8080 shows `HTTP-Alt`, on port 3000
-`TCP`. `StreamLabels` (pure C++), owned by the Converter next to the Stream
-Tracker, puts that right after the fact: `apply()` runs on every packet
-after the Stream Tracker, the TCP Analysis and `describeInStream()`, so the
+`TCP`. `StreamLabels` (pure C++), owned by the Packet Pipeline next to the
+Stream Tracker, puts that right after the fact: `apply()` runs on every
+packet as the pipeline's last step, after `describeInStream()`, so the
 QUIC short headers and HTTP/2 frames that only their stream makes
 recognisable count as recognised too. The first label a detector
 recognised on a stream (`PacketRecord::protocolRecognised`) sticks to it;
@@ -1111,7 +1111,7 @@ one byte of `StreamState`, a number into the capture's table of labels seen
 The describer sees one segment at a time, so a TLS record, an HTTP header
 section or a DNS-over-TCP message that spans segments used to be named, cut,
 by its first segment and as `Continuation` by the rest. `TcpReassembly`
-(pure C++), owned by the Converter next to the Stream Tracker, puts such a
+(pure C++), owned by the Packet Pipeline next to the Stream Tracker, puts such a
 message together: `apply()` runs on every packet after
 `describeInStream()` and before the Stream Labels, with the segment's
 captured payload, which the reader hands out
@@ -1244,8 +1244,8 @@ steps run over a capture built with the frame builders.
 
 #### TLS Decryption (`tls_decryption.h/cpp`, `tls_key_log.h/cpp`, `tls_crypto.h/cpp`, `hpack.h/cpp`)
 With a key log (`ConversionOptions::keyLogPath`, the option *TLS
-decryption: key log file*), the Converter runs a `TlsDecryption` (pure
-C++) on every packet right after the TCP Reassembly, with the messages it
+decryption: key log file*), the Packet Pipeline runs a `TlsDecryption`
+(pure C++) on every packet right after the TCP Reassembly, with the messages it
 returned: whole TLS records, in sequence order. Without one nothing of
 it runs, and the text is the same as before.
 
@@ -1606,21 +1606,12 @@ share a base name), and `cmake --install` puts them there too.
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it and takes each packet through the same
-steps, in this order: `limitPreview()` cuts its preview, the Stream Tracker
-gives it its stream (`track()`), the TCP Analysis shows its numbers relative
-and marks it (`analyseTcp()`), the Payload Describer looks at it again in
-its stream (`describeInStream()`), the TCP Reassembly describes a message
-that spans segments where it completes (`TcpReassembly::apply()`), the
-Payload Describer notes what the completed message tells its stream (an SSH
-NEWKEYS, a WebSocket upgrade: `rememberInStream()`), with a
-key log the TLS Decryption decrypts the whole records it returned
-(`TlsDecryption::apply()`), the
-`MediaExpectations` describe it as RTP or RTCP where SDP announced them
-(`apply()`), the Stream Labels name it by its stream's protocol
-(`StreamLabels::apply()`), the `ConversationStats` and the `CaptureStats`
-count it, the Packet Formatter writes its line to a new output file, and its
-place is noted in a `CaptureIndex` (see *Packet Panel*); progress is
-reported and a cancel flag checked between packets. `convertStream()` does the same for a
+steps: the Packet Pipeline (below) describes it in its stream, the
+`ConversationStats` and the `CaptureStats` count it, the Packet Formatter
+writes its line to a new output file, the `HostNames` learn from its DNS
+answers (with host names shown), and its place is noted in a `CaptureIndex`
+(see *Packet Panel*); progress is reported and a cancel flag checked
+between packets. `convertStream()` does the same for a
 capture read from a stream (*The Capture Source seam*), without progress
 but live (see *Live conversion* below): both run one loop
 (`convertOrThrow()`), so every packet of a file and of a stream goes
@@ -1639,6 +1630,53 @@ failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
+
+#### The Packet Pipeline (`packet_pipeline.h/cpp`)
+The steps every packet goes through between the reader and its line that
+follow its stream have one home: a `PacketPipeline` (pure C++), which owns
+the state they keep for the whole capture (the Stream Tracker, the TCP
+Reassembly, the TLS Decryption, the `MediaExpectations` and the Stream
+Labels) and the order they run in. The Converter makes one per conversion
+from its options (`PipelineOptions`: the preview length, the TCP timestamps,
+the stream cap, the reassembly's memory and, with a key log, a lookup of a
+session's secrets) and calls `run(pkt, payload)` once per packet, with the
+captured transport payload the reader hands out. `run()` rewrites the
+packet's protocol and Info and returns a `PacketOutcome`: the packet's
+stream, what the TCP Analysis found (its markers and iRTT, for the
+`CaptureStats`) and the messages the TCP Reassembly completed (for the
+`HostNames`, valid until the next packet). For the Capture Summary the
+Converter asks it for the Stream Tracker and the Stream Labels (the
+Conversations table, the stream cap) and `tlsSessionsDecrypted()`.
+
+The order, and why each step comes where it does, is stated once, in
+`packet_pipeline.h`:
+
+1. `limitPreview()` cuts the preview, before anything else touches Info,
+   whose end it cuts;
+2. with the option, `showTcpTimestamps()`;
+3. the Stream Tracker gives the packet its stream (`track()`);
+4. the TCP Analysis shows its numbers relative and marks it
+   (`analyseTcp()`), and forgets the state of a TCP stream's old connection
+   before any other step reads it;
+5. the Payload Describer looks at it again in its stream
+   (`describeInStream()`);
+6. the TCP Reassembly describes a message that spans segments where it
+   completes (`TcpReassembly::apply()`);
+7. the Payload Describer notes what the completed message tells its stream
+   (an SSH NEWKEYS, a WebSocket upgrade: `rememberInStream()`), after the
+   reassembly, which completes it;
+8. with a key log, the TLS Decryption decrypts the whole records the
+   reassembly returned (`TlsDecryption::apply()`);
+9. the `MediaExpectations` describe it as RTP or RTCP where SDP announced
+   them (`apply()`), after the reassembly, which completes SDP bodies, and
+   before the Stream Labels, so that the RTP label sticks;
+10. the Stream Labels name it by its stream's protocol
+    (`StreamLabels::apply()`).
+
+What the Converter does with the packet after that (the counts, the line,
+the names, the index, the live output) stays the Converter's. Tests go in
+`tests/packet_pipeline_test.cpp`, through `run()` over a capture built with
+the frame builders or a corpus capture.
 
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the
@@ -2253,9 +2291,9 @@ export, conversation statistics):
   the export with the payloads its script wrote.
 
 - **The Conversations table** (`conversations.h/cpp`, pure C++;
-  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter
-  next to the Stream Tracker, counts each numbered stream after the Stream
-  Labels ran (`add(pkt, stream)`): packets and wire bytes per direction,
+  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter,
+  counts each numbered stream after the Packet Pipeline ran
+  (`add(pkt, stream)`): packets and wire bytes per direction,
   its earliest and latest packet, the direction of its first packet (end
   A is that packet's source) and its last label byte, 64 bytes per stream.
   Packets of `kUnnumbered` streams are counted together, so the stream cap

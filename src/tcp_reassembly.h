@@ -122,8 +122,8 @@ public:
                             size_t streamLimit = kStreamLimit );
 
     /**
-     * Run on every packet, in capture order, after describeInStream() and
-     * before the Stream Labels, with the packet's captured TCP payload
+     * Run on every packet, in capture order, by the Packet Pipeline
+     * (packet_pipeline.h), with the packet's captured TCP payload
      * (CaptureReader::payloadOf()).  Rewrites the Info and protocol of a
      * segment as the class describes, and returns the messages it completed.
      * Packets of other transports, of no stream or one past the stream

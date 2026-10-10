@@ -25,10 +25,9 @@
  * The Payload Describer names one payload at a time, inside the parser,
  * before the packet's stream is known: a segment in the middle of an HTTP
  * body or a TLS record matches no detector and gets the port's guess
- * (HTTPS, HTTP-Alt) or none.  The Stream Labels run after the Stream
- * Tracker and the TCP Analysis and give such a packet the label its stream
- * was recognised by, so that the Protocol column names the whole
- * conversation.
+ * (HTTPS, HTTP-Alt) or none.  The Stream Labels, the last step of the
+ * Packet Pipeline, give such a packet the label its stream was recognised
+ * by, so that the Protocol column names the whole conversation.
  *
  * Pure C++ — no Qt dependency.
  */
@@ -45,7 +44,7 @@ namespace tcpdump {
 
 /**
  * The protocols recognised on the streams of one capture, owned by the
- * Converter next to the Stream Tracker.
+ * Packet Pipeline next to the Stream Tracker.
  *
  * Each stream keeps the protocol in one byte of its state, a number into
  * the labels seen so far in the capture; at most kMaxLabels distinct labels
@@ -57,8 +56,8 @@ public:
     static constexpr size_t kMaxLabels = 255;
 
     /**
-     * Run on every packet, in capture order, after the Stream Tracker and
-     * the TCP Analysis.
+     * Run on every packet, in capture order, by the Packet Pipeline
+     * (packet_pipeline.h).
      *
      * The first label a detector recognises on @p stream sticks to it.  A
      * later packet of it that no detector recognises

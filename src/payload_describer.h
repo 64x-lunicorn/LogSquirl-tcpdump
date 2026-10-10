@@ -149,9 +149,8 @@ void redescribe( PacketRecord& pkt, const char* label, const std::string& descri
 /**
  * Describe @p pkt again with what its @p stream has shown so far, and
  * remember in the stream's state what later packets need: run on every
- * packet, in capture order, after the Stream Tracker and the TCP Analysis
- * (which forgets the state of a TCP stream's old connection), before the
- * Stream Labels.
+ * packet, in capture order, by the Packet Pipeline, which says where among
+ * its steps (packet_pipeline.h).
  *
  * A UDP stream that carried a QUIC long header is a QUIC connection: its
  * short header packets, which carry no version, are labelled QUIC and
@@ -181,8 +180,8 @@ void describeInStream( PacketRecord& pkt, const Stream& stream );
 /**
  * Remember in @p stream's state what @p pkt, as the TCP Reassembly left
  * its description (PacketRecord::streamCue), tells the stream's later
- * packets: run on every packet, in capture order, after the TCP
- * Reassembly (after describeInStream() where there is none).  An SSH-2
+ * packets: run on every packet, in capture order, by the Packet Pipeline
+ * (packet_pipeline.h).  An SSH-2
  * banner makes the stream an SSH connection, a NEWKEYS encrypts what its
  * direction sends after it, a 101 response with "Upgrade: websocket" makes
  * it a WebSocket connection.
@@ -194,9 +193,8 @@ void rememberInStream( const PacketRecord& pkt, const Stream& stream );
  * to its first @p maxChars characters, followed by an ellipsis, so that a
  * shorter preview can be chosen than the describer's kMaxPreviewChars; with
  * @p maxChars 0, leave it out, and the separator before it.  A preview no
- * longer than that, and a packet without one, are left as they are.  Run on
- * a packet as the reader hands it out, before anything else touches its
- * Info.
+ * longer than that, and a packet without one, are left as they are.  The
+ * Packet Pipeline runs it first (packet_pipeline.h).
  */
 void limitPreview( PacketRecord& pkt, size_t maxChars );
 
