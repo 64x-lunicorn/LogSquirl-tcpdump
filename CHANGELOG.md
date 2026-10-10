@@ -51,7 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   required argument left empty, a number out of its range, a value its
   pattern does not match or a file that must exist and does not keeps
   Start disabled, and starting a saved choice that breaks such a rule is
-  refused with the same message. Values are remembered per interface
+  refused with the same message, the extcap asked for its arguments first
+  when the form has not shown them yet. Values are remembered per interface
   in `settings.ini`, except passwords (and arguments the extcap says not to
   save), kept for the session only. It captures with `--capture --fifo`
   into a FIFO the plugin makes in its private temporary directory (a named

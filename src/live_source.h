@@ -239,6 +239,25 @@ public:
     /// empty if it can.  By default an interface must be chosen.
     virtual QString validate( const LiveChoice& choice ) const;
 
+    /// Whether validate() can check @p choice only once the kind has asked
+    /// for what it needs (askForValidation()): an extcap whose interface's
+    /// arguments were not asked this session.  On the UI thread; by default
+    /// false, as validate() needs nothing else.
+    virtual bool validationNeedsAsking( const LiveChoice& choice ) const
+    {
+        (void)choice;
+        return false;
+    }
+    /// Ask, at most @p timeout, for what validate() needs to check @p
+    /// choice; on a worker thread, as a listing (runListing()).  What it
+    /// cannot learn validate() does not check: the capture says what it lacks.
+    virtual void askForValidation( const LiveChoice& choice,
+                                   std::chrono::milliseconds timeout ) const
+    {
+        (void)choice;
+        (void)timeout;
+    }
+
     /// A new widget for the kind's own options (LiveChoice::options), which
     /// the form shows below its fields while the kind is chosen, and owns;
     /// null (the default) for a kind without options.  On the UI thread.
@@ -312,6 +331,8 @@ QString liveLimitsProblem( const LiveLimits& limits );
  * (captureFilterProblem()), the limits (liveLimitsProblem()), and what the
  * kind's validate() says of it, its options too.  Needs no widget: what a
  * form has not finished asking yet (an extcap's arguments) is the form's.
+ * What the kind must ask first (LiveSourceKind::validationNeedsAsking())
+ * the Live Capture Session asks before it starts a choice, and checks again.
  */
 QString liveChoiceProblem( const LiveSourceRegistry* sources, const LiveChoice& choice );
 

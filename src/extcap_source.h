@@ -266,8 +266,14 @@ public:
                                 std::chrono::milliseconds timeout ) const override;
     /// An extcap that is there and an interface; then the rules of the
     /// interface's arguments (extcapArgumentProblem()), once config() was
-    /// asked for them: until then the extcap itself says what it lacks.
+    /// asked for them (askForValidation(), before a start).
     QString validate( const LiveChoice& choice ) const override;
+    /// Whether the arguments of @p choice's interface are not known yet:
+    /// config() was not asked for them this session.
+    bool validationNeedsAsking( const LiveChoice& choice ) const override;
+    /// config() for @p choice's interface, so that validate() knows its arguments.
+    void askForValidation( const LiveChoice& choice,
+                           std::chrono::milliseconds timeout ) const override;
     LiveOptionsWidget* makeOptionsWidget() const override;
     /// The capture of @p choice but its `--fifo <pipe>`, which makeSource()
     /// adds once it has made the pipe.

@@ -77,8 +77,7 @@ void LiveCapture::start()
     // The worker uses copies and the flags it shares; this object only to
     // post to, which outlives the worker (the destructor waits for it).
     pool_.start( [ this, name = name_, outputRoot = outputRoot_, options = options_,
-                   makeSource = makeSource_, limits = limits_, clock = clock_, stop = stop_,
-                   cancel = cancel_ ] {
+                   makeSource = makeSource_, limits = limits_, clock = clock_, stop = stop_ ] {
         ConversionResult result;
         std::unique_ptr<ByteSource> source;
         try {
@@ -98,16 +97,15 @@ void LiveCapture::start()
                     emit snapshotTaken( snapshot );
                 } );
             };
-            result = convertStream( *source, name, outputRoot, cancel.get(), options, observer,
-                                    limits, clock );
+            result = convertStream( *source, name, outputRoot, nullptr, options, observer, limits,
+                                    clock );
         }
         else if ( result.error.isEmpty() ) {
             result.error = QStringLiteral( "The capture source could not be opened" );
         }
-        post( [ this, result, cancel ] {
+        post( [ this, result ] {
             running_ = false;
-            // A cancel that came after the conversion ended still wins.
-            emit finished( applyCancelRequest( result, cancel.get() ) );
+            emit finished( result );
         } );
         // May take a while: a capture program is ended here.
         source.reset();
@@ -120,12 +118,6 @@ void LiveCapture::start()
 
 void LiveCapture::stop()
 {
-    stop_->store( true );
-}
-
-void LiveCapture::cancel()
-{
-    cancel_->store( true );
     stop_->store( true );
 }
 

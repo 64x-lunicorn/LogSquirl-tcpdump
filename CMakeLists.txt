@@ -172,6 +172,7 @@ add_library(logsquirl_tcpdump SHARED
     src/conversation_table.cpp
     src/packet_panel.cpp
     src/live_capture.cpp
+    src/live_capture_session.cpp
     src/live_source.cpp
     src/local_source.cpp
     src/adb_source.cpp

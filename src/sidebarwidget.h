@@ -29,10 +29,10 @@
 
 #include "export_dialog.h"
 #include "live_capture.h"
+#include "live_capture_session.h"
 #include "live_source.h"
 #include "pcap_converter.h"
 
-#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QLabel>
 #include <QPlainTextEdit>
@@ -49,7 +49,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
 
 namespace tcpdump {
 
@@ -70,10 +69,6 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
 /// buffer's file.
 QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
                           const LiveLimits& limits = {} );
-
-/// What the sidebar says of a live capture @p name that @p condition of
-/// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
-QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
 
 /**
  * Sidebar widget displayed in the LogSquirl sidebar panel.
@@ -122,13 +117,17 @@ QString liveStopText( const QString& name, StopCondition condition, const LiveLi
  * summary in the sidebar follows the snapshots while it runs, in every tab
  * of the capture, and is final when it ends.
  *
+ * A live capture's lifecycle and outcome are its LiveCaptureSession's
+ * (live_capture_session.h): the sidebar is its host (a tab, a notification)
+ * and keeps its summaries, and shows what it is told.
+ *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
  * the widget cancels a running conversion and waits for it: no code of the
  * plugin runs on the worker thread afterwards, and the host may unload the
  * library.
  */
-class SidebarWidget : public QWidget {
+class SidebarWidget : public QWidget, private LiveCaptureHost, private LiveCaptureCatalog {
     Q_OBJECT
 
 public:
@@ -217,11 +216,12 @@ public:
      * <name>.pcap or .pcapng.  Its tab opens, following the file, once the
      * first packet line is in it; a capture that ends without packets opens
      * none and says so.  It stops by itself, and keeps a ring buffer, as
-     * @p limits say.  False, with a notification, while a capture is being
-     * read or captured.
+     * @p limits say; a failure is explained by @p kind, if given.  False,
+     * with a notification, while a capture is being read or captured.
      */
     bool startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource,
-                           const LiveLimits& limits = {} );
+                           const LiveLimits& limits = {},
+                           std::shared_ptr<const LiveSourceKind> kind = {} );
 
     /**
      * Capture @p choice live: its source (a kind of the live sources, see
@@ -229,7 +229,9 @@ public:
      * interface (liveCaptureName()).  The choice is saved in settings.ini.
      * False, with a notification, if the source is unknown or unavailable,
      * the choice is not one it can capture, or a capture is being read or
-     * captured.
+     * captured.  A source that must be asked first (an extcap's arguments)
+     * is asked, and then the choice starts, or is refused with a
+     * notification (LiveCaptureSession::start()).
      */
     bool startLiveCapture( const LiveChoice& choice );
 
@@ -277,10 +279,16 @@ public:
     /// End the running live capture and keep what was captured.
     void stopLiveCapture();
 
-    /// Whether a live capture runs.
+    /// Whether a live capture runs, or a choice is being checked to start.
     bool isCapturing() const
     {
-        return capturing_;
+        return live_ && live_->isBusy();
+    }
+
+    /// The Live Capture Session the Live capture section shows.
+    LiveCaptureSession* liveSession() const
+    {
+        return live_.get();
     }
 
     /// Ask where to save the raw capture of the tab in front, and copy it
@@ -302,6 +310,7 @@ public:
     void setTempRoot( const QString& dir )
     {
         tempRoot_ = dir;
+        live_->setOutputRoot( dir );
     }
 
     /// The directory the temporary directories are created in.
@@ -338,19 +347,22 @@ private:
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
-    /// Show the idle or the capturing controls.
-    void setCapturing( bool capturing );
-    /// The live capture's file is ready: keep its summary, open its tab.
-    void openLiveCapture( const QString& logPath, const QString& rawPath );
-    /// The live capture's summary so far.
-    void takeLiveSnapshot( const LiveSnapshot& snapshot );
-    /// Show the outcome of a live capture, and return to idle.
-    void finishLiveCapture( const ConversionResult& result );
-    /// The live capture's worker is done: start the capture Start live
-    /// capture… asked for meanwhile.
-    void startPendingLiveCapture();
-    /// Show the outcome of a live capture and return to idle.
-    void reportLiveOutcome( const ConversionResult& result );
+    // The Live Capture Session's host and capture catalog.
+    void openTab( const QString& logPath ) override;
+    void notify( const QString& message ) override;
+    QString busyElsewhere() const override;
+    void addFile( const QString& logPath, const QString& rawPath, const QString& name ) override;
+    void updateFile( const QString& logPath, const CaptureSummary& summary,
+                     std::shared_ptr<const CaptureIndex> index, qint64 fileSize ) override;
+    void setFileError( const QString& logPath, const QString& error ) override;
+
+    /// A live capture started: clear the last one's error and stderr lines.
+    void showLiveStart();
+    /// Show the live capture's state: the controls of a capture running,
+    /// stopping, being checked, or none.
+    void showLiveState();
+    /// Show the outcome of a live capture.
+    void showLiveOutcome( const LiveOutcome& outcome );
     /// Whether @p key is a text file of the live capture, running or the last.
     bool isLiveKey( const QString& key ) const;
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
@@ -361,7 +373,7 @@ private:
     /// can be captured; its tooltip says why not.
     void updateStartButton();
     /// Show why the live capture failed, and what its source says to do.
-    void showLiveError( const QString& error );
+    void showLiveError( const LiveOutcome& outcome );
     /// Report the outcome of the export @p request asked for.
     void finishExport( const ExportRequest& request, ExportResult result );
 
@@ -397,27 +409,17 @@ private:
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
 
-    bool capturing_ = false;
-    /// The live capture, running or the last one; kept until the next starts,
-    /// as its worker may still be ending the capture program.
-    std::unique_ptr<LiveCapture> live_;
-    QString liveKey_; ///< The live capture's text file, once it is there.
-    /// Every text file of the live capture, oldest first, the last liveKey_:
-    /// a ring buffer's, one per raw file, each in a tab of its own.
+    /// The live capture, running or the last one, and what it comes to.
+    std::unique_ptr<LiveCaptureSession> live_;
+    /// The keys in converted_ of the live capture's text files, oldest
+    /// first: a ring buffer's, one per raw file, each in a tab of its own.
     std::vector<QString> liveKeys_;
-    LiveSnapshot liveSnapshot_; ///< The latest snapshot of the live capture.
-    LiveLimits liveLimits_;     ///< The live capture's stop conditions and ring buffer.
-    QElapsedTimer liveClock_;   ///< Since the live capture started.
-    QTimer liveTicker_;         ///< Moves the elapsed time on.
+    QTimer liveTicker_; ///< Moves the elapsed time on.
     /// Where the live capture form and dialog list devices and interfaces;
     /// cancelled and waited for when the widget goes.
     QThreadPool listingPool_;
     /// The kinds of live sources offered.
     std::shared_ptr<const LiveSourceRegistry> liveSources_;
-    /// The kind of the live capture, running or the last one.
-    std::shared_ptr<const LiveSourceKind> liveKind_;
-    /// Started when the running capture has ended (Start live capture…).
-    std::optional<LiveChoice> pendingStart_;
     LiveChoiceAsker askLiveChoice_; ///< Shows the Start live capture dialog.
     StopConfirmer confirmStop_;     ///< Asks whether to stop the running capture.
 

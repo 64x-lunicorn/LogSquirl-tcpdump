@@ -33,8 +33,10 @@
  * ProcessSource must be (its QProcess belongs to the thread that reads it).
  * Stop ends the stream and finalises: the last lines are flushed, the raw
  * capture is closed, the summary is final.  A stop condition of its
- * LiveLimits, reached, ends it the same way.  Cancel also removes what was
- * written.  The outcome is posted before the source is destroyed, so that a
+ * LiveLimits, reached, ends it the same way.  Nothing cancels a live
+ * capture: what it wrote is kept for its tabs, or removed by the Live
+ * Capture Session (live_capture_session.h) when no tab opened.  The
+ * outcome is posted before the source is destroyed, so that a
  * capture program that takes its time to end (ProcessSource::terminate())
  * does not hold it up; done() follows once the source is gone.
  *
@@ -108,8 +110,6 @@ public:
     void start();
     /// End the capture and keep what was captured: finished() follows.
     void stop();
-    /// End the capture and remove what was written: finished() follows.
-    void cancel();
 
     /// Whether the capture was started and has not finished yet.
     bool isRunning() const
@@ -138,8 +138,8 @@ signals:
     /// A line the capture program wrote to stderr.
     void stderrLine( const QString& line );
     /// The capture ended: Converted (stopped, or its stream closed), Failed
-    /// (keeping what was captured, if a packet came), Cancelled, or Stopped
-    /// before its capture header had come (nothing was captured).
+    /// (keeping what was captured, if a packet came), or Stopped before its
+    /// capture header had come (nothing was captured).  Never Cancelled.
     void finished( const tcpdump::ConversionResult& result );
     /// After finished(): the source is gone too, its capture program ended.
     void done();
@@ -157,9 +157,8 @@ private:
     bool running_ = false;
     bool started_ = false;
     bool done_ = false;
-    /// Ends the stream (Stop and Cancel), and removes what was written (Cancel).
+    /// Ends the stream.
     std::shared_ptr<std::atomic_bool> stop_ = std::make_shared<std::atomic_bool>( false );
-    std::shared_ptr<std::atomic_bool> cancel_ = std::make_shared<std::atomic_bool>( false );
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
 };

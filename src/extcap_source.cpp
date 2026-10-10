@@ -726,6 +726,23 @@ QString ExtcapSourceKind::validate( const LiveChoice& choice ) const
     return extcapArgumentProblem( known->second, choice.options, choice.networkInterface );
 }
 
+bool ExtcapSourceKind::validationNeedsAsking( const LiveChoice& choice ) const
+{
+    if ( choice.device.isEmpty() || choice.networkInterface.isEmpty() ) {
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock( knownArgs_->mutex );
+    return knownArgs_->byInterface.count( std::make_pair( choice.device, choice.networkInterface ) )
+           == 0;
+}
+
+void ExtcapSourceKind::askForValidation( const LiveChoice& choice,
+                                         std::chrono::milliseconds timeout ) const
+{
+    // Remembers the arguments; an extcap that cannot say leaves them unknown.
+    config( choice.device, choice.networkInterface, timeout );
+}
+
 LiveOptionsWidget* ExtcapSourceKind::makeOptionsWidget() const
 {
     // Its listings may outlive the registry this kind is in: they hold a copy.

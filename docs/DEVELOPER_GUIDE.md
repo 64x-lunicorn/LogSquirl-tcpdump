@@ -1800,21 +1800,75 @@ own and posts what it is told to its own (the UI) thread as signals:
 `finished( ConversionResult )`. The source is made on the worker by a
 `SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
 ProcessCommand )` for a capture program), as a `ProcessSource` must be.
-`stop()` sets the source's stop flag, `cancel()` also the cancel flag;
+`stop()` sets the source's stop flag; nothing cancels a live capture (its
+outcome is never Cancelled: what it wrote is kept for its tabs, or removed
+by the Live Capture Session when none opened).
 `setLimits()` and `setClock()` before `start()` hand the conversion its
 `LiveLimits` and clock, the same for every source kind. The
 outcome is posted before the source is destroyed, so a program that takes
 up to `kTerminateGrace` to end does not delay it; `done()` follows once the
-source is gone (`isDone()`). The UI thread never waits for a worker: the
-sidebar hands a capture that may still run (the last one, as the next
-starts; its own, as it is destroyed) to `retireLiveCapture()`, which
-disconnects and stops it and keeps it until it is done; a restart from
-*Start live capture…* starts the next on the last one's `done()`, so that
-two capture programs never run at once. The plugin's shutdown is the one
+source is gone (`isDone()`). The UI thread never waits for a worker: a
+capture that may still run (the last one, as the next starts; the
+session's own, as it is destroyed) is handed to `retireLiveCapture()`,
+which disconnects and stops it and keeps it until it is done; a restart
+from *Start live capture…* starts the next on the last one's `done()`, so
+that two capture programs never run at once. The plugin's shutdown is the one
 place that waits: `cancelListings()` first (a worker may be in a listing,
 e.g. adb's probe), `terminateCaptureProcesses()`, then `joinLiveCaptures()`
 stops and destroys every retired capture, whose destructor waits for its
 worker, before the library is unloaded.
+
+#### The Live Capture Session (`live_capture_session.h/cpp`)
+A live capture's lifecycle and outcome are decided in one place, a
+`LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
+drives and listens to; the sidebar only shows what it is told. The session
+reaches LogSquirl through a `LiveCaptureHost` (`openTab( logPath )`,
+`notify( message )`, and `busyElsewhere()`: a capture file being read) and
+the summaries the sidebar keeps per text file through a
+`LiveCaptureCatalog` (`addFile( logPath, rawPath, name )`, `updateFile(
+logPath, summary, index, fileSize )`, `setFileError( logPath, error )`);
+the sidebar is both. A capture runs through a `LiveRun` (`start( Listener
+)`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
+stderrLine, finished and done, as `LiveCapture`'s signals) made by a
+`LiveRunFactory` from a `LiveRunRequest` (name, output root, options,
+source factory, limits, clock): `runOnWorker()`, a `LiveCapture` that is
+retired when the run is let go of, in the app; `setRunFactory()` in tests.
+
+- `start( LiveChoice )` refuses, with a notification, while something
+  else is busy or a capture runs, or with `liveChoiceProblem()`'s message;
+  a kind whose `validationNeedsAsking( choice )` (an extcap whose
+  interface's arguments were not asked this session) is asked first
+  (`askForValidation()`, on a worker thread of the session under a
+  `ListingCancelScope`, state `Checking`), and the choice is checked
+  again and refused, or started. A start saves the choice and runs
+  `kind->makeSource( choice )` named `liveCaptureName( choice )`.
+  `start( name, SourceFactory, limits, kind )` starts a stream by name; the
+  kind, if given, explains its failure as for a choice.
+- Each text file (a ring buffer's, one per raw file) goes into the catalog
+  before its tab is opened; each snapshot replaces the summary, index and
+  size of every text file of the capture, and so does the outcome, each
+  file then with its own raw file's size.
+- `stop()` stops the capture (`Stopping`), or drops a check that runs.
+  `startWhenIdle( choice )` (*Start live capture…*) stops a running capture
+  and starts `choice` on its run's `done`, the pending start
+  (`hasPendingStart()`).
+- The outcome (`LiveOutcome`, also `outcome()`, and the signal
+  `finished`): `Captured` (a stop condition that ended it is
+  `stoppedBy`, and the user is told `liveStopText()`), `Empty` (no packet:
+  no tab opened, its directory removed, the user told), `Stopped` (before
+  the header: nothing left, not a failure) or `Failed` (the user told the
+  error; `guidance` is the kind's `explainFailure()`; the catalog's files
+  keep the capture with the error when a packet came). `files` are the
+  text files opened in tabs.
+
+The session's signals (`stateChanged`, `started`, `fileOpened`,
+`progressed`, `stderrLine`, `finished`) are what the sidebar renders:
+the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
+the error and Guidance, the summary label. `tests/fake_live_session.h`
+has `FakeLiveHost` (both adapters, recording) and `ScriptedRuns` (runs the
+test tells what happens, on its own thread), so that
+`tests/live_capture_session_test.cpp` tests the session without a widget
+or an event loop.
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
@@ -1830,6 +1884,7 @@ knows none of them. A kind answers:
 | `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
 | `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` whether it can tell yet (an extcap's widget asking for the arguments); whether the options can be captured with is `validate()`'s |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too), the last part of `liveChoiceProblem()`; by default an interface is needed |
+| `validationNeedsAsking( choice )`, `askForValidation( choice, timeout )` | UI, worker | Whether `validate()` can check the choice only once the kind has asked for something (an extcap's arguments), and asking for it, bounded by the timeout; by default nothing needs asking |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a local shell's. Where a remote shell must read it (adb's device shell, the server's over ssh, which get one joined command line), every value is `shellQuote()`d for it, so that it is one argument there too: the Android and SSH kinds build their device and server scripts so, and a custom command says `{filter:sh}` |
 | `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
@@ -1847,7 +1902,7 @@ for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
 worker thread cancels those run under it once the flag is set (the form
 cancels its own listings as it goes); the kinds need not know of either. `liveChoiceProblem( sources, choice )`
 is the one answer to "can this choice start?", for the form's Start button
-and for `startLiveCapture( LiveChoice )` alike, with no widget: a source
+and for the Live Capture Session's start alike, with no widget: a source
 that is there and available, a snaplen of 1 to `kMaxSnaplen`, the capture
 filter, the limits (`liveLimitsProblem()`), then the kind's `validate()`.
 `captureFilterProblem()` catches
@@ -2022,8 +2077,10 @@ a required argument without a value, a number that is none or out of
 arguments it was told per extcap and interface (shared by the kind's
 copies, so the widget's listing counts), and `validate()` checks a choice
 by them: a saved choice started without the form is refused as the form
-refuses it. An interface never asked is not checked; the extcap says what
-it lacks. `tests/extcap_source_test.cpp`
+refuses it. An interface never asked is asked by the Live Capture Session
+before it starts the choice (`validationNeedsAsking()`,
+`askForValidation()`); one the extcap cannot say is not checked, and the
+extcap says what it lacks. `tests/extcap_source_test.cpp`
 runs fake extcap scripts (`fakedump` answering from files and writing a
 synthetic pcap into the FIFO it is given, `brokendump` failing), so that
 discovery, every argument type, hostile values (passed as one word, no
@@ -2153,22 +2210,23 @@ Qt UI that provides:
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
 
-A live capture, `startLiveCapture( name, SourceFactory )`, runs in a
-`LiveCapture`. On `readyToOpen` the sidebar keeps the capture's entry under
-its text file and calls `open_file( path, follow = 1 )` on the UI thread
-(LogSquirl#796); snapshots replace the entry's summary through
-`updateSummary( textPath, summary )`, which redraws it if its tab is in
-front, and update a label with packets, bytes, packets/s (as of the
-snapshot) and the elapsed time (ticked by a 1 s timer) in place of the
-progress bar; the snapshot's index replaces the entry's, so the Packet
-Panel shows the packets captured so far. **Stop** calls `stopLiveCapture()`. At the end the final
-summary and index replace the last snapshot's; a capture without packets has its files
-removed and a notification; a failed one keeps its entry with the error
-shown above the summary. **Save capture…**, shown for a tab whose capture
-has a raw file, copies it where `setSaveChooser()`'s dialog says. stderr
-lines go to the host's log. Opening a file and a live capture exclude each
-other; the `LiveCapture` is kept until the next one starts, since its
-worker may still be ending the capture program.
+A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
+`startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
+(`liveSession()`; see *The Live Capture Session*), whose host and capture
+catalog the sidebar is: `addFile()` keeps the capture's entry under its
+text file, `openTab()` calls `open_file( path, follow = 1 )` on the UI
+thread (LogSquirl#796), `updateFile()` replaces the entry's summary, index
+and size through `updateSummary( textPath, summary )`, which redraws it if
+its tab is in front, so the Packet Panel shows the packets captured so far,
+and `setFileError()` keeps a failure's error, shown above the summary. A
+label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
+time (ticked by a 1 s timer) in place of the progress bar. **Stop** calls
+`stopLiveCapture()`. The outcome's summary label is the sidebar's: stopped
+before anything was captured, without packets, the error, or that the
+capture's tab shows its summary. **Save capture…**, shown for a tab whose
+capture has a raw file, copies it where `setSaveChooser()`'s dialog says.
+stderr lines go to the host's log. Opening a file and a live capture
+exclude each other (`busyElsewhere()`, `isCapturing()`).
 
 The **Live capture** section holds a `LiveCaptureForm`
 (`live_capture_form.h/cpp`): the source picker over a `LiveSourceRegistry`
@@ -2185,16 +2243,15 @@ are kept per source when another is chosen. `problem()`
 (`liveChoiceProblem()`, then an options widget that cannot tell yet) keeps
 **Start** disabled, with the reason as its tooltip, as does a conversion or
 a capture running; the form is locked while a capture runs.
-`startLiveCapture( LiveChoice )` refuses with `liveChoiceProblem()`'s message, saves the choice, and runs
-`startLiveCapture( liveCaptureName( choice ), kind->makeSource( choice ) )`.
-The capture program's stderr lines fill a small read-only view; a failure's
-error, with `explainFailure()`, a label below Stop. **Plugins → tcpdump →
+A choice the session starts is shown in the form. The capture program's
+stderr lines fill a small read-only view; a failure's error, with its
+Guidance (`explainFailure()`), a label below Stop. **Plugins → tcpdump →
 Start live capture…** (`chooseAndStartLiveCapture()`) asks to stop a
 running capture (`setStopConfirmer()` in tests), shows a
-`LiveCaptureDialog` with the same form (`setLiveChoiceAsker()`), and starts
-the choice, after the running capture's `finished`, from the event loop (it
-destroys the `LiveCapture` that sends the signal). **Stop live capture**
-calls `stopLiveCapture()`.
+`LiveCaptureDialog` with the same form (`setLiveChoiceAsker()`), and hands
+the choice to `LiveCaptureSession::startWhenIdle()`, which starts it once
+the running capture's program has ended. **Stop live capture** calls
+`stopLiveCapture()`.
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome

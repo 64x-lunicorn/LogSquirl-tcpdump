@@ -31,8 +31,10 @@
 #include "capture_pipe.h"
 #include "extcap_options.h"
 #include "extcap_source.h"
+#include "fake_live_session.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
+#include "live_capture_session.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 #include "stream_capture.h"
@@ -875,6 +877,98 @@ SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as 
             registry.add( extcaps.kind() );
             REQUIRE( liveChoiceProblem( &registry, { "extcap", "fakedump", "fake0", "", 96 } )
                          .isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed before it "
+          "starts a saved choice",
+          "[extcap_source]" )
+{
+    FakeHost host;
+    FakeExtcaps extcaps;
+    QTemporaryDir tempRoot;
+    const auto kind = extcaps.kind();
+    FakeLiveHost adapters;
+    LiveCaptureSession session( adapters, adapters );
+    session.setSources( registryOf( kind ) );
+    session.setOutputRoot( tempRoot.path() );
+    LiveChoice saved{ "extcap", "fakedump", "fake0", "", 4096 };
+    saved.options = { { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "70000" } };
+
+    GIVEN( "a saved choice whose port is out of its range, its arguments never asked" )
+    {
+        REQUIRE( kind->validationNeedsAsking( saved ) );
+
+        WHEN( "it is started without the form, as a pending start or one after launch is" )
+        {
+            REQUIRE( session.start( saved ) );
+            REQUIRE( session.state() == LiveCaptureSession::State::Checking );
+            REQUIRE( waitFor( [ & ] { return !session.isBusy(); } ) );
+
+            THEN( "the extcap was asked, and the start refused with the form's message" )
+            {
+                REQUIRE(
+                    extcaps.calls().contains( "[--extcap-interface][fake0][--extcap-config]" ) );
+                REQUIRE( adapters.notifications
+                         == QStringList{ "Cannot start the live capture: Port must be from 1 to "
+                                         "65535." } );
+                REQUIRE( extcaps.captures().isEmpty() );
+                REQUIRE( adapters.openedTabs.isEmpty() );
+                REQUIRE_FALSE( session.outcome() );
+            }
+
+            THEN( "a second start is refused at once: the arguments are known now" )
+            {
+                REQUIRE_FALSE( kind->validationNeedsAsking( saved ) );
+                REQUIRE_FALSE( session.start( saved ) );
+                REQUIRE( adapters.notifications.size() == 2 );
+                REQUIRE( adapters.notifications.last() == adapters.notifications.first() );
+            }
+        }
+
+        WHEN( "it is stopped while the extcap is asked, and started again" )
+        {
+            REQUIRE( session.start( saved ) );
+            session.stop();
+            REQUIRE( session.state() == LiveCaptureSession::State::Idle );
+            session.start( saved );
+            REQUIRE( waitFor(
+                [ & ] { return !session.isBusy() && !kind->validationNeedsAsking( saved ); } ) );
+            // The check stopped tells nothing: it comes before the other's.
+
+            THEN( "only the start that was not stopped is refused" )
+            {
+                REQUIRE( adapters.notifications
+                         == QStringList{ "Cannot start the live capture: Port must be from 1 to "
+                                         "65535." } );
+                REQUIRE( extcaps.captures().isEmpty() );
+            }
+        }
+    }
+
+    GIVEN( "a saved choice that keeps every rule, its arguments never asked" )
+    {
+        saved.options[ "fake0:--remote-port" ] = "22";
+
+        WHEN( "it is started without the form" )
+        {
+            REQUIRE( session.start( saved ) );
+            REQUIRE( session.state() == LiveCaptureSession::State::Checking );
+            REQUIRE( waitFor( [ & ] { return session.outcome().has_value(); } ) );
+
+            THEN( "the extcap was asked first, and then it captured" )
+            {
+                const auto calls = extcaps.calls().split( '\n' );
+                const auto config = calls.indexOf( "[--extcap-interface][fake0][--extcap-config]" );
+                REQUIRE( config >= 0 );
+                REQUIRE( extcaps.captures().size() == 1 );
+                REQUIRE( calls.indexOf( extcaps.captures().front() ) > config );
+                INFO( session.outcome()->error.toStdString() );
+                REQUIRE( session.outcome()->status == LiveOutcome::Status::Captured );
+                REQUIRE( adapters.openedTabs.size() == 1 );
+                REQUIRE( loadLiveChoice( host.configDir() ).device == "fakedump" );
+            }
         }
     }
 }
