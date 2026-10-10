@@ -1078,15 +1078,8 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
 {
     switch ( outcome.status ) {
     case LiveOutcome::Status::Stopped:
-        summaryLabel_->setText(
-            QString( "The capture %1 was stopped before anything was captured." )
-                .arg( outcome.name )
-                .toHtmlEscaped() );
-        return;
     case LiveOutcome::Status::Empty:
-        summaryLabel_->setText( QString( "The capture %1 ended without packets." )
-                                    .arg( outcome.name )
-                                    .toHtmlEscaped() );
+        summaryLabel_->setText( liveOutcomeText( outcome ).toHtmlEscaped() );
         return;
     case LiveOutcome::Status::Failed:
         showLiveError( outcome );

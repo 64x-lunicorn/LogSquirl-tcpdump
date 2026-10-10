@@ -183,6 +183,11 @@ struct LiveOutcome {
     QStringList files; ///< The text files opened in tabs, oldest first.
 };
 
+/// What the user is told of @p outcome when it left nothing to show,
+/// Stopped or Empty: "The capture eth0 ended without packets."; empty for
+/// one that Captured or Failed.
+QString liveOutcomeText( const LiveOutcome& outcome );
+
 /**
  * One live capture at a time, from its start to its outcome (see the file
  * comment).  On the UI thread; a capture runs through a LiveRun.

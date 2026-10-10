@@ -81,6 +81,21 @@ QString liveStopText( const QString& name, StopCondition condition, const LiveLi
     return QString( "The capture %1 stopped." ).arg( name );
 }
 
+QString liveOutcomeText( const LiveOutcome& outcome )
+{
+    switch ( outcome.status ) {
+    case LiveOutcome::Status::Stopped:
+        return QString( "The capture %1 was stopped before anything was captured." )
+            .arg( outcome.name );
+    case LiveOutcome::Status::Empty:
+        return QString( "The capture %1 ended without packets." ).arg( outcome.name );
+    case LiveOutcome::Status::Captured:
+    case LiveOutcome::Status::Failed:
+        break;
+    }
+    return {};
+}
+
 namespace {
 
 /// A LiveCapture run on its worker thread, retired when let go of.
@@ -418,9 +433,7 @@ void LiveCaptureSession::finish( unsigned run, const ConversionResult& result )
         // was written, so there is nothing to open or remove.
         outcome.status = LiveOutcome::Status::Stopped;
         outcome.files.clear();
-        hostLog(
-            LOGSQUIRL_LOG_INFO,
-            QString( "The capture %1 was stopped before anything was captured." ).arg( name_ ) );
+        hostLog( LOGSQUIRL_LOG_INFO, liveOutcomeText( outcome ) );
         break;
     }
 
@@ -448,7 +461,7 @@ void LiveCaptureSession::finish( unsigned run, const ConversionResult& result )
             if ( !result.outputPath.isEmpty() ) {
                 QDir( QFileInfo( result.outputPath ).absolutePath() ).removeRecursively();
             }
-            const auto message = QString( "The capture %1 ended without packets." ).arg( name_ );
+            const auto message = liveOutcomeText( outcome );
             hostLog( LOGSQUIRL_LOG_INFO, message );
             host_.notify( message );
             break;
