@@ -27,10 +27,11 @@
 #include <catch2/catch.hpp>
 
 #include "command_source.h"
+#include "fake_live_session.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
+#include "live_capture_session.h"
 #include "settings.h"
-#include "sidebarwidget.h"
 #include "ssh_source.h"
 
 #include <QCheckBox>
@@ -39,7 +40,6 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPlainTextEdit>
 #include <QProcess>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -406,27 +406,20 @@ QString fakeScript( const QTemporaryDir& dir, const QString& name, const QString
     return path;
 }
 
-/// Run @p choice in a sidebar until it ends; the sidebar for its labels.
+/// Run @p choice in a Live Capture Session until it ends.
 struct Captured {
     FakeHost host;
-    QTemporaryDir temp;
-    SidebarWidget sidebar;
+    WorkerSession live{ registryOf( std::make_shared<CustomCommandSourceKind>() ) };
 
     explicit Captured( const LiveChoice& choice )
     {
-        sidebar.setTempRoot( temp.path() );
-        sidebar.setLiveSources( registryOf( std::make_shared<CustomCommandSourceKind>() ) );
-        REQUIRE( sidebar.startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ this ] { return !sidebar.isCapturing(); } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForOutcome() );
     }
 
-    QString stderrText() const
+    const LiveOutcome& outcome() const
     {
-        return sidebar.findChild<QPlainTextEdit*>( "liveStderr" )->toPlainText();
-    }
-    QLabel* error() const
-    {
-        return sidebar.findChild<QLabel*>( "liveError" );
+        return live.outcome();
     }
 };
 
@@ -457,9 +450,11 @@ SCENARIO( "A custom command's capture converts live", "[command_source]" )
 
         THEN( "the capture is opened, and each value was one argument" )
         {
-            REQUIRE( run.host.openedFiles.size() == 1 );
-            REQUIRE( run.error()->isHidden() );
-            const auto text = run.stderrText();
+            INFO( run.outcome().error.toStdString() );
+            REQUIRE( run.outcome().status == LiveOutcome::Status::Captured );
+            REQUIRE( run.outcome().files.size() == 1 );
+            REQUIRE( run.live.adapters.openedTabs == run.outcome().files );
+            const auto text = run.live.stderrText();
             REQUIRE( text.contains( "[-i]\n[" + iface + "]\n[-s]\n[77]\n[" + filter + "]" ) );
             REQUIRE_FALSE( QFileInfo::exists( pwned ) );
         }
@@ -473,10 +468,12 @@ SCENARIO( "A custom command's capture converts live", "[command_source]" )
 
         THEN( "the shell runs the pipe, and the values are quoted for it" )
         {
-            REQUIRE( run.host.openedFiles.size() == 1 );
-            REQUIRE( run.error()->isHidden() );
-            REQUIRE( run.stderrText().contains( "[-i]\n[" + iface + "]\n[-s]\n[77]\n[" + filter
-                                                + "]" ) );
+            INFO( run.outcome().error.toStdString() );
+            REQUIRE( run.outcome().status == LiveOutcome::Status::Captured );
+            REQUIRE( run.outcome().files.size() == 1 );
+            REQUIRE( run.live.adapters.openedTabs == run.outcome().files );
+            REQUIRE( run.live.stderrText().contains( "[-i]\n[" + iface + "]\n[-s]\n[77]\n[" + filter
+                                                     + "]" ) );
             REQUIRE_FALSE( QFileInfo::exists( pwned ) );
         }
     }
@@ -495,13 +492,13 @@ SCENARIO( "A custom command whose stdout is not a capture says so, with its stde
 
     THEN( "the capture fails as not a capture, with the stderr lines and what to do" )
     {
-        REQUIRE( run.host.openedFiles.isEmpty() );
-        const auto error = run.error()->text();
-        REQUIRE_FALSE( run.error()->isHidden() );
-        REQUIRE( error.contains( "Not a capture" ) );
-        REQUIRE( error.contains( "not-pcap: writing text, use -w -" ) );
-        REQUIRE( error.contains( "pcap or pcapng" ) );
-        REQUIRE( run.stderrText().contains( "not-pcap: writing text, use -w -" ) );
+        REQUIRE( run.outcome().status == LiveOutcome::Status::Failed );
+        REQUIRE( run.outcome().files.isEmpty() );
+        REQUIRE( run.live.adapters.openedTabs.isEmpty() );
+        REQUIRE( run.outcome().error.contains( "Not a capture" ) );
+        REQUIRE( run.outcome().error.contains( "not-pcap: writing text, use -w -" ) );
+        REQUIRE( run.outcome().guidance.contains( "pcap or pcapng" ) );
+        REQUIRE( run.live.stderrText().contains( "not-pcap: writing text, use -w -" ) );
     }
 }
 
@@ -509,9 +506,10 @@ SCENARIO( "A custom command that cannot be started says what to check", "[comman
 {
     QTemporaryDir dir;
     Captured run( commandChoice( shellQuote( dir.filePath( "no-such-program" ) ) + " -w -" ) );
-    const auto error = run.error()->text();
-    REQUIRE( error.contains( "Cannot start no-such-program" ) );
-    REQUIRE( error.contains( "full path" ) );
+    REQUIRE( run.outcome().status == LiveOutcome::Status::Failed );
+    REQUIRE( run.outcome().error.contains( "Cannot start no-such-program" ) );
+    REQUIRE( run.outcome().guidance.contains( "full path" ) );
+    REQUIRE( run.live.adapters.openedTabs.isEmpty() );
 }
 
 #endif

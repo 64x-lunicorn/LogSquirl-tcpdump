@@ -242,7 +242,7 @@ std::optional<PayloadDescription> someIpByHeader( const Payload& p )
 /// on port 22, where whatever else the payload holds is taken for an
 /// encrypted packet, as a guess.  Before TLS, SIP and HTTP; the packets
 /// of a stream that showed a banner on another port are the stream's to
-/// tell (describeInStream(), sshFrame()).
+/// tell (InStreamPass::describeInStream(), sshFrame()).
 std::optional<PayloadDescription> sshMessages( const Payload& p )
 {
     return detectSsh( p.data, p.len, p.srcPort, p.dstPort );
@@ -648,7 +648,7 @@ PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_
     return result;
 }
 
-void describeInStream( PacketRecord& pkt, const Stream& stream )
+void InStreamPass::describeInStream( PacketRecord& pkt, const Stream& stream )
 {
     if ( !stream.state || !pkt.transport ) {
         return;
@@ -664,7 +664,7 @@ void describeInStream( PacketRecord& pkt, const Stream& stream )
     }
 }
 
-void rememberInStream( const PacketRecord& pkt, const Stream& stream )
+void InStreamPass::rememberInStream( const PacketRecord& pkt, const Stream& stream )
 {
     if ( !stream.state || pkt.transport != Transport::Tcp ) {
         return;

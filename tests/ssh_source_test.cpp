@@ -27,9 +27,10 @@
 
 #include <catch2/catch.hpp>
 
+#include "fake_live_session.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
-#include "sidebarwidget.h"
+#include "live_capture_session.h"
 #include "ssh_source.h"
 #include "stream_capture.h"
 
@@ -39,8 +40,6 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
-#include <QLabel>
-#include <QPlainTextEdit>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QStandardPaths>
@@ -492,21 +491,21 @@ SCENARIO( "The SSH source lists and captures on a server through a fake ssh", "[
     THEN( "a capture runs sudo -n tcpdump on the server and opens what it captured" )
     {
         FakeHost host;
-        QTemporaryDir temp;
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( temp.path() );
-        sidebar.setLiveSources( registryOf( kind ) );
-        REQUIRE( sidebar.startLiveCapture(
+        WorkerSession live( registryOf( kind ) );
+        REQUIRE( live.session.start(
             LiveChoice{ "ssh", "admin@srv", "eth0", "udp port 9999", 96, {} } ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
-        REQUIRE( host.openedFiles.size() == 1 );
-        REQUIRE( QFileInfo( host.openedFiles.first() ).fileName() == "admin_srv-eth0.log" );
-        const auto stderrText = sidebar.findChild<QPlainTextEdit*>( "liveStderr" )->toPlainText();
+        REQUIRE( live.waitForOutcome() );
+        INFO( live.outcome().error.toStdString() );
+        REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+        REQUIRE( live.outcome().error.isEmpty() );
+        REQUIRE( live.outcome().files.size() == 1 );
+        REQUIRE( live.outcome().files == live.adapters.openedTabs );
+        REQUIRE( QFileInfo( live.outcome().files.first() ).fileName() == "admin_srv-eth0.log" );
+        const auto stderrText = live.stderrText();
         REQUIRE( stderrText.contains( "[eth0]" ) );
         REQUIRE( stderrText.contains( "[96]" ) );
         REQUIRE(
             stderrText.contains( "[(udp port 9999) and not (host 10.9.8.7 and tcp port 2222)]" ) );
-        REQUIRE( sidebar.findChild<QLabel*>( "liveError" )->isHidden() );
     }
 }
 
@@ -521,20 +520,20 @@ SCENARIO( "Stop ends tcpdump on the server, not only the local ssh", "[ssh_sourc
         CAPTURE( sudo );
         QFile::remove( server.dir.filePath( "tcpdump.log" ) );
         FakeHost host;
-        QTemporaryDir temp;
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( temp.path() );
-        sidebar.setLiveSources( registryOf( kind ) );
+        WorkerSession live( registryOf( kind ) );
         LiveChoice choice{ "ssh", "admin@srv", "eth0", "", 96, {} };
         choice.options[ kSshSudoOption ] = sudo ? "true" : "false";
-        REQUIRE( sidebar.startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1; } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForFile() );
         REQUIRE( waitFor( [ & ] { return server.tcpdumpLog().contains( "running" ); } ) );
 
-        sidebar.stopLiveCapture();
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        live.session.stop();
+        REQUIRE( live.waitForOutcome() );
         REQUIRE( waitFor( [ & ] { return server.tcpdumpLog().contains( "killed" ); } ) );
-        REQUIRE( sidebar.findChild<QLabel*>( "liveError" )->isHidden() );
+        INFO( live.outcome().error.toStdString() );
+        REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+        REQUIRE( live.outcome().stoppedBy == StopCondition::None );
+        REQUIRE( live.outcome().files == live.adapters.openedTabs );
     }
 }
 
@@ -630,20 +629,18 @@ SCENARIO( "What ssh, sudo and tcpdump fail with is reported with what to do", "[
         server.sudo = "echo 'sudo: a password is required' >&2; exit 1";
         const auto kind = std::make_shared<SshSourceKind>( server.write() );
         FakeHost host;
-        QTemporaryDir temp;
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( temp.path() );
-        sidebar.setLiveSources( registryOf( kind ) );
-        REQUIRE( sidebar.startLiveCapture( LiveChoice{ "ssh", "srv", "eth0", "", 96, {} } ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        WorkerSession live( registryOf( kind ) );
+        REQUIRE( live.session.start( LiveChoice{ "ssh", "srv", "eth0", "", 96, {} } ) );
+        REQUIRE( live.waitForOutcome() );
 
-        THEN( "the capture fails, and the section says how to allow tcpdump without one" )
+        THEN( "the capture fails, and its Guidance says how to allow tcpdump without one" )
         {
-            REQUIRE( host.openedFiles.isEmpty() );
-            const auto error = sidebar.findChild<QLabel*>( "liveError" )->text();
-            REQUIRE( error.contains( "sudo: a password is required" ) );
-            REQUIRE( error.contains( "NOPASSWD" ) );
-            REQUIRE( error.contains( "never gives" ) );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Failed );
+            REQUIRE( live.outcome().files.isEmpty() );
+            REQUIRE( live.adapters.openedTabs.isEmpty() );
+            REQUIRE( live.outcome().error.contains( "sudo: a password is required" ) );
+            REQUIRE( live.outcome().guidance.contains( "NOPASSWD" ) );
+            REQUIRE( live.outcome().guidance.contains( "never gives" ) );
         }
     }
 

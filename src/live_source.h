@@ -32,7 +32,7 @@
  *   - lists its devices (phones, hosts) and their interfaces, on a worker
  *     thread, each listing bounded by a timeout,
  *   - may have options of its own, edited in a widget it makes,
- *   - checks a choice before it starts,
+ *   - checks a choice before it starts (its part of liveChoiceProblem()),
  *   - makes the capture's stream for a choice: by default a Process Source
  *     running the command the kind builds from {device, interface, capture
  *     filter, snaplen},
@@ -173,7 +173,8 @@ struct LiveAvailability {
  * makeSource() and explainFailure() on the UI thread, listDevices() and
  * listInterfaces() on a worker thread: a kind holds no state that changes
  * (its listings and commands depend on their arguments and the system
- * alone), so both may run at once.
+ * alone), so both may run at once.  What a kind remembers of a listing for
+ * validate() (an extcap's arguments) it guards itself.
  */
 class LiveSourceKind {
 public:
@@ -234,9 +235,28 @@ public:
     }
 
     /// Why @p choice cannot be captured, kind-specific (the capture filter's
-    /// syntax and the snaplen's range are checked before: captureFilterProblem());
+    /// syntax and the snaplen's range are checked before: liveChoiceProblem());
     /// empty if it can.  By default an interface must be chosen.
     virtual QString validate( const LiveChoice& choice ) const;
+
+    /// Whether validate() can check @p choice only once the kind has asked
+    /// for what it needs (askForValidation()): an extcap whose interface's
+    /// arguments were not asked this session.  On the UI thread; by default
+    /// false, as validate() needs nothing else.
+    virtual bool validationNeedsAsking( const LiveChoice& choice ) const
+    {
+        (void)choice;
+        return false;
+    }
+    /// Ask, at most @p timeout, for what validate() needs to check @p
+    /// choice; on a worker thread, as a listing (runListing()).  What it
+    /// cannot learn validate() does not check: the capture says what it lacks.
+    virtual void askForValidation( const LiveChoice& choice,
+                                   std::chrono::milliseconds timeout ) const
+    {
+        (void)choice;
+        (void)timeout;
+    }
 
     /// A new widget for the kind's own options (LiveChoice::options), which
     /// the form shows below its fields while the kind is chosen, and owns;
@@ -302,6 +322,19 @@ QString captureFilterProblem( const QString& filter );
 /// they can: a ring buffer that keeps files needs a size or a duration to
 /// start a new one at.
 QString liveLimitsProblem( const LiveLimits& limits );
+
+/**
+ * Why @p choice cannot start, for the Start button and for a start alike;
+ * empty if it can.  The one place this is answered, in this order: a
+ * source of @p sources (none when it is null) that is there and available,
+ * a snaplen of 1 to kMaxSnaplen, the capture filter
+ * (captureFilterProblem()), the limits (liveLimitsProblem()), and what the
+ * kind's validate() says of it, its options too.  Needs no widget: what a
+ * form has not finished asking yet (an extcap's arguments) is the form's.
+ * What the kind must ask first (LiveSourceKind::validationNeedsAsking())
+ * the Live Capture Session asks before it starts a choice, and checks again.
+ */
+QString liveChoiceProblem( const LiveSourceRegistry* sources, const LiveChoice& choice );
 
 /// What a listing program printed, or why it did not finish.
 struct ListingOutput {

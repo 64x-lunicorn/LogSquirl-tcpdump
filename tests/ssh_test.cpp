@@ -27,12 +27,10 @@
 
 #include <catch2/catch.hpp>
 
-#include "capture_reader.h"
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_tracker.h"
-#include "tcp_reassembly.h"
+#include "pipeline_harness.h"
 
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -141,45 +139,45 @@ std::string descriptionOf( const PacketRecord& pkt )
                : pkt.info.substr( at + std::string( kDescriptionSeparator ).size() );
 }
 
-/// @p payloads sent between the client and @p port, true from the client,
-/// run through the Converter's steps, the TCP Reassembly only if
-/// @p reassemble.
-std::vector<PacketRecord> inStream( const std::vector<std::pair<bool, Bytes>>& payloads,
-                                    uint16_t port, bool reassemble = false )
+/// A payload one side of a connection sends.
+struct Sent {
+    bool fromClient = true;
+    Bytes payload;
+    /// How much of it the capture holds, cut at the snaplen; all of it if
+    /// longer than the payload.
+    size_t captured = std::numeric_limits<size_t>::max();
+};
+
+/// @p payloads sent between the client and @p port, run through the
+/// Packet Pipeline as a conversion runs them.
+std::vector<PacketRecord> inStream( const std::vector<Sent>& payloads, uint16_t port )
 {
-    std::vector<Bytes> frames;
+    std::vector<Record> records;
+    uint32_t sec = 1000;
     uint32_t seq[ 2 ] = { 1000, 5000 }; // the client's, the server's
-    for ( const auto& [ client, payload ] : payloads ) {
+    for ( const auto& [ client, payload, captured ] : payloads ) {
         Ipv4Options o;
         if ( !client ) {
             std::swap( o.src, o.dst );
         }
         auto& next = seq[ client ? 0 : 1 ];
         const auto ack = seq[ client ? 1 : 0 ];
-        frames.push_back( eth( EthertypeIpv4,
-                               ipv4( IpProtoTcp,
-                                     client ? tcp( kClientPort, port, payload, 5, 0x18, next, ack )
-                                            : tcp( port, kClientPort, payload, 5, 0x18, next, ack ),
-                                     o ) ) );
+        Record r{ eth( EthertypeIpv4,
+                       ipv4( IpProtoTcp,
+                             client ? tcp( kClientPort, port, payload, 5, 0x18, next, ack )
+                                    : tcp( port, kClientPort, payload, 5, 0x18, next, ack ),
+                             o ) ),
+                  sec++ };
+        if ( captured < payload.size() ) {
+            r.origLen = static_cast<int64_t>( r.data.size() );
+            r.data.resize( r.data.size() - ( payload.size() - captured ) );
+        }
+        records.push_back( r );
         next += static_cast<uint32_t>( payload.size() );
     }
-    const auto file = pcapOf( frames );
-    MemorySource memory( file.data(), file.size() );
-    HeadSource head( memory );
-    const auto reader = makeCaptureReader( head );
-    REQUIRE( reader->open() );
-    StreamTracker tracker;
-    TcpReassembly reassembly;
     std::vector<PacketRecord> packets;
-    PacketRecord pkt;
-    while ( reader->next( pkt ) ) {
-        const auto stream = tracker.track( pkt );
-        describeInStream( pkt, stream );
-        if ( reassemble ) {
-            reassembly.apply( pkt, stream, reader->payloadOf( pkt ) );
-        }
-        rememberInStream( pkt, stream );
-        packets.push_back( pkt );
+    for ( const auto& p : piped( pcapFile( records ) ) ) {
+        packets.push_back( p.pkt );
     }
     return packets;
 }
@@ -451,7 +449,7 @@ SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
                 { false, Bytes( 52, 0x9E ) },
                 { true, prefix( ecdhReply(), 40 ) },
             },
-            2222, true );
+            2222 );
 
         THEN( "each direction is encrypted after its NEWKEYS" )
         {
@@ -475,10 +473,12 @@ SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
     {
         auto list = kexInit();
         list[ 25 ] = 0x7F;
+        // Cut by the snaplen, not by the sender: the TCP Reassembly cannot
+        // wait for the rest of it, and leaves it to the stream's phase.
         const auto packets = inStream(
             {
                 { true, banner() },
-                { true, prefix( ecdhInit(), 30 ) },
+                { true, ecdhInit(), 30 },
                 { true, list },
                 { true, u32( 13 ) + Bytes( 12, 0 ) },
             },
@@ -491,7 +491,11 @@ SCENARIO( "An SSH connection is followed through its phases", "[ssh]" )
             }
             REQUIRE( descriptionOf( packets[ 1 ] )
                      == "Client: Elliptic Curve Diffie-Hellman Key Exchange Init " + kEllipsis );
-            REQUIRE( descriptionOf( packets[ 2 ] ) == "Client: Key Exchange Init " + kEllipsis );
+            // Its packet whole, the TCP Reassembly reads all of it, past
+            // what the in-stream pass had (InStreamPass::describeInStream()):
+            // the name-list it breaks is malformed, not cut.
+            REQUIRE( descriptionOf( packets[ 2 ] )
+                     == "Client: Key Exchange Init [Malformed Packet]" );
             REQUIRE( descriptionOf( packets[ 3 ] )
                      == "Client: Invalid packet length 13 [Malformed Packet]" );
         }

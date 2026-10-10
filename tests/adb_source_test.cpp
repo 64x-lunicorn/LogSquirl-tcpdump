@@ -28,16 +28,14 @@
 #include <catch2/catch.hpp>
 
 #include "adb_source.h"
+#include "fake_live_session.h"
 #include "fakehost.h"
-#include "live_capture_form.h"
-#include "sidebarwidget.h"
+#include "live_capture_session.h"
 #include "stream_capture.h"
 
-#include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QLabel>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -333,14 +331,10 @@ std::shared_ptr<LiveSourceRegistry> registryOf( std::shared_ptr<const LiveSource
     return registry;
 }
 
-/// A sidebar capturing with the Android source of @p adb, below @p tempRoot.
-std::unique_ptr<SidebarWidget> sidebarFor( const FakeAdb& adb, const QTemporaryDir& tempRoot )
+/// A Live Capture Session capturing with the Android source of @p adb.
+std::unique_ptr<WorkerSession> sessionFor( const FakeAdb& adb )
 {
-    auto sidebar = std::make_unique<SidebarWidget>();
-    sidebar->setTempRoot( tempRoot.path() );
-    sidebar->setLiveSources( registryOf( adb.kind() ) );
-    REQUIRE( waitFor( [ & ] { return !sidebar->liveForm()->isListing(); } ) );
-    return sidebar;
+    return std::make_unique<WorkerSession>( registryOf( adb.kind() ) );
 }
 
 } // namespace
@@ -550,7 +544,6 @@ SCENARIO( "The Android source captures live through a fake adb", "[adb_source]" 
 {
     FakeHost host;
     FakeAdb adb;
-    QTemporaryDir tempRoot;
     const LiveChoice choice{ "adb", adb.serial, "wlan0", "udp port 9999", 4096 };
 
     for ( const auto how : { "adb root", "su" } ) {
@@ -565,16 +558,18 @@ SCENARIO( "The Android source captures live through a fake adb", "[adb_source]" 
                 adb.adbRoot();
             }
             adb.tcpdump();
-            auto sidebar = sidebarFor( adb, tempRoot );
-            REQUIRE( sidebar->startLiveCapture( choice ) );
-            REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+            auto live = sessionFor( adb );
+            REQUIRE( live->session.start( choice ) );
+            REQUIRE( live->waitForOutcome() );
 
             THEN( "the capture comes binary-clean through exec-out, CR and LF as they were" )
             {
-                INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
-                REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
-                REQUIRE( host.openedFiles.size() == 1 );
-                const QFileInfo log( host.openedFiles.first() );
+                INFO( live->outcome().error.toStdString() );
+                REQUIRE( live->outcome().status == LiveOutcome::Status::Captured );
+                REQUIRE( live->outcome().error.isEmpty() );
+                REQUIRE( live->outcome().files.size() == 1 );
+                REQUIRE( live->outcome().files == live->adapters.openedTabs );
+                const QFileInfo log( live->outcome().files.first() );
                 REQUIRE( log.fileName() == "emulator-5554-wlan0.log" );
                 REQUIRE( readBytes( log.dir().filePath( "emulator-5554-wlan0.pcap" ) )
                          == crlfCapture() );
@@ -604,7 +599,6 @@ SCENARIO( "A hostile capture filter reaches the device's tcpdump as one argument
 {
     FakeHost host;
     FakeAdb adb;
-    QTemporaryDir tempRoot;
     const auto marker = adb.path( "pwned" );
     const auto filter = QString( "host 10.0.0.1 or x' ; touch %1 ; echo 'y or $(touch %1) or "
                                  "`touch %1` or \"; touch %1\" or \\' ; touch %1" )
@@ -621,14 +615,16 @@ SCENARIO( "A hostile capture filter reaches the device's tcpdump as one argument
         }
         adb.tcpdump();
         QFile::remove( adb.path( "tcpdump.log" ) );
-        auto sidebar = sidebarFor( adb, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( { "adb", adb.serial, "wlan0", filter, 96 } ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        auto live = sessionFor( adb );
+        REQUIRE( live->session.start( { "adb", adb.serial, "wlan0", filter, 96 } ) );
+        REQUIRE( live->waitForOutcome() );
 
+        INFO( live->outcome().error.toStdString() );
+        REQUIRE( live->outcome().status == LiveOutcome::Status::Captured );
         REQUIRE( adb.tcpdumpLog().contains( "[-]\n[" + filter + "]\n" ) );
         REQUIRE_FALSE( QFileInfo::exists( marker ) );
         QFile::remove( adb.path( "adb-root" ) );
-        sidebar.reset();
+        live.reset();
     }
 }
 
@@ -636,7 +632,6 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
 {
     FakeHost host;
     FakeAdb adb;
-    QTemporaryDir tempRoot;
 
     for ( const auto viaSu : { false, true } ) {
         CAPTURE( viaSu );
@@ -648,25 +643,27 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
         }
         adb.tcpdump( true );
         QFile::remove( adb.path( "tcpdump.log" ) );
-        host.openedFiles.clear();
-        auto sidebar = sidebarFor( adb, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( { "adb", adb.serial, "any", "", 96 } ) );
-        const auto* error = sidebar->findChild<QLabel*>( "liveError" );
-        REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1 || !error->isHidden(); } ) );
-        INFO( error->text().toStdString() );
-        REQUIRE( host.openedFiles.size() == 1 );
+        auto live = sessionFor( adb );
+        REQUIRE( live->session.start( { "adb", adb.serial, "any", "", 96 } ) );
+        // A failure before the first packet ends the capture instead.
+        REQUIRE( live->waitUntil(
+            [ & ] { return !live->adapters.openedTabs.isEmpty() || live->session.outcome(); } ) );
+        INFO( ( live->session.outcome() ? live->outcome().error : QString() ).toStdString() );
+        REQUIRE( live->adapters.openedTabs.size() == 1 );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().size() == 2; } ) ); // pid, stderr
 
-        sidebar->stopLiveCapture();
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        live->session.stop();
+        REQUIRE( live->waitForOutcome() );
         REQUIRE( waitFor( [ & ] { return adb.tcpdumpLog().contains( "killed" ); } ) );
         REQUIRE( adb.adbLog().contains( "kill $p" ) );
         REQUIRE( adb.adbLog().contains( "su -c ': >" ) == viaSu );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
-        INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
-        REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
+        INFO( live->outcome().error.toStdString() );
+        REQUIRE( live->outcome().status == LiveOutcome::Status::Captured );
+        REQUIRE( live->outcome().stoppedBy == StopCondition::None );
+        REQUIRE( live->outcome().files == live->adapters.openedTabs );
         QFile::remove( adb.path( "adb-root" ) );
-        sidebar.reset();
+        live.reset();
     }
 }
 
@@ -717,22 +714,22 @@ SCENARIO( "A capture the device cannot make says why, and what to do", "[adb_sou
 {
     FakeHost host;
     FakeAdb adb;
-    QTemporaryDir tempRoot;
     const LiveChoice choice{ "adb", adb.serial, "wlan0", "", 96 };
 
     GIVEN( "no root" )
     {
         adb.suDenies();
         adb.tcpdump();
-        auto sidebar = sidebarFor( adb, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        auto live = sessionFor( adb );
+        REQUIRE( live->session.start( choice ) );
+        REQUIRE( live->waitForOutcome() );
 
-        THEN( "it fails before tcpdump runs, with the guidance for root" )
+        THEN( "it fails before tcpdump runs, with the Guidance for root" )
         {
-            const auto text = sidebar->findChild<QLabel*>( "liveError" )->text();
-            REQUIRE( text.contains( "no root" ) );
-            REQUIRE( text.contains( adbRootGuidance().left( 40 ).toHtmlEscaped() ) );
+            REQUIRE( live->outcome().status == LiveOutcome::Status::Failed );
+            REQUIRE( live->outcome().error.contains( "no root" ) );
+            REQUIRE( live->outcome().guidance == adbRootGuidance() );
+            REQUIRE( live->adapters.openedTabs.isEmpty() );
             REQUIRE( adb.tcpdumpLog().isEmpty() );
             REQUIRE_FALSE( adb.adbLog().contains( "exec-out" ) );
         }
@@ -742,16 +739,16 @@ SCENARIO( "A capture the device cannot make says why, and what to do", "[adb_sou
     {
         adb.adbRoot();
         adb.failingTcpdump( "tcpdump: wlan0: No such device exists" );
-        auto sidebar = sidebarFor( adb, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        auto live = sessionFor( adb );
+        REQUIRE( live->session.start( choice ) );
+        REQUIRE( live->waitForOutcome() );
 
         THEN( "its stderr on the device is the error, and its files are gone" )
         {
-            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )
-                         ->text()
-                         .contains( "No such device exists" ) );
-            REQUIRE( host.openedFiles.isEmpty() );
+            REQUIRE( live->outcome().status == LiveOutcome::Status::Failed );
+            REQUIRE( live->outcome().error.contains( "No such device exists" ) );
+            REQUIRE( live->outcome().files.isEmpty() );
+            REQUIRE( live->adapters.openedTabs.isEmpty() );
             REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
         }
     }
@@ -760,16 +757,16 @@ SCENARIO( "A capture the device cannot make says why, and what to do", "[adb_sou
     {
         adb.adbRoot();
         adb.tcpdump();
-        auto sidebar = sidebarFor( adb, tempRoot );
+        auto live = sessionFor( adb );
         QFile::remove( adb.path( "serial-" + adb.serial ) );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        REQUIRE( live->session.start( choice ) );
+        REQUIRE( live->waitForOutcome() );
 
-        THEN( "adb's error comes with how to connect it" )
+        THEN( "adb's error comes with the Guidance for connecting it" )
         {
-            const auto text = sidebar->findChild<QLabel*>( "liveError" )->text();
-            REQUIRE( text.contains( "not found" ) );
-            REQUIRE( text.contains( adbConnectGuidance().left( 40 ).toHtmlEscaped() ) );
+            REQUIRE( live->outcome().status == LiveOutcome::Status::Failed );
+            REQUIRE( live->outcome().error.contains( "not found" ) );
+            REQUIRE( live->outcome().guidance.contains( adbConnectGuidance() ) );
         }
     }
 }

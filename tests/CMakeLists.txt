@@ -47,6 +47,7 @@ add_executable(logsquirl_tcpdump_tests
     live_conversion_test.cpp
     live_limits_test.cpp
     live_capture_test.cpp
+    live_capture_session_test.cpp
     live_source_test.cpp
     local_source_test.cpp
     adb_source_test.cpp
@@ -79,6 +80,7 @@ add_executable(logsquirl_tcpdump_tests
     tcp_options_test.cpp
     byte_stream_orderer_test.cpp
     tcp_reassembly_test.cpp
+    packet_pipeline_test.cpp
     hpack_test.cpp
     tls_crypto_test.cpp
     tls_key_log_test.cpp
@@ -156,6 +158,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
         "${CMAKE_SOURCE_DIR}/src/raw_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_pipeline.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
@@ -164,6 +167,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/conversation_table.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_capture_session.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/local_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/adb_source.cpp"

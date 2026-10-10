@@ -198,7 +198,7 @@ bool skipQuicLongPacket( FieldReader& packet, uint32_t version, uint8_t firstByt
 /// "Initial, Handshake, Version 1, DCID=…, SCID=…".  Only a datagram that
 /// begins with a long header of a known version, or with a Version
 /// Negotiation packet, is QUIC by its bytes alone; a short header's is told
-/// by its stream (describeInStream).  The packets are encrypted: their
+/// by its stream (InStreamPass).  The packets are encrypted: their
 /// type is all there is to name.  Packets coalesced behind the first are
 /// named up to kMaxQuicPackets, a short header one as Protected Payload.
 std::string detectQuic( const uint8_t* payload, size_t len )

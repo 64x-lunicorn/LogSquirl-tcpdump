@@ -180,6 +180,7 @@ SCENARIO( "The Stream Tracker stops numbering at its cap", "[stream_tracker]" )
             REQUIRE( third.id == kUnnumbered );
             REQUIRE( third.state == nullptr );
             REQUIRE( tracker.limitReached() );
+            REQUIRE( tracker.maxStreams() == 2 );
 
             REQUIRE( tracker.track( packetOver( Transport::Tcp, "10.0.0.2", 1 ) ).id == 0 );
             REQUIRE( tracker.track( packetOver( Transport::Udp, "10.0.0.2", 2 ) ).id == 0 );

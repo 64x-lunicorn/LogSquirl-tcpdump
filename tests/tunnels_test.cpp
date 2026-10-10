@@ -83,7 +83,7 @@ PacketRecord only( const Bytes& frame )
 /// The packet line of @p frame.
 std::string lineOf( const Bytes& frame )
 {
-    const auto lines = formatAllPackets( { only( frame ) } );
+    const auto lines = formatAllPackets( pcapOf( { frame } ) );
     REQUIRE( lines.size() == 2 );
     return lines[ 1 ];
 }
@@ -147,7 +147,7 @@ SCENARIO( "A packet in a VXLAN tunnel is shown by its inner packet", "[tunnels]"
 
         THEN( "the TCP analysis marks the second after the tunnel's name" )
         {
-            const auto lines = formatAllPackets( parse( pcapOf( { frame, frame } ) ).packets );
+            const auto lines = formatAllPackets( pcapOf( { frame, frame } ) );
             REQUIRE( lines.size() == 3 );
             REQUIRE(
                 lines[ 2 ].find( "VXLAN VNI 100 | [TCP Retransmission] 40000 \xe2\x86\x92 40001" )
@@ -719,7 +719,7 @@ SCENARIO( "A malformed tunnel is never read beyond the packet", "[tunnels]" )
                 REQUIRE( pkt.info.size() < 512 );
                 frames.push_back( mutated );
             }
-            const auto lines = formatAllPackets( parse( pcapOf( frames ) ).packets );
+            const auto lines = formatAllPackets( pcapOf( frames ) );
             REQUIRE( lines.size() == frames.size() + 1 );
         }
     }

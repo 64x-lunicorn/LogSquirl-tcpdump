@@ -304,11 +304,11 @@ SCENARIO( "The whole-capture formatter shows relative numbers too", "[tcp_analys
 {
     GIVEN( "a SYN with a random initial sequence number" )
     {
-        const auto packets = parse( pcapOf( { segment( false, kSyn, 3000000000u, 0 ) } ) ).packets;
+        const auto capture = pcapOf( { segment( false, kSyn, 3000000000u, 0 ) } );
 
         THEN( "its line shows Seq=0" )
         {
-            REQUIRE( shows( formatAllPackets( packets ).at( 1 ), "Seq=0" ) );
+            REQUIRE( shows( formatAllPackets( capture ).at( 1 ), "Seq=0" ) );
         }
     }
 }

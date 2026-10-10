@@ -29,8 +29,7 @@
 #include <catch2/catch.hpp>
 
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_tracker.h"
+#include "pipeline_harness.h"
 
 #include <random>
 #include <string>
@@ -141,32 +140,13 @@ std::string described( const Bytes& payload )
     return result.description;
 }
 
-/// A segment between client and broker.
-struct Segment {
-    bool fromClient;
-    Bytes payload;
-};
-
-/// Parse @p segments, between the client and @p port, as a capture and
-/// describe each packet in its stream, as the Converter does.
-std::vector<PacketRecord> describedInStreams( const std::vector<Segment>& segments, uint16_t port )
+/// @p turns between the client and the broker's @p port, run through the
+/// Packet Pipeline as a conversion runs them.
+std::vector<PacketRecord> describedInStreams( const std::vector<Turn>& turns, uint16_t port )
 {
-    std::vector<Bytes> frames;
-    for ( const auto& s : segments ) {
-        Ipv4Options o;
-        if ( !s.fromClient ) {
-            std::swap( o.src, o.dst );
-        }
-        frames.push_back(
-            eth( EthertypeIpv4, ipv4( IpProtoTcp,
-                                      s.fromClient ? tcp( kClientPort, port, s.payload )
-                                                   : tcp( port, kClientPort, s.payload ),
-                                      o ) ) );
-    }
-    auto packets = parse( pcapOf( frames ) ).packets;
-    StreamTracker tracker;
-    for ( auto& pkt : packets ) {
-        describeInStream( pkt, tracker.track( pkt ) );
+    std::vector<PacketRecord> packets;
+    for ( const auto& p : piped( tcpConversation( turns, kClientPort, port ) ) ) {
+        packets.push_back( p.pkt );
     }
     return packets;
 }

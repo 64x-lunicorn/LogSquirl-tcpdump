@@ -488,12 +488,13 @@ void describeSshInStream( PacketRecord& pkt, const Stream& stream );
 /// (describe_websocket.cpp).
 void describeWebSocketInStream( PacketRecord& pkt, const Stream& stream );
 
-/// After the TCP Reassembly: a 101 response upgrades its stream to
-/// WebSocket (describe_websocket.cpp).
+/// A TCP segment in its stream: a 101 response upgrades its stream to
+/// WebSocket; the Packet Pipeline runs it (describe_websocket.cpp).
 void rememberWebSocketInStream( const PacketRecord& pkt, const Stream& stream );
 
-/// After the TCP Reassembly: what a segment's SSH banner or NEWKEYS tells
-/// its stream's later segments (describe_ssh.cpp).
+/// A TCP segment in its stream: records what its SSH banner or NEWKEYS
+/// tells the stream's later segments; the Packet Pipeline runs it
+/// (describe_ssh.cpp).
 void rememberSshInStream( const PacketRecord& pkt, const Stream& stream );
 
 } // namespace tcpdump::describer

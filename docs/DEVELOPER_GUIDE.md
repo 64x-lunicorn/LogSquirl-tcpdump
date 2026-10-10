@@ -475,7 +475,9 @@ application protocols exist on which transport and in which order they are
 tried: each transport has a table of detectors, all of the same shape
 (payload in, description out if recognised), and the first match wins.
 `payload_describer.cpp` holds the tables, the port hint and preview, and
-`describeInStream()`; the protocols' detectors live in a file each,
+the in-stream pass (`describeInStream()` and `rememberInStream()`, private
+members of `InStreamPass` that only the Packet Pipeline, its friend, can
+call); the protocols' detectors live in a file each,
 following `icmp.cpp`: `describe_http.cpp` (HTTP, SSDP's messages, HTTP/2
 and its frames in the stream), `describe_tls.cpp`, `describe_quic.cpp`
 (with the short headers in the stream), `describe_dns.cpp` (DNS and mDNS,
@@ -767,8 +769,8 @@ the declarations of the detectors and in-stream passes the tables use.
   and nowhere else: RTP has no port of its own and no header that tells
   it from any other UDP payload. The `MediaExpectations`
   (`media_expectations.h/cpp`) are that capture-wide state, a side table
-  the Converter owns next to the Stream Tracker and runs on every packet
-  after `describeInStream()`, before the Stream Labels: not in
+  the Packet Pipeline owns next to the Stream Tracker and runs on every
+  packet after the TCP Reassembly, before the Stream Labels: not in
   `StreamState`, since the signalling and the media are different
   conversations and an endpoint is expected before its stream exists. It
   maps "address port" to the call's Call-ID, whether RTP or RTCP is
@@ -854,7 +856,7 @@ the declarations of the detectors and in-stream passes the tables use.
   would take deriving the Initial keys). A short header carries no version
   and its connection ID no length: by its bytes alone it is not QUIC, and
   UDP 443 is still only the port hint `HTTPS`
-- `describeInStream()`, run by the Converter after the Stream Tracker, looks
+- `describeInStream()`, run by the Packet Pipeline once the packet has its stream, looks
   at a packet again with its stream's state: it records in the stream's
   `QuicConnection` that a long header was seen and how long the connection
   ID its sender chose is, and labels the stream's short header packets
@@ -883,7 +885,7 @@ the declarations of the detectors and in-stream passes the tables use.
   numbered stream (two bytes and the bits 0x40 and 0x80 are left). A NEWKEYS
   may complete a message the TCP Reassembly put together (a key exchange
   reply too long for one segment), so the bits are set by
-  `rememberInStream()`, which the Converter runs after the reassembly, from
+  `rememberInStream()`, which the Packet Pipeline runs after the reassembly, from
   the packet's `StreamCue` as the reassembly left it (`describeMessages()`
   takes the cue of the reassembled description, a segment of a message
   has none). `describeInStream()`, before the reassembly, goes by the bits
@@ -918,8 +920,8 @@ forgot to escape.
 A preview is marked as such (`PayloadDescription::preview`), and the parser
 records its length in `PacketRecord::previewBytes`: it ends the Info, after
 the separator. `limitPreview()` cuts it to the length the user chose, with
-an ellipsis, or removes it with its separator. The Converter calls it on
-each packet as the reader hands it out, before the stream steps touch the
+an ellipsis, or removes it with its separator. The Packet Pipeline calls it
+on each packet as the reader hands it out, before the stream steps touch the
 Info, so the dissectors take no options; a packet whose stream continues a
 protocol then reads `Continuation` alone, as one without a preview.
 
@@ -940,9 +942,8 @@ alone, and may take its name from the table to keep the two in step.
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
 Time, Source, Destination, Protocol, Length, Info. Both times have 6
 decimals, or 9 when the capture announces nanosecond precision for any of
-its packets (`PacketFormatter` takes the reader's `precision()`;
-`formatAllPackets()` the finest of its packets); further digits are cut,
-not rounded.
+its packets (`PacketFormatter` takes the reader's `precision()`); further
+digits are cut, not rounded.
 
 The widths are a minimum: a value as wide as its column, or wider (packet
 1,000,000, `MPLS-in-IP`), is still followed by a space, and an empty value
@@ -995,7 +996,7 @@ The Formatter keeps no conversations: the Stream column shows the stream
 number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
 `kUnnumbered`.
 
-`StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Converter,
+`StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Packet Pipeline,
 follows the conversations of a capture. Only TCP and UDP packets have a
 stream: those the parser read a TCP or UDP header of (`PacketRecord::transport`
 is set) and that share addresses and ports, in either direction. TCP and
@@ -1026,7 +1027,7 @@ them in a bounded table of its own and a bit or two here. A UDP stream pays for 
 ones, as both transports share `StreamState`.
 
 `analyseTcp()` (`tcp_analysis.h/cpp`, the TCP Analysis, pure C++), called
-by the Converter after the Stream Tracker, shows a TCP segment's `Seq=` and
+by the Packet Pipeline after the Stream Tracker, shows a TCP segment's `Seq=` and
 `Ack=` relative to the start of each direction, as Wireshark does by
 default. It follows Wireshark's rules: a SYN's sequence number is its
 direction's base, so the SYN shows `Seq=0`; a direction whose SYN was not
@@ -1057,7 +1058,7 @@ MSS=1460 SACK_PERM TSval=12345 TSecr=0 WS=128` (`WS=` is the multiplier,
 `1 << shift` with the shift capped at 14). Other segments show none of
 them, except the timestamps when `ConversionOptions::tcpTimestamps` asks
 for them, as Wireshark does on every segment: the parser keeps them in
-`PacketRecord::tcpTimestamps`, and the Converter calls
+`PacketRecord::tcpTimestamps`, and the Packet Pipeline calls
 `showTcpTimestamps()`, which puts ` TSval=… TSecr=…` after the TCP fields
 (`tcpFieldsEnd()`, before the payload description), before the TCP
 Analysis runs.
@@ -1085,9 +1086,9 @@ the packet's stream is known, so on its own the Protocol column changes
 within a conversation: a 443 stream alternates between `TLS` (a segment
 that starts a record) and `HTTPS` (the port's guess for one in the middle
 of a record), an HTTP body on port 8080 shows `HTTP-Alt`, on port 3000
-`TCP`. `StreamLabels` (pure C++), owned by the Converter next to the Stream
-Tracker, puts that right after the fact: `apply()` runs on every packet
-after the Stream Tracker, the TCP Analysis and `describeInStream()`, so the
+`TCP`. `StreamLabels` (pure C++), owned by the Packet Pipeline next to the
+Stream Tracker, puts that right after the fact: `apply()` runs on every
+packet as the pipeline's last step, after `describeInStream()`, so the
 QUIC short headers and HTTP/2 frames that only their stream makes
 recognisable count as recognised too. The first label a detector
 recognised on a stream (`PacketRecord::protocolRecognised`) sticks to it;
@@ -1111,7 +1112,7 @@ one byte of `StreamState`, a number into the capture's table of labels seen
 The describer sees one segment at a time, so a TLS record, an HTTP header
 section or a DNS-over-TCP message that spans segments used to be named, cut,
 by its first segment and as `Continuation` by the rest. `TcpReassembly`
-(pure C++), owned by the Converter next to the Stream Tracker, puts such a
+(pure C++), owned by the Packet Pipeline next to the Stream Tracker, puts such a
 message together: `apply()` runs on every packet after
 `describeInStream()` and before the Stream Labels, with the segment's
 captured payload, which the reader hands out
@@ -1239,13 +1240,13 @@ To frame a new protocol's messages, write `frameName( payload, len )`
 (returning `std::optional<size_t>` as above) in its `describe_name.cpp`,
 declare it in `describe_common.h` and add `{ "Label", nameFrame }` to
 `kTcpFramers`; its detector then sees whole messages on the completing
-segment. Tests go in `tests/tcp_reassembly_test.cpp`, with the Converter's
-steps run over a capture built with the frame builders.
+segment. Tests go in `tests/tcp_reassembly_test.cpp`, through the Packet Pipeline
+(`piped()`) over a capture built with the frame builders.
 
 #### TLS Decryption (`tls_decryption.h/cpp`, `tls_key_log.h/cpp`, `tls_crypto.h/cpp`, `hpack.h/cpp`)
 With a key log (`ConversionOptions::keyLogPath`, the option *TLS
-decryption: key log file*), the Converter runs a `TlsDecryption` (pure
-C++) on every packet right after the TCP Reassembly, with the messages it
+decryption: key log file*), the Packet Pipeline runs a `TlsDecryption`
+(pure C++) on every packet after the TCP Reassembly, with the messages it
 returned: whole TLS records, in sequence order. Without one nothing of
 it runs, and the text is the same as before.
 
@@ -1332,7 +1333,7 @@ Tests: `tests/tls_crypto_test.cpp` (HKDF-Expand-Label and a record against
 RFC 8448, the TLS 1.2 PRF against the published vectors),
 `tests/hpack_test.cpp` (RFC 7541, Appendix C, malformed and mutated blocks),
 `tests/tls_key_log_test.cpp`, and `tests/tls_decryption_test.cpp`, which
-runs the Converter's steps over `tests/corpus/tls-decrypt.pcap` with its key
+takes `tests/corpus/tls-decrypt.pcap` through the Packet Pipeline with its key
 log `tls-decrypt.keys`, without one, with secrets that come late and with
 mutated records, and over HTTP/2 frames cut and mutated.
 
@@ -1606,21 +1607,12 @@ share a base name), and `cmake --install` puts them there too.
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it and takes each packet through the same
-steps, in this order: `limitPreview()` cuts its preview, the Stream Tracker
-gives it its stream (`track()`), the TCP Analysis shows its numbers relative
-and marks it (`analyseTcp()`), the Payload Describer looks at it again in
-its stream (`describeInStream()`), the TCP Reassembly describes a message
-that spans segments where it completes (`TcpReassembly::apply()`), the
-Payload Describer notes what the completed message tells its stream (an SSH
-NEWKEYS, a WebSocket upgrade: `rememberInStream()`), with a
-key log the TLS Decryption decrypts the whole records it returned
-(`TlsDecryption::apply()`), the
-`MediaExpectations` describe it as RTP or RTCP where SDP announced them
-(`apply()`), the Stream Labels name it by its stream's protocol
-(`StreamLabels::apply()`), the `ConversationStats` and the `CaptureStats`
-count it, the Packet Formatter writes its line to a new output file, and its
-place is noted in a `CaptureIndex` (see *Packet Panel*); progress is
-reported and a cancel flag checked between packets. `convertStream()` does the same for a
+steps: the Packet Pipeline (below) describes it in its stream, the
+`ConversationStats` and the `CaptureStats` count it, the Packet Formatter
+writes its line to a new output file, the `HostNames` learn from its DNS
+answers (with host names shown), and its place is noted in a `CaptureIndex`
+(see *Packet Panel*); progress is reported and a cancel flag checked
+between packets. `convertStream()` does the same for a
 capture read from a stream (*The Capture Source seam*), without progress
 but live (see *Live conversion* below): both run one loop
 (`convertOrThrow()`), so every packet of a file and of a stream goes
@@ -1639,6 +1631,90 @@ failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter and its caller alike,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed.
+
+#### The Packet Pipeline (`packet_pipeline.h/cpp`)
+The steps every packet goes through between the reader and its line that
+follow its stream have one home: a `PacketPipeline` (pure C++), which owns
+the state they keep for the whole capture (the Stream Tracker, the TCP
+Reassembly, the TLS Decryption, the `MediaExpectations` and the Stream
+Labels) and the order they run in. The Converter makes one per conversion
+from its options (`PipelineOptions`: the preview length, the TCP timestamps,
+the stream cap, the reassembly's memory and, with a key log, a lookup of a
+session's secrets) and calls `run(pkt, payload)` once per packet, with the
+captured transport payload the reader hands out. `run()` rewrites the
+packet's protocol and Info and returns a `PacketOutcome`: the packet's
+stream, what the TCP Analysis found (its markers and iRTT, for the
+`CaptureStats`) and the messages the TCP Reassembly completed (for the
+`HostNames`, valid until the next packet). For the Capture Summary the
+Converter asks it for the Stream Tracker and the Stream Labels (the
+Conversations table, the stream cap) and `tlsSessionsDecrypted()`.
+
+The order, and why each step comes where it does, is stated once, in
+`packet_pipeline.h`:
+
+1. `limitPreview()` cuts the preview, before anything else touches Info,
+   whose end it cuts;
+2. with the option, `showTcpTimestamps()`;
+3. the Stream Tracker gives the packet its stream (`track()`);
+4. the TCP Analysis shows its numbers relative and marks it
+   (`analyseTcp()`), and forgets the state of a TCP stream's old connection
+   before any other step reads it;
+5. the Payload Describer looks at it again in its stream
+   (`describeInStream()`);
+6. the TCP Reassembly describes a message that spans segments where it
+   completes (`TcpReassembly::apply()`);
+7. the Payload Describer notes what the completed message tells its stream
+   (an SSH NEWKEYS, a WebSocket upgrade: `rememberInStream()`), after the
+   reassembly, which completes it;
+8. with a key log, the TLS Decryption decrypts the whole records the
+   reassembly returned (`TlsDecryption::apply()`);
+9. the `MediaExpectations` describe it as RTP or RTCP where SDP announced
+   them (`apply()`), after the reassembly, which completes SDP bodies, and
+   before the Stream Labels, so that the RTP label sticks;
+10. the Stream Labels name it by its stream's protocol
+    (`StreamLabels::apply()`).
+
+What the Converter does with the packet after that (the counts, the line,
+the names, the index, the live output) stays the Converter's. Tests go in
+`tests/packet_pipeline_test.cpp`, through `run()` over a capture built with
+the frame builders or a corpus capture.
+
+The tests of the steps it runs take their captures through it too, so that
+they test what a conversion does rather than a loop of their own with some
+of the steps: `piped()` in `tests/pipeline_harness.h` reads a capture built
+in the test, runs each packet through a `PacketPipeline` with its payload
+(`withKeyLog()` gives it the secrets of a key log) and hands back each
+packet as the pipeline left it, with its stream, its TCP Analysis and the
+messages it completed; `tcpConversation()` builds the capture of a TCP
+connection from what each end sends, its sequence numbers going on as a
+real one's do. The TCP Reassembly, TLS Decryption, SSH, WebSocket, HTTP,
+MQTT, QUIC and Stream Labels tests use it, and read what the reassembly or
+the decryption holds through the pipeline (`reassembly()`,
+`tlsDecryption()`); the Conversations tests count packets as the pipeline
+left them. A test that needs a stream in some state gets it from a
+capture with the packets that put it there, not by setting its bits.
+
+Nothing else runs the steps one by one. The in-stream pass is
+`InStreamPass`'s, private to all but the Packet Pipeline; the Stream
+Tracker, the TCP Analysis, the TCP Reassembly, the TLS Decryption, the
+`MediaExpectations`, the Stream Labels, `limitPreview()` and
+`showTcpTimestamps()` keep an interface of their own, which only the
+Packet Pipeline calls in `src/`. Their own tests may call it to test one of
+them alone (the TCP Analysis behind a Stream Tracker, the
+`MediaExpectations` of SIP and RTP packets, the TLS Decryption of records
+fed to it), never several of them in an order of their own. The order is
+stated in `packet_pipeline.h` and in the list above; a step's own header
+says that the Packet Pipeline runs it, not where.
+
+`formatAllPackets()` (`packet_formatter.h`), which tests use for the lines
+of a capture, reads a capture held in memory the same way: its reader, each
+packet with its payload through a Packet Pipeline made from the
+`PipelineOptions` it is handed, the Packet Formatter at the reader's
+precision and, with host names in the layout, the `HostNames`. It takes the
+capture's bytes rather than parsed `PacketRecord`s because the TCP
+Reassembly needs the payloads, which only the reader hands out. With
+options to match a conversion's, its lines are the ones the conversion
+writes (`tests/streaming_test.cpp` checks this for every corpus capture).
 
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the
@@ -1739,21 +1815,82 @@ own and posts what it is told to its own (the UI) thread as signals:
 `finished( ConversionResult )`. The source is made on the worker by a
 `SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
 ProcessCommand )` for a capture program), as a `ProcessSource` must be.
-`stop()` sets the source's stop flag, `cancel()` also the cancel flag;
+`stop()` sets the source's stop flag; nothing cancels a live capture (its
+outcome is never Cancelled: what it wrote is kept for its tabs, or removed
+by the Live Capture Session when none opened).
 `setLimits()` and `setClock()` before `start()` hand the conversion its
 `LiveLimits` and clock, the same for every source kind. The
 outcome is posted before the source is destroyed, so a program that takes
 up to `kTerminateGrace` to end does not delay it; `done()` follows once the
-source is gone (`isDone()`). The UI thread never waits for a worker: the
-sidebar hands a capture that may still run (the last one, as the next
-starts; its own, as it is destroyed) to `retireLiveCapture()`, which
-disconnects and stops it and keeps it until it is done; a restart from
-*Start live capture…* starts the next on the last one's `done()`, so that
-two capture programs never run at once. The plugin's shutdown is the one
+source is gone (`isDone()`). The UI thread never waits for a worker: a
+capture that may still run (the last one, as the next starts; the
+session's own, as it is destroyed) is handed to `retireLiveCapture()`,
+which disconnects and stops it and keeps it until it is done; a restart
+from *Start live capture…* starts the next on the last one's `done()`, so
+that two capture programs never run at once. The plugin's shutdown is the one
 place that waits: `cancelListings()` first (a worker may be in a listing,
 e.g. adb's probe), `terminateCaptureProcesses()`, then `joinLiveCaptures()`
 stops and destroys every retired capture, whose destructor waits for its
 worker, before the library is unloaded.
+
+#### The Live Capture Session (`live_capture_session.h/cpp`)
+A live capture's lifecycle and outcome are decided in one place, a
+`LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
+drives and listens to; the sidebar only shows what it is told. The session
+reaches LogSquirl through a `LiveCaptureHost` (`openTab( logPath )`,
+`notify( message )`, and `busyElsewhere()`: a capture file being read) and
+the summaries the sidebar keeps per text file through a
+`LiveCaptureCatalog` (`addFile( logPath, rawPath, name )`, `updateFile(
+logPath, summary, index, fileSize )`, `setFileError( logPath, error )`);
+the sidebar is both. A capture runs through a `LiveRun` (`start( Listener
+)`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
+stderrLine, finished and done, as `LiveCapture`'s signals) made by a
+`LiveRunFactory` from a `LiveRunRequest` (name, output root, options,
+source factory, limits, clock): `runOnWorker()`, a `LiveCapture` that is
+retired when the run is let go of, in the app; `setRunFactory()` in tests.
+
+- `start( LiveChoice )` refuses, with a notification, while something
+  else is busy or a capture runs, or with `liveChoiceProblem()`'s message;
+  a kind whose `validationNeedsAsking( choice )` (an extcap whose
+  interface's arguments were not asked this session) is asked first
+  (`askForValidation()`, on a worker thread of the session under a
+  `ListingCancelScope`, state `Checking`), and the choice is checked
+  again and refused, or started. A start saves the choice and runs
+  `kind->makeSource( choice )` named `liveCaptureName( choice )`.
+  `start( name, SourceFactory, limits, kind )` starts a stream by name; the
+  kind, if given, explains its failure as for a choice.
+- Each text file (a ring buffer's, one per raw file) goes into the catalog
+  before its tab is opened; each snapshot replaces the summary, index and
+  size of every text file of the capture, and so does the outcome, each
+  file then with its own raw file's size.
+- `stop()` stops the capture (`Stopping`), or drops a check that runs.
+  `startWhenIdle( choice )` (*Start live capture…*) stops a running capture
+  and starts `choice` on its run's `done`, the pending start
+  (`hasPendingStart()`).
+- The outcome (`LiveOutcome`, also `outcome()`, and the signal
+  `finished`): `Captured` (a stop condition that ended it is
+  `stoppedBy`, and the user is told `liveStopText()`), `Empty` (no packet:
+  no tab opened, its directory removed, the user told), `Stopped` (before
+  the header: nothing left, not a failure) or `Failed` (the user told the
+  error; `guidance` is the kind's `explainFailure()`; the catalog's files
+  keep the capture with the error when a packet came). `files` are the
+  text files opened in tabs.
+
+The session's signals (`stateChanged`, `started`, `fileOpened`,
+`progressed`, `stderrLine`, `finished`) are what the sidebar renders:
+the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
+the error and Guidance, the summary label. `tests/fake_live_session.h`
+has `FakeLiveHost` (both adapters, recording) and `ScriptedRuns` (runs the
+test tells what happens, on its own thread), so that
+`tests/live_capture_session_test.cpp` tests the session without a widget
+or an event loop. Its `WorkerSession` is a session whose captures run on a
+worker as in the app, on a `FakeLiveHost`: the tests of each source kind
+(local, adb, ssh, extcap, command) start their captures with it, run by the
+kind's fake programs, and assert on the outcome (status, error, Guidance,
+files opened) and the stderr lines, waiting in the event loop for what the
+session tells (`waitForOutcome()`, `waitForFile()`). How the sidebar shows
+an outcome is tested on the sidebar itself (`live_capture_ui_test.cpp`,
+`live_capture_test.cpp`).
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
@@ -1767,14 +1904,16 @@ knows none of them. A kind answers:
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
 | `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
 | `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
-| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` for its own |
-| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too); by default an interface is needed |
+| `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` whether it can tell yet (an extcap's widget asking for the arguments); whether the options can be captured with is `validate()`'s |
+| `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too), the last part of `liveChoiceProblem()`; by default an interface is needed |
+| `validationNeedsAsking( choice )`, `askForValidation( choice, timeout )` | UI, worker | Whether `validate()` can check the choice only once the kind has asked for something (an extcap's arguments), and asking for it, bounded by the timeout; by default nothing needs asking |
 | `command( choice )` | UI | The `ProcessCommand` capturing `{ device, interface, filter, snaplen }`; the BPF filter is one argument, never a local shell's. Where a remote shell must read it (adb's device shell, the server's over ssh, which get one joined command line), every value is `shellQuote()`d for it, so that it is one argument there too: the Android and SSH kinds build their device and server scripts so, and a custom command says `{filter:sh}` |
 | `makeSource( choice )` | UI | The `LiveCapture::SourceFactory`; by default a Process Source running `command()`. The extcap kind's is a `PipeSource` |
 | `explainFailure( error )` | UI | What the user can do about a failed capture (permissions per OS), shown below the error |
 
 A kind holds no state that changes, so its listings may run on a worker
-while the UI asks it the rest. `runListing( command, timeout )` runs a
+while the UI asks it the rest (the extcap kind remembers the arguments its
+listing was told, for `validate()`, behind a mutex). `runListing( command, timeout )` runs a
 listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
 device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
@@ -1783,7 +1922,12 @@ kills its group within moments: `cancelListings()` cancels every running
 one (the sidebar's destructor, so that the plugin's shutdown does not wait
 for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
 worker thread cancels those run under it once the flag is set (the form
-cancels its own listings as it goes); the kinds need not know of either. `captureFilterProblem()` catches
+cancels its own listings as it goes); the kinds need not know of either. `liveChoiceProblem( sources, choice )`
+is the one answer to "can this choice start?", for the form's Start button
+and for the Live Capture Session's start alike, with no widget: a source
+that is there and available, a snaplen of 1 to `kMaxSnaplen`, the capture
+filter, the limits (`liveLimitsProblem()`), then the kind's `validate()`.
+`captureFilterProblem()` catches
 what would be misread before libpcap sees a filter (a line break, a
 leading `-`, unbalanced parentheses, a display filter field such as
 `ip.addr`); the capture program compiles it. `liveCaptureName( choice )`
@@ -1946,10 +2090,19 @@ radio buttons, a checkable `QListWidget` (multicheck, children indented
 under their parent), a path with Browse… (fileselect). Fields start with the
 option kept, else the default, and write through to the options, so that
 the capture passes every value shown; the interface's options it no longer
-takes are dropped, other interfaces' kept. `problem()` says the extcap is
-being asked, or names a required field left empty, a number that is none or
-out of `{range=}`, a value its `{validation=}` does not match, or a
-`{mustexist=true}` file that is not there. `tests/extcap_source_test.cpp`
+takes are dropped, other interfaces' kept. Its `problem()` says only that
+the extcap is being asked. The arguments' rules are
+`extcapArgumentProblem( args, options, interface )`, which needs no widget:
+a required argument without a value, a number that is none or out of
+`{range=}`, a value its `{validation=}` does not match, or a
+`{mustexist=true}` file that is not there. `config()` remembers the
+arguments it was told per extcap and interface (shared by the kind's
+copies, so the widget's listing counts), and `validate()` checks a choice
+by them: a saved choice started without the form is refused as the form
+refuses it. An interface never asked is asked by the Live Capture Session
+before it starts the choice (`validationNeedsAsking()`,
+`askForValidation()`); one the extcap cannot say is not checked, and the
+extcap says what it lacks. `tests/extcap_source_test.cpp`
 runs fake extcap scripts (`fakedump` answering from files and writing a
 synthetic pcap into the FIFO it is given, `brokendump` failing), so that
 discovery, every argument type, hostile values (passed as one word, no
@@ -2079,22 +2232,23 @@ Qt UI that provides:
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
 
-A live capture, `startLiveCapture( name, SourceFactory )`, runs in a
-`LiveCapture`. On `readyToOpen` the sidebar keeps the capture's entry under
-its text file and calls `open_file( path, follow = 1 )` on the UI thread
-(LogSquirl#796); snapshots replace the entry's summary through
-`updateSummary( textPath, summary )`, which redraws it if its tab is in
-front, and update a label with packets, bytes, packets/s (as of the
-snapshot) and the elapsed time (ticked by a 1 s timer) in place of the
-progress bar; the snapshot's index replaces the entry's, so the Packet
-Panel shows the packets captured so far. **Stop** calls `stopLiveCapture()`. At the end the final
-summary and index replace the last snapshot's; a capture without packets has its files
-removed and a notification; a failed one keeps its entry with the error
-shown above the summary. **Save capture…**, shown for a tab whose capture
-has a raw file, copies it where `setSaveChooser()`'s dialog says. stderr
-lines go to the host's log. Opening a file and a live capture exclude each
-other; the `LiveCapture` is kept until the next one starts, since its
-worker may still be ending the capture program.
+A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
+`startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
+(`liveSession()`; see *The Live Capture Session*), whose host and capture
+catalog the sidebar is: `addFile()` keeps the capture's entry under its
+text file, `openTab()` calls `open_file( path, follow = 1 )` on the UI
+thread (LogSquirl#796), `updateFile()` replaces the entry's summary, index
+and size through `updateSummary( textPath, summary )`, which redraws it if
+its tab is in front, so the Packet Panel shows the packets captured so far,
+and `setFileError()` keeps a failure's error, shown above the summary. A
+label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
+time (ticked by a 1 s timer) in place of the progress bar. **Stop** calls
+`stopLiveCapture()`. The outcome's summary label is the sidebar's: stopped
+before anything was captured, without packets, the error, or that the
+capture's tab shows its summary. **Save capture…**, shown for a tab whose
+capture has a raw file, copies it where `setSaveChooser()`'s dialog says.
+stderr lines go to the host's log. Opening a file and a live capture
+exclude each other (`busyElsewhere()`, `isCapturing()`).
 
 The **Live capture** section holds a `LiveCaptureForm`
 (`live_capture_form.h/cpp`): the source picker over a `LiveSourceRegistry`
@@ -2108,19 +2262,18 @@ source or device chosen since is dropped (a generation counter). The form
 remembers the choice it was given and selects it once listed. A kind's
 options widget is made anew whenever the kind is chosen, and its options
 are kept per source when another is chosen. `problem()`
-(no source, unavailable, the filter, the kind's `validate()`) keeps
+(`liveChoiceProblem()`, then an options widget that cannot tell yet) keeps
 **Start** disabled, with the reason as its tooltip, as does a conversion or
 a capture running; the form is locked while a capture runs.
-`startLiveCapture( LiveChoice )` checks the same, saves the choice, and runs
-`startLiveCapture( liveCaptureName( choice ), kind->makeSource( choice ) )`.
-The capture program's stderr lines fill a small read-only view; a failure's
-error, with `explainFailure()`, a label below Stop. **Plugins → tcpdump →
+A choice the session starts is shown in the form. The capture program's
+stderr lines fill a small read-only view; a failure's error, with its
+Guidance (`explainFailure()`), a label below Stop. **Plugins → tcpdump →
 Start live capture…** (`chooseAndStartLiveCapture()`) asks to stop a
 running capture (`setStopConfirmer()` in tests), shows a
-`LiveCaptureDialog` with the same form (`setLiveChoiceAsker()`), and starts
-the choice, after the running capture's `finished`, from the event loop (it
-destroys the `LiveCapture` that sends the signal). **Stop live capture**
-calls `stopLiveCapture()`.
+`LiveCaptureDialog` with the same form (`setLiveChoiceAsker()`), and hands
+the choice to `LiveCaptureSession::startWhenIdle()`, which starts it once
+the running capture's program has ended. **Stop live capture** calls
+`stopLiveCapture()`.
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome
@@ -2253,9 +2406,9 @@ export, conversation statistics):
   the export with the payloads its script wrote.
 
 - **The Conversations table** (`conversations.h/cpp`, pure C++;
-  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter
-  next to the Stream Tracker, counts each numbered stream after the Stream
-  Labels ran (`add(pkt, stream)`): packets and wire bytes per direction,
+  `conversation_table.h/cpp`). `ConversationStats`, owned by the Converter,
+  counts each numbered stream after the Packet Pipeline ran
+  (`add(pkt, stream)`): packets and wire bytes per direction,
   its earliest and latest packet, the direction of its first packet (end
   A is that packet's source) and its last label byte, 64 bytes per stream.
   Packets of `kUnnumbered` streams are counted together, so the stream cap

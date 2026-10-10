@@ -111,8 +111,9 @@ public:
     TlsDecryption& operator=( const TlsDecryption& ) = delete;
 
     /**
-     * Run on every packet, in capture order, after the TCP Reassembly, with
-     * the messages it returned for the packet.  Follows the handshakes in
+     * Run on every packet, in capture order, by the Packet Pipeline
+     * (packet_pipeline.h), with the messages the TCP Reassembly returned for
+     * the packet.  Follows the handshakes in
      * them, decrypts their records and describes the packet anew if it
      * decrypted one.  Packets of other transports, and of no stream or one
      * past the stream cap, are left as they are.

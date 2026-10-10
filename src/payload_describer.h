@@ -59,8 +59,8 @@ struct PayloadDescription {
     /// The description is a preview of the payload's text, no detector
     /// having recognised it: printable ASCII, a dot for every other byte.
     bool preview = false;
-    /// What the payload begins for its stream, which describeInStream()
-    /// builds on (PacketRecord::streamCue).
+    /// What the payload begins for its stream, which
+    /// InStreamPass::describeInStream() builds on (PacketRecord::streamCue).
     StreamCue streamCue = StreamCue::None;
     /// The SIP messages of the payload that announce media or end a call
     /// (PacketRecord::sipCalls).
@@ -146,57 +146,63 @@ PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_
  */
 void redescribe( PacketRecord& pkt, const char* label, const std::string& description );
 
-/**
- * Describe @p pkt again with what its @p stream has shown so far, and
- * remember in the stream's state what later packets need: run on every
- * packet, in capture order, after the Stream Tracker and the TCP Analysis
- * (which forgets the state of a TCP stream's old connection), before the
- * Stream Labels.
- *
- * A UDP stream that carried a QUIC long header is a QUIC connection: its
- * short header packets, which carry no version, are labelled QUIC and
- * described as "Protected Payload, DCID=…", the connection ID as long as
- * the other side's last long header said.  A TCP stream that began with
- * the HTTP/2 connection preface is an HTTP/2 connection: its segments that
- * begin with frame headers are labelled HTTP2 and described as
- * "HEADERS[1], DATA[1]", each frame's type and stream.  A packet so
- * labelled counts as recognised (PacketRecord::protocolRecognised), so its
- * label sticks to the stream.  A TCP stream that began with an MQTT
- * CONNECT on a port other than MQTT's is an MQTT connection: its segments
- * no detector recognised that begin with MQTT packets are labelled MQTT
- * and described as on MQTT's port, as far as the first kPayloadHeadBytes
- * go.  A TCP stream that carried an SSH-2 banner is an SSH connection: a
- * direction's segments after its NEWKEYS are labelled SSHv2 and described
- * as "Client: Encrypted packet (len=N)", those before it no detector
- * recognised as the binary packets they begin with.  A TCP stream an HTTP
- * "101 Switching Protocols" response with "Upgrade: websocket" upgraded is
- * a WebSocket connection: its later segments are labelled WebSocket and
- * their frames described, as far as the first kPayloadHeadBytes go (the
- * TCP Reassembly describes them from all the bytes).  Packets of other
- * streams, and of streams past the stream cap, which have no state, are
- * left as they are.
- */
-void describeInStream( PacketRecord& pkt, const Stream& stream );
+class PacketPipeline;
 
 /**
- * Remember in @p stream's state what @p pkt, as the TCP Reassembly left
- * its description (PacketRecord::streamCue), tells the stream's later
- * packets: run on every packet, in capture order, after the TCP
- * Reassembly (after describeInStream() where there is none).  An SSH-2
- * banner makes the stream an SSH connection, a NEWKEYS encrypts what its
- * direction sends after it, a 101 response with "Upgrade: websocket" makes
- * it a WebSocket connection.
+ * The Payload Describer's passes over a packet whose stream is known.  Only
+ * the Packet Pipeline runs them, on every packet, in capture order, each
+ * where among its steps it says (packet_pipeline.h).
  */
-void rememberInStream( const PacketRecord& pkt, const Stream& stream );
+class InStreamPass {
+    friend class PacketPipeline;
+
+    /**
+     * Describe @p pkt again with what its @p stream has shown so far, and
+     * remember in the stream's state what later packets need.
+     *
+     * A UDP stream that carried a QUIC long header is a QUIC connection:
+     * its short header packets, which carry no version, are labelled QUIC
+     * and described as "Protected Payload, DCID=…", the connection ID as
+     * long as the other side's last long header said.  A TCP stream that
+     * began with the HTTP/2 connection preface is an HTTP/2 connection: its
+     * segments that begin with frame headers are labelled HTTP2 and
+     * described as "HEADERS[1], DATA[1]", each frame's type and stream.  A
+     * packet so labelled counts as recognised
+     * (PacketRecord::protocolRecognised), so its label sticks to the
+     * stream.  A TCP stream that began with an MQTT CONNECT on a port other
+     * than MQTT's is an MQTT connection: its segments no detector
+     * recognised that begin with MQTT packets are labelled MQTT and
+     * described as on MQTT's port, as far as the first kPayloadHeadBytes
+     * go.  A TCP stream that carried an SSH-2 banner is an SSH connection:
+     * a direction's segments after its NEWKEYS are labelled SSHv2 and
+     * described as "Client: Encrypted packet (len=N)", those before it no
+     * detector recognised as the binary packets they begin with.  A TCP
+     * stream an HTTP "101 Switching Protocols" response with "Upgrade:
+     * websocket" upgraded is a WebSocket connection: its later segments are
+     * labelled WebSocket and their frames described, as far as the first
+     * kPayloadHeadBytes go (the TCP Reassembly describes them from all the
+     * bytes).  Packets of other streams, and of streams past the stream
+     * cap, which have no state, are left as they are.
+     */
+    static void describeInStream( PacketRecord& pkt, const Stream& stream );
+
+    /**
+     * Remember in @p stream's state what @p pkt, as the TCP Reassembly left
+     * its description (PacketRecord::streamCue), tells the stream's later
+     * packets.  An SSH-2 banner makes the stream an SSH connection, a
+     * NEWKEYS encrypts what its direction sends after it, a 101 response
+     * with "Upgrade: websocket" makes it a WebSocket connection.
+     */
+    static void rememberInStream( const PacketRecord& pkt, const Stream& stream );
+};
 
 /**
  * Cut the payload preview @p pkt's Info ends in (PacketRecord::previewBytes)
  * to its first @p maxChars characters, followed by an ellipsis, so that a
  * shorter preview can be chosen than the describer's kMaxPreviewChars; with
  * @p maxChars 0, leave it out, and the separator before it.  A preview no
- * longer than that, and a packet without one, are left as they are.  Run on
- * a packet as the reader hands it out, before anything else touches its
- * Info.
+ * longer than that, and a packet without one, are left as they are.  The
+ * Packet Pipeline runs it on every packet (packet_pipeline.h).
  */
 void limitPreview( PacketRecord& pkt, size_t maxChars );
 

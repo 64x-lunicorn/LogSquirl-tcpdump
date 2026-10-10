@@ -106,7 +106,7 @@ private:
 
 /**
  * Counts the packets of each numbered stream, packet by packet, as the
- * Converter reads them; owned by the Converter next to the Stream Tracker.
+ * Converter reads them; owned by the Converter.
  *
  * A stream's counts take 64 bytes (and the tracker 8 more to find its
  * endpoints), kept only for the streams the Stream Tracker numbers, so that
@@ -117,8 +117,8 @@ private:
  */
 class ConversationStats {
 public:
-    /// Count @p pkt in, of @p stream; run after the Stream Labels.  Packets
-    /// of no stream are not counted.
+    /// Count @p pkt in, of @p stream, as the Packet Pipeline left it.
+    /// Packets of no stream are not counted.
     void add( const PacketRecord& pkt, const Stream& stream );
 
     /// The table as it stands: a row per stream, TCP's first, each by its

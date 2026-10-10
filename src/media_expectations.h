@@ -25,7 +25,7 @@
  * RTP has no port of its own and no header a detector could tell from any
  * other UDP payload with confidence: Wireshark describes it where the SDP
  * of a call said it would be sent.  So do the MediaExpectations, owned by
- * the Converter next to the Stream Tracker: the capture-wide side table of
+ * the Packet Pipeline next to the Stream Tracker: the capture-wide side table of
  * the media endpoints announced so far, which no single stream's state
  * could hold, since the SIP signalling and its media are different
  * conversations.
@@ -80,8 +80,8 @@ public:
     /**
      * Learn what @p pkt's SIP messages announce or end, then describe it as
      * RTP or RTCP if it is a UDP packet from or to an expected endpoint.
-     * Run on every packet, in capture order, after describeInStream() and
-     * before the Stream Labels, so that the RTP label sticks to its stream.
+     * Run on every packet, in capture order, by the Packet Pipeline
+     * (packet_pipeline.h).
      */
     void apply( PacketRecord& pkt );
 

@@ -25,8 +25,32 @@
 #include <catch2/catch.hpp>
 
 #include "packet_formatter.h"
+#include "pcapbuilder.h"
+
+#include <algorithm>
+#include <array>
 
 using namespace tcpdump;
+using namespace tcpdump_test;
+
+namespace {
+
+constexpr uint8_t kSyn = 0x02;
+constexpr uint8_t kAck = 0x10;
+
+/// From @p src to @p dst.
+Ipv4Options between( std::array<uint8_t, 4> src, std::array<uint8_t, 4> dst )
+{
+    Ipv4Options o;
+    std::copy( src.begin(), src.end(), o.src );
+    std::copy( dst.begin(), dst.end(), o.dst );
+    return o;
+}
+
+/// The way back of the builder's default packet, from 192.168.1.2 to 192.168.1.1.
+const auto kBack = between( { 192, 168, 1, 2 }, { 192, 168, 1, 1 } );
+
+} // namespace
 
 SCENARIO( "formatTcpFlags renders flags correctly", "[packet_formatter]" )
 {
@@ -73,39 +97,23 @@ SCENARIO( "formatTcpFlags renders flags correctly", "[packet_formatter]" )
 
 SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]" )
 {
-    GIVEN( "a list of two packets" )
+    // The Stream column of a packet line: it starts at column 7, 8 wide.
+    auto streamOf = []( const std::string& line ) {
+        auto sub = line.substr( 7, 8 );
+        return sub.substr( 0, sub.find( ' ' ) );
+    };
+
+    GIVEN( "a capture of two packets" )
     {
-        PacketRecord pkt1;
-        pkt1.number = 1;
-        pkt1.timestampSec = 1000;
-        pkt1.timestampNsec = 0;
-        pkt1.srcIp = "192.168.1.1";
-        pkt1.dstIp = "10.0.0.1";
-        pkt1.transport = Transport::Tcp;
-        pkt1.srcPort = 80;
-        pkt1.dstPort = 443;
-        pkt1.protocol = "TCP";
-        pkt1.capturedLen = 60;
-        pkt1.info = "80 > 443 [SYN]";
-
-        PacketRecord pkt2;
-        pkt2.number = 2;
-        pkt2.timestampSec = 1000;
-        pkt2.timestampNsec = 500000000;
-        pkt2.srcIp = "10.0.0.1";
-        pkt2.dstIp = "192.168.1.1";
-        pkt2.transport = Transport::Tcp;
-        pkt2.srcPort = 443;
-        pkt2.dstPort = 80;
-        pkt2.protocol = "TCP";
-        pkt2.capturedLen = 60;
-        pkt2.info = "443 > 80 [SYN, ACK]";
-
-        std::vector<PacketRecord> packets = { pkt1, pkt2 };
+        const auto capture = pcapOf( {
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 443, {}, 5, kSyn, 100 ) ) ),
+            eth( EthertypeIpv4,
+                 ipv4( IpProtoTcp, tcp( 443, 40000, {}, 5, kSyn | kAck, 500, 101 ), kBack ) ),
+        } );
 
         WHEN( "formatting all packets" )
         {
-            auto lines = formatAllPackets( packets );
+            auto lines = formatAllPackets( capture );
 
             THEN( "the first line is the column header" )
             {
@@ -119,78 +127,34 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
             THEN( "packet lines contain the IP addresses" )
             {
                 REQUIRE( lines[ 1 ].find( "192.168.1.1" ) != std::string::npos );
-                REQUIRE( lines[ 2 ].find( "10.0.0.1" ) != std::string::npos );
+                REQUIRE( lines[ 2 ].find( "192.168.1.2" ) != std::string::npos );
             }
 
             THEN( "both packets have the same stream ID (same conversation)" )
             {
-                // stream 0 should appear in both lines
-                REQUIRE( lines[ 1 ].find( "0" ) != std::string::npos );
-                REQUIRE( lines[ 2 ].find( "0" ) != std::string::npos );
+                REQUIRE( streamOf( lines[ 1 ] ) == "0" );
+                REQUIRE( streamOf( lines[ 2 ] ) == "0" );
             }
         }
     }
 
     GIVEN( "packets from two different conversations" )
     {
-        PacketRecord pktA1;
-        pktA1.number = 1;
-        pktA1.timestampSec = 1000;
-        pktA1.timestampNsec = 0;
-        pktA1.srcIp = "192.168.1.1";
-        pktA1.dstIp = "10.0.0.1";
-        pktA1.transport = Transport::Tcp;
-        pktA1.srcPort = 80;
-        pktA1.dstPort = 443;
-        pktA1.protocol = "TCP";
-        pktA1.capturedLen = 60;
-        pktA1.info = "80 > 443 [SYN]";
-
-        PacketRecord pktB1;
-        pktB1.number = 2;
-        pktB1.timestampSec = 1000;
-        pktB1.timestampNsec = 100000000;
-        pktB1.srcIp = "172.16.0.5";
-        pktB1.dstIp = "8.8.8.8";
-        pktB1.transport = Transport::Tcp;
-        pktB1.srcPort = 54321;
-        pktB1.dstPort = 443;
-        pktB1.protocol = "TCP";
-        pktB1.capturedLen = 74;
-        pktB1.info = "54321 > 443 [SYN]";
-
-        PacketRecord pktA2;
-        pktA2.number = 3;
-        pktA2.timestampSec = 1000;
-        pktA2.timestampNsec = 200000000;
-        pktA2.srcIp = "10.0.0.1";
-        pktA2.dstIp = "192.168.1.1";
-        pktA2.transport = Transport::Tcp;
-        pktA2.srcPort = 443;
-        pktA2.dstPort = 80;
-        pktA2.protocol = "TCP";
-        pktA2.capturedLen = 60;
-        pktA2.info = "443 > 80 [SYN, ACK]";
-
-        std::vector<PacketRecord> packets = { pktA1, pktB1, pktA2 };
+        const auto capture = pcapOf( {
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 443, {}, 5, kSyn, 100 ) ) ),
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 54321, 443, {}, 5, kSyn, 700 ),
+                                      between( { 172, 16, 0, 5 }, { 8, 8, 8, 8 } ) ) ),
+            eth( EthertypeIpv4,
+                 ipv4( IpProtoTcp, tcp( 443, 40000, {}, 5, kSyn | kAck, 500, 101 ), kBack ) ),
+        } );
 
         WHEN( "formatting" )
         {
-            auto lines = formatAllPackets( packets );
+            auto lines = formatAllPackets( capture );
 
             THEN( "packet 1 and 3 share stream 0, packet 2 is stream 1" )
             {
                 REQUIRE( lines.size() == 4 ); // header + 3 packets
-
-                // Extract stream column (starts at col 7, width 8)
-                auto streamOf = []( const std::string& line ) {
-                    auto sub = line.substr( 7, 8 );
-                    // trim trailing spaces
-                    auto pos = sub.find_first_not_of( ' ' );
-                    auto end = sub.find_last_not_of( ' ' );
-                    return sub.substr( pos, end - pos + 1 );
-                };
-
                 REQUIRE( streamOf( lines[ 1 ] ) == "0" );
                 REQUIRE( streamOf( lines[ 2 ] ) == "1" );
                 REQUIRE( streamOf( lines[ 3 ] ) == "0" );
@@ -198,47 +162,30 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         }
     }
 
-    GIVEN( "an ARP packet with no IP layer" )
+    GIVEN( "an LLDP frame, with no IP layer" )
     {
-        PacketRecord arp;
-        arp.number = 1;
-        arp.timestampSec = 1000;
-        arp.timestampNsec = 0;
-        arp.protocol = "ARP";
-        arp.capturedLen = 42;
-        arp.info = "Who has 192.168.1.100?";
-        arp.srcMac = "11:22:33:44:55:66";
-        arp.dstMac = "ff:ff:ff:ff:ff:ff";
-        // srcIp and dstIp intentionally empty
-
-        std::vector<PacketRecord> packets = { arp };
-
         WHEN( "formatting" )
         {
-            auto lines = formatAllPackets( packets );
+            auto lines = formatAllPackets( pcapOf( { eth( 0x88CC, Bytes( 20, 0 ) ) } ) );
 
-            THEN( "ARP gets stream '-' and falls back to MAC address display" )
+            THEN( "it gets stream '-' and falls back to MAC address display" )
             {
                 REQUIRE( lines.size() == 2 );
-                REQUIRE( lines[ 1 ].find( "-" ) != std::string::npos );
-                REQUIRE( lines[ 1 ].find( "11:22:33:44:55:66" ) != std::string::npos );
-                REQUIRE( lines[ 1 ].find( "ff:ff:ff:ff:ff:ff" ) != std::string::npos );
+                REQUIRE( streamOf( lines[ 1 ] ) == "-" );
+                REQUIRE( lines[ 1 ].find( "66:77:88:99:aa:bb" ) != std::string::npos );
+                REQUIRE( lines[ 1 ].find( "00:11:22:33:44:55" ) != std::string::npos );
             }
         }
     }
 
     GIVEN( "an ICMP packet between two hosts" )
     {
-        PacketRecord icmp;
-        icmp.number = 1;
-        icmp.srcIp = "192.168.1.1";
-        icmp.dstIp = "10.0.0.1";
-        icmp.protocol = "ICMP";
-        icmp.info = "Echo request";
+        const Bytes echoRequest{ 8, 0, 0, 0, 0, 1, 0, 1 };
 
         WHEN( "formatting" )
         {
-            auto lines = formatAllPackets( { icmp } );
+            auto lines = formatAllPackets(
+                pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoIcmp, echoRequest ) ) } ) );
 
             THEN( "it has no stream: only TCP and UDP have one" )
             {
@@ -249,16 +196,15 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
 
     GIVEN( "packets recorded to the nanosecond" )
     {
-        PacketRecord first;
-        first.timestampSec = 1000;
-        first.timestampNsec = 5;
-        first.precision = TimePrecision::Nanoseconds;
-        PacketRecord second = first;
-        second.timestampNsec = 123456789;
+        const auto frame = eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 40000, 9999 ) ) );
+        FileOptions nanoseconds;
+        nanoseconds.nanoseconds = true;
+        const auto capture
+            = pcapFile( { { frame, 1000, 5 }, { frame, 1000, 123456789 } }, nanoseconds );
 
         WHEN( "formatting all packets" )
         {
-            auto lines = formatAllPackets( { first, second } );
+            auto lines = formatAllPackets( capture );
 
             THEN( "the times are shown to the nanosecond, as the packets were recorded" )
             {
@@ -269,17 +215,17 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
 
     GIVEN( "a packet recorded to the nanosecond after one recorded to the microsecond" )
     {
-        PacketRecord first;
-        first.timestampSec = 1000;
-        PacketRecord second = first;
-        second.timestampNsec = 123456789;
-        second.precision = TimePrecision::Nanoseconds;
+        const auto frame = eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( 40000, 9999 ) ) );
+        const Pcapng le;
+        const auto capture = le.shb() + le.idb( DltEthernet ) + le.idb( DltEthernet, 9 )
+                             + le.epb( 0, 1000 * 1000000ull, frame )
+                             + le.epb( 1, 1000 * 1000000000ull + 123456789, frame );
 
         WHEN( "formatting all packets" )
         {
-            auto lines = formatAllPackets( { first, second } );
+            auto lines = formatAllPackets( capture );
 
-            THEN( "every time is shown at the finest precision of the packets" )
+            THEN( "every time is shown at the finest precision the capture announces" )
             {
                 REQUIRE( lines[ 1 ].find( " 0.000000000 " ) != std::string::npos );
                 REQUIRE( lines[ 2 ].find( " 0.123456789 " ) != std::string::npos );
@@ -287,18 +233,24 @@ SCENARIO( "formatAllPackets produces header + packet lines", "[packet_formatter]
         }
     }
 
-    GIVEN( "an empty packet list" )
+    GIVEN( "a capture without packets" )
     {
-        std::vector<PacketRecord> empty;
-
         WHEN( "formatting" )
         {
-            auto lines = formatAllPackets( empty );
+            auto lines = formatAllPackets( pcapOf( {} ) );
 
             THEN( "only the header line is returned" )
             {
                 REQUIRE( lines.size() == 1 );
             }
+        }
+    }
+
+    GIVEN( "bytes that are no capture" )
+    {
+        THEN( "they give no lines" )
+        {
+            REQUIRE( formatAllPackets( text( "not a capture" ) ).empty() );
         }
     }
 }

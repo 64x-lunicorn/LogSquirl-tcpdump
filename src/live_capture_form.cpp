@@ -293,24 +293,11 @@ std::shared_ptr<const LiveSourceKind> LiveCaptureForm::currentKind() const
 
 QString LiveCaptureForm::problem() const
 {
-    const auto kind = currentKind();
-    if ( !kind ) {
-        return QStringLiteral( "No live capture source is available." );
-    }
-    const auto availability = kind->availability();
-    if ( !availability.available ) {
-        return availability.reason;
-    }
-    const auto current = choice();
-    if ( const auto filter = captureFilterProblem( current.filter ); !filter.isEmpty() ) {
-        return filter;
-    }
-    if ( const auto limits = liveLimitsProblem( current.limits ); !limits.isEmpty() ) {
-        return limits;
-    }
-    if ( auto invalid = kind->validate( current ); !invalid.isEmpty() ) {
+    if ( auto invalid = liveChoiceProblem( sources_.get(), choice() ); !invalid.isEmpty() ) {
         return invalid;
     }
+    // The form's own state: an options widget still asking (an extcap for
+    // its arguments) cannot tell yet.
     return options_ ? options_->problem() : QString();
 }
 

@@ -147,8 +147,8 @@ struct Udp {
     uint32_t sec = 1000;
 };
 
-/// Parse @p packets as a capture and run each through @p media, as the
-/// Converter does.
+/// Parse @p packets as a capture and run each through @p media alone: the
+/// MediaExpectations in isolation, without the rest of the Packet Pipeline.
 std::vector<PacketRecord> throughExpectations( const std::vector<Udp>& packets,
                                                MediaExpectations& media )
 {

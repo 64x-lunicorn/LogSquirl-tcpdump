@@ -28,8 +28,7 @@
 #include <catch2/catch.hpp>
 
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_tracker.h"
+#include "pipeline_harness.h"
 
 #include <array>
 #include <optional>
@@ -114,13 +113,24 @@ std::string labelOf( const MessageExtent& extent )
     return extent.label ? extent.label : "";
 }
 
+/// The stream of the upgrade request, the client's direction of it, as
+/// @p pipeline left it: upgraded to WebSocket if the server @p answered
+/// with its 101 response.
+Stream upgradeStream( PacketPipeline& pipeline, bool answered = true )
+{
+    std::vector<Turn> turns{ { true, kUpgradeRequest } };
+    if ( answered ) {
+        turns.push_back( { false, upgradeResponse() } );
+    }
+    return piped( tcpConversation( turns, kClientPort, kServerPort ), pipeline ).front().stream;
+}
+
 /// The WebSocket framer's number, as tcpMessageExtent() gives it on an
 /// upgraded stream.
 uint8_t webSocketFramer()
 {
-    StreamState state;
-    state.protocols = StreamState::kWebSocket;
-    const Stream stream{ 0, &state, 0 };
+    PacketPipeline pipeline;
+    const auto stream = upgradeStream( pipeline );
     const auto ping = frame( 0x9, {} );
     const auto extent
         = tcpMessageExtent( ping.data(), ping.size(), kClientPort, kServerPort, 0, &stream );
@@ -152,30 +162,15 @@ std::string descriptionOf( const PacketRecord& pkt )
                : pkt.info.substr( at + std::string( kDescriptionSeparator ).size() );
 }
 
-/// @p payloads sent between the client and the server, true from the
-/// client, run through the Converter's steps but the TCP Reassembly.
-std::vector<PacketRecord> inStream( const std::vector<std::pair<bool, Bytes>>& payloads )
+/// @p turns between the client and the server, run through the Packet
+/// Pipeline as a conversion runs them.
+std::vector<PacketRecord> inStream( const std::vector<Turn>& turns )
 {
-    std::vector<Bytes> packets;
-    for ( const auto& [ client, payload ] : payloads ) {
-        Ipv4Options o;
-        if ( !client ) {
-            std::swap( o.src, o.dst );
-        }
-        packets.push_back(
-            eth( EthertypeIpv4, ipv4( IpProtoTcp,
-                                      client ? tcp( kClientPort, kServerPort, payload )
-                                             : tcp( kServerPort, kClientPort, payload ),
-                                      o ) ) );
+    std::vector<PacketRecord> packets;
+    for ( const auto& p : piped( tcpConversation( turns, kClientPort, kServerPort ) ) ) {
+        packets.push_back( p.pkt );
     }
-    auto records = parse( pcapOf( packets ) ).packets;
-    StreamTracker tracker;
-    for ( auto& pkt : records ) {
-        const auto stream = tracker.track( pkt );
-        describeInStream( pkt, stream );
-        rememberInStream( pkt, stream );
-    }
-    return records;
+    return packets;
 }
 
 } // namespace
@@ -395,12 +390,12 @@ SCENARIO( "A truncated or malformed WebSocket frame is described as such", "[web
 
 SCENARIO( "WebSocket is framed for the TCP Reassembly on upgraded streams only", "[websocket]" )
 {
-    StreamState state;
-    const Stream stream{ 0, &state, 0 };
+    PacketPipeline pipeline;
     const auto message = frame( 0x2, Bytes( 300, 0x11 ), kMask );
 
     GIVEN( "a stream the upgrade has not reached" )
     {
+        const auto stream = upgradeStream( pipeline, false );
         THEN( "no frame is framed" )
         {
             REQUIRE( labelOf( tcpMessageExtent( message.data(), 100, kClientPort, kServerPort, 0,
@@ -411,7 +406,7 @@ SCENARIO( "WebSocket is framed for the TCP Reassembly on upgraded streams only",
 
     GIVEN( "an upgraded stream" )
     {
-        state.protocols = StreamState::kWebSocket;
+        const auto stream = upgradeStream( pipeline );
         THEN( "a frame is framed by its header, whole messages described in the stream" )
         {
             const auto cut
@@ -455,9 +450,8 @@ SCENARIO( "Mangled WebSocket frames never break the describer", "[websocket][fuz
         frame( 0xA, {} ),
         frame( 0x1, Bytes{ 0xF2, 0x48, 0xCD }, kMask, true, 0x40 ),
     };
-    StreamState state;
-    state.protocols = StreamState::kWebSocket;
-    const Stream stream{ 0, &state, 0 };
+    PacketPipeline pipeline;
+    const auto stream = upgradeStream( pipeline );
     const auto framer = webSocketFramer();
     auto check = [ & ]( const Bytes& bytes ) {
         const auto described
