@@ -33,6 +33,8 @@
 
 #include <QString>
 
+#include <cstdint>
+
 namespace tcpdump {
 
 /// The pattern that follows a packet line's stream, or why there is none.
@@ -44,6 +46,13 @@ struct FollowStream {
 /// The Regex Lab pattern that matches exactly the lines of the stream of
 /// @p packetLine, a line of the packet list.
 FollowStream followStreamPattern( const QString& packetLine );
+
+/// The Regex Lab pattern that matches exactly the lines of stream @p stream
+/// between @p addressA port @p portA and @p addressB port @p portB, as the
+/// Conversations table lists it; the transport is told by the ports, as
+/// followStreamPattern() tells it.
+QString conversationPattern( int stream, const QString& addressA, uint16_t portA,
+                             const QString& addressB, uint16_t portB );
 
 /// Plugins > tcpdump > Follow stream: open the Regex Lab with the pattern
 /// for the first Log Line selected in the tab in front, or notify the user

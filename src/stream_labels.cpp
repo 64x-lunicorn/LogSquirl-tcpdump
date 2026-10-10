@@ -78,4 +78,10 @@ void StreamLabels::apply( PacketRecord& pkt, const Stream& stream )
     }
 }
 
+const std::string& StreamLabels::name( uint8_t label ) const
+{
+    static const std::string none;
+    return label == 0 || label > labels_.size() ? none : labels_[ label - 1 ];
+}
+
 } // namespace tcpdump

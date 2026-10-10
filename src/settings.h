@@ -25,11 +25,19 @@
  * The configuration dialog (configdialog.h) writes them; the sidebar reads
  * them at the start of each conversion, so that a capture already open
  * keeps the options it was converted with.
+ *
+ * The same file remembers the last choice of the live capture UI (group
+ * [live]): source, device, interface, capture filter, snaplen, and the
+ * options of each source (live/options/<source>/<name>).  Never a
+ * password: a secret option (isSecretLiveOption(), an extcap's password
+ * argument) is left out.
  */
 
 #pragma once
 
+#include "live_source.h"
 #include "pcap_converter.h"
+#include "someip.h"
 
 #include <QString>
 
@@ -43,6 +51,9 @@ constexpr size_t kMinCap = 1;
 constexpr size_t kMaxStreamCap = 10 * StreamTracker::kMaxStreams;
 /// The most the endpoint cap may be set to: ten times the default.
 constexpr size_t kMaxEndpointCap = 10 * CaptureStats::kMaxEndpoints;
+/// The most the TCP Reassembly's memory may be set to, in mebibytes: sixteen
+/// times the default, 1 GiB.
+constexpr size_t kMaxReassemblyMegabytes = 16 * TcpReassembly::kDefaultMemoryLimit / kMegabyte;
 
 /// The settings file in @p configDir.
 QString settingsFilePath( const QString& configDir );
@@ -56,5 +67,25 @@ ConversionOptions loadConversionOptions( const QString& configDir );
 
 /// Save @p options in @p configDir; false if they could not be written.
 bool saveConversionOptions( const QString& configDir, const ConversionOptions& options );
+
+/// The live capture choice saved in @p configDir; the snaplen within 1 to
+/// kMaxSnaplen, the limits within theirs (kMaxLimitSeconds, …), none if
+/// none were saved.  Without a directory, or a file, an empty choice.
+LiveChoice loadLiveChoice( const QString& configDir );
+
+/// Save @p choice in @p configDir, its options as those of its source
+/// (replacing what that source had; other sources keep theirs) but its
+/// secret ones; false if it could not be written.
+bool saveLiveChoice( const QString& configDir, const LiveChoice& choice );
+
+/// The options last saved for @p source in @p configDir; none without a
+/// directory, a file, or options saved for it.
+LiveOptions loadLiveOptions( const QString& configDir, const QString& source );
+
+/// Save the option @p name of @p source in @p configDir at once, the other
+/// options and the choice as they are (a custom command saved by name);
+/// false if it could not be written.
+bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
+                     const QString& value );
 
 } // namespace tcpdump

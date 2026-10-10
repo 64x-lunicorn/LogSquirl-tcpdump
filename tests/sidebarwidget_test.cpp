@@ -712,6 +712,44 @@ SCENARIO( "the summary lists the capture's link-layer types", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary tells what the TLS decryption did", "[sidebar]" )
+{
+    GIVEN( "a capture converted with a key log" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.tlsSessionsDecrypted = 3;
+
+        THEN( "the sessions decrypted are counted" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>TLS decryption</b><br>Sessions decrypted: 3<br>" ) );
+        }
+    }
+
+    GIVEN( "a key log that could not be read" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.tlsSessionsDecrypted = 0;
+        summary.keyLogError = "Cannot read the TLS key log: <No such file>";
+
+        THEN( "it says why, as text" )
+        {
+            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
+            REQUIRE( html.contains( "<i>Cannot read the TLS key log: &lt;No such "
+                                    "file&gt;</i><br>Sessions decrypted: 0" ) );
+        }
+    }
+
+    GIVEN( "a capture converted without a key log" )
+    {
+        THEN( "nothing is said about TLS decryption" )
+        {
+            REQUIRE_FALSE( tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary() )
+                               .contains( "TLS decryption" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary shows the earliest and latest packet time", "[sidebar]" )
 {
     GIVEN( "a capture with packets" )
@@ -762,6 +800,26 @@ SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
     }
 }
 
+SCENARIO( "the summary names the endpoints DNS answers named", "[sidebar]" )
+{
+    GIVEN( "a capture converted with host names, one endpoint named" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packets = 5;
+        summary.endpointPackets[ "93.184.216.34" ] = 3;
+        summary.endpointPackets[ "192.0.2.10" ] = 2;
+        summary.endpointNames[ "93.184.216.34" ] = "www.example.com";
+
+        THEN( "its name follows the address, the filter link is the address's" )
+        {
+            const auto html = tcpdump::summaryHtml( "names.pcap", 100, summary, true );
+            REQUIRE( html.contains( "93.184.216.34</a> (www.example.com): 3 pkts" ) );
+            REQUIRE( html.contains( "endpoint/93.184.216.34\"" ) );
+            REQUIRE( html.contains( "192.0.2.10</a>: 2 pkts" ) );
+        }
+    }
+}
+
 SCENARIO( "the summary lists a tunnel's endpoints apart, without a filter", "[sidebar]" )
 {
     GIVEN( "a capture whose packets were carried through tunnels" )
@@ -807,6 +865,19 @@ SCENARIO( "the summary says what was cut", "[sidebar]" )
         THEN( "the summary says so" )
         {
             REQUIRE( tcpdump::summaryHtml( "cut.pcap", 100, summary ).contains( "cut off" ) );
+        }
+    }
+
+    GIVEN( "a capture with more packets than the No. column can number" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.packetNumbersUsedUp = true;
+
+        THEN( "the summary says the rest was not converted" )
+        {
+            REQUIRE( tcpdump::summaryHtml( "huge.pcap", 100, summary )
+                         .contains( "the last one the No. column can number; the rest was not "
+                                    "converted" ) );
         }
     }
 
@@ -880,6 +951,21 @@ SCENARIO( "the summary lists the TCP analysis markers", "[sidebar]" )
                 QString( "TCP Retransmission: %1<br>" ).arg( QLocale().toString( 1200 ) ) ) );
             REQUIRE( html.contains( "TCP Dup ACK: 3<br>" ) );
             REQUIRE( html.indexOf( "TCP Retransmission" ) < html.indexOf( "TCP Dup ACK" ) );
+        }
+    }
+
+    GIVEN( "a capture with handshakes and no marker" )
+    {
+        tcpdump::CaptureSummary summary;
+        summary.handshakes = 1200;
+        summary.medianInitialRttNs = 12345678;
+
+        THEN( "the median initial round-trip time is under Analysis, in milliseconds" )
+        {
+            const auto html = tcpdump::summaryHtml( "clean.pcap", 100, summary );
+            REQUIRE( html.contains( "<b>Analysis</b><br>" ) );
+            REQUIRE( html.contains( QString( "Median iRTT: 12.346 ms (%1 handshakes)<br>" )
+                                        .arg( QLocale().toString( 1200 ) ) ) );
         }
     }
 

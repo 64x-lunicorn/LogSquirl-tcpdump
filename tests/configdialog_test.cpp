@@ -33,6 +33,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
@@ -82,11 +83,16 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
     GIVEN( "a dialog for options other than the defaults" )
     {
         ConversionOptions options;
-        options.layout = { TimeColumns::AbsoluteOnly, true };
+        options.layout = { TimeColumns::AbsoluteOnly, true, true };
         options.preview = false;
         options.previewChars = 50;
         options.maxStreams = 1234;
         options.maxEndpoints = 567;
+        options.reassemblyMegabytes = 8;
+        options.tcpTimestamps = true;
+        options.someIpPorts = { 30501, 30502 };
+        options.someIpNamesFile = QStringLiteral( "/data/someip-names.txt" );
+        options.keyLogPath = "/home/user/sslkeys.log";
         ConfigDialog dialog( options );
 
         THEN( "its controls show them" )
@@ -94,11 +100,18 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE( child<QComboBox>( dialog, "timeColumns" )->currentData().toInt()
                      == static_cast<int>( TimeColumns::AbsoluteOnly ) );
             REQUIRE( child<QCheckBox>( dialog, "macColumns" )->isChecked() );
+            REQUIRE( child<QCheckBox>( dialog, "hostNames" )->isChecked() );
             REQUIRE_FALSE( child<QCheckBox>( dialog, "preview" )->isChecked() );
             REQUIRE( child<QSpinBox>( dialog, "previewChars" )->value() == 50 );
             REQUIRE_FALSE( child<QSpinBox>( dialog, "previewChars" )->isEnabled() );
             REQUIRE( child<QSpinBox>( dialog, "maxStreams" )->value() == 1234 );
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->value() == 567 );
+            REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->value() == 8 );
+            REQUIRE( child<QCheckBox>( dialog, "tcpTimestamps" )->isChecked() );
+            REQUIRE( child<QLineEdit>( dialog, "someIpPorts" )->text() == "30501, 30502" );
+            REQUIRE( child<QLineEdit>( dialog, "someIpNamesFile" )->text()
+                     == "/data/someip-names.txt" );
+            REQUIRE( child<QLineEdit>( dialog, "keyLogPath" )->text() == "/home/user/sslkeys.log" );
             REQUIRE( dialog.options().layout.timeColumns == TimeColumns::AbsoluteOnly );
             REQUIRE( dialog.options().previewChars == 50 );
         }
@@ -114,21 +127,33 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             timeColumns->setCurrentIndex(
                 timeColumns->findData( static_cast<int>( TimeColumns::RelativeOnly ) ) );
             child<QCheckBox>( dialog, "macColumns" )->setChecked( false );
+            child<QCheckBox>( dialog, "hostNames" )->setChecked( false );
             child<QCheckBox>( dialog, "preview" )->setChecked( true );
             child<QSpinBox>( dialog, "previewChars" )->setValue( 80 );
             child<QSpinBox>( dialog, "maxStreams" )->setValue( 2000 );
             child<QSpinBox>( dialog, "maxEndpoints" )->setValue( 3000 );
+            child<QSpinBox>( dialog, "reassemblyMegabytes" )->setValue( 128 );
+            child<QCheckBox>( dialog, "tcpTimestamps" )->setChecked( false );
+            child<QLineEdit>( dialog, "someIpPorts" )->setText( "40000 40001, nope" );
+            child<QLineEdit>( dialog, "someIpNamesFile" )->setText( " /data/other.txt " );
+            child<QLineEdit>( dialog, "keyLogPath" )->setText( " /tmp/other.keys " );
 
             THEN( "the dialog's options are the new ones" )
             {
                 const auto edited = dialog.options();
                 REQUIRE( edited.layout.timeColumns == TimeColumns::RelativeOnly );
                 REQUIRE_FALSE( edited.layout.macColumns );
+                REQUIRE_FALSE( edited.layout.hostNames );
                 REQUIRE( edited.preview );
                 REQUIRE( child<QSpinBox>( dialog, "previewChars" )->isEnabled() );
                 REQUIRE( edited.previewChars == 80 );
                 REQUIRE( edited.maxStreams == 2000 );
                 REQUIRE( edited.maxEndpoints == 3000 );
+                REQUIRE( edited.reassemblyMegabytes == 128 );
+                REQUIRE_FALSE( edited.tcpTimestamps );
+                REQUIRE( edited.someIpPorts == std::vector<uint16_t>{ 40000, 40001 } );
+                REQUIRE( edited.someIpNamesFile == "/data/other.txt" );
+                REQUIRE( edited.keyLogPath == "/tmp/other.keys" );
             }
         }
 
@@ -144,10 +169,16 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 const ConversionOptions defaults;
                 REQUIRE( restored.layout.timeColumns == defaults.layout.timeColumns );
                 REQUIRE( restored.layout.macColumns == defaults.layout.macColumns );
+                REQUIRE_FALSE( restored.layout.hostNames );
                 REQUIRE( restored.preview == defaults.preview );
                 REQUIRE( restored.previewChars == defaults.previewChars );
                 REQUIRE( restored.maxStreams == defaults.maxStreams );
                 REQUIRE( restored.maxEndpoints == defaults.maxEndpoints );
+                REQUIRE( restored.reassemblyMegabytes == defaults.reassemblyMegabytes );
+                REQUIRE( restored.tcpTimestamps == defaults.tcpTimestamps );
+                REQUIRE( restored.someIpPorts.empty() );
+                REQUIRE( restored.someIpNamesFile.isEmpty() );
+                REQUIRE( restored.keyLogPath.isEmpty() );
             }
         }
     }
@@ -164,6 +195,8 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                      == static_cast<int>( kMaxStreamCap ) );
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->maximum()
                      == static_cast<int>( kMaxEndpointCap ) );
+            REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->maximum()
+                     == static_cast<int>( kMaxReassemblyMegabytes ) );
         }
     }
 }

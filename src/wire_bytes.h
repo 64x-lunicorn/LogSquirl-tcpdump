@@ -73,21 +73,38 @@ inline uint32_t read32( const uint8_t* p, bool swap )
     return v;
 }
 
-/// An IPv4 address in dotted decimal.
+/// An IPv4 address in dotted decimal.  Written out by hand: every packet
+/// formats two, and snprintf() took a tenth of a conversion.
 inline std::string formatIpv4( const uint8_t* p )
 {
-    char buf[ 16 ];
-    std::snprintf( buf, sizeof( buf ), "%u.%u.%u.%u", p[ 0 ], p[ 1 ], p[ 2 ], p[ 3 ] );
-    return buf;
+    char buf[ 15 ];
+    size_t n = 0;
+    for ( int i = 0; i < 4; ++i ) {
+        if ( i > 0 ) {
+            buf[ n++ ] = '.';
+        }
+        const unsigned v = p[ i ];
+        if ( v >= 100 ) {
+            buf[ n++ ] = static_cast<char>( '0' + v / 100 );
+        }
+        if ( v >= 10 ) {
+            buf[ n++ ] = static_cast<char>( '0' + v / 10 % 10 );
+        }
+        buf[ n++ ] = static_cast<char>( '0' + v % 10 );
+    }
+    return std::string( buf, n );
 }
 
 /// A MAC address as six lowercase hexadecimal pairs, `00:11:22:33:44:55`.
 inline std::string formatMac( const uint8_t* p )
 {
-    char buf[ 18 ];
-    std::snprintf( buf, sizeof( buf ), "%02x:%02x:%02x:%02x:%02x:%02x", p[ 0 ], p[ 1 ], p[ 2 ],
-                   p[ 3 ], p[ 4 ], p[ 5 ] );
-    return buf;
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string mac( 17, ':' );
+    for ( size_t i = 0; i < 6; ++i ) {
+        mac[ 3 * i ] = kHex[ p[ i ] >> 4 ];
+        mac[ 3 * i + 1 ] = kHex[ p[ i ] & 0x0F ];
+    }
+    return mac;
 }
 
 /// An IPv6 address in the RFC 5952 form: lowercase hexadecimal groups

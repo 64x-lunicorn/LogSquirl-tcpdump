@@ -302,9 +302,16 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
 
         THEN( "Plugins > tcpdump > Follow stream and the sidebar button are offered" )
         {
-            REQUIRE( host.menuActions.size() == 2 );
+            QStringList labels;
+            for ( const auto& action : host.menuActions ) {
+                labels << action.label;
+            }
+            REQUIRE( labels
+                     == QStringList{ "Open pcap\xe2\x80\xa6", "Start live capture\xe2\x80\xa6",
+                                     "Stop live capture", "Packet details",
+                                     "Export packets\xe2\x80\xa6", "Display filter\xe2\x80\xa6",
+                                     "Follow stream content", "Follow stream" } );
             REQUIRE( host.menuActions.last().menuPath == "tcpdump" );
-            REQUIRE( host.menuActions.last().label == "Follow stream" );
             REQUIRE( button );
         }
 
@@ -451,7 +458,7 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
 
         THEN( "neither the entry nor the button is offered" )
         {
-            REQUIRE( host.menuActions.size() == 1 );
+            REQUIRE( host.menuActions.size() == 3 );
             REQUIRE_FALSE(
                 tcpdump::g_state.sidebarWidget->findChild<QPushButton*>( "followStreamButton" ) );
         }

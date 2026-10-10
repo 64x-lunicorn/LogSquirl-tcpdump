@@ -24,18 +24,25 @@
 
 #pragma once
 
+#include "capture_index.h"
 #include "capture_stats.h"
+#include "conversations.h"
+#include "gzip_source.h"
+#include "host_names.h"
 #include "packet_formatter.h"
 #include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
+#include "tcp_reassembly.h"
 
 #include <QString>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -66,24 +73,62 @@ struct CaptureSummary {
     /// Packets per IP address in the Source or Destination column, for
     /// every address that was counted.
     std::map<std::string, uint64_t> endpointPackets;
+    /// The names of those addresses at the end of the capture (or of what
+    /// was converted so far), with host names shown (LineLayout::hostNames):
+    /// the last a DNS answer gave each (HostNames); empty otherwise.
+    std::map<std::string, std::string> endpointNames;
     /// Packets per address of a tunnel's endpoints, which no column shows
     /// (CaptureStats::tunnelEndpointPackets); empty without tunnels.
     std::map<std::string, uint64_t> tunnelEndpointPackets;
     /// TCP segments per analysis marker ("TCP Retransmission", …), for the
     /// kinds that occur, in the order of TcpMarker.
     std::vector<std::pair<std::string, uint64_t>> tcpMarkers;
+    /// TCP handshakes captured whole, and the median of their initial
+    /// round-trip times (iRTT) in nanoseconds; unset without any.
+    uint64_t handshakes = 0;
+    std::optional<uint64_t> medianInitialRttNs;
+    /// The Conversations table: a row per numbered stream.  Shared, as it
+    /// may hold a million rows: a summary taken anew (a live capture's
+    /// next snapshot) holds a table of its own, never a changed one.
+    std::shared_ptr<const ConversationRows> conversations;
+    /// Packets of the streams past the stream cap (see streamCap), which
+    /// the table counts together as "other streams", and their bytes on the
+    /// wire.
+    uint64_t otherStreamPackets = 0;
+    uint64_t otherStreamBytes = 0;
 
     /// Packets captured shorter than on the wire, cut at the snaplen; their
     /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
     uint64_t cutPackets = 0;
-    /// The capture ends in the middle of a record, which is not shown.
+    /// The capture ends in the middle of a record, which is not shown; or
+    /// its gzip stream ends early (compressionProblem).
     bool endsInsideRecord = false;
+    /// Why a gzip-compressed capture's stream ended before its end, cut off
+    /// or corrupt; empty otherwise.
+    std::string compressionProblem;
+    /// The conversion stopped with the packet of the last number
+    /// (ConversionOptions::lastPacketNumber): a capture file had more
+    /// packets, which were not converted, or a live capture got to it.
+    bool packetNumbersUsedUp = false;
     /// Set when conversations past the stream cap went unnumbered and show
     /// stream "?" in the log: the cap, i.e. how many were numbered.
     std::optional<uint64_t> streamCap;
     /// Set when addresses past the endpoint cap went uncounted: the packets
     /// of all those addresses together.
     std::optional<uint64_t> otherEndpointPackets;
+
+    /// Set when a TLS key log was given (ConversionOptions::keyLogPath):
+    /// the TLS sessions with records decrypted.
+    std::optional<uint64_t> tlsSessionsDecrypted;
+    /// Why the key log could not be read, when it could not: never any of
+    /// its contents.
+    std::string keyLogError;
+
+    bool operator==( const CaptureSummary& other ) const;
+    bool operator!=( const CaptureSummary& other ) const
+    {
+        return !( *this == other );
+    }
 };
 
 /**
@@ -95,18 +140,130 @@ struct CaptureSummary {
  * exception on the thread that runs it, ends as Failed with a message.
  * No exception leaves the Converter.
  */
+/// Which stop condition of a live capture (LiveLimits) ended it.
+enum class StopCondition : uint8_t {
+    None,     ///< None: Stop, or the stream ended.
+    Duration, ///< It ran for LiveLimits::duration.
+    Packets,  ///< It converted LiveLimits::packets packets.
+    Bytes,    ///< It read LiveLimits::bytes bytes.
+    /// It converted the packet of the last number the No. column has
+    /// (kMaxPacketNumber); not a LiveLimits setting.
+    PacketNumbers,
+};
+
 struct ConversionResult {
     enum class Status {
         Converted, ///< outputPath holds the capture's text.
-        Failed,    ///< See error; nothing is left behind.
+        /// See error.  Nothing is left behind, except for a live capture
+        /// that broke off after its first packet: outputPath, rawPath and
+        /// summary then hold what was captured (convertStream()).
+        Failed,
         Cancelled, ///< Nothing is left behind.
+        /// A stream stopped (Stop, or its capture program ended on purpose)
+        /// before its capture header had come: nothing was captured, and
+        /// nothing is left behind (convertStream()).  Not a failure.
+        Stopped,
     };
 
     Status status = Status::Failed;
-    QString error;          ///< Why it failed, when Failed.
-    QString outputPath;     ///< The text file, when Converted; see convertPcap().
+    QString error;      ///< Why it failed, when Failed.
+    QString outputPath; ///< The text file, when Converted; see convertPcap().
+    /// The capture's bytes as they were read, next to the text file, for a
+    /// capture read from a stream (convertStream()); empty for a file.
+    QString rawPath;
     CaptureSummary summary; ///< What was converted, when Converted.
+    /// Where each packet of the text is in the capture file, when Converted
+    /// (for a stream, in the raw capture), or when Failed keeping a capture.
+    std::shared_ptr<CaptureIndex> index;
+    /// The stop condition that ended a live capture, if one did.
+    StopCondition stoppedBy = StopCondition::None;
 };
+
+/// How often at least a live conversion makes its lines readable.
+constexpr std::chrono::milliseconds kLiveFlushInterval{ 100 };
+/// How often at most a live conversion hands out a LiveSnapshot.
+constexpr std::chrono::milliseconds kLiveSnapshotInterval{ 1000 };
+
+/// What a live conversion has converted so far, while it runs.
+struct LiveSnapshot {
+    CaptureSummary summary;              ///< As the final one, of the packets so far.
+    std::chrono::milliseconds elapsed{}; ///< Since the conversion started.
+    uint64_t rawBytes = 0;               ///< Bytes read from the stream so far.
+    /// Where the packets so far are in the raw capture, which keeps growing
+    /// (CaptureIndex::Growth::Growing), for the Packet Panel.
+    std::shared_ptr<const CaptureIndex> index;
+    /// The number of the raw capture's file written, from 1: a ring buffer's
+    /// goes up with each file it starts.
+    uint32_t rawFile = 1;
+};
+
+/**
+ * When a live capture stops by itself, and whether its raw capture is a ring
+ * buffer, as dumpcap's -a and -b say it (raw_capture.h).  0 is "none"
+ * throughout: the defaults capture until Stop, into one file.
+ *
+ * The stop conditions are checked after each packet, so the packet that
+ * reaches a count or a size is the last one; the duration is also checked
+ * while the stream has nothing to read.  The first one reached ends the
+ * capture as Stop does: Converted, with what was captured.
+ *
+ * A ring buffer starts a new file after the packet that filled the current
+ * one, by size or duration, and keeps the newest ringFiles files.  Each file
+ * has a text file of its own, named after it, which LiveObserver::firstPacket
+ * hands out to be opened; a text is never rewritten, also once its raw file
+ * is deleted.
+ */
+struct LiveLimits {
+    std::chrono::seconds duration{ 0 };     ///< Stop after this long.
+    uint64_t packets = 0;                   ///< Stop after this many packets.
+    uint64_t bytes = 0;                     ///< Stop once this many bytes were read.
+    uint32_t ringFiles = 0;                 ///< The ring buffer's files; 0: no ring buffer.
+    uint64_t fileBytes = 0;                 ///< A new file once one is this big.
+    std::chrono::seconds fileDuration{ 0 }; ///< A new file once one is this old.
+
+    /// Whether the raw capture is a ring buffer: files kept, and a size or
+    /// duration to start a new one at.
+    bool ringBuffer() const
+    {
+        return ringFiles > 0 && ( fileBytes > 0 || fileDuration.count() > 0 );
+    }
+
+    bool operator==( const LiveLimits& other ) const
+    {
+        return duration == other.duration && packets == other.packets && bytes == other.bytes
+               && ringFiles == other.ringFiles && fileBytes == other.fileBytes
+               && fileDuration == other.fileDuration;
+    }
+    bool operator!=( const LiveLimits& other ) const
+    {
+        return !( *this == other );
+    }
+};
+
+/// The clock a live conversion measures LiveLimits' durations with; a test
+/// hands it a fake one.  Empty: the steady clock.
+using LiveClock = std::function<std::chrono::steady_clock::time_point()>;
+
+/**
+ * What a live conversion tells while it runs (convertStream()).  Both are
+ * called on the thread that converts; either may be empty.
+ */
+struct LiveObserver {
+    /// The text file holds its header and the first packet line, so that a
+    /// viewer that recognises its format at the first load sees a packet
+    /// line: it can be opened now, following it.  Called once per text file
+    /// (a ring buffer's, one per raw file, as each starts), with the paths
+    /// of the text file and its raw file; never for a capture without
+    /// packets.
+    std::function<void( const QString& logPath, const QString& rawPath )> firstPacket;
+    /// A snapshot: with the first packet, then at most once every
+    /// kLiveSnapshotInterval while packets come, handed over to be moved
+    /// on, not copied.  The final summary is the result's.
+    std::function<void( LiveSnapshot&& )> snapshot;
+};
+
+/// Bytes in a mebibyte, the unit of ConversionOptions::reassemblyMegabytes.
+constexpr size_t kMegabyte = 1024 * 1024;
 
 /// Settings of a conversion, as the user chose them in the configuration
 /// dialog (settings.h).  The defaults write the text the Log Format is made
@@ -122,6 +279,32 @@ struct ConversionOptions {
     size_t maxStreams = StreamTracker::kMaxStreams;
     /// Addresses to count packets for at most; the rest are "other endpoints".
     size_t maxEndpoints = CaptureStats::kMaxEndpoints;
+    /// Mebibytes the TCP Reassembly holds at most, of all streams together.
+    size_t reassemblyMegabytes = TcpReassembly::kDefaultMemoryLimit / kMegabyte;
+    /// Packets between two checkpoints of the CaptureIndex.
+    uint32_t checkpointInterval = CaptureIndex::kCheckpointInterval;
+    /// Decompressed bytes between two access points of a gzip-compressed
+    /// capture (GzipSource::kAccessSpan).
+    uint64_t gzipAccessSpan = GzipSource::kAccessSpan;
+    /// Whether every TCP segment shows its timestamps option in Info, as
+    /// Wireshark does, rather than the SYNs only (showTcpTimestamps()).
+    bool tcpTimestamps = false;
+    /// Ports SOME/IP is read on besides 30490, whatever its header says
+    /// (someip.h); at most kMaxSomeIpPorts.
+    std::vector<uint16_t> someIpPorts;
+    /// A file naming SOME/IP services, methods and eventgroups
+    /// (parseSomeIpNames()); empty: none.  One that cannot be read is
+    /// ignored.
+    QString someIpNamesFile;
+    /// The TLS key log (SSLKEYLOGFILE) to decrypt TLS sessions with
+    /// (tls_decryption.h); empty: none.  Read only, while converting.
+    QString keyLogPath;
+    /// Addresses whose names are kept at most, with host names shown
+    /// (LineLayout::hostNames, HostNames).
+    size_t maxHostNames = HostNames::kMaxNames;
+    /// The number of the last packet converted (kMaxPacketNumber, which
+    /// only a test lowers).
+    uint32_t lastPacketNumber = kMaxPacketNumber;
 };
 
 /**
@@ -142,6 +325,44 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
                               const std::atomic_bool* cancel = nullptr,
                               const std::function<void( int )>& progress = {},
                               const ConversionOptions& options = {} );
+
+/**
+ * Convert the capture read from @p source, a stream that is still being
+ * written (capture_source.h), as convertPcap() converts a file: into
+ * <@p name>.log ("capture.log" without a name), packet by packet as the
+ * capture comes, until the stream ends.  A stream stopped or closed in the
+ * middle of a record ends Converted, with the record reported cut off.
+ *
+ * The conversion is live: every byte read is also written, unchanged, to
+ * the raw capture next to the text file, <name>.pcap or <name>.pcapng by
+ * its format (ConversionResult::rawPath), so that it can be saved, converted
+ * again or opened in Wireshark.  The lines written, and the raw bytes, are
+ * flushed before every wait for more of the stream and at least every
+ * kLiveFlushInterval.  @p live is told when the first packet line is there
+ * and gets snapshots of the summary; there is no progress, as a stream's
+ * size is unknown.
+ *
+ * A stream that breaks off with a read error (a capture program that
+ * failed) ends Failed; once a packet was converted, what was captured is
+ * kept: the text file, the raw capture and the summary of them.  A stream
+ * stopped before its header had come (StreamSource::stopped()) ends
+ * Stopped, not Failed: nothing went wrong, nothing was captured.
+ *
+ * With @p limits, the conversion stops by itself, and the raw capture may
+ * be a ring buffer of files (LiveLimits), each with a text file of its own;
+ * ConversionResult::outputPath and rawPath are then the newest ones, and
+ * the index's parts are the files kept.
+ *
+ * @param cancel  If set, checked between packets; stops the conversion and
+ *                removes what was written.  The source must be given it
+ *                too, so that a wait for the next packet ends with it.
+ * @param clock   What the limits' durations are measured with.
+ */
+ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
+                                const std::atomic_bool* cancel = nullptr,
+                                const ConversionOptions& options = {},
+                                const LiveObserver& live = {}, const LiveLimits& limits = {},
+                                const LiveClock& clock = {} );
 
 /**
  * The rule that a cancel request wins, even over a conversion that had

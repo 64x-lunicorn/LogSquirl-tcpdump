@@ -26,8 +26,11 @@
 
 #include <QDir>
 #include <QSettings>
+#include <QStringList>
 
 #include <algorithm>
+#include <chrono>
+#include <limits>
 
 namespace tcpdump {
 
@@ -36,10 +39,36 @@ namespace {
 /// The keys of the settings file, all in its [conversion] group.
 constexpr const char* kTimeColumnsKey = "conversion/timeColumns";
 constexpr const char* kMacColumnsKey = "conversion/macColumns";
+constexpr const char* kHostNamesKey = "conversion/hostNames";
 constexpr const char* kPreviewKey = "conversion/preview";
 constexpr const char* kPreviewCharsKey = "conversion/previewChars";
 constexpr const char* kMaxStreamsKey = "conversion/maxStreams";
 constexpr const char* kMaxEndpointsKey = "conversion/maxEndpoints";
+constexpr const char* kReassemblyMegabytesKey = "conversion/reassemblyMegabytes";
+constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
+constexpr const char* kSomeIpPortsKey = "conversion/someIpPorts";
+constexpr const char* kSomeIpNamesFileKey = "conversion/someIpNamesFile";
+constexpr const char* kKeyLogPathKey = "conversion/tlsKeyLogFile";
+
+/// The keys of the live capture choice, in the [live] group.
+constexpr const char* kLiveSourceKey = "live/source";
+constexpr const char* kLiveDeviceKey = "live/device";
+constexpr const char* kLiveInterfaceKey = "live/interface";
+constexpr const char* kLiveFilterKey = "live/filter";
+constexpr const char* kLiveSnaplenKey = "live/snaplen";
+// A live capture's LiveLimits, in the units the form shows: seconds, packets,
+// mebibytes, files.
+constexpr const char* kLiveStopSecondsKey = "live/stopSeconds";
+constexpr const char* kLiveStopPacketsKey = "live/stopPackets";
+constexpr const char* kLiveStopMegabytesKey = "live/stopMegabytes";
+constexpr const char* kLiveRingFilesKey = "live/ringFiles";
+constexpr const char* kLiveRingMegabytesKey = "live/ringMegabytes";
+constexpr const char* kLiveRingSecondsKey = "live/ringSeconds";
+/// The group of a source's options: live/options/<source>/<name>.
+QString liveOptionsGroup( const QString& source )
+{
+    return QStringLiteral( "live/options/" ) + source;
+}
 
 /// The names of the time column choices in the file.
 struct TimeColumnsName {
@@ -102,13 +131,23 @@ ConversionOptions loadConversionOptions( const QString& configDir )
         }
     }
     options.layout.macColumns = readFlag( file, kMacColumnsKey, options.layout.macColumns );
+    options.layout.hostNames = readFlag( file, kHostNamesKey, options.layout.hostNames );
     options.preview = readFlag( file, kPreviewKey, options.preview );
+    options.tcpTimestamps = readFlag( file, kTcpTimestampsKey, options.tcpTimestamps );
     options.previewChars
         = readCount( file, kPreviewCharsKey, options.previewChars, 1, kMaxPreviewChars );
     options.maxStreams
         = readCount( file, kMaxStreamsKey, options.maxStreams, kMinCap, kMaxStreamCap );
     options.maxEndpoints
         = readCount( file, kMaxEndpointsKey, options.maxEndpoints, kMinCap, kMaxEndpointCap );
+    options.reassemblyMegabytes
+        = readCount( file, kReassemblyMegabytesKey, options.reassemblyMegabytes, kMinCap,
+                     kMaxReassemblyMegabytes );
+    // A list in the file ("30501, 30502"), or one port.
+    options.someIpPorts = parseSomeIpPorts(
+        file.value( kSomeIpPortsKey ).toStringList().join( QLatin1Char( ',' ) ).toStdString() );
+    options.someIpNamesFile = file.value( kSomeIpNamesFileKey ).toString();
+    options.keyLogPath = file.value( kKeyLogPathKey ).toString();
     return options;
 }
 
@@ -124,10 +163,117 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
         }
     }
     file.setValue( kMacColumnsKey, options.layout.macColumns );
+    file.setValue( kHostNamesKey, options.layout.hostNames );
     file.setValue( kPreviewKey, options.preview );
+    file.setValue( kTcpTimestampsKey, options.tcpTimestamps );
     file.setValue( kPreviewCharsKey, static_cast<qulonglong>( options.previewChars ) );
     file.setValue( kMaxStreamsKey, static_cast<qulonglong>( options.maxStreams ) );
     file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );
+    file.setValue( kReassemblyMegabytesKey,
+                   static_cast<qulonglong>( options.reassemblyMegabytes ) );
+    QStringList ports;
+    for ( const auto port : options.someIpPorts ) {
+        ports << QString::number( port );
+    }
+    file.setValue( kSomeIpPortsKey, ports.isEmpty() ? QVariant( QString() ) : QVariant( ports ) );
+    file.setValue( kSomeIpNamesFileKey, options.someIpNamesFile );
+    file.setValue( kKeyLogPathKey, options.keyLogPath );
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+LiveChoice loadLiveChoice( const QString& configDir )
+{
+    LiveChoice choice;
+    if ( configDir.isEmpty() ) {
+        return choice;
+    }
+    const QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    choice.source = file.value( kLiveSourceKey ).toString();
+    choice.device = file.value( kLiveDeviceKey ).toString();
+    choice.networkInterface = file.value( kLiveInterfaceKey ).toString();
+    choice.filter = file.value( kLiveFilterKey ).toString();
+    choice.snaplen = static_cast<int>( readCount( file, kLiveSnaplenKey, kDefaultSnaplen, 1,
+                                                  static_cast<size_t>( kMaxSnaplen ) ) );
+    choice.options = loadLiveOptions( configDir, choice.source );
+    auto& limits = choice.limits;
+    limits.duration = std::chrono::seconds(
+        readCount( file, kLiveStopSecondsKey, 0, 0, static_cast<size_t>( kMaxLimitSeconds ) ) );
+    limits.packets = readCount( file, kLiveStopPacketsKey, 0, 0,
+                                static_cast<size_t>( std::numeric_limits<int>::max() ) );
+    limits.bytes
+        = readCount( file, kLiveStopMegabytesKey, 0, 0, static_cast<size_t>( kMaxLimitMegabytes ) )
+          * kMegabyte;
+    limits.ringFiles = static_cast<uint32_t>(
+        readCount( file, kLiveRingFilesKey, 0, 0, static_cast<size_t>( kMaxRingFiles ) ) );
+    limits.fileBytes
+        = readCount( file, kLiveRingMegabytesKey, 0, 0, static_cast<size_t>( kMaxLimitMegabytes ) )
+          * kMegabyte;
+    limits.fileDuration = std::chrono::seconds(
+        readCount( file, kLiveRingSecondsKey, 0, 0, static_cast<size_t>( kMaxLimitSeconds ) ) );
+    return choice;
+}
+
+LiveOptions loadLiveOptions( const QString& configDir, const QString& source )
+{
+    LiveOptions options;
+    if ( configDir.isEmpty() || source.isEmpty() ) {
+        return options;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.beginGroup( liveOptionsGroup( source ) );
+    for ( const auto& name : file.childKeys() ) {
+        options.insert( name, file.value( name ).toString() );
+    }
+    file.endGroup();
+    return options;
+}
+
+bool saveLiveChoice( const QString& configDir, const LiveChoice& choice )
+{
+    if ( configDir.isEmpty() || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.setValue( kLiveSourceKey, choice.source );
+    file.setValue( kLiveDeviceKey, choice.device );
+    file.setValue( kLiveInterfaceKey, choice.networkInterface );
+    file.setValue( kLiveFilterKey, choice.filter );
+    file.setValue( kLiveSnaplenKey, choice.snaplen );
+    const auto& limits = choice.limits;
+    file.setValue( kLiveStopSecondsKey, static_cast<qlonglong>( limits.duration.count() ) );
+    file.setValue( kLiveStopPacketsKey, static_cast<qulonglong>( limits.packets ) );
+    file.setValue( kLiveStopMegabytesKey, static_cast<qulonglong>( limits.bytes / kMegabyte ) );
+    file.setValue( kLiveRingFilesKey, limits.ringFiles );
+    file.setValue( kLiveRingMegabytesKey, static_cast<qulonglong>( limits.fileBytes / kMegabyte ) );
+    file.setValue( kLiveRingSecondsKey, static_cast<qlonglong>( limits.fileDuration.count() ) );
+    if ( !choice.source.isEmpty() ) {
+        file.remove( liveOptionsGroup( choice.source ) );
+        file.beginGroup( liveOptionsGroup( choice.source ) );
+        for ( auto option = choice.options.cbegin(); option != choice.options.cend(); ++option ) {
+            // A secret (a password) is the session's, never the file's.
+            if ( !option.key().isEmpty() && !option.key().contains( QLatin1Char( '/' ) )
+                 && !isSecretLiveOption( option.key() ) ) {
+                file.setValue( option.key(), option.value() );
+            }
+        }
+        file.endGroup();
+    }
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
+                     const QString& value )
+{
+    if ( configDir.isEmpty() || source.isEmpty() || name.isEmpty()
+         || name.contains( QLatin1Char( '/' ) ) || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.beginGroup( liveOptionsGroup( source ) );
+    file.setValue( name, value );
+    file.endGroup();
     file.sync();
     return file.status() == QSettings::NoError;
 }

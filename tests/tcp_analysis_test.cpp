@@ -84,6 +84,7 @@ std::vector<std::string> infoOf( const std::vector<Bytes>& segments,
 struct Analysed {
     std::vector<std::string> infos;
     std::vector<TcpMarkers> markers;
+    std::vector<std::optional<uint64_t>> initialRtts;
 };
 
 Analysed analyse( const std::vector<Bytes>& segments, uint32_t gapUsec = 1000000 )
@@ -100,7 +101,9 @@ Analysed analyse( const std::vector<Bytes>& segments, uint32_t gapUsec = 1000000
     StreamTracker tracker;
     Analysed analysed;
     for ( auto& pkt : packets ) {
-        analysed.markers.push_back( analyseTcp( pkt, tracker.track( pkt ) ) );
+        const auto analysis = analyseTcp( pkt, tracker.track( pkt ) );
+        analysed.markers.push_back( analysis.markers );
+        analysed.initialRtts.push_back( analysis.initialRttNs );
         analysed.infos.push_back( pkt.info );
     }
     return analysed;
@@ -597,7 +600,7 @@ SCENARIO( "The TCP Analysis marks nothing it cannot follow", "[tcp_analysis]" )
         THEN( "neither is marked" )
         {
             for ( auto& pkt : packets ) {
-                REQUIRE( analyseTcp( pkt, tracker.track( pkt ) ).none() );
+                REQUIRE( analyseTcp( pkt, tracker.track( pkt ) ).markers.none() );
                 REQUIRE( unmarked( pkt.info ) );
             }
         }
@@ -642,6 +645,7 @@ SCENARIO( "Each marker kind has Wireshark's name", "[tcp_analysis]" )
     REQUIRE( std::string( tcpMarkerName( TcpMarker::PreviousSegmentNotCaptured ) )
              == "TCP Previous segment not captured" );
     REQUIRE( std::string( tcpMarkerName( TcpMarker::WindowUpdate ) ) == "TCP Window Update" );
+    REQUIRE( std::string( tcpMarkerName( TcpMarker::WindowFull ) ) == "TCP Window Full" );
     REQUIRE( std::string( tcpMarkerName( TcpMarker::KeepAlive ) ) == "TCP Keep-Alive" );
     REQUIRE( std::string( tcpMarkerName( TcpMarker::KeepAliveAck ) ) == "TCP Keep-Alive ACK" );
     REQUIRE( std::string( tcpMarkerName( TcpMarker::DupAck ) ) == "TCP Dup ACK" );
@@ -799,6 +803,194 @@ SCENARIO( "The analysis markers look at the scaled window", "[tcp_analysis]" )
             REQUIRE( showsWindow( a.infos[ 4 ], "Seq=1 Ack=6 Win=0" ) );
             REQUIRE( startsWith( a.infos[ 5 ], "[TCP Window Update] 80 " ) );
             REQUIRE( showsWindow( a.infos[ 5 ], "Seq=1 Ack=6 Win=128" ) );
+        }
+    }
+}
+
+SCENARIO( "The segment that completes a handshake shows its initial round-trip time",
+          "[tcp_analysis]" )
+{
+    GIVEN( "a handshake, each segment 10 ms after the one before" )
+    {
+        const auto a = analyse( handshake() + std::vector<Bytes>{
+                                                  segment( false, kPshAck, kC + 1, kS + 1,
+                                                           text( "hello" ) ),
+                                                  segment( true, kAck, kS + 1, kC + 6 ),
+                                              },
+                                10000 );
+
+        THEN( "the client's ACK shows the time from its SYN, 20 ms, and returns it" )
+        {
+            REQUIRE( a.infos[ 2 ]
+                     == "40000 \xe2\x86\x92 80 [ACK] Seq=1 Ack=1 Win=65535 [iRTT=0.020000]" );
+            REQUIRE( a.initialRtts[ 2 ] == 20000000u );
+        }
+
+        THEN( "no other segment does" )
+        {
+            for ( const size_t i : { 0, 1, 3, 4 } ) {
+                REQUIRE_FALSE( a.initialRtts[ i ] );
+                REQUIRE( a.infos[ i ].find( "iRTT" ) == std::string::npos );
+            }
+        }
+    }
+
+    GIVEN( "a SYN sent again before the SYN-ACK" )
+    {
+        const auto a = analyse(
+            {
+                segment( false, kSyn, kC, 0 ),
+                segment( false, kSyn, kC, 0 ),
+                segment( true, kSyn | kAck, kS, kC + 1 ),
+                segment( false, kAck, kC + 1, kS + 1 ),
+            },
+            10000 );
+
+        THEN( "the time counts from the last SYN, as Wireshark's does" )
+        {
+            REQUIRE( a.initialRtts[ 3 ] == 20000000u );
+        }
+    }
+
+    GIVEN( "handshakes not captured whole" )
+    {
+        THEN( "without the SYN-ACK there is none" )
+        {
+            const auto a = analyse( {
+                segment( false, kSyn, kC, 0 ),
+                segment( false, kAck, kC + 1, kS + 1 ),
+            } );
+            REQUIRE_FALSE( a.initialRtts[ 1 ] );
+        }
+
+        THEN( "without the SYN there is none" )
+        {
+            const auto a = analyse( {
+                segment( true, kSyn | kAck, kS, kC + 1 ),
+                segment( false, kAck, kC + 1, kS + 1 ),
+            } );
+            REQUIRE_FALSE( a.initialRtts[ 1 ] );
+        }
+
+        THEN( "a stream captured mid-way has none" )
+        {
+            const auto a = analyse( {
+                segment( false, kAck, kC + 1, kS + 1 ),
+                segment( true, kAck, kS + 1, kC + 1 ),
+            } );
+            REQUIRE_FALSE( a.initialRtts[ 0 ] );
+            REQUIRE_FALSE( a.initialRtts[ 1 ] );
+        }
+    }
+
+    GIVEN( "a SYN sent again after the handshake completed" )
+    {
+        const auto a = analyse( handshake() + handshake() );
+
+        THEN( "the handshake's time is shown once" )
+        {
+            REQUIRE( a.initialRtts[ 2 ] );
+            REQUIRE_FALSE( a.initialRtts[ 5 ] );
+        }
+    }
+
+    GIVEN( "a capture at nanosecond precision" )
+    {
+        std::vector<Record> records;
+        uint32_t nsec = 0;
+        for ( const auto& data : handshake() ) {
+            records.push_back( { data, 1000, nsec, -1 } );
+            nsec += 1234567;
+        }
+        FileOptions nano;
+        nano.nanoseconds = true;
+        auto packets = parse( pcapFile( records, nano ) ).packets;
+        StreamTracker tracker;
+        for ( auto& pkt : packets ) {
+            analyseTcp( pkt, tracker.track( pkt ) );
+        }
+
+        THEN( "the time has 9 decimals" )
+        {
+            REQUIRE( packets[ 2 ].info.find( "[iRTT=0.002469134]" ) != std::string::npos );
+        }
+    }
+}
+
+SCENARIO( "Data up to the edge of the receiver's window is marked [TCP Window Full]",
+          "[tcp_analysis]" )
+{
+    GIVEN( "a server advertising 1000 bytes, scaled by 4, and the client sending them" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000, 7 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 1000, 2 ),
+            segment( false, kAck, kC + 1, kS + 1, {}, 1000 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 250 ),
+            segment( false, kPshAck, kC + 1, kS + 1, Bytes( 600, 'a' ), 1000 ),
+            segment( false, kPshAck, kC + 601, kS + 1, Bytes( 400, 'b' ), 1000 ),
+            segment( false, kAck | kFin, kC + 1001, kS + 1, {}, 1000 ),
+        } );
+
+        THEN( "the segment that reaches the edge is marked, the one before not" )
+        {
+            REQUIRE( unmarked( a.infos[ 4 ] ) );
+            REQUIRE( startsWith( a.infos[ 5 ], "[TCP Window Full] 40000 " ) );
+            REQUIRE( a.markers[ 5 ].test( TcpMarker::WindowFull ) );
+        }
+    }
+
+    GIVEN( "a SYN-ACK advertising 5 bytes, and the client sending them" )
+    {
+        THEN( "the segment is marked: a SYN's window is never scaled" )
+        {
+            const auto a = analyse( {
+                segment( false, kSyn, kC, 0, {}, 1000 ),
+                segment( true, kSyn | kAck, kS, kC + 1, {}, 5 ),
+                segment( false, kPshAck, kC + 1, kS + 1, Bytes( 5, 'a' ), 1000 ),
+            } );
+            REQUIRE( startsWith( a.infos[ 2 ], "[TCP Window Full] 40000 " ) );
+        }
+    }
+
+    GIVEN( "a FIN, SYN or RST with data up to the edge" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000 ),
+            segment( true, kSyn | kAck, kS, kC + 1, {}, 5 ),
+            segment( false, kPshAck | kFin, kC + 1, kS + 1, Bytes( 5, 'a' ), 1000 ),
+        } );
+
+        THEN( "it is not marked" )
+        {
+            REQUIRE_FALSE( a.markers[ 2 ].test( TcpMarker::WindowFull ) );
+        }
+    }
+
+    GIVEN( "a stream captured mid-way, whose window scale is unknown" )
+    {
+        const auto a = analyse( {
+            segment( true, kAck, kS + 1, kC + 1, {}, 5 ),
+            segment( false, kPshAck, kC + 1, kS + 1, Bytes( 5, 'a' ), 1000 ),
+        } );
+
+        THEN( "nothing is marked: the window may be scaled" )
+        {
+            REQUIRE_FALSE( a.markers[ 1 ].test( TcpMarker::WindowFull ) );
+        }
+    }
+
+    GIVEN( "a stream whose client SYN without window scale was seen, but not the SYN-ACK" )
+    {
+        const auto a = analyse( {
+            segment( false, kSyn, kC, 0, {}, 1000 ),
+            segment( true, kAck, kS + 1, kC + 1, {}, 5 ),
+            segment( false, kPshAck, kC + 1, kS + 1, Bytes( 5, 'a' ), 1000 ),
+        } );
+
+        THEN( "it is marked: without the client's option no window is scaled" )
+        {
+            REQUIRE( a.markers[ 2 ].test( TcpMarker::WindowFull ) );
         }
     }
 }

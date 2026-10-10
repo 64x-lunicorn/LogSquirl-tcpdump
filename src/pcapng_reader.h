@@ -52,7 +52,10 @@ namespace tcpdump {
  * promises that no packet is finer; writers that declare interfaces as they
  * see them, such as macOS's tcpdump, in practice give them all the same
  * resolution.  Reading the whole file twice to know better would double
- * the time a large capture takes to open.
+ * the time a large capture takes to open.  On a stream that is still being
+ * written (ByteSource::ready()), open() reads on past the first interface
+ * only as far as blocks have come, so that a capture with no traffic yet
+ * opens; dumpcap and tcpdump write all their interfaces at once.
  *
  * linkTypes() lists the link-layer types of all interfaces declared so far,
  * each once, also those of interfaces without a packet; a capture without
@@ -77,7 +80,7 @@ public:
     }
 
     /// Read the first section header and the blocks up to the first packet
-    /// block.
+    /// block, on a stream up to the first that has not come yet.
     bool open() override;
 
     bool next( PacketRecord& pkt ) override;
@@ -92,6 +95,20 @@ public:
         return linkTypes_;
     }
 
+    /// Also keeps the section's byte order and interfaces, shared with the
+    /// checkpoint before as long as no interface was declared between them.
+    ReaderCheckpoint checkpoint() const override;
+
+    bool resume( const ReaderCheckpoint& checkpoint ) override;
+
+    /// The section header and interface blocks the checkpoint resumed at.
+    bool
+    relocateHeaders( const std::function<std::optional<uint64_t>( uint64_t )>& where ) override;
+
+    /// The section header block of the last packet's section and the
+    /// interface description blocks declared in it so far.
+    CaptureHeaders headers() const override;
+
 private:
     /// A timestamp unit: 10^-exponent or, if binary, 2^-exponent seconds.
     struct TimeUnit {
@@ -104,12 +121,21 @@ private:
         uint32_t snaplen = 0; ///< 0: no limit
         TimeUnit unit;
         TimePrecision precision = TimePrecision::Microseconds;
+        RecordSpan block; ///< Its interface description block.
     };
 
     struct BlockHeader {
         uint32_t type = 0;
         uint32_t length = 0;   ///< The block's total length.
         uint32_t consumed = 0; ///< Bytes of the block read so far.
+        uint64_t start = 0;    ///< Where the block starts in the source.
+    };
+
+    /// What a checkpoint keeps of the section it lies in.
+    struct SectionState : ReaderState {
+        bool swap = false;
+        RecordSpan sectionHeader;
+        std::vector<Interface> interfaces;
     };
 
     bool fail( const char* problem );
@@ -120,19 +146,19 @@ private:
     bool readSectionHeader( BlockHeader& block );
     bool readInterface( BlockHeader& block );
     bool readPacket( BlockHeader& block, PacketRecord& pkt );
-    bool readBlocksUpToPacket();
+    bool readBlocksUpToPacket( bool untilWaiting = false );
 
-    bool swap_ = false; ///< The section is in the other byte order than this host's.
+    RecordSpan sectionHeader_;          ///< The current section's header block.
     std::vector<Interface> interfaces_; ///< The current section's.
+    /// The section state the last checkpoint kept, while it is still current.
+    mutable std::shared_ptr<const SectionState> sectionState_;
     std::vector<uint32_t> linkTypes_;
     TimePrecision precision_ = TimePrecision::Microseconds;
     bool precisionAnnounced_ = false;
     bool havePacketBlock_ = false; ///< pendingBlock_ is a packet block read up to its body.
     BlockHeader pendingBlock_;
     std::string problem_; ///< Why the last block could not be read; empty at the end.
-    std::vector<uint8_t> packet_;
     bool open_ = false;
-    uint32_t packetCount_ = 0;
 };
 
 } // namespace tcpdump

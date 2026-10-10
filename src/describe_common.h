@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 #include "wire_bytes.h"
@@ -37,6 +38,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -44,8 +46,35 @@ namespace tcpdump::describer {
 
 // ── Payload text (describe_text.cpp) ─────────────────────────────────────
 
+/// The ellipsis that ends what is cut or left out, "…".
+inline const std::string kEllipsis = "\xe2\x80\xa6";
+
+/// What follows the name of a message that breaks its protocol's rules.
+inline const std::string kMalformed = " [Malformed Packet]";
+
+/// " …" after @p text, unless it ends in an ellipsis already: what is cut
+/// is said once.
+void markCut( std::string& text );
+
+/// How far a field or a message could be read: all of it, not all as the
+/// bytes are cut (the message goes on in a later segment, or was cut at
+/// the snaplen), or not at all as it breaks the rules.
+enum class Read { Ok, Cut, Malformed };
+
 /// Format a protocol code as "0xNN".
 std::string hexCode( uint8_t code );
+
+/// @p value as "0x" and @p digits uppercase hexadecimal digits, "0x1234".
+std::string hexValue( uint32_t value, int digits );
+
+/// A 16-bit ID as "0x1234".
+inline std::string id16( uint16_t value )
+{
+    return hexValue( value, 4 );
+}
+
+/// The value of the hex digit @p c, of either case, or -1.
+int hexDigit( uint8_t c );
 
 /// @p len bytes as lowercase hexadecimal, as Wireshark shows connection
 /// IDs and DUIDs: at most @p maxBytes of them, then an ellipsis.
@@ -54,6 +83,59 @@ std::string hexBytes( const uint8_t* p, size_t len, size_t maxBytes = SIZE_MAX )
 /// @p names joined with ", ": the first @p maxNames of them, then "…" if
 /// there were more, or if @p more says that more were left unnamed.
 std::string joinNames( std::vector<std::string> names, size_t maxNames, bool more = false );
+
+/// One message of a payload, as nameMessages() reads it.
+struct NamedMessage {
+    /// Its name, as the description shows it; empty: nothing is named.
+    std::string text;
+    /// The bytes it takes from where it was read: the next one begins
+    /// after them.
+    size_t length = 0;
+    /// No message is read after it.
+    bool last = false;
+    /// With last: messages left unnamed follow it, which "…" says.
+    bool more = false;
+};
+
+/**
+ * The names of the messages in @p len bytes of a payload, one after the
+ * other from the first, as every protocol that names several in a segment
+ * names them: @p readOne( at ) reads the one at offset at (a NamedMessage).
+ * At most @p maxMessages are named, joined by @p separator ("; " or ", "),
+ * then the separator and "…" if one more is there.  The walk ends after a
+ * message that is last, "…" after it if it says so, or at the end of the
+ * bytes, "…" after it with @p moreAfter (the bytes are not all of the
+ * payload's).  A readOne() that is not last must take bytes.
+ */
+template <typename ReadOne>
+std::string nameMessages( size_t len, size_t maxMessages, const std::string& separator,
+                          ReadOne&& readOne, bool moreAfter = false )
+{
+    std::string text;
+    size_t named = 0;
+    size_t at = 0;
+    bool more = moreAfter;
+    while ( at < len ) {
+        if ( named == maxMessages ) {
+            more = true;
+            break;
+        }
+        auto message = readOne( at );
+        if ( !message.text.empty() ) {
+            text += ( named == 0 ? "" : separator ) + message.text;
+            ++named;
+        }
+        if ( message.last ) {
+            more = message.more;
+            break;
+        }
+        at += message.length;
+    }
+    if ( more ) {
+        text += ( named == 0 ? "" : separator ) + kEllipsis;
+    }
+    return text;
+}
 
 /// Payload bytes as text: printable ASCII as is, anything else as \xNN, so
 /// that a field can neither break the line nor hide what it contains.
@@ -256,6 +338,131 @@ std::string detectTls( const uint8_t* payload, size_t len );
 std::string detectQuic( const uint8_t* payload, size_t len );
 /// A SOCKS message, told by its ports (describe_socks.cpp).
 std::string detectSocks( const uint8_t* payload, size_t len, uint16_t srcPort, uint16_t dstPort );
+/// The MQTT packets of a TCP segment: any on MQTT's port, else only behind
+/// a CONNECT (describe_mqtt.cpp).
+std::string detectMqtt( const uint8_t* payload, size_t len, bool onMqttPort );
+/// The payload begins with an MQTT CONNECT (describe_mqtt.cpp).
+bool isMqttConnect( const uint8_t* payload, size_t len );
+/// A keep-alive of a SIP connection (RFC 5626, 3.5.1), the whole payload:
+/// "Keep-alive (ping)" for a double CRLF, "Keep-alive (pong)" for one;
+/// otherwise empty (describe_sip.cpp).
+std::string detectSipKeepAlive( const uint8_t* payload, size_t len );
+/// The SIP messages a payload begins with, line ends before them skipped,
+/// every one of a TCP segment (describe_sip.cpp): what their SDP bodies
+/// announce, and the calls a BYE ends, are added to @p calls.
+std::string detectSip( const uint8_t* payload, size_t len, bool overTcp,
+                       std::vector<SipCall>& calls );
+
+/// SOME/IP messages (describe_someip.cpp): their description, and whether
+/// the first is a SOME/IP-SD message.
+struct SomeIpDescription {
+    std::string text;
+    bool sd = false;
+};
+/// The SOME/IP messages a payload begins with, every one of a datagram or
+/// segment.  With @p heuristic, only if every message is whole and keeps
+/// to the rules of the header, and they fill the payload; otherwise empty.
+SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heuristic );
+/// The port SOME/IP-SD's (30490), or one configured for SOME/IP (someip.h).
+bool onSomeIpPort( uint16_t srcPort, uint16_t dstPort );
+/// SSH's port.
+constexpr uint16_t kSshPort = 22;
+/// The SSH banner a TCP payload begins with, on any port, and the binary
+/// packets of the unencrypted phase behind it, labelled "SSHv2"
+/// (describe_ssh.cpp).  Binary packets without a banner on port 22 only,
+/// as any binary protocol may begin as they do, or with @p inSshStream,
+/// on a stream that showed a banner, on any port, cut or malformed said
+/// so; on port 22, any other payload as an encrypted packet, a guess.
+std::optional<PayloadDescription> detectSsh( const uint8_t* payload, size_t len, uint16_t srcPort,
+                                             uint16_t dstPort, bool inSshStream = false );
+/// An HTTP "101 Switching Protocols" response with "Upgrade: websocket"
+/// in its header section, which makes its stream WebSocket
+/// (describe_http.cpp).
+bool isWebSocketUpgrade( const uint8_t* payload, size_t len );
+/// The DoIP messages (ISO 13400-2) a payload begins with, every one of a
+/// datagram or segment, a diagnostic message with the UDS service it
+/// carries (describe_doip.cpp).
+std::string detectDoip( const uint8_t* payload, size_t len );
+
+/// SMB messages (describe_smb.cpp): their description and their label,
+/// "SMB2" (SMB2 and SMB 3), "SMB" (SMB1) or "NBSS", as the first names it.
+struct SmbDescription {
+    std::string text;
+    const char* label = nullptr;
+};
+/// The NetBIOS Session Service messages a TCP payload begins with, every
+/// one of a segment: the SMB2/3 commands in them as Wireshark names them,
+/// "Create Request File: dir\file.txt", compounded ones too, up to 8 in
+/// all, an encrypted or compressed SMB 3 message, an SMB1 command; empty
+/// if the payload does not begin with an NBSS message.
+SmbDescription detectSmb( const uint8_t* payload, size_t len );
+/// The payload begins with an NBSS session message holding SMB: a protocol
+/// ID of SMB1, SMB2 or an SMB 3 transform header (describe_smb.cpp).
+bool beginsWithSmb( const uint8_t* payload, size_t len );
+
+// ── Where an SDP body announced them (describe_rtp.cpp) ──────────────────
+
+/// The payload begins with an RTCP header: version 2, an RTCP packet type.
+bool isRtcpHeader( const uint8_t* payload, size_t len );
+/// An RTP packet, "PT=PCMU, SSRC=0x…, Seq=…, Time=…", of @p wireLen bytes
+/// of which @p len were kept; empty if it is no RTP version 2 (or RTCP).
+std::string describeRtp( const uint8_t* payload, size_t len, size_t wireLen );
+/// The packets of a compound RTCP packet, "Sender Report, Source
+/// description"; empty if it does not begin with an RTCP header.
+std::string describeRtcp( const uint8_t* payload, size_t len, size_t wireLen );
+
+// ── Framing, for the TCP Reassembly ─────────────────────────────────────
+//
+// How many bytes the message a TCP payload begins with takes, header and
+// all: more than len while it is not all there (one more than len when the
+// header does not say how many), nothing if no message of the protocol
+// begins there.
+
+/// A TLS record (describe_tls.cpp).
+std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
+/// A DNS message behind its 2-byte length (describe_dns.cpp).
+std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
+/// An HTTP/1.x header section (describe_http.cpp).
+std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
+/// A SIP message, its body as long as its Content-Length says, and the
+/// line ends before it (describe_sip.cpp).
+std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len );
+/// An MQTT control packet, by its Remaining Length (describe_mqtt.cpp).
+std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
+/// A SOME/IP message, by its Length: on SOME/IP's port whatever its header
+/// says, elsewhere only if the header keeps to its rules (describe_someip.cpp).
+std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bool onSomeIpPort );
+/// A DoIP message, by its payload length, if its header keeps to the
+/// pattern of version and inverse version (describe_doip.cpp).
+std::optional<size_t> frameDoipMessage( const uint8_t* payload, size_t len );
+/// An NBSS message, by its length (describe_smb.cpp): on SMB's ports
+/// (445, 139) any NBSS message, elsewhere a session message that holds SMB.
+std::optional<size_t> frameSmbMessage( const uint8_t* payload, size_t len, bool onSmbPort );
+
+/// A WebSocket frame, by its payload length (describe_websocket.cpp): on
+/// an upgraded stream only, as nothing in its bytes tells it.
+std::optional<size_t> frameWebSocketFrame( const uint8_t* payload, size_t len );
+
+/// The WebSocket frames at @p p, the @p len captured bytes of a
+/// @p wireLen-byte TCP payload of an upgraded stream, as Wireshark names
+/// them, "WebSocket Text [FIN] [MASKED] len=5 \"hello\"": up to 8, then
+/// "…"; a cut frame ends in "…", a malformed one says so
+/// (describe_websocket.cpp).
+std::string describeWebSocketFrames( const uint8_t* p, size_t len, size_t wireLen );
+
+/// How far one direction of an SSH connection is, as its stream's state
+/// says (StreamState::kSshBannerSeen, StreamState::sshEncrypted()).
+enum class SshPhase {
+    Unknown,   ///< No banner was seen: only a banner is framed.
+    Clear,     ///< Before NEWKEYS: binary packets, by their packet_length.
+    Encrypted, ///< After NEWKEYS: nothing to frame.
+};
+/// The phase of @p direction of the stream @p state is of.
+SshPhase sshPhaseOf( const StreamState& state, unsigned direction );
+/// An SSH banner, to its line end; in the clear phase a binary packet, by
+/// its packet_length, and a NEWKEYS with all after it; in the encrypted
+/// phase, all the bytes (describe_ssh.cpp).
+std::optional<size_t> frameSshMessage( const uint8_t* payload, size_t len, SshPhase phase );
 
 // ── In the stream ────────────────────────────────────────────────────────
 
@@ -267,9 +474,26 @@ void describeQuicInStream( PacketRecord& pkt, const Stream& stream );
 /// (describe_http.cpp).
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state );
 
-/// Put @p description in place of the one in @p pkt's Info, and @p label
-/// in place of its protocol: recognised from its content, so the label
-/// sticks to the stream (StreamLabels).  In payload_describer.cpp.
-void redescribe( PacketRecord& pkt, const char* label, const std::string& description );
+/// A TCP segment in its stream: MQTT packets after a CONNECT on another
+/// port than MQTT's (describe_mqtt.cpp).
+void describeMqttInStream( PacketRecord& pkt, StreamState& state );
+
+/// A TCP segment in its stream: after NEWKEYS an encrypted packet, before
+/// it the packets no detector recognised, as the stream's SSH phase says
+/// (describe_ssh.cpp).
+void describeSshInStream( PacketRecord& pkt, const Stream& stream );
+
+/// A TCP segment in its stream: after the HTTP 101 response that upgraded
+/// it, the WebSocket frames in the payload's first kPayloadHeadBytes
+/// (describe_websocket.cpp).
+void describeWebSocketInStream( PacketRecord& pkt, const Stream& stream );
+
+/// After the TCP Reassembly: a 101 response upgrades its stream to
+/// WebSocket (describe_websocket.cpp).
+void rememberWebSocketInStream( const PacketRecord& pkt, const Stream& stream );
+
+/// After the TCP Reassembly: what a segment's SSH banner or NEWKEYS tells
+/// its stream's later segments (describe_ssh.cpp).
+void rememberSshInStream( const PacketRecord& pkt, const Stream& stream );
 
 } // namespace tcpdump::describer

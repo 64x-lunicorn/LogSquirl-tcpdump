@@ -39,6 +39,35 @@ std::string hexCode( uint8_t code )
     return buf;
 }
 
+void markCut( std::string& text )
+{
+    if ( text.size() < kEllipsis.size()
+         || text.compare( text.size() - kEllipsis.size(), kEllipsis.size(), kEllipsis ) != 0 ) {
+        text += " " + kEllipsis;
+    }
+}
+
+std::string hexValue( uint32_t value, int digits )
+{
+    char buf[ 16 ];
+    std::snprintf( buf, sizeof( buf ), "0x%0*X", digits, value );
+    return buf;
+}
+
+int hexDigit( uint8_t c )
+{
+    if ( c >= '0' && c <= '9' ) {
+        return c - '0';
+    }
+    if ( c >= 'a' && c <= 'f' ) {
+        return c - 'a' + 10;
+    }
+    if ( c >= 'A' && c <= 'F' ) {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
 std::string hexBytes( const uint8_t* p, size_t len, size_t maxBytes )
 {
     static const char kDigits[] = "0123456789abcdef";

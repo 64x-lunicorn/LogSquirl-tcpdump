@@ -33,10 +33,62 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace tcpdump {
+
+/**
+ * The median of a stream of values in bounded memory: exact while it holds
+ * at most kExactValues of them, then from a histogram of fixed size whose
+ * buckets are a 64th of a power of two wide (an HDR histogram), so that the
+ * median it gives lies within kRelativePrecision of the exact one.  Holds
+ * kMaxMemoryBytes at most, however many values a long or live capture adds.
+ */
+class RunningMedian {
+public:
+    /// Values kept as they are before they are counted in the histogram.
+    static constexpr size_t kExactValues = 4096;
+    /// Buckets per power of two; values below it get a bucket each.
+    static constexpr uint64_t kSubBuckets = 64;
+    /// Relative error of the median from the histogram at most: half a
+    /// bucket's width, i.e. 1/128 (0.8 %).
+    static constexpr double kRelativePrecision = 1.0 / ( 2 * kSubBuckets );
+    /// Memory held at most: the exact values or the histogram, 32 KiB.
+    static constexpr size_t kMaxMemoryBytes = kExactValues * sizeof( uint64_t );
+
+    void add( uint64_t value );
+
+    /// Values added.
+    uint64_t count() const
+    {
+        return count_;
+    }
+
+    /// Whether the median is still exact: the upper of the two middle values
+    /// of an even count.  Otherwise it is the middle of its bucket.
+    bool exact() const
+    {
+        return buckets_.empty();
+    }
+
+    /// The median, unset without any value.
+    std::optional<uint64_t> median() const;
+
+    /// Memory the values or the histogram hold.
+    size_t memoryBytes() const
+    {
+        return ( exact_.capacity() + buckets_.capacity() ) * sizeof( uint64_t );
+    }
+
+private:
+    void countInBucket( uint64_t value );
+
+    uint64_t count_ = 0;
+    std::vector<uint64_t> exact_;
+    std::vector<uint64_t> buckets_;
+};
 
 /**
  * Statistics collected packet by packet, so that the capture itself need
@@ -69,6 +121,9 @@ struct CaptureStats {
 
     /// TCP segments per kind of analysis marker, indexed by TcpMarker.
     std::array<uint64_t, kTcpMarkerKinds> tcpMarkers{};
+    /// The initial round-trip times of the handshakes, in nanoseconds: their
+    /// count and median, in bounded memory.
+    RunningMedian initialRtts;
 
     /// Link-layer types (DLT_*) of the capture, each once, in the order they
     /// were first seen.  A capture holds few, so a list is searched.
@@ -86,8 +141,15 @@ struct CaptureStats {
     /// Count @p pkt in, with the link-layer type it was dissected with.
     void add( const PacketRecord& pkt );
 
-    /// Count the markers the TCP Analysis gave a segment.
-    void addTcpMarkers( const TcpMarkers& markers );
+    /// Count the markers the TCP Analysis gave a segment, and the initial
+    /// round-trip time of a handshake it completed.
+    void addTcpAnalysis( const TcpAnalysis& analysis );
+
+    /// The median of initialRtts; unset without any.
+    std::optional<uint64_t> medianInitialRttNs() const
+    {
+        return initialRtts.median();
+    }
 
     /// List @p linkType, unless it is listed already: also for a type the
     /// capture declares without a packet of it.

@@ -203,6 +203,74 @@ SCENARIO( "Capture statistics are collected packet by packet", "[capture_stats]"
     }
 }
 
+SCENARIO( "The median initial round-trip time is kept in bounded memory", "[capture_stats]" )
+{
+    GIVEN( "fewer handshakes than are kept exactly" )
+    {
+        RunningMedian median;
+        for ( const uint64_t ns : { 30u, 10u, 20u, 40u } ) {
+            median.add( ns );
+        }
+
+        THEN( "the median is exact, the upper middle one of an even count" )
+        {
+            REQUIRE( median.exact() );
+            REQUIRE( median.count() == 4 );
+            REQUIRE( median.median() == 30u );
+        }
+    }
+
+    GIVEN( "no value" )
+    {
+        THEN( "there is no median" )
+        {
+            REQUIRE_FALSE( RunningMedian{}.median() );
+        }
+    }
+
+    GIVEN( "far more handshakes than are kept exactly, as a long or live capture has" )
+    {
+        RunningMedian median;
+        // 1 to 200000 microseconds, every value once, in a scrambled order.
+        constexpr uint64_t kCount = 200000;
+        for ( uint64_t i = 0; i < kCount; ++i ) {
+            median.add( ( ( i * 7919 ) % kCount + 1 ) * 1000 );
+        }
+
+        THEN( "the values are counted in a histogram of fixed size" )
+        {
+            REQUIRE_FALSE( median.exact() );
+            REQUIRE( median.count() == kCount );
+            REQUIRE( median.memoryBytes() <= RunningMedian::kMaxMemoryBytes );
+        }
+
+        THEN( "the median lies within the histogram's precision of the exact one" )
+        {
+            const double exact = 100001.0 * 1000;
+            REQUIRE( static_cast<double>( *median.median() )
+                     == Approx( exact ).epsilon( RunningMedian::kRelativePrecision ) );
+        }
+    }
+
+    GIVEN( "values beyond the exact buffer of zero and of the largest round-trip times" )
+    {
+        RunningMedian median;
+        for ( size_t i = 0; i <= RunningMedian::kExactValues; ++i ) {
+            median.add( i % 2 == 0 ? 0 : UINT64_MAX );
+        }
+
+        THEN( "both ends of the range are counted" )
+        {
+            REQUIRE( median.median() == 0u );
+            median.add( UINT64_MAX );
+            median.add( UINT64_MAX );
+            REQUIRE( static_cast<double>( *median.median() )
+                     == Approx( static_cast<double>( UINT64_MAX ) )
+                            .epsilon( RunningMedian::kRelativePrecision ) );
+        }
+    }
+}
+
 SCENARIO( "Packets captured shorter than on the wire are counted as cut", "[capture_stats]" )
 {
     CaptureStats stats;
@@ -257,6 +325,65 @@ SCENARIO( "The summary counts the packets cut at the snaplen", "[converter]" )
     }
 }
 
+SCENARIO( "No packet is numbered past the last number the No. column has", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a capture of six packets, and the last number lowered to four" )
+    {
+        std::vector<Record> records;
+        for ( int i = 0; i < 6; ++i ) {
+            records.push_back( { udpPacket( 1111 ) } );
+        }
+        const auto input = writeFile( dir, "many.pcap", pcapFile( records ) );
+        ConversionOptions options;
+        options.lastPacketNumber = 4;
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
+
+            THEN( "the first four packets are, and the summary says the rest was not" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.packets == 4 );
+                REQUIRE( result.summary.packetNumbersUsedUp );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( lines.size() == 5 );
+                REQUIRE( lines[ 4 ].startsWith( "4 " ) );
+            }
+        }
+    }
+
+    GIVEN( "a capture of exactly as many packets as there are numbers" )
+    {
+        std::vector<Record> records;
+        for ( int i = 0; i < 4; ++i ) {
+            records.push_back( { udpPacket( 1111 ) } );
+        }
+        const auto input = writeFile( dir, "four.pcap", pcapFile( records ) );
+        ConversionOptions options;
+        options.lastPacketNumber = 4;
+
+        THEN( "it is converted whole, with nothing said" )
+        {
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.summary.packets == 4 );
+            REQUIRE_FALSE( result.summary.packetNumbersUsedUp );
+        }
+    }
+
+    THEN( "the No. column numbers up to the largest 32-bit number by default" )
+    {
+        REQUIRE( ConversionOptions().lastPacketNumber == kMaxPacketNumber );
+        REQUIRE( kMaxPacketNumber == 4294967295u );
+    }
+}
+
 SCENARIO( "The summary counts the TCP analysis markers per kind", "[converter]" )
 {
     QTemporaryDir dir;
@@ -287,6 +414,68 @@ SCENARIO( "The summary counts the TCP analysis markers per kind", "[converter]" 
                     result.summary.tcpMarkers
                     == std::vector<Count>{ { "TCP Retransmission", 2 }, { "TCP Dup ACK", 1 } } );
             }
+        }
+    }
+}
+
+SCENARIO( "The summary gives the median initial round-trip time of the handshakes", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    // A handshake from client port @p port whose ACK comes @p usec after its SYN.
+    auto handshake = []( uint16_t port, uint32_t second, uint32_t usec ) {
+        Ipv4Options back;
+        std::swap( back.src, back.dst );
+        return std::vector<Record>{
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( port, 80, {}, 5, 0x02, 100, 0 ) ) ),
+              second, 0 },
+            { eth( EthertypeIpv4,
+                   ipv4( IpProtoTcp, tcp( 80, port, {}, 5, 0x12, 900, 101 ), back ) ),
+              second, usec / 2 },
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( port, 80, {}, 5, 0x10, 101, 901 ) ) ),
+              second, usec },
+        };
+    };
+
+    GIVEN( "three handshakes of 10, 30 and 20 ms, and a stream captured mid-way" )
+    {
+        std::vector<Record> records;
+        for ( const auto& part : { handshake( 40000, 1000, 10000 ), handshake( 40001, 1001, 30000 ),
+                                   handshake( 40002, 1002, 20000 ) } ) {
+            records.insert( records.end(), part.begin(), part.end() );
+        }
+        records.push_back(
+            { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40003, 80, {}, 5, 0x10, 1, 1 ) ) ), 1003,
+              0 } );
+        const auto input = writeFile( dir, "handshakes.pcap", pcapFile( records ) );
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertPcap( input, out.path() );
+
+            THEN( "the summary counts the three, with their median" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                REQUIRE( result.summary.handshakes == 3 );
+                REQUIRE( result.summary.medianInitialRttNs == 20000000u );
+            }
+        }
+    }
+
+    GIVEN( "no handshake" )
+    {
+        const auto input = writeFile(
+            dir, "midway.pcap",
+            pcapOf( { eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40003, 80, {}, 5, 0x10 ) ) ) } ) );
+
+        THEN( "the summary has no median" )
+        {
+            const auto result = convertPcap( input, out.path() );
+            REQUIRE( result.summary.handshakes == 0 );
+            REQUIRE_FALSE( result.summary.medianInitialRttNs );
         }
     }
 }
@@ -762,6 +951,71 @@ SCENARIO( "Endpoint counts stop growing at their cap", "[capture_stats]" )
             REQUIRE( stats.endpointPackets.at( "10.0.0.2" ) == 2 );
             REQUIRE( stats.otherEndpointPackets == 2 );
             REQUIRE( stats.endpointLimitReached() );
+        }
+    }
+}
+
+SCENARIO( "The TCP reassembly holds the memory the options allow", "[converter]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir out;
+    REQUIRE( dir.isValid() );
+    REQUIRE( out.isValid() );
+
+    GIVEN( "80 connections that each begin a TLS record of 18,000 bytes before any ends it" )
+    {
+        constexpr int kConnections = 80;
+        Bytes record{ 0x17, 0x03, 0x03 };
+        putBE16( record, 18000 );
+        record.resize( 5 + 18000, 0xA5 );
+        auto segment = [ & ]( int connection, size_t from, size_t to ) {
+            const Bytes part( record.begin() + static_cast<std::ptrdiff_t>( from ),
+                              record.begin() + static_cast<std::ptrdiff_t>( to ) );
+            const auto port = static_cast<uint16_t>( 40000 + connection );
+            return eth( EthertypeIpv4,
+                        ipv4( IpProtoTcp, tcp( port, 443, part, 5, 0x18,
+                                               1 + static_cast<uint32_t>( from ) ) ) );
+        };
+        std::vector<Bytes> frames;
+        for ( int i = 0; i < kConnections; ++i ) {
+            frames.push_back( segment( i, 0, 1000 ) );
+        }
+        for ( int i = 0; i < kConnections; ++i ) {
+            frames.push_back( segment( i, 1000, record.size() ) );
+        }
+        const auto input = writeFile( dir, "records.pcap", pcapOf( frames ) );
+
+        auto marked = []( const QStringList& lines ) {
+            return lines.filter( QStringLiteral( "[reassembly limit]" ) ).size();
+        };
+        auto reassembled = []( const QStringList& lines ) {
+            return lines.filter( QStringLiteral( "[reassembled from 2 segments]" ) ).size();
+        };
+
+        WHEN( "it is converted with the default memory" )
+        {
+            const auto result = convertPcap( input, out.path() );
+            THEN( "every record is described where it ends" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( reassembled( lines ) == kConnections );
+                REQUIRE( marked( lines ) == 0 );
+            }
+        }
+
+        WHEN( "it is converted with 1 MB, room for some 55 of them" )
+        {
+            ConversionOptions options;
+            options.reassemblyMegabytes = 1;
+            const auto result = convertPcap( input, out.path(), nullptr, {}, options );
+            THEN( "the records that waited longest are given up, their ends marked" )
+            {
+                REQUIRE( result.status == ConversionResult::Status::Converted );
+                const auto lines = readLines( result.outputPath );
+                REQUIRE( marked( lines ) > 0 );
+                REQUIRE( marked( lines ) + reassembled( lines ) == kConnections );
+            }
         }
     }
 }

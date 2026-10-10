@@ -40,9 +40,12 @@ namespace tcpdump {
 bool operator==( const ConversionOptions& a, const ConversionOptions& b )
 {
     return a.layout.timeColumns == b.layout.timeColumns
-           && a.layout.macColumns == b.layout.macColumns && a.preview == b.preview
-           && a.previewChars == b.previewChars && a.maxStreams == b.maxStreams
-           && a.maxEndpoints == b.maxEndpoints;
+           && a.layout.macColumns == b.layout.macColumns && a.layout.hostNames == b.layout.hostNames
+           && a.preview == b.preview && a.previewChars == b.previewChars
+           && a.maxStreams == b.maxStreams && a.maxEndpoints == b.maxEndpoints
+           && a.reassemblyMegabytes == b.reassemblyMegabytes && a.tcpTimestamps == b.tcpTimestamps
+           && a.someIpPorts == b.someIpPorts && a.someIpNamesFile == b.someIpNamesFile
+           && a.keyLogPath == b.keyLogPath;
 }
 
 } // namespace tcpdump
@@ -72,11 +75,16 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
     GIVEN( "options other than the defaults" )
     {
         ConversionOptions options;
-        options.layout = { TimeColumns::RelativeOnly, true };
+        options.layout = { TimeColumns::RelativeOnly, true, true };
         options.preview = false;
         options.previewChars = 64;
         options.maxStreams = 5000;
         options.maxEndpoints = 300;
+        options.reassemblyMegabytes = 16;
+        options.tcpTimestamps = true;
+        options.someIpPorts = { 30501, 30502 };
+        options.someIpNamesFile = QStringLiteral( "/tmp/some ip, names.txt" );
+        options.keyLogPath = configDir.filePath( "sslkeys.log" );
 
         WHEN( "they are saved" )
         {
@@ -89,6 +97,21 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
                          == QDir( configDir.path() ) );
                 REQUIRE( loadConversionOptions( configDir.path() ) == options );
             }
+        }
+    }
+
+    GIVEN( "one SOME/IP port, then none" )
+    {
+        THEN( "each is read back" )
+        {
+            ConversionOptions options;
+            options.someIpPorts = { 30501 };
+            REQUIRE( saveConversionOptions( configDir.path(), options ) );
+            REQUIRE( loadConversionOptions( configDir.path() ).someIpPorts
+                     == std::vector<uint16_t>{ 30501 } );
+            options.someIpPorts.clear();
+            REQUIRE( saveConversionOptions( configDir.path(), options ) );
+            REQUIRE( loadConversionOptions( configDir.path() ).someIpPorts.empty() );
         }
     }
 
@@ -111,6 +134,8 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
             file.setValue( "conversion/previewChars", 5000 );
             file.setValue( "conversion/maxStreams", 0 );
             file.setValue( "conversion/maxEndpoints", "many" );
+            file.setValue( "conversion/reassemblyMegabytes", 1000000 );
+            file.setValue( "conversion/someIpPorts", "30501, http, 99999" );
         }
 
         THEN( "those values are their defaults or the nearest allowed" )
@@ -120,6 +145,8 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
             REQUIRE( options.previewChars == kMaxPreviewChars );
             REQUIRE( options.maxStreams == kMinCap );
             REQUIRE( options.maxEndpoints == ConversionOptions{}.maxEndpoints );
+            REQUIRE( options.reassemblyMegabytes == kMaxReassemblyMegabytes );
+            REQUIRE( options.someIpPorts == std::vector<uint16_t>{ 30501 } );
         }
     }
 }

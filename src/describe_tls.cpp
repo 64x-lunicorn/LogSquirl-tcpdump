@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -229,6 +230,8 @@ std::string tlsHandshakeMessage( uint8_t type, FieldReader body )
         return tlsServerHello( body );
     case 4:
         return "New Session Ticket";
+    case 5:
+        return "End Of Early Data";
     case 8:
         return "Encrypted Extensions";
     case 11:
@@ -245,6 +248,8 @@ std::string tlsHandshakeMessage( uint8_t type, FieldReader body )
         return "Client Key Exchange";
     case 20:
         return "Finished";
+    case 24:
+        return "Key Update";
     default:
         return "Handshake";
     }
@@ -326,6 +331,120 @@ std::string detectTls( const uint8_t* payload, size_t len )
     }
 
     return joinNames( std::move( names ), kMaxTlsMessages );
+}
+
+} // namespace tcpdump::describer
+
+// ── Decrypted records, for the TLS Decryption ────────────────────────────
+
+namespace tcpdump {
+
+using namespace describer;
+
+/// The handshake messages of a decrypted record, up to kMaxTlsMessages,
+/// then an ellipsis.
+std::string describeTlsHandshake( const uint8_t* data, size_t len )
+{
+    std::vector<std::string> names;
+    FieldReader fragment( data, len );
+    uint8_t type = 0;
+    uint32_t length = 0;
+    bool more = false;
+    while ( fragment.u8( type ) ) {
+        if ( names.size() == kMaxTlsMessages ) {
+            more = true;
+            break;
+        }
+        if ( !fragment.u24( length ) ) {
+            names.push_back( tlsHandshakeMessage( type, FieldReader( nullptr, 0, false ) ) );
+            break;
+        }
+        auto message = fragment.take( length );
+        names.push_back( tlsHandshakeMessage( type, message ) );
+        if ( !message.complete() ) {
+            break;
+        }
+    }
+    if ( names.empty() ) {
+        return "Handshake";
+    }
+    return joinNames( std::move( names ), kMaxTlsMessages, more );
+}
+
+/// A decrypted alert, "Alert: close_notify", by its description's name
+/// (RFC 8446, 6).
+std::string describeTlsAlert( const uint8_t* data, size_t len )
+{
+    if ( len != 2 ) {
+        return "Alert";
+    }
+    switch ( data[ 1 ] ) {
+    case 0:
+        return "Alert: close_notify";
+    case 10:
+        return "Alert: unexpected_message";
+    case 20:
+        return "Alert: bad_record_mac";
+    case 22:
+        return "Alert: record_overflow";
+    case 40:
+        return "Alert: handshake_failure";
+    case 42:
+        return "Alert: bad_certificate";
+    case 46:
+        return "Alert: certificate_unknown";
+    case 48:
+        return "Alert: unknown_ca";
+    case 50:
+        return "Alert: decode_error";
+    case 51:
+        return "Alert: decrypt_error";
+    case 70:
+        return "Alert: protocol_version";
+    case 80:
+        return "Alert: internal_error";
+    case 90:
+        return "Alert: user_canceled";
+    case 100:
+        return "Alert: no_renegotiation";
+    case 109:
+        return "Alert: missing_extension";
+    case 112:
+        return "Alert: unrecognized_name";
+    case 116:
+        return "Alert: certificate_required";
+    case 120:
+        return "Alert: no_application_protocol";
+    default:
+        return "Alert: " + std::to_string( data[ 1 ] );
+    }
+}
+
+} // namespace tcpdump
+
+namespace tcpdump::describer {
+
+/// The TLS record a segment begins with: its header and fragment, or
+/// nothing if the bytes there are no record header (RFC 8446, 5.1).  A
+/// fragment longer than 2^14 + 2048 bytes, the most a TLS 1.2 ciphertext
+/// may take, is no record's.  Fewer bytes than a header's are taken for one
+/// if those there fit.
+std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len )
+{
+    constexpr size_t kHeaderBytes = 5;
+    constexpr uint16_t kMaxFragment = 16384 + 2048;
+    if ( len == 0 || payload[ 0 ] < 0x14 || payload[ 0 ] > 0x17
+         || ( len >= 2 && payload[ 1 ] != 0x03 ) || ( len >= 3 && payload[ 2 ] > 0x04 ) ) {
+        return std::nullopt;
+    }
+    if ( len < kHeaderBytes ) {
+        return kHeaderBytes;
+    }
+    const uint16_t length = readBE16( payload + 3 );
+    if ( length > kMaxFragment ) {
+        return std::nullopt;
+    }
+    return kHeaderBytes + length;
 }
 
 } // namespace tcpdump::describer

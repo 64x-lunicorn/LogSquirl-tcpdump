@@ -33,6 +33,7 @@
 #include <deque>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace tcpdump {
 
@@ -86,7 +87,14 @@ struct TcpDirection {
     static constexpr uint8_t kZeroWindowProbe = 0x10; ///< The last segment was a probe.
     /// The last segment that raised nextSeq carried data.
     static constexpr uint8_t kAdvancedWithData = 0x20;
-    /// The bits each segment sets afresh; kBaseSeqSet stays.
+    /// A SYN of this direction was seen: windowScale tells its option, or
+    /// that it had none.
+    static constexpr uint8_t kSynSeen = 0x40;
+    /// The direction's last segment was a SYN without ACK that awaits the
+    /// ACK which completes its handshake: lastTime is the SYN's.
+    static constexpr uint8_t kSynPending = 0x80;
+    /// The bits each segment sets afresh; kBaseSeqSet, kSynSeen and
+    /// kSynPending stay until the analysis changes them.
     static constexpr uint8_t kSegmentFlags
         = kWindowKnown | kWindowScaled | kKeepAlive | kZeroWindowProbe | kAdvancedWithData;
 };
@@ -98,19 +106,43 @@ struct TcpDirection {
  * the Payload Describer, the Stream Labels, …) keep their fields here, and
  * read and update them through the Stream the tracker hands out.  Every
  * byte added here is paid once per numbered stream, see kMaxStreams: 72
- * bytes today, the two TcpDirections and the alignment taking most.  A new
- * TCP connection on the same addresses and ports (see analyseTcp()) starts
- * from a fresh state, its HTTP/2 flag and label with it.
+ * bytes today, the two TcpDirections taking most, and 2 bytes are left
+ * before the alignment adds 8.  A protocol the stream was found to speak
+ * takes a bit of protocols, not a byte of its own.  A new TCP connection on
+ * the same addresses and ports (see analyseTcp()) starts from a fresh
+ * state, its protocols and label with it.
  */
 struct StreamState {
     /// TCP only: each direction, indexed by Stream::direction.
     TcpDirection tcp[ 2 ];
     QuicConnection quic; ///< UDP only.
-    /// TCP only: the stream began with the HTTP/2 connection preface.
-    bool http2 = false;
+    /// TCP only: what the Payload Describer learnt the stream speaks, from
+    /// a message that opens a protocol on it: StreamState::k… bits.
+    uint8_t protocols = 0;
     /// The protocol a detector recognised on the stream, as StreamLabels
     /// numbers it; 0 while none has.
     uint8_t label = 0;
+    /// TCP only: what the TCP Reassembly knows of each direction d, whose
+    /// bytes it keeps apart (tcp_reassembly.h): bit 1 << d, it holds some;
+    /// bit 4 << d, it let them go for lack of memory, which the direction's
+    /// next segment says.
+    uint8_t reassembly = 0;
+
+    /// protocols: the stream began with the HTTP/2 connection preface.
+    static constexpr uint8_t kHttp2 = 0x01;
+    /// protocols: the stream began with an MQTT CONNECT.
+    static constexpr uint8_t kMqtt = 0x02;
+    /// protocols: an SSH-2 banner was seen on the stream (describe_ssh.cpp).
+    static constexpr uint8_t kSshBannerSeen = 0x04;
+    /// protocols: direction @p direction of the stream's SSH connection sent
+    /// its NEWKEYS, and what it sends after is encrypted (bits 0x08, 0x10).
+    static constexpr uint8_t sshEncrypted( unsigned direction )
+    {
+        return static_cast<uint8_t>( 0x08u << direction );
+    }
+    /// protocols: an HTTP "101 Switching Protocols" response upgraded the
+    /// stream to WebSocket: what follows it are frames (describe_websocket.cpp).
+    static constexpr uint8_t kWebSocket = 0x20;
 };
 
 /// The stream a packet belongs to.
@@ -123,6 +155,13 @@ struct Stream {
     /// The packet's direction in the stream, 0 or 1: the same for every
     /// packet from the same address and port.
     unsigned direction = 0;
+};
+
+/// The two ends of a numbered stream, each an address and a port, indexed
+/// by Stream::direction: end d is the source of the packets of direction d.
+struct StreamEndpoints {
+    std::string address[ 2 ];
+    uint16_t port[ 2 ] = { 0, 0 };
 };
 
 /**
@@ -141,8 +180,10 @@ struct Stream {
  */
 class StreamTracker {
 public:
-    /// Conversations numbered by default: some 150 MB of memory at most.  The
-    /// options may raise it tenfold (kMaxStreamCap, some 1.5 GB) or lower it.
+    /// Conversations numbered by default: some 390 MB of memory at most
+    /// with their counts and rows in the Conversations table
+    /// (conversations.h; measured, DEVELOPER_GUIDE).  The options may raise
+    /// it tenfold (kMaxStreamCap, some 3.9 GB) or lower it.
     static constexpr size_t kMaxStreams = 1000000;
 
     explicit StreamTracker( size_t maxStreams = kMaxStreams )
@@ -152,6 +193,9 @@ public:
 
     /// The stream of @p pkt, numbering its conversation if it is a new one.
     Stream track( const PacketRecord& pkt );
+
+    /// The ends of stream @p id of @p transport, a stream track() numbered.
+    StreamEndpoints endpoints( Transport transport, int id ) const;
 
     /// Whether a conversation went unnumbered because of maxStreams.
     bool limitReached() const
@@ -164,6 +208,8 @@ private:
     struct Conversations {
         std::map<std::string, int> ids; ///< By their endpoints, in either order.
         std::deque<StreamState> states; ///< By stream id; a deque never moves them.
+        /// The key of each in ids, by stream id: a map never moves them.
+        std::vector<const std::string*> keys;
     };
 
     Conversations tcp_;

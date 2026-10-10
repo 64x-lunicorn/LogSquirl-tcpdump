@@ -58,6 +58,32 @@ QString eitherWay( const QString& a, const QString& b, const QString& separator 
     return forth == back ? forth : QString( "(?:%1|%2)" ).arg( forth, back );
 }
 
+/// The pattern of the lines of stream @p stream between @p source and
+/// @p destination, either way, whether their columns show names or not,
+/// and, unless they are empty, the ports @p sourcePort and
+/// @p destinationPort.  @p source and @p destination may be columns, the
+/// name of a host behind the address.
+QString streamPattern( const QString& stream, const QString& source, const QString& destination,
+                       const QString& sourcePort, const QString& destinationPort )
+{
+    // Number and stream, then whatever time columns there are up to the
+    // addresses; the Protocol column differs between the packets of one
+    // stream, so it is skipped with the Length.
+    auto pattern = QString( R"(%1%2 +\S+ +\d+ +)" )
+                       .arg( upToSourcePattern( stream ),
+                             eitherWay( addressPattern( columnAddress( source ) ),
+                                        addressPattern( columnAddress( destination ) ), " +" ) );
+    // The ports tell a TCP from a UDP stream of the same number between the
+    // same hosts; a line without them still has the stream and addresses.
+    // They are looked for anywhere in Info, after the MAC columns a Line
+    // Layout may put at its start and the analysis markers.
+    if ( !sourcePort.isEmpty() ) {
+        pattern += QString( R"(.*?(?<!\d)%1(?!\d))" )
+                       .arg( eitherWay( sourcePort, destinationPort, kArrow ) );
+    }
+    return pattern;
+}
+
 /// Why get_selected_log_lines() returned no line, for the user.
 QString selectionFailure( int result )
 {
@@ -95,23 +121,17 @@ FollowStream followStreamPattern( const QString& packetLine )
                      .arg( number ) };
     }
 
-    // Number and stream, then whatever time columns there are up to the
-    // addresses; the Protocol column differs between the packets of one
-    // stream, so it is skipped with the Length.
-    auto pattern = QString( R"(%1%2 +\S+ +\d+ +)" )
-                       .arg( upToSourcePattern( stream ),
-                             eitherWay( literalPattern( match.captured( "source" ) ),
-                                        literalPattern( match.captured( "destination" ) ), " +" ) );
-    // The ports tell a TCP from a UDP stream of the same number between the
-    // same hosts; a line without them still has the stream and addresses.
-    // They are looked for anywhere in Info, after the MAC columns a Line
-    // Layout may put at its start and the analysis markers.
     const auto ports = portsRegex().match( match.captured( "body" ) );
-    if ( ports.hasMatch() ) {
-        pattern += QString( R"(.*?(?<!\d)%1(?!\d))" )
-                       .arg( eitherWay( ports.captured( 1 ), ports.captured( 2 ), kArrow ) );
-    }
-    return { pattern, {} };
+    return { streamPattern( stream, match.captured( "source" ), match.captured( "destination" ),
+                            ports.captured( 1 ), ports.captured( 2 ) ),
+             {} };
+}
+
+QString conversationPattern( int stream, const QString& addressA, uint16_t portA,
+                             const QString& addressB, uint16_t portB )
+{
+    return streamPattern( QString::number( stream ), addressA, addressB, QString::number( portA ),
+                          QString::number( portB ) );
 }
 
 void followSelectedStream()

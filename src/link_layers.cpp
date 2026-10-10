@@ -30,6 +30,7 @@
 #include "link_layers.h"
 
 #include "describe_common.h"
+#include "packet_layers.h"
 #include "wire_bytes.h"
 
 #include <algorithm>
@@ -57,6 +58,15 @@ std::string hex16( uint16_t value )
     char hex[ 8 ];
     std::snprintf( hex, sizeof( hex ), "0x%04X", value );
     return hex;
+}
+
+/// A layer @p name of the @p len bytes at @p data, which are not read further.
+void bodyLayer( PacketRecord& pkt, const char* name, const uint8_t* data, size_t len )
+{
+    if ( auto* layers = pkt.layers; layers && len > 0 ) {
+        layers->layer( name, data, len );
+        layers->field( "Length", std::to_string( len ) + " bytes", nullptr, 0 );
+    }
 }
 
 // ── PPP ──────────────────────────────────────────────────────────────────
@@ -102,11 +112,18 @@ void describeControl( PacketRecord& pkt, const ControlProtocol& cp, const uint8_
     pkt.protocol = cp.label;
     if ( len < 4 ) {
         pkt.info = std::string( "Truncated " ) + cp.label + " packet";
+        bodyLayer( pkt, cp.label, data, len );
         return;
     }
     const uint8_t code = data[ 0 ];
     pkt.info = code >= 1 && code <= cp.codeCount ? cp.codes[ code - 1 ]
                                                  : "Code " + std::to_string( code );
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( cp.label, data, len );
+        layers->field( "Code", pkt.info + " (" + std::to_string( code ) + ")", data, 1 );
+        layers->field( "Identifier", std::to_string( data[ 1 ] ), data + 1, 1 );
+        layers->field( "Length", std::to_string( readBE16( data + 2 ) ), data + 2, 2 );
+    }
 }
 
 /// Dissect a PPP frame from its protocol field on (RFC 1661): IP is handed
@@ -123,6 +140,10 @@ std::optional<NetworkLayer> dissectPppProtocol( PacketRecord& pkt, const uint8_t
         return std::nullopt;
     }
     const uint16_t protocol = fieldLen == 1 ? data[ 0 ] : readBE16( data );
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "Point-to-Point Protocol", data, fieldLen );
+        layers->field( "Protocol", hex16( protocol ), data, fieldLen );
+    }
     data += fieldLen;
     len -= fieldLen;
     if ( protocol == kPppIpv4 ) {
@@ -139,6 +160,7 @@ std::optional<NetworkLayer> dissectPppProtocol( PacketRecord& pkt, const uint8_t
     }
     pkt.protocol = "PPP";
     pkt.info = "PPP protocol " + hex16( protocol );
+    bodyLayer( pkt, "Data", data, len );
     return std::nullopt;
 }
 
@@ -161,7 +183,14 @@ std::optional<NetworkLayer> dissectCiscoHdlc( PacketRecord& pkt, const uint8_t* 
     if ( len < 4 ) {
         pkt.protocol = "CHDLC";
         pkt.info = "Truncated Cisco HDLC header";
+        bodyLayer( pkt, "Cisco HDLC (truncated)", data, len );
         return std::nullopt;
+    }
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "Cisco HDLC", data, 4 );
+        layers->field( "Address", describer::hexCode( data[ 0 ] ), data, 1 );
+        layers->field( "Control", describer::hexCode( data[ 1 ] ), data + 1, 1 );
+        layers->field( "Protocol", etherTypeField( readBE16( data + 2 ) ), data + 2, 2 );
     }
     return NetworkLayer{ readBE16( data + 2 ), data + 4, len - 4 };
 }
@@ -381,8 +410,15 @@ std::optional<NetworkLayer> dissectLlc( PacketRecord& pkt, const std::string& su
 {
     if ( len >= 8 && data[ 0 ] == 0xAA && data[ 1 ] == 0xAA && data[ 2 ] == 0x03
          && data[ 3 ] == 0x00 && data[ 4 ] == 0x00 && ( data[ 5 ] == 0x00 || data[ 5 ] == 0xF8 ) ) {
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( "Logical-Link Control", data, 8 );
+            layers->field( "DSAP", describer::hexCode( data[ 0 ] ), data, 1 );
+            layers->field( "SSAP", describer::hexCode( data[ 1 ] ), data + 1, 1 );
+            layers->field( "Type", etherTypeField( readBE16( data + 6 ) ), data + 6, 2 );
+        }
         return NetworkLayer{ readBE16( data + 6 ), data + 8, len - 8 };
     }
+    bodyLayer( pkt, "Logical-Link Control", data, len );
     if ( len < 2 ) {
         pkt.protocol = "802.11";
         pkt.info = summary;
@@ -412,6 +448,14 @@ std::optional<NetworkLayer> dissectIeee80211( PacketRecord& pkt, const uint8_t* 
         return std::nullopt;
     }
     const auto name = frameName( type, subtype );
+    if ( auto* layers = pkt.layers ) {
+        // The whole MAC header once its length is known, below; until then
+        // the fields every frame has.
+        layers->layer( "IEEE 802.11 " + name, data, 10 );
+        layers->field( "Frame Control", hex16( readBE16( data ) ), data, 2 );
+        layers->field( "Duration", std::to_string( readLE16( data + 2 ) ), data + 2, 2 );
+        layers->field( "Receiver Address", formatMac( data + kAddress1 ), data + kAddress1, 6 );
+    }
 
     if ( type == kTypeControl ) {
         // Every control frame names its receiver; most also the transmitter.
@@ -463,11 +507,25 @@ std::optional<NetworkLayer> dissectIeee80211( PacketRecord& pkt, const uint8_t* 
 
     const uint16_t sequence = readLE16( data + kSequenceControl );
     const uint16_t fragment = sequence & 0x0F;
+    if ( auto* layers = pkt.layers ) {
+        layers->setLength( headerLen );
+        layers->field( "Transmitter Address", formatMac( data + kAddress2 ), data + kAddress2, 6 );
+        layers->field( "Address 3", formatMac( data + kAddress3 ), data + kAddress3, 6 );
+        if ( headerLen >= kAddress4 + 6 && type == kTypeData && toDs && fromDs ) {
+            layers->field( "Address 4", formatMac( data + kAddress4 ), data + kAddress4, 6 );
+        }
+        layers->field( "Source Address", pkt.srcMac, data + sa, 6 );
+        layers->field( "Destination Address", pkt.dstMac, data + da, 6 );
+        layers->field( "Sequence Number", std::to_string( sequence >> 4 ), data + kSequenceControl,
+                       2 );
+        layers->field( "Fragment Number", std::to_string( fragment ), data + kSequenceControl, 1 );
+    }
     const auto summary
         = name + ", SN=" + std::to_string( sequence >> 4 ) + ", FN=" + std::to_string( fragment );
     pkt.info = summary;
     if ( flags & kProtected ) {
         pkt.info += ", Protected";
+        bodyLayer( pkt, "Data (protected)", data + headerLen, len - headerLen );
         return std::nullopt;
     }
 
@@ -479,6 +537,7 @@ std::optional<NetworkLayer> dissectIeee80211( PacketRecord& pkt, const uint8_t* 
 
     if ( type == kTypeManagement ) {
         pkt.info += managementDetails( subtype, body, bodyLen );
+        bodyLayer( pkt, "IEEE 802.11 Wireless Management", body, bodyLen );
         return std::nullopt;
     }
     if ( subtype & 0x04 ) {
@@ -513,6 +572,12 @@ std::optional<NetworkLayer> dissectRadiotap( PacketRecord& pkt, const uint8_t* d
     if ( headerLen < 8 || headerLen > len ) {
         pkt.info = "Invalid Radiotap header length " + std::to_string( headerLen );
         return std::nullopt;
+    }
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "Radiotap Header", data, headerLen );
+        layers->field( "Version", "0", data, 1 );
+        layers->field( "Length", std::to_string( headerLen ), data + 2, 2 );
+        layers->field( "Present Flags", hexField( readLE32( data + 4 ), 8 ), data + 4, 4 );
     }
 
     // The present bitmaps: bit 31 of each says another follows.  The fields
@@ -597,8 +662,17 @@ std::optional<NetworkLayer> dissectPppoe( PacketRecord& pkt, const uint8_t* data
     const uint8_t code = data[ 1 ];
     // The length bounds what follows, as Ethernet pads a short frame.
     const size_t payloadLen = std::min<size_t>( readBE16( data + 4 ), len - 6 );
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "PPP-over-Ethernet", data, 6 );
+        layers->field( "Version", std::to_string( data[ 0 ] >> 4 ), data, 1 );
+        layers->field( "Type", std::to_string( data[ 0 ] & 0x0F ), data, 1 );
+        layers->field( "Code", describer::hexCode( code ), data + 1, 1 );
+        layers->field( "Session ID", hex16( readBE16( data + 2 ) ), data + 2, 2 );
+        layers->field( "Payload Length", std::to_string( readBE16( data + 4 ) ), data + 4, 2 );
+    }
     if ( code != kPppoeSession ) {
         describeDiscovery( pkt, code, data + 6, payloadLen );
+        bodyLayer( pkt, "PPPoE Tags", data + 6, payloadLen );
         return std::nullopt;
     }
     return dissectPppProtocol( pkt, data + 6, payloadLen, "PPPoES" );

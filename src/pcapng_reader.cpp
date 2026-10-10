@@ -107,6 +107,7 @@ void PcapngReader::endBroken()
 bool PcapngReader::readBlockHeader( BlockHeader& block )
 {
     problem_.clear();
+    block.start = bytesRead();
     uint8_t header[ 12 ];
     const auto got = read( header, 8 );
     if ( got == 0 ) {
@@ -128,6 +129,7 @@ bool PcapngReader::readBlockHeader( BlockHeader& block )
             return fail( "unknown byte-order magic" );
         }
         swap_ = magic == kByteOrderMagicSwapped;
+        sectionState_.reset();
     }
     block.length = read32( header + 4, swap_ );
     if ( block.length % 4 != 0 || block.length < minimumLength( block.type ) ) {
@@ -164,6 +166,8 @@ bool PcapngReader::readSectionHeader( BlockHeader& block )
         return false;
     }
     interfaces_.clear();
+    sectionState_.reset();
+    sectionHeader_ = { block.start, block.length };
     return finishBlock( block );
 }
 
@@ -225,7 +229,9 @@ bool PcapngReader::readInterface( BlockHeader& block )
         return false;
     }
 
+    iface.block = { block.start, block.length };
     interfaces_.push_back( iface );
+    sectionState_.reset();
     if ( !precisionAnnounced_ ) {
         precision_ = std::max( precision_, iface.precision );
     }
@@ -292,6 +298,8 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
         return false;
     }
 
+    recordOffset_ = block.start;
+    recordLength_ = block.length;
     pkt = PacketRecord();
     pkt.number = ++packetCount_;
     const auto& unit = iface->unit;
@@ -324,9 +332,14 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
 
 /// Read blocks up to the next packet block, whose header is then pending.
 /// False at the end of the capture and for a block that cannot be read.
-bool PcapngReader::readBlocksUpToPacket()
+/// @p untilWaiting: once an interface is declared, stop (true, with no
+/// packet block pending) before a block that has not come yet.
+bool PcapngReader::readBlocksUpToPacket( bool untilWaiting )
 {
     for ( ;; ) {
+        if ( untilWaiting && !interfaces_.empty() && !ready() ) {
+            return true;
+        }
         BlockHeader block;
         if ( !readBlockHeader( block ) ) {
             return false;
@@ -367,11 +380,84 @@ bool PcapngReader::open()
     }
 
     open_ = true;
-    if ( !readBlocksUpToPacket() && !problem_.empty() ) {
+    if ( !readBlocksUpToPacket( true ) && !problem_.empty() ) {
         endBroken();
     }
     precisionAnnounced_ = true;
     return true;
+}
+
+ReaderCheckpoint PcapngReader::checkpoint() const
+{
+    if ( !sectionState_ ) {
+        auto state = std::make_shared<SectionState>();
+        state->swap = swap_;
+        state->sectionHeader = sectionHeader_;
+        state->interfaces = interfaces_;
+        sectionState_ = std::move( state );
+    }
+    // Right after open(), the first packet block's header was read already.
+    const auto offset = havePacketBlock_ ? pendingBlock_.start : bytesRead();
+    return { packetCount_, offset, sectionState_ };
+}
+
+bool PcapngReader::resume( const ReaderCheckpoint& checkpoint )
+{
+    const auto* state = dynamic_cast<const SectionState*>( checkpoint.state.get() );
+    if ( !open_ || !state ) {
+        open_ = false;
+        return false;
+    }
+    // A checkpoint at the packet block open() stopped at is where the
+    // reader is; any other lies further on, at the start of a block.
+    if ( havePacketBlock_ && checkpoint.offset == pendingBlock_.start ) {
+        packetCount_ = checkpoint.packetsBefore;
+    }
+    else {
+        havePacketBlock_ = false;
+        if ( !CaptureReader::resume( checkpoint ) ) {
+            open_ = false;
+            return false;
+        }
+    }
+    swap_ = state->swap;
+    sectionHeader_ = state->sectionHeader;
+    interfaces_ = state->interfaces;
+    sectionState_ = std::static_pointer_cast<const SectionState>( checkpoint.state );
+    return true;
+}
+
+bool PcapngReader::relocateHeaders(
+    const std::function<std::optional<uint64_t>( uint64_t )>& where )
+{
+    const auto relocate = [ & ]( RecordSpan& span ) {
+        const auto here = where( span.offset );
+        if ( here ) {
+            span.offset = *here;
+        }
+        return here.has_value();
+    };
+    bool all = relocate( sectionHeader_ );
+    for ( auto& iface : interfaces_ ) {
+        all = relocate( iface.block ) && all;
+    }
+    sectionState_.reset(); // the next checkpoint keeps them as they are now
+    return all;
+}
+
+CaptureHeaders PcapngReader::headers() const
+{
+    CaptureHeaders headers;
+    headers.format = CaptureFormat::Pcapng;
+    if ( sectionHeader_.length == 0 ) {
+        return headers; // not open
+    }
+    headers.records.reserve( interfaces_.size() + 1 );
+    headers.records.push_back( sectionHeader_ );
+    for ( const auto& iface : interfaces_ ) {
+        headers.records.push_back( iface.block );
+    }
+    return headers;
 }
 
 bool PcapngReader::next( PacketRecord& pkt )

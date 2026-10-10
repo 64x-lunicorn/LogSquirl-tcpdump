@@ -228,6 +228,12 @@ Line readLine( const QString& text )
     if ( separator >= 0 ) {
         line.description = line.info.mid( separator + 3 );
     }
+    // What decrypted TLS records carry, after the marker of the TLS
+    // Decryption (tls_decryption.h)
+    const QString decrypted = "TLS (decrypted) | ";
+    if ( line.description.startsWith( decrypted ) ) {
+        line.description = line.description.mid( decrypted.size() );
+    }
     return line;
 }
 
@@ -411,10 +417,64 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "HTTP", { 2, 3 } },
               { "ICMP", { 7, 20 } },
           } },
+        { "names.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 10, 11, 17, 18, 28, 29 } },
+              { "TCP handshakes", { 1, 2, 10, 11, 17, 18, 28, 29 } },
+              { "DNS", { 3, 4, 8, 9, 12, 13, 15, 17, 18, 19, 20, 21, 23, 24, 26, 27 } },
+          } },
+        { "mqtt.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 21, 22, 31, 32 } },
+              { "TCP handshakes", { 1, 2, 21, 22, 31, 32 } },
+          } },
+        { "sip.txt",
+          {
+              { "TCP SYN/FIN", { 17, 18 } },
+              { "TCP handshakes", { 17, 18 } },
+          } },
+        { "doip.txt",
+          {
+              { "TCP SYN/FIN", { 10, 11, 33, 34 } },
+              { "TCP handshakes", { 10, 11, 33, 34 } },
+          } },
+        { "ssh.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 15, 16, 18, 19, 30, 31, 36, 37, 42, 43 } },
+              { "TCP handshakes", { 1, 2, 15, 16, 18, 19, 30, 31, 36, 37, 42, 43 } },
+          } },
+        { "websocket.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 18, 19, 21, 22, 30, 31, 33, 34, 40, 41, 43, 44, 48, 49 } },
+              { "TCP handshakes",
+                { 1, 2, 18, 19, 21, 22, 30, 31, 33, 34, 40, 41, 43, 44, 48, 49 } },
+              { "HTTP", { 4, 5, 24, 25, 36, 37 } }, // the upgrades; WebSocket frames are not HTTP
+          } },
+        { "smb.txt",
+          {
+              { "TCP SYN/FIN", { 1, 2, 51, 52, 54, 55, 61, 62 } },
+              { "TCP handshakes", { 1, 2, 51, 52, 54, 55, 61, 62 } },
+          } },
+        { "someip.txt",
+          {
+              { "TCP SYN/FIN", { 11, 12, 17, 18 } },
+              { "TCP handshakes", { 11, 12, 17, 18 } },
+          } },
+        { "reassembly.txt",
+          {
+              // the late, retransmitted and overlapping segments, the lost one
+              { "TCP problems", { 28, 29, 30, 32, 39 } },
+              { "TCP SYN/FIN", { 1, 2, 8, 9, 17, 18, 24, 25, 34, 35 } },
+              { "TLS", { 4, 5, 6, 7, 27, 28, 29, 30, 31, 32, 33, 37, 38, 39 } },
+              { "TCP handshakes", { 1, 2, 8, 9, 17, 18, 24, 25, 34, 35 } },
+              { "TCP errors", { 28, 29, 30, 32, 39 } },
+              { "DNS", { 17, 18, 19, 20, 21, 22, 23 } },
+              { "HTTP", { 12, 15 } }, // the request and the response, where they complete
+          } },
         { "stream-labels.txt",
           {
               { "TCP SYN/FIN", { 1, 2, 10, 11, 13, 14 } },
-              { "TLS", { 16, 17, 18 } }, // a Continuation and a bare ACK too
+              { "TLS", { 16, 17, 18 } }, // a segment of the hello and a bare ACK too
               { "TCP handshakes", { 1, 2, 10, 11, 13, 14 } },
               { "HTTP", { 4, 6 } }, // not the Continuation of the body
           } },
@@ -426,10 +486,11 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
           } },
         { "tcp-analysis.txt",
           {
-              { "TCP problems", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20 } },
-              { "TCP SYN/FIN", { 1, 2, 24, 25 } },
-              { "TCP handshakes", { 1, 2, 24, 25 } },
-              { "TCP errors", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20 } },
+              // the second connection's full and zero window too
+              { "TCP problems", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20, 33, 34 } },
+              { "TCP SYN/FIN", { 1, 2, 24, 25, 27, 28, 36, 37 } },
+              { "TCP handshakes", { 1, 2, 24, 25, 27, 28, 36, 37 } },
+              { "TCP errors", { 5, 8, 9, 10, 12, 14, 16, 17, 18, 19, 20, 33, 34 } },
           } },
         { "tls.txt",
           {
@@ -437,6 +498,28 @@ const std::map<QString, std::map<QString, Numbers>>& expectedMatches()
               { "TLS",
                 { 4, 5, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18, 19, 20, 24, 25 } }, // Continuations too
               { "TCP handshakes", { 1, 2, 12, 13, 21, 22 } },
+          } },
+        { "tls-decrypt.txt",
+          {
+              // the request after the record the capture lost
+              { "TCP problems", { 40 } },
+              { "TCP SYN/FIN",
+                { 1,  2,  12, 13, 15, 16, 25, 26, 28, 29, 42, 43, 45,  46,  56,  57,
+                  59, 60, 70, 71, 73, 74, 84, 85, 87, 88, 97, 98, 100, 101, 111, 112 } },
+              // the hellos, the decrypted handshakes and alerts, and the two
+              // sessions without their secrets
+              { "TLS", { 4,  5,  6,   7,   10,  11,  12,  13,  14,  18,  19,  25,  26, 27, 31,
+                         32, 33, 34,  36,  38,  39,  41,  42,  43,  44,  48,  49,  50, 51, 54,
+                         55, 56, 57,  58,  62,  63,  64,  65,  68,  69,  70,  71,  72, 76, 77,
+                         78, 79, 82,  83,  84,  85,  86,  90,  91,  92,  93,  94,  95, 96, 97,
+                         98, 99, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113 } },
+              { "TCP handshakes",
+                { 1,  2,  12, 13, 15, 16, 25, 26, 28, 29, 42, 43, 45,  46,  56,  57,
+                  59, 60, 70, 71, 73, 74, 84, 85, 87, 88, 97, 98, 100, 101, 111, 112 } },
+              { "TCP errors", { 40 } },
+              // the decrypted HTTP/1.1 requests and responses
+              { "HTTP", { 8, 9, 35, 37, 40, 52, 53, 66, 67, 80, 81 } },
+              { "HTTP 4xx/5xx", { 53 } },
           } },
         { "tunnels.txt",
           {
@@ -705,6 +788,20 @@ SCENARIO( "The highlighters and filters read Info as the plugin writes it", "[pr
                       "[TCP Keep-Alive ACK] 80 " + kArrow + " 40000 [ACK] Seq=1 Ack=1 Win=9" ),
           "",
           {} },
+        { packetLine( "HTTP", "[TCP Window Full] 40000 " + kArrow
+                                  + " 80 [ACK, PSH] Seq=1 Ack=1 Win=9 Len=9 TSval=1 TSecr=2 | x" ),
+          "TCP problems",
+          { "TCP errors" } },
+        { packetLine( "HTTPS", "50100 " + kArrow
+                                   + " 443 [ACK] Seq=1 Ack=1 Win=64256 TSval=1 TSecr=2 "
+                                     "[iRTT=0.024000]" ),
+          "",
+          {} },
+        { packetLine( "HTTPS", "50100 " + kArrow
+                                   + " 443 [SYN] Seq=0 Win=64240 MSS=1460 SACK_PERM TSval=1 "
+                                     "TSecr=0 WS=128" ),
+          "TCP SYN/FIN",
+          { "TCP handshakes" } },
         { packetLine( "HTTP", "[TCP Keep-Alive] [TCP ZeroWindow] 80 " + kArrow
                                   + " 40000 [ACK] Seq=1 Ack=1 Win=0" ),
           "TCP problems",

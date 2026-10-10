@@ -433,6 +433,12 @@ SCENARIO( "formatUtcTime writes a time as an ISO 8601 date and time in UTC", "[p
         REQUIRE( formatUtcTime( -62167219201, 0, TimePrecision::Microseconds )
                  == "-0001-12-31 23:59:59.000000Z" );
     }
+
+    THEN( "a fraction of a second or more, which no reader passes, is written whole" )
+    {
+        REQUIRE( formatUtcTime( 0, 1234567890, TimePrecision::Nanoseconds )
+                 == "1970-01-01 00:00:00.1234567890Z" );
+    }
 }
 
 SCENARIO( "The UTC Time column shows each packet's wall-clock time", "[packet_formatter]" )

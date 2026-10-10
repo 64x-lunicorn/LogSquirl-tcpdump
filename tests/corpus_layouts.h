@@ -39,15 +39,19 @@
 
 namespace tcpdump_test {
 
-/// Every Line Layout the configuration dialog offers, the default first.
+/// Every Line Layout the configuration dialog offers, the default first:
+/// each choice of time columns, with and without MAC columns, with and
+/// without host names.
 inline std::vector<tcpdump::LineLayout> allLineLayouts()
 {
     using tcpdump::TimeColumns;
     std::vector<tcpdump::LineLayout> layouts;
-    for ( const bool macColumns : { false, true } ) {
-        for ( const auto timeColumns :
-              { TimeColumns::Both, TimeColumns::AbsoluteOnly, TimeColumns::RelativeOnly } ) {
-            layouts.push_back( { timeColumns, macColumns } );
+    for ( const bool hostNames : { false, true } ) {
+        for ( const bool macColumns : { false, true } ) {
+            for ( const auto timeColumns :
+                  { TimeColumns::Both, TimeColumns::AbsoluteOnly, TimeColumns::RelativeOnly } ) {
+                layouts.push_back( { timeColumns, macColumns, hostNames } );
+            }
         }
     }
     return layouts;
@@ -59,7 +63,8 @@ inline std::string describeLayout( const tcpdump::LineLayout& layout )
     static const char* const times[]
         = { "both time columns", "UTC time only", "time since the first packet only" };
     return std::string( times[ static_cast<int>( layout.timeColumns ) ] )
-           + ( layout.macColumns ? ", MAC columns" : "" );
+           + ( layout.macColumns ? ", MAC columns" : "" )
+           + ( layout.hostNames ? ", host names" : "" );
 }
 
 /// The committed corpus captures that have a committed text.
@@ -84,6 +89,12 @@ inline QStringList convertedLines( const QString& capture, const tcpdump::LineLa
 {
     tcpdump::ConversionOptions options;
     options.layout = layout;
+    // As the corpus test converts it: with the key log beside it, if any.
+    const QFileInfo info( capture );
+    const auto keyLog = info.dir().filePath( info.completeBaseName() + ".keys" );
+    if ( QFile::exists( keyLog ) ) {
+        options.keyLogPath = keyLog;
+    }
     const auto result = tcpdump::convertPcap( capture, outputRoot, nullptr, {}, options );
     REQUIRE( result.status == tcpdump::ConversionResult::Status::Converted );
     QFile file( result.outputPath );

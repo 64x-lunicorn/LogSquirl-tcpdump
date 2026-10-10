@@ -26,6 +26,9 @@
 
 #include "logsquirl_plugin_api.h"
 
+#include <QFile>
+#include <QRegularExpression>
+
 #include <cstring>
 
 extern "C" const LogSquirlPluginInfo* logsquirl_plugin_get_info( void );
@@ -79,6 +82,42 @@ SCENARIO( "logsquirl_plugin_get_info returns valid metadata", "[plugininfo]" )
             {
                 REQUIRE( info->version != nullptr );
                 REQUIRE( std::strlen( info->version ) > 0 );
+            }
+        }
+    }
+}
+
+namespace {
+
+QString sourceFile( const char* name )
+{
+    QFile file( QStringLiteral( TCPDUMP_SOURCE_DIR "/" ) + name );
+    REQUIRE( file.open( QIODevice::ReadOnly ) );
+    return QString::fromUtf8( file.readAll() );
+}
+
+} // namespace
+
+SCENARIO( "NOTICE names the exact source archives the build links in", "[plugininfo]" )
+{
+    GIVEN( "the archives CMakeLists.txt fetches for the library, by URL and SHA-256" )
+    {
+        const auto cmake = sourceFile( "CMakeLists.txt" );
+        const auto notice = sourceFile( "NOTICE" );
+        QStringList pinned;
+        const QRegularExpression pin(
+            QStringLiteral( R"((https://\S+\.tar\.(?:gz|bz2))|SHA256[= ]([0-9a-f]{64}))" ) );
+        for ( auto it = pin.globalMatch( cmake ); it.hasNext(); ) {
+            const auto match = it.next();
+            pinned << ( match.captured( 1 ).isEmpty() ? match.captured( 2 ) : match.captured( 1 ) );
+        }
+
+        THEN( "NOTICE gives each of them, so that a package points to its source" )
+        {
+            REQUIRE( pinned.size() == 4 ); // zlib and Mbed TLS, each a URL and a hash
+            for ( const auto& each : pinned ) {
+                INFO( each.toStdString() );
+                REQUIRE( notice.contains( each ) );
             }
         }
     }

@@ -37,9 +37,13 @@
  *      if it is older than LogSquirl 26.11 — we store the pointers and
  *      the host capabilities the size tells, create a SidebarWidget,
  *      register it as a sidebar tab, add Plugins > tcpdump >
- *      Open pcap… to the menu (and Follow stream, on a host with the
- *      Regex Lab and the selected lines), and register for the host's active-file
- *      notifications, so the sidebar shows the summary of the tab in front.
+ *      Open pcap…, Start live capture… and Stop live capture to the menu
+ *      (and Follow stream, on a host with the
+ *      Regex Lab and the selected lines; Packet details, Export packets…
+ *      and Follow stream content on a host with the selected lines; Display
+ *      filter… on a host with the Regex Lab), and register for the host's
+ *      active-file notifications, so the sidebar shows the summary and the
+ *      Packet Panel the packets of the tab in front.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
@@ -52,7 +56,9 @@
 
 #include "plugin.h"
 #include "configdialog.h"
+#include "display_filter_dialog.h"
 #include "follow_stream.h"
+#include "process_source.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 #include "tempdirs.h"
@@ -156,10 +162,74 @@ static void openFromMenu( void* /* user_data */ )
     } );
 }
 
+/// Plugins > tcpdump > Start live capture…: the Live capture section's form
+/// in a dialog.
+static void startLiveCaptureFromMenu( void* /* user_data */ )
+{
+    guarded( "starting a live capture from the menu", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->chooseAndStartLiveCapture();
+        }
+    } );
+}
+
+/// Plugins > tcpdump > Stop live capture: the same as the sidebar's Stop.
+static void stopLiveCaptureFromMenu( void* /* user_data */ )
+{
+    guarded( "stopping a live capture from the menu", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            if ( !sidebar->isCapturing() ) {
+                tcpdump::hostNotify( "No live capture is running." );
+                return;
+            }
+            sidebar->stopLiveCapture();
+        }
+    } );
+}
+
 /// Plugins > tcpdump > Follow stream: the same as the sidebar's button.
 static void followStreamFromMenu( void* /* user_data */ )
 {
     guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
+}
+
+/// Plugins > tcpdump > Display filter…: a filter typed, opened in the Regex Lab.
+static void displayFilterFromMenu( void* /* user_data */ )
+{
+    guarded( "opening a display filter", [] {
+        auto* sidebar = tcpdump::g_state.sidebarWidget;
+        tcpdump::openDisplayFilter( sidebar ? sidebar->window() : nullptr );
+    } );
+}
+
+/// Plugins > tcpdump > Packet details: the selected line's packet in the panel.
+static void packetDetailsFromMenu( void* /* user_data */ )
+{
+    guarded( "showing the packet details", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->showPacketDetails();
+        }
+    } );
+}
+
+/// Plugins > tcpdump > Follow stream content: the stream's payload in the panel.
+static void followStreamContentFromMenu( void* /* user_data */ )
+{
+    guarded( "following a stream's content", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->followStreamContent();
+        }
+    } );
+}
+
+/// Plugins > tcpdump > Export packets…: the selected lines' packets to a file.
+static void exportPacketsFromMenu( void* /* user_data */ )
+{
+    guarded( "exporting packets", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->exportSelectedPackets();
+        }
+    } );
 }
 
 /// The host brought another tab to the front: show its capture's summary.
@@ -217,6 +287,27 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // no call to remove it: the host does when it unloads the plugin.
         api->register_menu_action( handle, "tcpdump", "Open pcap\xe2\x80\xa6", &openFromMenu,
                                    nullptr );
+        api->register_menu_action( handle, "tcpdump", "Start live capture\xe2\x80\xa6",
+                                   &startLiveCaptureFromMenu, nullptr );
+        api->register_menu_action( handle, "tcpdump", "Stop live capture", &stopLiveCaptureFromMenu,
+                                   nullptr );
+        // The Packet Panel and Export packets read the selected lines, and
+        // a display filter opens in the Regex Lab: only a host that tells the
+        // lines, or has the Lab (LogSquirl 26.11 or later), gets the entries.
+        if ( tcpdump::g_state.hostCapabilities.selectedLogLines ) {
+            api->register_menu_action( handle, "tcpdump", "Packet details", &packetDetailsFromMenu,
+                                       nullptr );
+            api->register_menu_action( handle, "tcpdump", "Export packets\xe2\x80\xa6",
+                                       &exportPacketsFromMenu, nullptr );
+        }
+        if ( tcpdump::g_state.hostCapabilities.regexLab ) {
+            api->register_menu_action( handle, "tcpdump", "Display filter\xe2\x80\xa6",
+                                       &displayFilterFromMenu, nullptr );
+        }
+        if ( tcpdump::g_state.hostCapabilities.selectedLogLines ) {
+            api->register_menu_action( handle, "tcpdump", "Follow stream content",
+                                       &followStreamContentFromMenu, nullptr );
+        }
         // Only a host that has the Regex Lab and tells the selected lines
         // can follow a stream.
         if ( tcpdump::g_state.hostCapabilities.regexLab
@@ -282,6 +373,19 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         guarded( "shutdown", [] { delete tcpdump::g_state.sidebarWidget; } );
         st.sidebarWidget = nullptr;
     }
+
+    // No capture program may outlive the plugin: whatever runs still, also
+    // on a thread the widget did not wait for, ends with what it started.
+    // The live captures the widget retired are joined in between, the one
+    // wait for them, after their listings were cancelled and their
+    // programs ended, so that it takes moments: the library is unloaded
+    // next.
+    guarded( "ending capture programs", [] {
+        tcpdump::cancelListings();
+        tcpdump::terminateCaptureProcesses();
+        tcpdump::joinLiveCaptures();
+        tcpdump::terminateCaptureProcesses();
+    } );
 
     // The tabs close with LogSquirl: remove the files of every instance of
     // the plugin in this process, also those of instances before a runtime

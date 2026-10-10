@@ -5,10 +5,12 @@
 # ============================================================================
 
 include(FetchContent)
+# The release's source archive, pinned by its SHA-256 as zlib and Mbed TLS
+# are: a git tag can be moved, a hash cannot.
 FetchContent_Declare(
     Catch2
-    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG        v2.13.10
+    URL      https://github.com/catchorg/Catch2/archive/refs/tags/v2.13.10.tar.gz
+    URL_HASH SHA256=d54a712b7b1d7708bc7a819a8e6e47b2fde9536f487b89ccbca295072a7d9943
 )
 FetchContent_MakeAvailable(Catch2)
 
@@ -20,19 +22,47 @@ add_executable(logsquirl_tcpdump_tests
     pcap_parser_test.cpp
     pcapng_reader_test.cpp
     pcap_layers_test.cpp
+    packet_layers_test.cpp
+    capture_index_test.cpp
+    gzip_source_test.cpp
+    packet_export_test.cpp
     link_layers_test.cpp
     socks_test.cpp
+    mqtt_test.cpp
+    someip_test.cpp
+    doip_test.cpp
+    smb_test.cpp
+    ssh_test.cpp
+    websocket_test.cpp
+    sip_test.cpp
     tls_test.cpp
     dns_test.cpp
+    host_names_test.cpp
     icmp_test.cpp
     dhcp_ntp_test.cpp
     http_test.cpp
     quic_test.cpp
     streaming_test.cpp
+    capture_source_test.cpp
+    live_conversion_test.cpp
+    live_limits_test.cpp
+    live_capture_test.cpp
+    live_source_test.cpp
+    local_source_test.cpp
+    adb_source_test.cpp
+    extcap_source_test.cpp
+    ssh_source_test.cpp
+    command_source_test.cpp
+    live_capture_ui_test.cpp
+    process_source_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    packet_panel_test.cpp
+    conversation_table_test.cpp
     follow_stream_test.cpp
+    stream_content_test.cpp
     regex_lab_test.cpp
+    display_filter_test.cpp
     corpus_test.cpp
     conversion_options_test.cpp
     settings_test.cpp
@@ -43,8 +73,16 @@ add_executable(logsquirl_tcpdump_tests
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
+    conversations_test.cpp
     stream_labels_test.cpp
     tcp_analysis_test.cpp
+    tcp_options_test.cpp
+    byte_stream_orderer_test.cpp
+    tcp_reassembly_test.cpp
+    hpack_test.cpp
+    tls_crypto_test.cpp
+    tls_key_log_test.cpp
+    tls_decryption_test.cpp
     tunnels_test.cpp
     wire_bytes_test.cpp
 )
@@ -65,6 +103,8 @@ target_link_libraries(logsquirl_tcpdump_tests
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        tcpdump_zlib
+        mbedcrypto
 )
 
 # Compile plugin sources into the test binary
@@ -72,7 +112,10 @@ target_sources(logsquirl_tcpdump_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/plugin.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_reader.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/process_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_parser.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_layers.cpp"
         "${CMAKE_SOURCE_DIR}/src/icmp.cpp"
         "${CMAKE_SOURCE_DIR}/src/link_layers.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcapng_reader.cpp"
@@ -85,29 +128,70 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/describe_tls.cpp"
         "${CMAKE_SOURCE_DIR}/src/describe_quic.cpp"
         "${CMAKE_SOURCE_DIR}/src/describe_socks.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_mqtt.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_sip.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_rtp.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_someip.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_doip.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_smb.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_ssh.cpp"
+        "${CMAKE_SOURCE_DIR}/src/describe_websocket.cpp"
+        "${CMAKE_SOURCE_DIR}/src/media_expectations.cpp"
+        "${CMAKE_SOURCE_DIR}/src/hpack.cpp"
         "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_labels.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
+        "${CMAKE_SOURCE_DIR}/src/byte_stream_orderer.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tcp_reassembly.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tls_crypto.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tls_key_log.cpp"
+        "${CMAKE_SOURCE_DIR}/src/tls_decryption.cpp"
+        "${CMAKE_SOURCE_DIR}/src/host_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_stats.cpp"
+        "${CMAKE_SOURCE_DIR}/src/conversations.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
+        "${CMAKE_SOURCE_DIR}/src/gzip_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/raw_capture.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/export_dialog.cpp"
+        "${CMAKE_SOURCE_DIR}/src/conversation_table.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/local_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/adb_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/extcap_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/extcap_options.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_pipe.cpp"
+        "${CMAKE_SOURCE_DIR}/src/ssh_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/command_source.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_capture_form.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_content.cpp"
+        "${CMAKE_SOURCE_DIR}/src/stream_content_view.cpp"
         "${CMAKE_SOURCE_DIR}/src/regex_lab.cpp"
+        "${CMAKE_SOURCE_DIR}/src/display_filter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/display_filter_dialog.cpp"
 )
 
 # Captures and their expected text, for corpus_test.cpp, and the Log Format
 # that reads that text, for logformat_test.cpp, and the highlighter set and
-# filter group that colour and filter it, for presets_test.cpp
+# filter group that colour and filter it, for presets_test.cpp; the build
+# and NOTICE, for plugininfo_test.cpp
 target_compile_definitions(logsquirl_tcpdump_tests
     PRIVATE
         TCPDUMP_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/corpus"
         TCPDUMP_FORMAT_FILE="${CMAKE_SOURCE_DIR}/formats/tcpdump_log.json"
         TCPDUMP_PRESETS_DIR="${CMAKE_SOURCE_DIR}/presets"
+        TCPDUMP_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 
 # ── Register with CTest ──────────────────────────────────────────────────

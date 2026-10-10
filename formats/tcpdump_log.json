@@ -33,13 +33,13 @@
                 "kind": "string",
                 "collate": "ipaddress",
                 "identifier": true,
-                "description": "The source IP address, or MAC address without one; - for neither"
+                "description": "The source IP address, or MAC address without one; - for neither. With host names shown, an address a DNS answer earlier in the capture named carries the name behind it: 93.184.216.34(example.com)"
             },
             "destination": {
                 "kind": "string",
                 "collate": "ipaddress",
                 "identifier": true,
-                "description": "The destination IP address, or MAC address without one; - for neither"
+                "description": "The destination IP address, or MAC address without one; - for neither. With host names shown, an address a DNS answer earlier in the capture named carries the name behind it: 93.184.216.34(example.com)"
             },
             "protocol": {
                 "kind": "string",
@@ -63,6 +63,9 @@
             },
             {
                 "line": "8      0       2025-10-09 08:53:20.031500Z  0.031500       10.0.0.2                                10.0.0.1                                HTTP      54     [TCP Dup ACK 7#1] 80 → 40000 [ACK] Seq=1 Ack=101 Win=65535"
+            },
+            {
+                "line": "5      0       2025-10-09 08:53:20.007500Z  0.006000       192.0.2.10                              93.184.216.34(www.example.com)          HTTPS     54     50000 → 443 [ACK] Seq=1 Ack=1 Win=64240"
             }
         ]
     }

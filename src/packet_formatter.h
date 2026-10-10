@@ -49,6 +49,7 @@
 
 #pragma once
 
+#include "host_names.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
@@ -74,6 +75,11 @@ struct LineLayout {
     /// packet without them (one not on Ethernet or 802.11).  Info is the
     /// rest of the line to a Log Format, so they are read as its start.
     bool macColumns = false;
+    /// Source and Destination show the name a DNS answer earlier in the
+    /// capture gave their address (HostNames), behind it in parentheses
+    /// and without a space, "93.184.216.34(example.com)", so that the
+    /// column stays one word and still starts with its address.
+    bool hostNames = false;
 };
 
 /**
@@ -100,11 +106,13 @@ std::string formatUtcTime( int64_t seconds, uint32_t nanoseconds, TimePrecision 
  * @param precision     The capture's finest precision: the time is shown to
  *                      the nanosecond or to the microsecond.
  * @param layout        The columns to show.
+ * @param names         The names of the addresses so far, shown with
+ *                      LineLayout::hostNames; null for none.
  * @return Formatted line.
  */
 std::string formatPacketLine( const PacketRecord& pkt, int64_t baseTimeSec, uint32_t baseTimeNsec,
                               int streamId, TimePrecision precision = TimePrecision::Microseconds,
-                              const LineLayout& layout = {} );
+                              const LineLayout& layout = {}, const HostNames* names = nullptr );
 
 /**
  * Formats the packets of one capture, one at a time and in capture order,
@@ -130,8 +138,9 @@ public:
     std::string header() const;
 
     /// The line of the next packet of the capture, @p streamId its stream
-    /// number from the Stream Tracker, or kNoStream or kUnnumbered.
-    std::string format( const PacketRecord& pkt, int streamId );
+    /// number from the Stream Tracker, or kNoStream or kUnnumbered, its
+    /// addresses named by @p names when the layout shows host names.
+    std::string format( const PacketRecord& pkt, int streamId, const HostNames* names = nullptr );
 
 private:
     TimePrecision precision_;

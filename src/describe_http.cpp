@@ -121,8 +121,21 @@ std::string httpRequest( const uint8_t* payload, size_t len )
     return line;
 }
 
+/// The response's status line has status code 101, Switching Protocols.
+bool switchesProtocols( const uint8_t* payload, size_t len )
+{
+    // "HTTP/1.1 101 ", the version of any length up to its space.
+    const auto* end = payload + std::min<size_t>( len, 16 );
+    const auto* space = std::find( payload, end, ' ' );
+    return end - space >= 4 && std::memcmp( space + 1, "101", 3 ) == 0
+           && ( end - space == 4 || space[ 4 ] == ' ' || space[ 4 ] == '\r' );
+}
+
 /// The status line, then the Content-Type and Content-Length headers the
-/// response has, "HTTP/1.1 200 OK, Content-Type: text/html, Content-Length: 1234".
+/// response has, "HTTP/1.1 200 OK, Content-Type: text/html, Content-Length: 1234";
+/// for a 101, the protocol it switches to and the WebSocket extensions,
+/// "HTTP/1.1 101 Switching Protocols, Upgrade: websocket,
+/// Sec-WebSocket-Extensions: permessage-deflate".
 std::string httpResponse( const uint8_t* payload, size_t len )
 {
     auto line = firstLine( payload, len );
@@ -130,6 +143,17 @@ std::string httpResponse( const uint8_t* payload, size_t len )
         { "content-type", "Content-Type" },
         { "content-length", "Content-Length" },
     };
+    static const std::pair<const char*, const char*> kShownOnSwitch[] = {
+        { "upgrade", "Upgrade" },
+        { "sec-websocket-extensions", "Sec-WebSocket-Extensions" },
+    };
+    if ( switchesProtocols( payload, len ) ) {
+        for ( const auto& [ key, name ] : kShownOnSwitch ) {
+            if ( const auto value = headerValue( payload, len, key ) ) {
+                line += std::string( ", " ) + name + ": " + fieldText( value->data, value->len );
+            }
+        }
+    }
     for ( const auto& [ key, name ] : kShown ) {
         if ( const auto value = headerValue( payload, len, key ) ) {
             line += std::string( ", " ) + name + ": " + fieldText( value->data, value->len );
@@ -163,6 +187,40 @@ std::string detectHttp( const uint8_t* payload, size_t len )
     }
 
     return {};
+}
+
+bool isWebSocketUpgrade( const uint8_t* payload, size_t len )
+{
+    if ( len < 5 || std::memcmp( payload, "HTTP/", 5 ) != 0
+         || !switchesProtocols( payload, len ) ) {
+        return false;
+    }
+    const auto upgrade = headerValue( payload, len, "upgrade" );
+    return upgrade && upgrade->len == 9 && equalsIgnoringCase( upgrade->data, "websocket", 9 );
+}
+
+/// The HTTP/1.x header section a segment begins with, the start line up to
+/// the empty line that ends it, or nothing if no request or status line
+/// starts there.  Its body, if any, is not part of it: the description
+/// reads the header section only.  While the empty line has not come, one
+/// byte more than there is.
+std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len )
+{
+    if ( detectHttp( payload, std::min<size_t>( len, 8 ) ).empty() ) {
+        return std::nullopt;
+    }
+    for ( size_t i = 0; i + 1 < len; ++i ) {
+        if ( payload[ i ] != '\n' ) {
+            continue;
+        }
+        if ( payload[ i + 1 ] == '\n' ) {
+            return i + 2;
+        }
+        if ( payload[ i + 1 ] == '\r' && i + 2 < len && payload[ i + 2 ] == '\n' ) {
+            return i + 3;
+        }
+    }
+    return len + 1;
 }
 
 // ── HTTP/2 ───────────────────────────────────────────────────────────────
@@ -317,10 +375,10 @@ std::string detectHttp2Preface( const uint8_t* payload, size_t len )
 void describeHttp2InStream( PacketRecord& pkt, StreamState& state )
 {
     if ( pkt.streamCue == StreamCue::Http2Preface ) {
-        state.http2 = true;
+        state.protocols |= StreamState::kHttp2;
         return;
     }
-    if ( !state.http2 ) {
+    if ( !( state.protocols & StreamState::kHttp2 ) ) {
         return;
     }
     const auto frames = http2Frames( pkt.payloadHead.data(), pkt.payloadHeadLen,
@@ -331,3 +389,228 @@ void describeHttp2InStream( PacketRecord& pkt, StreamState& state )
 }
 
 } // namespace tcpdump::describer
+
+// ── HTTP/2 with its header blocks, for the TLS Decryption ───────────────
+
+namespace tcpdump {
+
+using namespace describer;
+
+namespace {
+
+constexpr uint8_t kHttp2Headers = 0x1;
+constexpr uint8_t kHttp2PushPromise = 0x5;
+constexpr uint8_t kHttp2Continuation = 0x9;
+constexpr uint8_t kHttp2FlagEndHeaders = 0x4;
+constexpr uint8_t kHttp2FlagPadded = 0x8;
+constexpr uint8_t kHttp2FlagPriority = 0x20;
+
+bool carriesHeaderBlock( uint8_t type )
+{
+    return type == kHttp2Headers || type == kHttp2PushPromise || type == kHttp2Continuation;
+}
+
+/// The value of the field @p name of @p fields, the first one; null if none.
+const std::string* fieldValue( const std::vector<HeaderField>& fields, const char* name )
+{
+    for ( const auto& field : fields ) {
+        if ( field.name == name ) {
+            return &field.value;
+        }
+    }
+    return nullptr;
+}
+
+std::string text( const std::string& value )
+{
+    return fieldText( reinterpret_cast<const uint8_t*>( value.data() ), value.size() );
+}
+
+/// What a decoded header block says: "GET example.com/index.html" for a
+/// request, "200, Content-Type: text/html, Content-Length: 1234" for a
+/// response; empty for trailers.
+std::string headerBlockSummary( const std::vector<HeaderField>& fields )
+{
+    if ( const auto* method = fieldValue( fields, ":method" ) ) {
+        auto summary = text( *method );
+        const auto* authority = fieldValue( fields, ":authority" );
+        const auto* path = fieldValue( fields, ":path" );
+        if ( authority || path ) {
+            summary += ' ';
+        }
+        if ( authority && ( !path || ( !path->empty() && ( *path )[ 0 ] == '/' ) ) ) {
+            summary += text( *authority );
+        }
+        if ( path ) {
+            summary += text( *path );
+        }
+        return summary;
+    }
+    if ( const auto* status = fieldValue( fields, ":status" ) ) {
+        auto summary = text( *status );
+        static const std::pair<const char*, const char*> kShown[] = {
+            { "content-type", "Content-Type" },
+            { "content-length", "Content-Length" },
+        };
+        for ( const auto& [ key, name ] : kShown ) {
+            if ( const auto* value = fieldValue( fields, key ) ) {
+                summary += std::string( ", " ) + name + ": " + text( *value );
+            }
+        }
+        return summary;
+    }
+    return {};
+}
+
+} // namespace
+
+std::string Http2Direction::describe( const uint8_t* data, size_t len )
+{
+    std::vector<std::string> names;
+    frameName_ = SIZE_MAX;
+    blockName_ = SIZE_MAX;
+    size_t at = 0;
+    if ( !started_ ) {
+        started_ = true;
+        if ( len >= kHttp2PrefaceBytes
+             && std::memcmp( data, kHttp2Preface, kHttp2PrefaceBytes ) == 0 ) {
+            names.emplace_back( "Magic" );
+            at = kHttp2PrefaceBytes;
+        }
+    }
+    while ( at < len ) {
+        if ( skip_ > 0 ) {
+            const auto n = std::min( skip_, len - at );
+            skip_ -= n;
+            at += n;
+            continue;
+        }
+        if ( frame_.size() < kHttp2FrameHeaderBytes ) {
+            const auto n = std::min( kHttp2FrameHeaderBytes - frame_.size(), len - at );
+            frame_.insert( frame_.end(), data + at, data + at + n );
+            at += n;
+            if ( frame_.size() < kHttp2FrameHeaderBytes ) {
+                break;
+            }
+            FieldReader header( frame_.data(), kHttp2FrameHeaderBytes );
+            uint32_t length = 0;
+            uint8_t type = 0;
+            uint8_t flags = 0;
+            uint32_t stream = 0;
+            header.u24( length );
+            header.u8( type );
+            header.u8( flags );
+            header.u32( stream );
+            stream &= 0x7FFFFFFFu; // the reserved bit
+            const char* name
+                = http2FrameName( type, std::min( length, kHttp2DefaultMaxFrameSize ), stream );
+            names.push_back( ( name ? std::string( name ) : hexCode( type ) ) + "["
+                             + std::to_string( stream ) + "]" );
+            frameName_ = names.size() - 1;
+            frameLength_ = length;
+            if ( !carriesHeaderBlock( type ) || headersAbandoned_
+                 || length > kMaxHeaderBlockBytes ) {
+                if ( carriesHeaderBlock( type ) && !headersAbandoned_ ) {
+                    abandonHeaders(); // a block too long to hold
+                }
+                skip_ = length;
+                frame_.clear();
+                continue;
+            }
+            frame_.reserve( kHttp2FrameHeaderBytes + length );
+        }
+        const auto want = kHttp2FrameHeaderBytes + frameLength_ - frame_.size();
+        const auto n = std::min( want, len - at );
+        frame_.insert( frame_.end(), data + at, data + at + n );
+        at += n;
+        if ( n == want ) {
+            frameDone( names, frameName_ );
+            frame_.clear();
+            frameName_ = SIZE_MAX;
+        }
+    }
+    return joinNames( std::move( names ), kMaxHttp2Frames );
+}
+
+void Http2Direction::frameDone( std::vector<std::string>& names, size_t nameIndex )
+{
+    const uint8_t type = frame_[ 3 ];
+    const uint8_t flags = frame_[ 4 ];
+    FieldReader payload( frame_.data() + kHttp2FrameHeaderBytes, frameLength_ );
+    uint8_t padding = 0;
+    if ( type != kHttp2Continuation && ( flags & kHttp2FlagPadded ) && !payload.u8( padding ) ) {
+        abandonHeaders();
+        return;
+    }
+    if ( ( type == kHttp2Headers && ( flags & kHttp2FlagPriority ) && !payload.skip( 5 ) )
+         || ( type == kHttp2PushPromise && !payload.skip( 4 ) ) || payload.remaining() < padding ) {
+        abandonHeaders();
+        return;
+    }
+    const auto fragment = payload.remaining() - padding;
+    if ( type == kHttp2Continuation ) {
+        if ( !inBlock_ || block_.size() + fragment > kMaxHeaderBlockBytes ) {
+            abandonHeaders();
+            return;
+        }
+    }
+    else {
+        if ( inBlock_ ) {
+            abandonHeaders(); // a new block before the last one ended
+            return;
+        }
+        inBlock_ = true;
+        block_.clear();
+        blockName_ = nameIndex;
+    }
+    block_.insert( block_.end(), payload.here(), payload.here() + fragment );
+    if ( !( flags & kHttp2FlagEndHeaders ) ) {
+        return;
+    }
+    std::vector<HeaderField> fields;
+    const bool decoded = hpack_.decode( block_.data(), block_.size(), fields );
+    inBlock_ = false;
+    std::vector<uint8_t>().swap( block_ );
+    if ( !decoded ) {
+        abandonHeaders();
+        return;
+    }
+    const auto summary = headerBlockSummary( fields );
+    // On the frame that began the block, or, when that was named by an
+    // earlier call, on the one that ends it.
+    const auto named = blockName_ < names.size() ? blockName_ : nameIndex;
+    if ( named < names.size() && !summary.empty() ) {
+        names[ named ] += ": " + summary;
+    }
+    blockName_ = SIZE_MAX;
+}
+
+size_t Http2Direction::memory() const
+{
+    return frame_.capacity() + block_.capacity() + hpack_.tableSize();
+}
+
+void Http2Direction::abandonHeaders()
+{
+    headersAbandoned_ = true;
+    hpack_.abandon();
+    inBlock_ = false;
+    blockName_ = SIZE_MAX;
+    std::vector<uint8_t>().swap( block_ );
+    if ( frame_.size() >= kHttp2FrameHeaderBytes ) {
+        // The header block frame being read: the rest of it is passed over.
+        skip_ = kHttp2FrameHeaderBytes + frameLength_ - frame_.size();
+        std::vector<uint8_t>().swap( frame_ );
+    }
+}
+
+void Http2Direction::resync()
+{
+    abandonHeaders();
+    std::vector<uint8_t>().swap( frame_ );
+    frameLength_ = 0;
+    frameName_ = SIZE_MAX;
+    skip_ = 0;
+}
+
+} // namespace tcpdump

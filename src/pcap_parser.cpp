@@ -32,6 +32,7 @@
 
 #include "icmp.h"
 #include "link_layers.h"
+#include "packet_layers.h"
 #include "payload_describer.h"
 #include "protocol_names.h"
 #include "wire_bytes.h"
@@ -44,6 +45,25 @@
 namespace tcpdump {
 
 namespace {
+
+/// The bytes dissectPacket() is dissecting on this thread, from which the
+/// payload's offset is taken (PacketRecord::payloadOffset); empty outside it.
+thread_local ByteView tDissected;
+
+/// Sets tDissected for the time a packet is dissected.
+class Dissecting {
+public:
+    Dissecting( const uint8_t* data, size_t len )
+    {
+        tDissected = { data, len };
+    }
+    ~Dissecting()
+    {
+        tDissected = {};
+    }
+    Dissecting( const Dissecting& ) = delete;
+    Dissecting& operator=( const Dissecting& ) = delete;
+};
 
 // ── Byte-order helpers ───────────────────────────────────────────────────
 
@@ -71,42 +91,40 @@ void describePayloadOf( PacketRecord& pkt, std::ostringstream& oss, Transport tr
 {
     pkt.payloadHeadLen = std::min( len, kPayloadHeadBytes );
     std::copy_n( payload, pkt.payloadHeadLen, pkt.payloadHead.begin() );
-    const auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
+    const auto at = reinterpret_cast<uintptr_t>( payload );
+    const auto begin = reinterpret_cast<uintptr_t>( tDissected.data );
+    if ( tDissected.data != nullptr && at >= begin && at - begin <= tDissected.size
+         && len <= tDissected.size - ( at - begin ) ) {
+        pkt.payloadOffset = static_cast<uint32_t>( at - begin );
+        pkt.payloadCaptured = static_cast<uint32_t>( len );
+    }
+    auto described = describePayload( transport, payload, len, pkt.srcPort, pkt.dstPort );
     if ( !described.label.empty() ) {
         pkt.protocol = described.label;
     }
     pkt.protocolRecognised = !described.label.empty() && !described.guessed;
     pkt.streamCue = described.streamCue;
+    pkt.sipCalls = std::move( described.sipCalls );
     if ( !described.description.empty() ) {
         oss << kDescriptionSeparator << described.description;
         pkt.previewBytes = described.preview ? described.description.size() : 0;
     }
+    if ( auto* layers = pkt.layers; layers && len > 0 ) {
+        layers->layer( described.label.empty() ? "Data" : described.label, payload, len );
+        if ( !described.description.empty() ) {
+            layers->field( "Description", described.description, payload, len );
+        }
+        layers->field( "Length", std::to_string( len ) + " bytes", nullptr, 0 );
+    }
 }
 
-/// The shift count of the window scale option among the TCP options at
-/// @p options, @p len bytes of them; unset without one.  The options are
-/// walked as Wireshark does: a NOP takes one byte, the end of options or an
-/// option whose length is bogus or runs past them ends the walk.
-std::optional<uint8_t> tcpWindowShiftOf( const uint8_t* options, size_t len )
+/// A layer of the @p len bytes at @p data that no dissector reads further.
+void dataLayer( PacketRecord& pkt, const uint8_t* data, size_t len, const char* name = "Data" )
 {
-    constexpr uint8_t kEndOfOptions = 0;
-    constexpr uint8_t kNop = 1;
-    constexpr uint8_t kWindowScale = 3;
-    size_t at = 0;
-    while ( at < len && options[ at ] != kEndOfOptions ) {
-        if ( options[ at ] == kNop ) {
-            ++at;
-            continue;
-        }
-        if ( at + 1 >= len || options[ at + 1 ] < 2 || at + options[ at + 1 ] > len ) {
-            break;
-        }
-        if ( options[ at ] == kWindowScale && options[ at + 1 ] == 3 ) {
-            return options[ at + 2 ];
-        }
-        at += options[ at + 1 ];
+    if ( auto* layers = pkt.layers; layers && len > 0 ) {
+        layers->layer( name, data, len );
+        layers->field( "Length", std::to_string( len ) + " bytes", nullptr, 0 );
     }
-    return std::nullopt;
 }
 
 // ── Tunnels (defined below the network layer they unwrap to) ─────────────
@@ -154,6 +172,27 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
 
         const auto dataOffset = static_cast<size_t>( data[ 12 ] >> 4 ) * 4;
         pkt.tcpHeaderLen = static_cast<uint8_t>( dataOffset );
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( "Transmission Control Protocol", data,
+                           std::max<size_t>( dataOffset, 20 ) );
+            layers->field( "Source Port", std::to_string( pkt.srcPort ), data, 2 );
+            layers->field( "Destination Port", std::to_string( pkt.dstPort ), data + 2, 2 );
+            layers->field( "Sequence Number", std::to_string( pkt.tcpSeq ), data + 4, 4 );
+            layers->field( "Acknowledgment Number", std::to_string( pkt.tcpAck ), data + 8, 4 );
+            layers->field( "Header Length", std::to_string( dataOffset ) + " bytes", data + 12, 1 );
+            layers->field( "Flags",
+                           hexField( readBE16( data + 12 ) & 0x0FFF, 3 ) + " "
+                               + formatTcpFlags( pkt.tcpFlags ),
+                           data + 12, 2 );
+            layers->field( "Window", std::to_string( pkt.tcpWindow ), data + 14, 2 );
+            layers->field( "Checksum", hexField( readBE16( data + 16 ), 4 ), data + 16, 2 );
+            layers->field( "Urgent Pointer", std::to_string( readBE16( data + 18 ) ), data + 18,
+                           2 );
+            if ( dataOffset > 20 ) {
+                layers->field( "Options", std::to_string( dataOffset - 20 ) + " bytes", data + 20,
+                               dataOffset - 20 );
+            }
+        }
 
         // Build base TCP info line
         std::ostringstream oss;
@@ -172,7 +211,9 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
             return;
         }
 
-        pkt.tcpWindowShift = tcpWindowShiftOf( data + 20, std::min( dataOffset, remaining ) - 20 );
+        const auto options = parseTcpOptions( data + 20, std::min( dataOffset, remaining ) - 20 );
+        pkt.tcpWindowShift = options.windowShift;
+        pkt.tcpTimestamps = options.timestamps;
 
         // Len is the payload on the wire, as Wireshark shows it; only the
         // captured part of it can be looked at.
@@ -180,6 +221,11 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
         pkt.payloadLen = static_cast<uint32_t>( wireLen >= dataOffset ? wireLen - dataOffset : 0 );
         if ( pkt.payloadLen > 0 ) {
             oss << " Len=" << pkt.payloadLen;
+        }
+        // A SYN's options follow, as Wireshark appends them; on other
+        // segments the timestamps only, if asked for (showTcpTimestamps()).
+        if ( pkt.tcpFlags & 0x02 ) {
+            oss << options.info;
         }
 
         describePayloadOf( pkt, oss, Transport::Tcp, data + std::min( dataOffset, remaining ),
@@ -193,6 +239,13 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
         pkt.dstPort = readBE16( data + 2 );
         auto udpLen = readBE16( data + 4 );
         pkt.payloadLen = ( udpLen > 8 ) ? static_cast<uint32_t>( udpLen - 8 ) : 0;
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( "User Datagram Protocol", data, 8 );
+            layers->field( "Source Port", std::to_string( pkt.srcPort ), data, 2 );
+            layers->field( "Destination Port", std::to_string( pkt.dstPort ), data + 2, 2 );
+            layers->field( "Length", std::to_string( udpLen ), data + 4, 2 );
+            layers->field( "Checksum", hexField( readBE16( data + 6 ), 4 ), data + 6, 2 );
+        }
 
         const uint8_t* payload = data + 8;
         size_t payloadSize = ( remaining > 8 ) ? remaining - 8 : 0;
@@ -211,13 +264,20 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
         describePayloadOf( pkt, oss, Transport::Udp, payload, payloadSize );
         pkt.info = oss.str();
     }
-    else if ( pkt.ipProtocol == IpProtoIcmp && remaining >= 8 ) {
-        pkt.protocol = "ICMP";
-        pkt.info = describeIcmp( data, remaining );
-    }
-    else if ( pkt.ipProtocol == IpProtoIcmpv6 && remaining >= 8 ) {
-        pkt.protocol = "ICMPv6";
-        pkt.info = describeIcmpv6( data, remaining );
+    else if ( ( pkt.ipProtocol == IpProtoIcmp || pkt.ipProtocol == IpProtoIcmpv6 )
+              && remaining >= 8 ) {
+        const bool v6 = pkt.ipProtocol == IpProtoIcmpv6;
+        pkt.protocol = v6 ? "ICMPv6" : "ICMP";
+        pkt.info = v6 ? describeIcmpv6( data, remaining ) : describeIcmp( data, remaining );
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( v6 ? "Internet Control Message Protocol v6"
+                              : "Internet Control Message Protocol",
+                           data, remaining );
+            layers->field( "Type", std::to_string( data[ 0 ] ), data, 1 );
+            layers->field( "Code", std::to_string( data[ 1 ] ), data + 1, 1 );
+            layers->field( "Checksum", hexField( readBE16( data + 2 ), 4 ), data + 2, 2 );
+            layers->field( "Message", pkt.info, data + 4, remaining - 4 );
+        }
     }
     else if ( pkt.ipProtocol == IpProtoGre ) {
         parseGre( pkt, data, remaining );
@@ -230,6 +290,7 @@ void parseTransport( PacketRecord& pkt, const char* network, const uint8_t* data
         // A protocol not dissected further: its name, if it has one.
         pkt.protocol = ipProtocolLabel( pkt.ipProtocol );
         pkt.info = "Protocol " + std::to_string( pkt.ipProtocol );
+        dataLayer( pkt, data, remaining );
     }
 }
 
@@ -248,11 +309,42 @@ void describeFragment( PacketRecord& pkt, const char* ipVersion, uint8_t protoco
 
 // ── Parse IPv4 header ────────────────────────────────────────────────────
 
+/// The fields of the IPv4 header at @p data, @p ihl bytes of it.
+void describeIpv4Header( PacketLayers& layers, const uint8_t* data, size_t ihl )
+{
+    const auto flags = data[ 6 ] >> 5;
+    std::string flagNames = hexField( static_cast<uint64_t>( flags ), 1 );
+    if ( flags & 0x2 ) {
+        flagNames += " Don't fragment";
+    }
+    if ( flags & 0x1 ) {
+        flagNames += " More fragments";
+    }
+    layers.layer( "Internet Protocol Version 4", data, ihl );
+    layers.field( "Version", "4", data, 1 );
+    layers.field( "Header Length", std::to_string( ihl ) + " bytes", data, 1 );
+    layers.field( "Differentiated Services", hexField( data[ 1 ], 2 ), data + 1, 1 );
+    layers.field( "Total Length", std::to_string( readBE16( data + 2 ) ), data + 2, 2 );
+    layers.field( "Identification", hexField( readBE16( data + 4 ), 4 ), data + 4, 2 );
+    layers.field( "Flags", flagNames, data + 6, 1 );
+    layers.field( "Fragment Offset", std::to_string( ( readBE16( data + 6 ) & 0x1FFF ) * 8 ),
+                  data + 6, 2 );
+    layers.field( "Time to Live", std::to_string( data[ 8 ] ), data + 8, 1 );
+    layers.field( "Protocol", ipProtocolField( data[ 9 ] ), data + 9, 1 );
+    layers.field( "Header Checksum", hexField( readBE16( data + 10 ), 4 ), data + 10, 2 );
+    layers.field( "Source Address", formatIpv4( data + 12 ), data + 12, 4 );
+    layers.field( "Destination Address", formatIpv4( data + 16 ), data + 16, 4 );
+    if ( ihl > 20 ) {
+        layers.field( "Options", std::to_string( ihl - 20 ) + " bytes", data + 20, ihl - 20 );
+    }
+}
+
 void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool quoted = false )
 {
     if ( remaining < 20 ) {
         pkt.protocol = "IPv4";
         pkt.info = "Truncated IPv4 header";
+        dataLayer( pkt, data, remaining, "Internet Protocol Version 4 (truncated)" );
         return;
     }
 
@@ -260,7 +352,11 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
     if ( ihl < 20 || ihl > remaining ) {
         pkt.protocol = "IPv4";
         pkt.info = "Invalid IHL";
+        dataLayer( pkt, data, remaining, "Internet Protocol Version 4 (invalid header length)" );
         return;
+    }
+    if ( pkt.layers ) {
+        describeIpv4Header( *pkt.layers, data, ihl );
     }
 
     pkt.ipTtl = data[ 8 ];
@@ -285,6 +381,7 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
     const auto fragmentOffset = static_cast<size_t>( readBE16( data + 6 ) & 0x1FFF ) * 8;
     if ( fragmentOffset != 0 ) {
         describeFragment( pkt, "IPv4", pkt.ipProtocol, fragmentOffset, readBE16( data + 4 ), 2 );
+        dataLayer( pkt, data + ihl, capturedLen - ihl, "Fragment Data" );
         return;
     }
 
@@ -293,17 +390,46 @@ void parseIpv4( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
 
 // ── Parse IPv6 header ────────────────────────────────────────────────────
 
+/// The layer name of IPv6 extension header @p type, one parseIpv6() walks.
+const char* extensionHeaderName( uint8_t type )
+{
+    switch ( type ) {
+    case 0:
+        return "IPv6 Hop-by-Hop Options";
+    case 43:
+        return "IPv6 Routing Header";
+    case 44:
+        return "IPv6 Fragment Header";
+    case 51:
+        return "Authentication Header";
+    default:
+        return "IPv6 Destination Options";
+    }
+}
+
 void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool quoted = false )
 {
     if ( remaining < 40 ) {
         pkt.protocol = "IPv6";
         pkt.info = "Truncated IPv6 header";
+        dataLayer( pkt, data, remaining, "Internet Protocol Version 6 (truncated)" );
         return;
     }
 
     pkt.ipTtl = data[ 7 ]; // Hop limit
     pkt.srcIp = formatIpv6( data + 8 );
     pkt.dstIp = formatIpv6( data + 24 );
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "Internet Protocol Version 6", data, 40 );
+        layers->field( "Version", "6", data, 1 );
+        layers->field( "Traffic Class", hexField( ( readBE16( data ) >> 4 ) & 0xFF, 2 ), data, 2 );
+        layers->field( "Flow Label", hexField( readBE32( data ) & 0xFFFFF, 5 ), data + 1, 3 );
+        layers->field( "Payload Length", std::to_string( readBE16( data + 4 ) ), data + 4, 2 );
+        layers->field( "Next Header", ipProtocolField( data[ 6 ] ), data + 6, 1 );
+        layers->field( "Hop Limit", std::to_string( data[ 7 ] ), data + 7, 1 );
+        layers->field( "Source Address", pkt.srcIp, data + 8, 16 );
+        layers->field( "Destination Address", pkt.dstIp, data + 24, 16 );
+    }
 
     // Use the IPv6 payload length field, not raw remaining bytes, to exclude
     // link-layer padding (e.g. Ethernet FCS, SLL2 trailer).  A payload
@@ -355,6 +481,11 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
         const auto headerType = next;
         next = header[ 0 ];
         offset += length;
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( extensionHeaderName( headerType ), header, length );
+            layers->field( "Next Header", ipProtocolField( next ), header, 1 );
+            layers->field( "Length", std::to_string( length ) + " bytes", header + 1, 1 );
+        }
 
         if ( headerType == 44 ) {
             // Only the first fragment starts with the upper-layer header.
@@ -362,6 +493,7 @@ void parseIpv6( PacketRecord& pkt, const uint8_t* data, size_t remaining, bool q
             if ( fragmentOffset != 0 ) {
                 pkt.ipProtocol = next;
                 describeFragment( pkt, "IPv6", next, fragmentOffset, readBE32( header + 4 ), 4 );
+                dataLayer( pkt, data + offset, end - offset, "Fragment Data" );
                 return;
             }
         }
@@ -379,12 +511,26 @@ void parseArp( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     pkt.protocol = "ARP";
     if ( remaining < 28 ) {
         pkt.info = "Truncated ARP";
+        dataLayer( pkt, data, remaining, "Address Resolution Protocol (truncated)" );
         return;
     }
 
     auto opcode = readBE16( data + 6 );
     auto senderIp = formatIpv4( data + 14 );
     auto targetIp = formatIpv4( data + 24 );
+    if ( auto* layers = pkt.layers ) {
+        const char* opName = opcode == 1 ? "request " : opcode == 2 ? "reply " : "";
+        layers->layer( "Address Resolution Protocol", data, 28 );
+        layers->field( "Hardware Type", std::to_string( readBE16( data ) ), data, 2 );
+        layers->field( "Protocol Type", etherTypeField( readBE16( data + 2 ) ), data + 2, 2 );
+        layers->field( "Hardware Size", std::to_string( data[ 4 ] ), data + 4, 1 );
+        layers->field( "Protocol Size", std::to_string( data[ 5 ] ), data + 5, 1 );
+        layers->field( "Opcode", opName + ( "(" + std::to_string( opcode ) + ")" ), data + 6, 2 );
+        layers->field( "Sender MAC Address", formatMac( data + 8 ), data + 8, 6 );
+        layers->field( "Sender IP Address", senderIp, data + 14, 4 );
+        layers->field( "Target MAC Address", formatMac( data + 18 ), data + 18, 6 );
+        layers->field( "Target IP Address", targetIp, data + 24, 4 );
+    }
 
     if ( opcode == 1 ) {
         pkt.info = "Who has " + targetIp + "? Tell " + senderIp;
@@ -418,8 +564,17 @@ void parseNetwork( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, s
                         && ( etherType == EthertypeVlan || etherType == EthertypeQinQ
                              || etherType == EthertypeQinQLegacy );
           ++tags ) {
+        const auto tagType = etherType;
         etherType = readBE16( data + 2 );
         pkt.etherType = etherType;
+        if ( auto* layers = pkt.layers ) {
+            const auto tci = readBE16( data );
+            layers->layer( tagType == EthertypeVlan ? "802.1Q Virtual LAN" : "802.1ad Virtual LAN",
+                           data, 4 );
+            layers->field( "Priority", std::to_string( tci >> 13 ), data, 1 );
+            layers->field( "ID", std::to_string( tci & 0x0FFF ), data, 2 );
+            layers->field( "Type", etherTypeField( etherType ), data + 2, 2 );
+        }
         data += 4;
         remaining -= 4;
     }
@@ -450,6 +605,7 @@ void parseNetwork( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, s
         // An IEEE 802.3 frame: the field is the length of its LLC data
         pkt.protocol = "LLC";
         pkt.info = "802.3 frame, length " + std::to_string( etherType );
+        dataLayer( pkt, data, remaining, "Logical-Link Control" );
     }
     else {
         // An EtherType not dissected further: its name, if it has one.
@@ -458,6 +614,7 @@ void parseNetwork( PacketRecord& pkt, uint16_t etherType, const uint8_t* data, s
         const auto* name = etherTypeName( etherType );
         pkt.protocol = name ? name : std::string( "ETH(0x" ) + hex + ")";
         pkt.info = std::string( "EtherType 0x" ) + hex;
+        dataLayer( pkt, data, remaining );
     }
 }
 
@@ -468,11 +625,21 @@ void parseEthernet( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     if ( remaining < 14 ) {
         pkt.protocol = "Ethernet";
         pkt.info = "Truncated Ethernet header";
+        dataLayer( pkt, data, remaining, "Ethernet II (truncated)" );
         return;
     }
     pkt.dstMac = formatMac( data );
     pkt.srcMac = formatMac( data + 6 );
     pkt.etherType = readBE16( data + 12 );
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "Ethernet II", data, 14 );
+        layers->field( "Destination", pkt.dstMac, data, 6 );
+        layers->field( "Source", pkt.srcMac, data + 6, 6 );
+        layers->field( "Type",
+                       pkt.etherType <= kMax8023Length ? "Length " + std::to_string( pkt.etherType )
+                                                       : etherTypeField( pkt.etherType ),
+                       data + 12, 2 );
+    }
     parseNetwork( pkt, pkt.etherType, data + 14, remaining - 14, true );
 }
 
@@ -540,6 +707,13 @@ void parseGre( PacketRecord& pkt, const uint8_t* data, size_t remaining )
     }
     const auto flags = readBE16( data );
     const auto protocolType = readBE16( data + 2 );
+    if ( auto* layers = pkt.layers ) {
+        const size_t headerLen = 4 + ( ( flags & ( kChecksum | kRouting ) ) ? 4 : 0 )
+                                 + ( ( flags & kKey ) ? 4 : 0 ) + ( ( flags & kSequence ) ? 4 : 0 );
+        layers->layer( "Generic Routing Encapsulation", data, headerLen );
+        layers->field( "Flags and Version", hexField( flags, 4 ), data, 2 );
+        layers->field( "Protocol Type", etherTypeField( protocolType ), data + 2, 2 );
+    }
     char type[ 8 ];
     std::snprintf( type, sizeof( type ), "%04X", protocolType );
     const auto version = flags & 0x0007;
@@ -558,6 +732,9 @@ void parseGre( PacketRecord& pkt, const uint8_t* data, size_t remaining )
         char key[ 16 ];
         std::snprintf( key, sizeof( key ), "0x%08X", readBE32( data + offset ) );
         name += std::string( " key=" ) + key;
+        if ( auto* layers = pkt.layers ) {
+            layers->field( "Key", key, data + offset, 4 );
+        }
     }
     offset += ( ( flags & kKey ) ? 4 : 0 ) + ( ( flags & kSequence ) ? 4 : 0 );
     if ( remaining < offset ) {
@@ -586,6 +763,11 @@ void parseGre( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 void parseVxlan( PacketRecord& pkt, const uint8_t* data, size_t remaining )
 {
     constexpr uint8_t kVniValid = 0x08;
+    if ( auto* layers = pkt.layers ) {
+        layers->layer( "Virtual eXtensible Local Area Network", data, 8 );
+        layers->field( "Flags", hexField( data[ 0 ], 2 ), data, 1 );
+        layers->field( "VNI", std::to_string( readBE32( data + 4 ) >> 8 ), data + 4, 3 );
+    }
     std::string name = "VXLAN";
     if ( data[ 0 ] & kVniValid ) {
         const auto vni = readBE32( data + 4 ) >> 8;
@@ -615,6 +797,7 @@ void dissectQuotedPacket( PacketRecord& pkt, const uint8_t* data, size_t len )
 void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8_t* pktData,
                     size_t pktRemaining )
 {
+    const Dissecting dissecting( pktData, pktRemaining );
     uint16_t etherType = 0;
     const uint8_t* networkData = nullptr;
     size_t networkRemaining = 0;
@@ -634,6 +817,19 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         // Linux cooked capture v1: 16-byte header, ethertype at offset 14
         etherType = readBE16( pktData + 14 );
         pkt.etherType = etherType;
+        if ( auto* layers = pkt.layers ) {
+            const size_t addressLen = std::min<size_t>( readBE16( pktData + 4 ), 8 );
+            layers->layer( "Linux cooked capture v1", pktData, 16 );
+            layers->field( "Packet Type", std::to_string( readBE16( pktData ) ), pktData, 2 );
+            layers->field( "Link-layer Address Type", std::to_string( readBE16( pktData + 2 ) ),
+                           pktData + 2, 2 );
+            layers->field( "Link-layer Address Length", std::to_string( addressLen ), pktData + 4,
+                           2 );
+            if ( addressLen == 6 ) {
+                layers->field( "Source", formatMac( pktData + 6 ), pktData + 6, 6 );
+            }
+            layers->field( "Protocol", etherTypeField( etherType ), pktData + 14, 2 );
+        }
         networkData = pktData + 16;
         networkRemaining = pktRemaining - 16;
     }
@@ -643,6 +839,20 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         pkt.etherType = etherType;
         networkData = pktData + 20;
         networkRemaining = pktRemaining - 20;
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( "Linux cooked capture v2", pktData, 20 );
+            layers->field( "Protocol", etherTypeField( etherType ), pktData, 2 );
+            layers->field( "Interface Index", std::to_string( readBE32( pktData + 4 ) ),
+                           pktData + 4, 4 );
+            layers->field( "Link-layer Address Type", std::to_string( readBE16( pktData + 8 ) ),
+                           pktData + 8, 2 );
+            layers->field( "Packet Type", std::to_string( pktData[ 10 ] ), pktData + 10, 1 );
+            layers->field( "Link-layer Address Length", std::to_string( pktData[ 11 ] ),
+                           pktData + 11, 1 );
+            if ( pktData[ 11 ] == 6 ) {
+                layers->field( "Source", formatMac( pktData + 12 ), pktData + 12, 6 );
+            }
+        }
     }
     else if ( ( linkType == DltNull || linkType == DltLoop ) && pktRemaining >= 4 ) {
         // BSD loopback: a 4-byte address family, in the byte order of the
@@ -656,6 +866,10 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         }
         networkData = pktData + 4;
         networkRemaining = pktRemaining - 4;
+        if ( auto* layers = pkt.layers ) {
+            layers->layer( "Null/Loopback", pktData, 4 );
+            layers->field( "Family", std::to_string( family ), pktData, 4 );
+        }
         switch ( family ) {
         case 2: // AF_INET
             etherType = EthertypeIpv4;
@@ -686,11 +900,17 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
     else {
         pkt.protocol = "Unknown";
         pkt.info = "Unsupported link-layer type " + std::to_string( linkType );
+        dataLayer( pkt, pktData, pktRemaining );
     }
 
     if ( networkData ) {
         parseNetwork( pkt, etherType, networkData, networkRemaining, false );
     }
+}
+
+bool isPreambleText( uint8_t c )
+{
+    return ( c >= 0x20 && c < 0x7F ) || c == '\t' || c == '\r' || c == '\n';
 }
 
 namespace {
@@ -699,12 +919,6 @@ bool isPcapMagic( uint32_t magic )
 {
     return magic == PcapMagicLE || magic == PcapMagicBE || magic == PcapNsMagicLE
            || magic == PcapNsMagicBE;
-}
-
-/// A byte of the text tcpdump writes to stderr.
-bool isPreambleText( uint8_t c )
-{
-    return ( c >= 0x20 && c < 0x7F ) || c == '\t' || c == '\r' || c == '\n';
 }
 
 /// Whether the 24 bytes at @p p hold a pcap global header this parser reads:
@@ -734,26 +948,38 @@ bool isPcapNgHeader( const uint8_t* p )
 
 // ── Format detection ─────────────────────────────────────────────────────
 
-size_t findCaptureStart( const uint8_t* data, size_t size, CaptureFormat& format,
-                         std::string& error )
+CaptureStart findCaptureStart( const uint8_t* data, size_t size, size_t& offset,
+                               CaptureFormat& format, std::string& error )
 {
-    for ( size_t i = 0; i + 24 <= size && i <= kMaxPreamble; ++i ) {
+    error = "Not a valid pcap or pcapng file (no pcap magic found)";
+    if ( size >= 2 && data[ 0 ] == 0x1f && data[ 1 ] == 0x8b ) {
+        // A capture file's gzip stream is decompressed before (gzip_source.h).
+        error = "gzip-compressed data: only a gzip-compressed capture file is decompressed, "
+                "not a stream";
+        return CaptureStart::None;
+    }
+    for ( size_t i = 0; i <= kMaxPreamble; ++i ) {
+        if ( i + 24 > size ) {
+            offset = i + 24; // the header that may start here
+            return CaptureStart::NeedMore;
+        }
         uint32_t magic;
         std::memcpy( &magic, data + i, 4 );
         if ( ( i == 0 && isPcapMagic( magic ) ) || isPcapHeader( data + i ) ) {
             format = CaptureFormat::Pcap;
-            return i;
+            offset = i;
+            return CaptureStart::Found;
         }
         if ( ( i == 0 && magic == PcapNgMagic ) || isPcapNgHeader( data + i ) ) {
             format = CaptureFormat::Pcapng;
-            return i;
+            offset = i;
+            return CaptureStart::Found;
         }
         if ( !isPreambleText( data[ i ] ) ) {
             break; // binary data that is no capture header: no text preamble
         }
     }
-    error = "Not a valid pcap or pcapng file (no pcap magic found)";
-    return size;
+    return CaptureStart::None;
 }
 
 // ── Link-layer types ─────────────────────────────────────────────────────
@@ -826,6 +1052,69 @@ std::string formatTcpNumbers( uint32_t seq, std::optional<uint32_t> ack, uint32_
            + " Win=" + std::to_string( window );
 }
 
+TcpOptions parseTcpOptions( const uint8_t* options, size_t len )
+{
+    constexpr uint8_t kEndOfOptions = 0;
+    constexpr uint8_t kNop = 1;
+    constexpr uint8_t kMss = 2;
+    constexpr uint8_t kWindowScale = 3;
+    constexpr uint8_t kSackPermitted = 4;
+    constexpr uint8_t kTimestamps = 8;
+    /// RFC 7323's largest shift count; Wireshark shows a larger one as 14.
+    constexpr uint8_t kMaxWindowShift = 14;
+
+    TcpOptions result;
+    size_t at = 0;
+    while ( at < len && options[ at ] != kEndOfOptions ) {
+        if ( options[ at ] == kNop ) {
+            ++at;
+            continue;
+        }
+        if ( at + 1 >= len || options[ at + 1 ] < 2 || options[ at + 1 ] > len - at ) {
+            break;
+        }
+        const uint8_t* option = options + at;
+        const uint8_t length = option[ 1 ];
+        if ( option[ 0 ] == kMss && length == 4 ) {
+            result.mss = readBE16( option + 2 );
+            result.info += " MSS=" + std::to_string( *result.mss );
+        }
+        else if ( option[ 0 ] == kWindowScale && length == 3 ) {
+            result.windowShift = option[ 2 ];
+            result.info
+                += " WS=" + std::to_string( 1u << std::min( option[ 2 ], kMaxWindowShift ) );
+        }
+        else if ( option[ 0 ] == kSackPermitted ) {
+            // Wireshark names it before it checks its length.
+            result.sackPermitted = true;
+            result.info += " SACK_PERM";
+        }
+        else if ( option[ 0 ] == kTimestamps && length == 10 ) {
+            result.timestamps = TcpTimestamps{ readBE32( option + 2 ), readBE32( option + 6 ) };
+            result.info += " TSval=" + std::to_string( result.timestamps->value )
+                           + " TSecr=" + std::to_string( result.timestamps->echoReply );
+        }
+        at += length;
+    }
+    return result;
+}
+
+size_t tcpFieldsEnd( const std::string& info )
+{
+    const auto at = info.find( kDescriptionSeparator );
+    return at == std::string::npos ? info.size() : at;
+}
+
+void showTcpTimestamps( PacketRecord& pkt )
+{
+    if ( pkt.transport != Transport::Tcp || !pkt.tcpTimestamps || ( pkt.tcpFlags & 0x02 ) ) {
+        return;
+    }
+    pkt.info.insert( tcpFieldsEnd( pkt.info ),
+                     " TSval=" + std::to_string( pkt.tcpTimestamps->value )
+                         + " TSecr=" + std::to_string( pkt.tcpTimestamps->echoReply ) );
+}
+
 // ── Byte sources ─────────────────────────────────────────────────────────
 
 bool ByteSource::skip( uint64_t n )
@@ -862,6 +1151,16 @@ bool MemorySource::skip( uint64_t n )
     return true;
 }
 
+bool MemorySource::seek( uint64_t offset )
+{
+    if ( offset > size_ ) {
+        pos_ = size_;
+        return false;
+    }
+    pos_ = static_cast<size_t>( offset );
+    return true;
+}
+
 const std::vector<uint8_t>& HeadSource::peek( size_t n )
 {
     while ( head_.size() < n ) {
@@ -888,6 +1187,11 @@ size_t HeadSource::read( uint8_t* dst, size_t n )
     std::memcpy( dst, head_.data(), got );
     head_.erase( head_.begin(), head_.begin() + static_cast<std::ptrdiff_t>( got ) );
     return got;
+}
+
+bool HeadSource::ready()
+{
+    return !head_.empty() || source_.ready();
 }
 
 bool HeadSource::skip( uint64_t n )
@@ -919,11 +1223,34 @@ size_t CaptureReader::read( uint8_t* dst, size_t n )
     return got;
 }
 
+ByteView CaptureReader::payloadOf( const PacketRecord& pkt ) const
+{
+    if ( pkt.payloadCaptured == 0 || pkt.payloadOffset > packet_.size()
+         || pkt.payloadCaptured > packet_.size() - pkt.payloadOffset ) {
+        return {};
+    }
+    return { packet_.data() + pkt.payloadOffset, pkt.payloadCaptured };
+}
+
 bool CaptureReader::skip( uint64_t n )
 {
     const bool ok = n == 0 || source_.skip( n );
     bytesRead_ += n; // on failure the source is at its end anyway
     return ok;
+}
+
+ReaderCheckpoint CaptureReader::checkpoint() const
+{
+    return { packetCount_, bytesRead_, nullptr };
+}
+
+bool CaptureReader::resume( const ReaderCheckpoint& checkpoint )
+{
+    if ( checkpoint.offset < bytesRead_ || !skip( checkpoint.offset - bytesRead_ ) ) {
+        return false;
+    }
+    packetCount_ = checkpoint.packetsBefore;
+    return true;
 }
 
 // ── PcapReader ───────────────────────────────────────────────────────────
@@ -959,6 +1286,25 @@ bool PcapReader::open()
     return true;
 }
 
+bool PcapReader::resume( const ReaderCheckpoint& checkpoint )
+{
+    // The global header that open() read is all a pcap's records need.
+    if ( !open_ || !CaptureReader::resume( checkpoint ) ) {
+        open_ = false;
+        return false;
+    }
+    return true;
+}
+
+CaptureHeaders PcapReader::headers() const
+{
+    CaptureHeaders headers;
+    if ( headerRead_ ) {
+        headers.records.push_back( { start_, 24 } );
+    }
+    return headers;
+}
+
 std::vector<uint32_t> PcapReader::linkTypes() const
 {
     if ( !headerRead_ ) {
@@ -974,6 +1320,7 @@ bool PcapReader::next( PacketRecord& pkt )
     }
 
     // Packet header: ts_sec(4) ts_usec(4) incl_len(4) orig_len(4)
+    const auto recordStart = bytesRead();
     uint8_t recordHeader[ 16 ];
     const auto got = read( recordHeader, sizeof( recordHeader ) );
     if ( got < sizeof( recordHeader ) ) {
@@ -997,6 +1344,8 @@ bool PcapReader::next( PacketRecord& pkt )
         return false;
     }
 
+    recordOffset_ = recordStart;
+    recordLength_ = sizeof( recordHeader ) + static_cast<uint64_t>( inclLen );
     pkt = PacketRecord();
     pkt.number = ++packetCount_;
     // The fraction is kept in nanoseconds.  A corrupt one of a second or

@@ -16,7 +16,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(logsquirl_tcpdump
     VERSION   0.3.0
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -34,11 +34,95 @@ add_compile_definitions(LOGSQUIRL_PLUGIN_VERSION="${PROJECT_VERSION}")
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Widgets)
 qt_standard_project_setup()
 
+# ── zlib, for gzip-compressed captures ────────────────────────────────────
+# Fetched as the release tarball, pinned by its SHA-256, and built here as a
+# static library of the files the plugin needs (zlib's own CMakeLists would
+# add a shared library, examples and install rules).  Qt does not offer gzip
+# streaming publicly (qUncompress() takes a whole zlib-format buffer), and a
+# system zlib is not there on every CI platform (Windows).  Z_PREFIX renames
+# its symbols to z_*, and they are hidden, so that it cannot clash with the
+# zlib Qt or the host loads.  Licence: NOTICE.
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW) # extracted files get the extraction time
+endif()
+FetchContent_Declare(tcpdump_zlib
+    URL      https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+    URL_HASH SHA256=9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23
+    # No CMakeLists.txt there: the sources are fetched, not added as a project.
+    SOURCE_SUBDIR not-a-cmake-project
+)
+FetchContent_MakeAvailable(tcpdump_zlib)
+
+add_library(tcpdump_zlib STATIC
+    "${tcpdump_zlib_SOURCE_DIR}/adler32.c"
+    "${tcpdump_zlib_SOURCE_DIR}/crc32.c"
+    "${tcpdump_zlib_SOURCE_DIR}/deflate.c"    # the tests write gzip files
+    "${tcpdump_zlib_SOURCE_DIR}/inffast.c"
+    "${tcpdump_zlib_SOURCE_DIR}/inflate.c"
+    "${tcpdump_zlib_SOURCE_DIR}/inftrees.c"
+    "${tcpdump_zlib_SOURCE_DIR}/trees.c"
+    "${tcpdump_zlib_SOURCE_DIR}/zutil.c"
+)
+target_include_directories(tcpdump_zlib SYSTEM PUBLIC "${tcpdump_zlib_SOURCE_DIR}")
+target_compile_definitions(tcpdump_zlib PUBLIC Z_PREFIX)
+set_target_properties(tcpdump_zlib PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    POSITION_INDEPENDENT_CODE ON
+)
+if(MSVC)
+    target_compile_definitions(tcpdump_zlib PRIVATE _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE)
+    target_compile_options(tcpdump_zlib PRIVATE /W0)
+else()
+    target_compile_options(tcpdump_zlib PRIVATE -w)
+endif()
+
+# ── Mbed TLS ──────────────────────────────────────────────────────────────
+# The cryptography of the TLS Decryption (tls_crypto.cpp): AES-GCM, AES-CBC,
+# ChaCha20-Poly1305, HMAC and HKDF of Mbed TLS (Apache-2.0 or
+# GPL-2.0-or-later, NOTICE): the 3.6 LTS release below, fetched by its hash
+# and built here as a static library with only those
+# (third_party/mbedtls_config.h).  Its symbols stay hidden in the plugin,
+# and its warnings do not fail the build.
+set(MBEDTLS_URL
+    https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2)
+set(MBEDTLS_SHA256 a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6)
+set(MBEDTLS_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls_config.h"
+    CACHE FILEPATH "Mbed TLS configuration of the plugin" FORCE)
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(GEN_FILES OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+set(DISABLE_PACKAGE_CONFIG_AND_INSTALL ON CACHE BOOL "" FORCE)
+# Linked into a shared library: position independent, and nothing of it
+# exported (the plugin exports its entry points only).
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_C_VISIBILITY_PRESET hidden)
+# Out of the default build and the install: only mbedcrypto is built, as
+# the plugin links it, and nothing of Mbed TLS is installed.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+    FetchContent_Declare(mbedtls URL ${MBEDTLS_URL} URL_HASH SHA256=${MBEDTLS_SHA256}
+                         EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(mbedtls)
+else()
+    FetchContent_Declare(mbedtls URL ${MBEDTLS_URL} URL_HASH SHA256=${MBEDTLS_SHA256})
+    FetchContent_GetProperties(mbedtls)
+    if(NOT mbedtls_POPULATED)
+        FetchContent_Populate(mbedtls)
+        add_subdirectory("${mbedtls_SOURCE_DIR}" "${mbedtls_BINARY_DIR}" EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # ── Plugin shared library ─────────────────────────────────────────────────
 add_library(logsquirl_tcpdump SHARED
     src/plugin.cpp
     src/capture_reader.cpp
+    src/capture_source.cpp
+    src/process_source.cpp
     src/pcap_parser.cpp
+    src/packet_layers.cpp
     src/icmp.cpp
     src/link_layers.cpp
     src/pcapng_reader.cpp
@@ -51,19 +135,58 @@ add_library(logsquirl_tcpdump SHARED
     src/describe_tls.cpp
     src/describe_quic.cpp
     src/describe_socks.cpp
+    src/describe_mqtt.cpp
+    src/describe_sip.cpp
+    src/describe_rtp.cpp
+    src/describe_someip.cpp
+    src/describe_doip.cpp
+    src/describe_smb.cpp
+    src/describe_ssh.cpp
+    src/describe_websocket.cpp
+    src/media_expectations.cpp
+    src/hpack.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp
     src/stream_tracker.cpp
     src/stream_labels.cpp
     src/tcp_analysis.cpp
+    src/byte_stream_orderer.cpp
+    src/tcp_reassembly.cpp
+    src/tls_crypto.cpp
+    src/tls_key_log.cpp
+    src/tls_decryption.cpp
+    src/host_names.cpp
     src/capture_stats.cpp
+    src/conversations.cpp
+    src/capture_file.cpp
+    src/gzip_source.cpp
+    src/capture_index.cpp
+    src/raw_capture.cpp
+    src/packet_export.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/settings.cpp
     src/configdialog.cpp
+    src/export_dialog.cpp
+    src/conversation_table.cpp
+    src/packet_panel.cpp
+    src/live_capture.cpp
+    src/live_source.cpp
+    src/local_source.cpp
+    src/adb_source.cpp
+    src/extcap_source.cpp
+    src/extcap_options.cpp
+    src/capture_pipe.cpp
+    src/ssh_source.cpp
+    src/command_source.cpp
+    src/live_capture_form.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
+    src/stream_content.cpp
+    src/stream_content_view.cpp
     src/regex_lab.cpp
+    src/display_filter.cpp
+    src/display_filter_dialog.cpp
 )
 
 # Qt MOC needs to know about our Q_OBJECT classes
@@ -77,6 +200,11 @@ set_target_properties(logsquirl_tcpdump PROPERTIES
 if(NOT WIN32)
     target_compile_options(logsquirl_tcpdump PRIVATE -fvisibility=hidden)
 endif()
+# Nor anything of the static libraries linked in (Mbed TLS), where the
+# linker can be told so.
+if(UNIX AND NOT APPLE)
+    target_link_options(logsquirl_tcpdump PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 
 target_include_directories(logsquirl_tcpdump
     PRIVATE
@@ -89,6 +217,8 @@ target_link_libraries(logsquirl_tcpdump
         Qt6::Core
         Qt6::Concurrent
         Qt6::Widgets
+        tcpdump_zlib
+        mbedcrypto
 )
 
 # ── Install rule ──────────────────────────────────────────────────────────
@@ -101,6 +231,9 @@ set(PLUGIN_INSTALL_DIR
 
 install(TARGETS logsquirl_tcpdump LIBRARY DESTINATION "${PLUGIN_INSTALL_DIR}")
 install(FILES   plugin.json               DESTINATION "${PLUGIN_INSTALL_DIR}")
+# The licence and where the source of what is linked in is (NOTICE), as the
+# release packages carry them (.github/plugin-ci.json).
+install(FILES   LICENSE NOTICE            DESTINATION "${PLUGIN_INSTALL_DIR}")
 # The Log Format of the converted text, next to the library; LogSquirl reads
 # it only from its formats directory, where the user copies it (README).
 install(FILES   formats/tcpdump_log.json  DESTINATION "${PLUGIN_INSTALL_DIR}")

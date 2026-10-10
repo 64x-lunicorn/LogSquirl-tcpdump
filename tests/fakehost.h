@@ -116,8 +116,14 @@ public:
         api_.show_notification = []( void* handle, const char* message ) {
             self( handle )->notifications << QString::fromUtf8( message );
         };
-        api_.open_file = []( void* handle, const char* filePath, int ) {
-            self( handle )->openedFiles << QString::fromUtf8( filePath );
+        api_.open_file = []( void* handle, const char* filePath, int follow ) {
+            auto* host = self( handle );
+            host->openedFiles << QString::fromUtf8( filePath );
+            host->openedFollowing << ( follow != 0 );
+            // LogSquirl must be called on its UI thread (LogSquirl#796).
+            if ( QThread::currentThread() != QCoreApplication::instance()->thread() ) {
+                host->openedOffUiThread = true;
+            }
         };
         api_.register_menu_action = []( void* handle, const char* menuPath, const char* label,
                                         void ( *callback )( void* ), void* userData ) {
@@ -166,6 +172,7 @@ public:
             api_.get_selected_log_lines = []( void* handle, const char** text, std::size_t* length,
                                               std::size_t* lineCount ) {
                 auto* host = self( handle );
+                ++host->selectionCalls;
                 if ( !text ) {
                     return static_cast<int>( LOGSQUIRL_LOG_LINES_INVALID_ARGUMENT );
                 }
@@ -249,8 +256,10 @@ public:
     QStringList logs;
     QStringList notifications;
     QStringList openedFiles;
-    QList<MenuAction> menuActions; ///< Registered, until the plugin is unloaded.
-    QList<void*> sidebarTabs;      ///< Registered and not yet unregistered.
+    QList<bool> openedFollowing;    ///< Per open_file(): whether to follow the file.
+    bool openedOffUiThread = false; ///< open_file() was called on another thread.
+    QList<MenuAction> menuActions;  ///< Registered, until the plugin is unloaded.
+    QList<void*> sidebarTabs;       ///< Registered and not yet unregistered.
 
     /** Make register_sidebar_tab() throw, as a misbehaving host might. */
     bool failSidebarTab = false;
@@ -263,6 +272,8 @@ public:
     QStringList selectedLines;        ///< What get_selected_log_lines() returns.
     /** get_selected_log_lines()'s result when lines are selected, or a negative one to fail. */
     int selectionResult = LOGSQUIRL_LOG_LINES_OK;
+    /** How often get_selected_log_lines() was called. */
+    int selectionCalls = 0;
 
     /** The host API table, to pass to logsquirl_plugin_init() or _init_ex(). */
     const LogSquirlHostApi* api() const
