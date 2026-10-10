@@ -440,6 +440,37 @@ SCENARIO( "An unavailable source says why, and a failed capture shows its error 
             }
         }
     }
+
+    GIVEN( "a source whose capture fails before a packet, its Guidance like markup" )
+    {
+        fake->failure = "fakecap exited with code 1:\nfakecap: <eth0> permission denied";
+        fake->hint = "Run: setcap cap_net_raw=eip <fakecap> && log in again.";
+        SidebarWidget sidebar;
+        sidebar.setTempRoot( root.path() );
+        sidebar.setLiveSources( registryOf( fake ) );
+        const Fields fields( &sidebar );
+        REQUIRE( listed( sidebar.liveForm(), fields ) );
+        fields.start->click();
+        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+
+        THEN( "the section shows the error's lines and the Guidance as text, the summary the "
+              "error" )
+        {
+            const auto outcome = sidebar.liveSession()->outcome();
+            REQUIRE( outcome );
+            REQUIRE( outcome->status == LiveOutcome::Status::Failed );
+            REQUIRE( outcome->files.isEmpty() );
+            auto* error = sidebar.findChild<QLabel*>( "liveError" );
+            REQUIRE_FALSE( error->isHidden() );
+            REQUIRE( error->text()
+                     == "Error: Cannot read the capture: fakecap exited with code 1:<br>fakecap: "
+                        "&lt;eth0&gt; permission denied<br>Run: setcap cap_net_raw=eip "
+                        "&lt;fakecap&gt; &amp;&amp; log in again." );
+            REQUIRE( sidebar.findChild<QLabel*>( "summary" )->text()
+                     == "Error: " + outcome->error.toHtmlEscaped() );
+            REQUIRE( host.openedFiles.isEmpty() );
+        }
+    }
 }
 
 SCENARIO( "A source with devices lists them, and the interfaces of the one chosen", "[live_ui]" )

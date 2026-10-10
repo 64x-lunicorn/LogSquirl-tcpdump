@@ -1883,7 +1883,14 @@ the error and Guidance, the summary label. `tests/fake_live_session.h`
 has `FakeLiveHost` (both adapters, recording) and `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
 `tests/live_capture_session_test.cpp` tests the session without a widget
-or an event loop.
+or an event loop. Its `WorkerSession` is a session whose captures run on a
+worker as in the app, on a `FakeLiveHost`: the tests of each source kind
+(local, adb, ssh, extcap, command) start their captures with it, run by the
+kind's fake programs, and assert on the outcome (status, error, Guidance,
+files opened) and the stderr lines, waiting in the event loop for what the
+session tells (`waitForOutcome()`, `waitForFile()`). How the sidebar shows
+an outcome is tested on the sidebar itself (`live_capture_ui_test.cpp`,
+`live_capture_test.cpp`).
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,

@@ -21,23 +21,23 @@
  * @file local_source_test.cpp
  * @brief BDD tests for the Local source: live capture on this computer with
  *        dumpcap or tcpdump, found on a test PATH as fake scripts, and the
- *        guidance for missing capture permissions per OS.
+ *        guidance for missing capture permissions per OS; captures run
+ *        through a Live Capture Session.
  */
 
 #include <catch2/catch.hpp>
 
+#include "fake_live_session.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
+#include "live_capture_session.h"
 #include "local_source.h"
-#include "sidebarwidget.h"
 #include "stream_capture.h"
 
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QLabel>
-#include <QPlainTextEdit>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -408,30 +408,30 @@ SCENARIO( "The Local source captures live with a fake dumpcap or tcpdump", "[loc
         CAPTURE( name );
         QTemporaryDir path;
         fakeCaptureProgram( path, name, "1.en0 (Wi-Fi)\\n", pcap );
-        host.openedFiles.clear();
+        const auto sources = registryOf( std::make_shared<LocalSourceKind>( onTestPath( path ) ) );
 
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( dir.path() );
-        sidebar.setLiveSources(
-            registryOf( std::make_shared<LocalSourceKind>( onTestPath( path ) ) ) );
-        auto* interfaces = sidebar.findChild<QComboBox*>( "liveInterface" );
-        REQUIRE( waitFor(
-            [ & ] { return !sidebar.liveForm()->isListing() && interfaces->count() == 1; } ) );
+        LiveCaptureForm form;
+        form.setSources( sources );
+        form.setChoice( LiveChoice{ "local", "", "", "", kDefaultSnaplen, {} } );
+        auto* interfaces = form.findChild<QComboBox*>( "liveInterface" );
+        REQUIRE( waitFor( [ & ] { return !form.isListing() && interfaces->count() == 1; } ) );
         REQUIRE( interfaces->itemData( 0 ).toString() == "en0" );
 
-        REQUIRE(
-            sidebar.startLiveCapture( LiveChoice{ "local", "", "en0", "udp port 9999", 96 } ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
-        REQUIRE( host.openedFiles.size() == 1 );
-        REQUIRE( QFileInfo( host.openedFiles.first() ).fileName() == "en0.log" );
-        const auto stderrText = sidebar.findChild<QPlainTextEdit*>( "liveStderr" )->toPlainText();
-        REQUIRE( stderrText.contains( "[udp port 9999]" ) );
-        REQUIRE( stderrText.contains( "[96]" ) );
-        REQUIRE( sidebar.findChild<QLabel*>( "liveError" )->isHidden() );
+        WorkerSession live( sources );
+        REQUIRE( live.session.start( LiveChoice{ "local", "", "en0", "udp port 9999", 96 } ) );
+        REQUIRE( live.waitForOutcome() );
+        INFO( live.outcome().error.toStdString() );
+        REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+        REQUIRE( live.outcome().error.isEmpty() );
+        REQUIRE( live.outcome().files.size() == 1 );
+        REQUIRE( live.outcome().files == live.adapters.openedTabs );
+        REQUIRE( QFileInfo( live.outcome().files.first() ).fileName() == "en0.log" );
+        REQUIRE( live.stderrText().contains( "[udp port 9999]" ) );
+        REQUIRE( live.stderrText().contains( "[96]" ) );
     }
 }
 
-SCENARIO( "A capture that fails for want of permissions shows the guidance for this OS",
+SCENARIO( "A capture that fails for want of permissions gets the guidance for this OS",
           "[local_source]" )
 {
     FakeHost host;
@@ -443,23 +443,22 @@ SCENARIO( "A capture that fails for want of permissions shows the guidance for t
                    "echo '((cannot open BPF device) /dev/bpf0: Permission denied)' >&2\n"
                    "exit 1" );
     const auto kind = std::make_shared<LocalSourceKind>( onTestPath( dir ) );
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( dir.path() );
-    sidebar.setLiveSources( registryOf( kind ) );
+    WorkerSession live( registryOf( kind ) );
 
-    REQUIRE( sidebar.startLiveCapture( LiveChoice{ "local", "", "en0", "", 96 } ) );
-    REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+    REQUIRE( live.session.start( LiveChoice{ "local", "", "en0", "", 96 } ) );
+    REQUIRE( live.waitForOutcome() );
 
-    THEN( "the section shows the error and the guidance of the running OS" )
+    THEN( "the capture fails with the error and the Guidance of the running OS" )
     {
-        auto* error = sidebar.findChild<QLabel*>( "liveError" );
-        REQUIRE_FALSE( error->isHidden() );
-        REQUIRE( error->text().contains( "permission to capture" ) );
+        REQUIRE( live.outcome().status == LiveOutcome::Status::Failed );
+        REQUIRE( live.outcome().error.contains( "permission to capture" ) );
         const auto guidance
             = capturePermissionGuidance( runningCaptureOs(), dir.filePath( "tcpdump" ) );
         REQUIRE( kind->explainFailure( "tcpdump: en0: You don't have permission to capture" )
                  == guidance );
-        REQUIRE( error->text().contains( guidance.left( 30 ).toHtmlEscaped() ) );
+        REQUIRE( live.outcome().guidance == guidance );
+        REQUIRE( live.outcome().files.isEmpty() );
+        REQUIRE( live.adapters.openedTabs.isEmpty() );
     }
 
     THEN( "a failure that is not about permissions gets no guidance" )

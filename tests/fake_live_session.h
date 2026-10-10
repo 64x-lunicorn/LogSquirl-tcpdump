@@ -20,7 +20,7 @@
 /**
  * @file fake_live_session.h
  * @brief Fakes around a Live Capture Session: its host and capture catalog,
- *        and captures the test scripts.
+ *        captures the test scripts, and captures run for real.
  *
  * FakeLiveHost is both adapters of a LiveCaptureSession: it records the
  * tabs opened, the notifications, and what the catalog keeps per text file
@@ -29,15 +29,22 @@
  * each a ScriptedRun that records what it was asked to run and whether it
  * was told to stop, and tells the session what the test says, when the
  * test says it, on the test's thread, so that no event loop is needed.
+ * WorkerSession is a session whose captures run on a worker, as in the
+ * app (runOnWorker()), for a source kind's tests with its fake programs:
+ * it runs the event loop until the session told what the test waits for.
  */
 
 #pragma once
 
 #include "live_capture_session.h"
 
+#include <QEventLoop>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
+#include <QTimer>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <vector>
@@ -199,6 +206,76 @@ private:
     private:
         std::shared_ptr<ScriptedRun> run_;
     };
+};
+
+/**
+ * A Live Capture Session that runs its captures on a worker, as in the app,
+ * with the kinds of a registry, writing below a temporary directory of its
+ * own, on a FakeLiveHost; it records the lines its programs wrote to
+ * stderr.  What a run tells comes through the event loop, which the waits
+ * run until the session told it: the deadline only guards against a hang.
+ */
+class WorkerSession {
+public:
+    static constexpr int kHangGuardMs = 120000;
+
+    explicit WorkerSession( std::shared_ptr<const tcpdump::LiveSourceRegistry> sources )
+    {
+        session.setSources( std::move( sources ) );
+        session.setOutputRoot( outputRoot.path() );
+        QObject::connect( &session, &tcpdump::LiveCaptureSession::stderrLine, &session,
+                          [ this ]( const QString& line ) { stderrLines << line; } );
+    }
+
+    /// Run the event loop until the capture has ended: outcome() is its.
+    bool waitForOutcome( int hangGuardMs = kHangGuardMs )
+    {
+        return waitUntil( [ this ] { return session.outcome().has_value(); }, hangGuardMs );
+    }
+
+    /// Run the event loop until the capture opened its first text file in a tab.
+    bool waitForFile( int hangGuardMs = kHangGuardMs )
+    {
+        return waitUntil( [ this ] { return !adapters.openedTabs.isEmpty(); }, hangGuardMs );
+    }
+
+    /// Run the event loop until @p met holds, checked each time the session
+    /// tells something: a file opened, its state, its outcome.
+    bool waitUntil( const std::function<bool()>& met, int hangGuardMs = kHangGuardMs )
+    {
+        if ( met() ) {
+            return true;
+        }
+        QEventLoop loop;
+        const auto check = [ & ] {
+            if ( met() ) {
+                loop.quit();
+            }
+        };
+        QObject::connect( &session, &tcpdump::LiveCaptureSession::fileOpened, &loop, check );
+        QObject::connect( &session, &tcpdump::LiveCaptureSession::finished, &loop, check );
+        QObject::connect( &session, &tcpdump::LiveCaptureSession::stateChanged, &loop, check );
+        QTimer::singleShot( hangGuardMs, &loop, &QEventLoop::quit );
+        loop.exec();
+        return met();
+    }
+
+    /// What the last capture came to; it must have ended (waitForOutcome()).
+    const tcpdump::LiveOutcome& outcome() const
+    {
+        return *session.outcome();
+    }
+
+    /// The lines its programs wrote to stderr, one text.
+    QString stderrText() const
+    {
+        return stderrLines.join( '\n' );
+    }
+
+    FakeLiveHost adapters;
+    QTemporaryDir outputRoot; ///< Outlives the session, which writes below it.
+    tcpdump::LiveCaptureSession session{ adapters, adapters };
+    QStringList stderrLines; ///< What its capture programs wrote to stderr, in order.
 };
 
 } // namespace tcpdump_test

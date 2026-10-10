@@ -23,7 +23,8 @@
  *        parsed, extcaps found in their directories, an interface's
  *        arguments as a form whose values reach the command line (a
  *        password never settings.ini), the pipe a capture is read from,
- *        and live captures through a fake extcap script.
+ *        and live captures through a fake extcap script, run by a Live
+ *        Capture Session.
  */
 
 #include <catch2/catch.hpp>
@@ -36,7 +37,6 @@
 #include "live_capture_form.h"
 #include "live_capture_session.h"
 #include "settings.h"
-#include "sidebarwidget.h"
 #include "stream_capture.h"
 
 #include <QCheckBox>
@@ -47,8 +47,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QPlainTextEdit>
-#include <QPushButton>
 #include <QRadioButton>
 #include <QTemporaryDir>
 
@@ -721,15 +719,16 @@ std::shared_ptr<LiveSourceRegistry> registryOf( std::shared_ptr<const LiveSource
     return registry;
 }
 
-/// A sidebar with the extcap source of @p extcaps, below @p tempRoot.
-std::unique_ptr<SidebarWidget> sidebarFor( const FakeExtcaps& extcaps,
-                                           const QTemporaryDir& tempRoot )
+/// A live capture form of @p sources showing the choice saved in @p
+/// configDir, as the sidebar's form shows it after a restart, once it has listed.
+std::unique_ptr<LiveCaptureForm> formFor( std::shared_ptr<const LiveSourceRegistry> sources,
+                                          const QString& configDir )
 {
-    auto sidebar = std::make_unique<SidebarWidget>();
-    sidebar->setTempRoot( tempRoot.path() );
-    sidebar->setLiveSources( registryOf( extcaps.kind() ) );
-    REQUIRE( waitFor( [ & ] { return !sidebar->liveForm()->isListing(); } ) );
-    return sidebar;
+    auto form = std::make_unique<LiveCaptureForm>();
+    form->setSources( std::move( sources ) );
+    form->setChoice( loadLiveChoice( configDir ) );
+    REQUIRE( waitFor( [ & ] { return !form->isListing(); } ) );
+    return form;
 }
 
 /// The extcap options widget below @p parent, once it has its arguments.
@@ -822,25 +821,27 @@ SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as 
 {
     FakeHost host;
     FakeExtcaps extcaps;
-    QTemporaryDir tempRoot;
+    const auto sources = registryOf( extcaps.kind() );
 
     GIVEN( "a saved choice whose port is out of its range" )
     {
         LiveChoice saved{ "extcap", "fakedump", "fake0", "", 4096 };
         saved.options = { { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "70000" } };
         REQUIRE( saveLiveChoice( host.configDir(), saved ) );
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        optionsOf( sidebar.get() );
+        auto form = formFor( sources, host.configDir() );
+        optionsOf( form.get() );
+        WorkerSession live( sources );
 
         THEN( "the form shows the problem, and starting the saved choice is refused with it" )
         {
-            const auto shown = sidebar->liveForm()->problem();
+            const auto shown = form->problem();
             REQUIRE( shown == "Port must be from 1 to 65535." );
-            REQUIRE( liveChoiceProblem( sidebar->liveForm()->sources().get(), saved ) == shown );
-            REQUIRE_FALSE( sidebar->startLiveCapture( loadLiveChoice( host.configDir() ) ) );
-            REQUIRE( host.notifications
+            REQUIRE( liveChoiceProblem( sources.get(), saved ) == shown );
+            REQUIRE_FALSE( live.session.start( loadLiveChoice( host.configDir() ) ) );
+            REQUIRE( live.adapters.notifications
                      == QStringList{ "Cannot start the live capture: " + shown } );
-            REQUIRE_FALSE( sidebar->isCapturing() );
+            REQUIRE_FALSE( live.session.isBusy() );
+            REQUIRE_FALSE( live.session.outcome() );
             REQUIRE( extcaps.captures().isEmpty() );
         }
 
@@ -848,7 +849,6 @@ SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as 
         {
             auto choice = saved;
             choice.options = { { "fake0:--remote-port", "22" } };
-            auto* form = sidebar->liveForm();
             form->setChoice( choice );
             // Its device and interface are shown once listed again.
             REQUIRE( waitFor( [ & ] {
@@ -857,8 +857,8 @@ SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as 
             } ) );
             INFO( form->problem().toStdString() );
             REQUIRE( form->problem() == "Remote host is required." );
-            REQUIRE_FALSE( sidebar->startLiveCapture( choice ) );
-            REQUIRE( host.notifications
+            REQUIRE_FALSE( live.session.start( choice ) );
+            REQUIRE( live.adapters.notifications
                      == QStringList{ "Cannot start the live capture: Remote host is required." } );
             REQUIRE( extcaps.captures().isEmpty() );
         }
@@ -887,12 +887,10 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
 {
     FakeHost host;
     FakeExtcaps extcaps;
-    QTemporaryDir tempRoot;
     const auto kind = extcaps.kind();
-    FakeLiveHost adapters;
-    LiveCaptureSession session( adapters, adapters );
-    session.setSources( registryOf( kind ) );
-    session.setOutputRoot( tempRoot.path() );
+    WorkerSession live( registryOf( kind ) );
+    auto& session = live.session;
+    auto& adapters = live.adapters;
     LiveChoice saved{ "extcap", "fakedump", "fake0", "", 4096 };
     saved.options = { { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "70000" } };
 
@@ -904,7 +902,7 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
         {
             REQUIRE( session.start( saved ) );
             REQUIRE( session.state() == LiveCaptureSession::State::Checking );
-            REQUIRE( waitFor( [ & ] { return !session.isBusy(); } ) );
+            REQUIRE( live.waitUntil( [ & ] { return !session.isBusy(); } ) );
 
             THEN( "the extcap was asked, and the start refused with the form's message" )
             {
@@ -933,7 +931,7 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
             session.stop();
             REQUIRE( session.state() == LiveCaptureSession::State::Idle );
             session.start( saved );
-            REQUIRE( waitFor(
+            REQUIRE( live.waitUntil(
                 [ & ] { return !session.isBusy() && !kind->validationNeedsAsking( saved ); } ) );
             // The check stopped tells nothing: it comes before the other's.
 
@@ -955,7 +953,7 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
         {
             REQUIRE( session.start( saved ) );
             REQUIRE( session.state() == LiveCaptureSession::State::Checking );
-            REQUIRE( waitFor( [ & ] { return session.outcome().has_value(); } ) );
+            REQUIRE( live.waitForOutcome() );
 
             THEN( "the extcap was asked first, and then it captured" )
             {
@@ -978,39 +976,42 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
 {
     FakeHost host;
     FakeExtcaps extcaps;
-    QTemporaryDir tempRoot;
-    auto sidebar = sidebarFor( extcaps, tempRoot );
-    auto* form = sidebar->liveForm();
+    const auto sources = registryOf( extcaps.kind() );
+    auto form = formFor( sources, host.configDir() );
     REQUIRE( waitFor( [ & ] { return form->choice().networkInterface == "fake0"; } ) );
     REQUIRE( form->choice().device == "fakedump" );
-    auto* options = optionsOf( sidebar.get() );
+    auto* options = optionsOf( form.get() );
 
     THEN( "each argument has a field of its type, showing its default" )
     {
-        REQUIRE( sidebar->findChild<QLineEdit*>( "extcapArg--remote-host" ) );
-        REQUIRE( sidebar->findChild<QLineEdit*>( "extcapArg--remote-port" )->text() == "22" );
-        REQUIRE( sidebar->findChild<QLineEdit*>( "extcapArg--ratio" )->text() == "0.5" );
-        REQUIRE( sidebar->findChild<QCheckBox*>( "extcapArg--verbose" )->isChecked() );
-        REQUIRE_FALSE( sidebar->findChild<QCheckBox*>( "extcapArg--promisc" )->isChecked() );
-        REQUIRE( sidebar->findChild<QComboBox*>( "extcapArg--if" )->currentData() == "wlan0" );
-        REQUIRE( sidebar->findChild<QRadioButton*>( "extcapArg--mode=slow" )->isChecked() );
-        auto* channels = sidebar->findChild<QListWidget*>( "extcapArg--channels" );
+        REQUIRE( form->findChild<QLineEdit*>( "extcapArg--remote-host" ) );
+        REQUIRE( form->findChild<QLineEdit*>( "extcapArg--remote-port" )->text() == "22" );
+        REQUIRE( form->findChild<QLineEdit*>( "extcapArg--ratio" )->text() == "0.5" );
+        REQUIRE( form->findChild<QCheckBox*>( "extcapArg--verbose" )->isChecked() );
+        REQUIRE_FALSE( form->findChild<QCheckBox*>( "extcapArg--promisc" )->isChecked() );
+        REQUIRE( form->findChild<QComboBox*>( "extcapArg--if" )->currentData() == "wlan0" );
+        REQUIRE( form->findChild<QRadioButton*>( "extcapArg--mode=slow" )->isChecked() );
+        auto* channels = form->findChild<QListWidget*>( "extcapArg--channels" );
         REQUIRE( channels->count() == 3 );
         REQUIRE( channels->item( 0 )->checkState() == Qt::Checked );
         REQUIRE( channels->item( 1 )->checkState() == Qt::Unchecked );
         REQUIRE( channels->item( 2 )->text() == "  Three" );
-        REQUIRE( sidebar->findChild<QComboBox*>( "extcapArg--sink" )->isEditable() );
-        REQUIRE( sidebar->findChild<QLineEdit*>( "extcapArg--keyfilePath" ) );
-        REQUIRE( sidebar->findChild<QLineEdit*>( "extcapArg--password" )->echoMode()
+        REQUIRE( form->findChild<QComboBox*>( "extcapArg--sink" )->isEditable() );
+        REQUIRE( form->findChild<QLineEdit*>( "extcapArg--keyfilePath" ) );
+        REQUIRE( form->findChild<QLineEdit*>( "extcapArg--password" )->echoMode()
                  == QLineEdit::Password );
-        REQUIRE_FALSE( sidebar->findChild<QWidget*>( "extcapArg--fifo" ) );
-        REQUIRE( sidebar->findChild<QLabel*>( "extcapStatus" )->text().contains( "EN10MB" ) );
+        REQUIRE_FALSE( form->findChild<QWidget*>( "extcapArg--fifo" ) );
+        REQUIRE( form->findChild<QLabel*>( "extcapStatus" )->text().contains( "EN10MB" ) );
     }
 
-    THEN( "a required argument left empty keeps Start disabled" )
+    THEN( "a required argument left empty is the form's problem, and a start is refused" )
     {
         REQUIRE( form->problem() == "Remote host is required." );
-        REQUIRE_FALSE( sidebar->findChild<QPushButton*>( "liveStartButton" )->isEnabled() );
+        WorkerSession live( sources );
+        REQUIRE_FALSE( live.session.start( form->choice() ) );
+        REQUIRE( live.adapters.notifications
+                 == QStringList{ "Cannot start the live capture: Remote host is required." } );
+        REQUIRE( extcaps.captures().isEmpty() );
     }
 
     WHEN( "the fields are filled" )
@@ -1018,19 +1019,19 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
         QTemporaryDir files;
         const auto keyFile = files.filePath( "key" );
         writeFile( keyFile, text( "k" ) );
-        sidebar->findChild<QLineEdit*>( "extcapArg--remote-host" )->setText( "it's $(rm -rf ~)" );
-        sidebar->findChild<QLineEdit*>( "extcapArg--remote-port" )->setText( "2222" );
-        sidebar->findChild<QLineEdit*>( "extcapArg--big" )->setText( "-5000000000" );
-        sidebar->findChild<QCheckBox*>( "extcapArg--verbose" )->setChecked( false );
-        sidebar->findChild<QCheckBox*>( "extcapArg--promisc" )->setChecked( true );
-        sidebar->findChild<QComboBox*>( "extcapArg--if" )->setCurrentIndex( 0 );
-        sidebar->findChild<QRadioButton*>( "extcapArg--mode=fast" )->setChecked( true );
-        sidebar->findChild<QListWidget*>( "extcapArg--channels" )
+        form->findChild<QLineEdit*>( "extcapArg--remote-host" )->setText( "it's $(rm -rf ~)" );
+        form->findChild<QLineEdit*>( "extcapArg--remote-port" )->setText( "2222" );
+        form->findChild<QLineEdit*>( "extcapArg--big" )->setText( "-5000000000" );
+        form->findChild<QCheckBox*>( "extcapArg--verbose" )->setChecked( false );
+        form->findChild<QCheckBox*>( "extcapArg--promisc" )->setChecked( true );
+        form->findChild<QComboBox*>( "extcapArg--if" )->setCurrentIndex( 0 );
+        form->findChild<QRadioButton*>( "extcapArg--mode=fast" )->setChecked( true );
+        form->findChild<QListWidget*>( "extcapArg--channels" )
             ->item( 1 )
             ->setCheckState( Qt::Checked );
-        sidebar->findChild<QComboBox*>( "extcapArg--sink" )->setEditText( "typed sink" );
-        sidebar->findChild<QLineEdit*>( "extcapArg--keyfilePath" )->setText( keyFile );
-        sidebar->findChild<QLineEdit*>( "extcapArg--password" )->setText( "s3cret" );
+        form->findChild<QComboBox*>( "extcapArg--sink" )->setEditText( "typed sink" );
+        form->findChild<QLineEdit*>( "extcapArg--keyfilePath" )->setText( keyFile );
+        form->findChild<QLineEdit*>( "extcapArg--password" )->setText( "s3cret" );
 
         THEN( "Start is enabled, and the command passes each value as one word" )
         {
@@ -1051,27 +1052,30 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
 
         THEN( "a value out of range, or not a number, is pointed out" )
         {
-            auto* port = sidebar->findChild<QLineEdit*>( "extcapArg--remote-port" );
+            auto* port = form->findChild<QLineEdit*>( "extcapArg--remote-port" );
             port->setText( "70000" );
             REQUIRE( form->problem() == "Port must be from 1 to 65535." );
             port->setText( "-1" );
             REQUIRE( form->problem() == "Port must be a whole number, not negative." );
             port->setText( "22" );
-            sidebar->findChild<QLineEdit*>( "extcapArg--count" )->setText( "3000000000" );
+            form->findChild<QLineEdit*>( "extcapArg--count" )->setText( "3000000000" );
             REQUIRE( form->problem() == "Count must be a whole number." );
-            sidebar->findChild<QLineEdit*>( "extcapArg--count" )->setText( "1" );
-            sidebar->findChild<QLineEdit*>( "extcapArg--keyfilePath" )
+            form->findChild<QLineEdit*>( "extcapArg--count" )->setText( "1" );
+            form->findChild<QLineEdit*>( "extcapArg--keyfilePath" )
                 ->setText( files.filePath( "missing" ) );
             REQUIRE( form->problem().contains( "does not exist" ) );
         }
 
         AND_WHEN( "the capture is started" )
         {
-            REQUIRE( sidebar->startLiveCapture( form->choice() ) );
-            REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+            WorkerSession live( sources );
+            REQUIRE( live.session.start( form->choice() ) );
+            REQUIRE( live.waitForOutcome() );
 
             THEN( "the password reached the extcap but not settings.ini" )
             {
+                INFO( live.outcome().error.toStdString() );
+                REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
                 REQUIRE( extcaps.captures().size() == 1 );
                 REQUIRE( extcaps.captures().front().contains( "[--password=s3cret]" ) );
                 const auto written = readText( settingsFilePath( host.configDir() ) );
@@ -1081,30 +1085,28 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
 
             THEN( "after a restart the options are shown again, but the password is not" )
             {
-                SidebarWidget restarted;
-                restarted.setTempRoot( tempRoot.path() );
-                restarted.setLiveSources( registryOf( extcaps.kind() ) );
-                optionsOf( &restarted );
-                REQUIRE( restarted.findChild<QLineEdit*>( "extcapArg--remote-port" )->text()
+                auto restarted = formFor( registryOf( extcaps.kind() ), host.configDir() );
+                optionsOf( restarted.get() );
+                REQUIRE( restarted->findChild<QLineEdit*>( "extcapArg--remote-port" )->text()
                          == "2222" );
                 REQUIRE(
-                    restarted.findChild<QLineEdit*>( "extcapArg--password" )->text().isEmpty() );
+                    restarted->findChild<QLineEdit*>( "extcapArg--password" )->text().isEmpty() );
             }
         }
     }
 
     WHEN( "another interface is chosen" )
     {
-        auto* interfaces = sidebar->findChild<QComboBox*>( "liveInterface" );
-        sidebar->findChild<QLineEdit*>( "extcapArg--remote-host" )->setText( "kept" );
+        auto* interfaces = form->findChild<QComboBox*>( "liveInterface" );
+        form->findChild<QLineEdit*>( "extcapArg--remote-host" )->setText( "kept" );
         interfaces->setCurrentIndex( 1 );
         REQUIRE( waitFor(
             [ & ] { return !options->isListing() && options->config().args.size() == 1; } ) );
 
         THEN( "its own arguments are shown, and the first interface's options are kept" )
         {
-            REQUIRE( sidebar->findChild<QLineEdit*>( "extcapArg--level" ) );
-            REQUIRE_FALSE( sidebar->findChild<QLineEdit*>( "extcapArg--remote-host" ) );
+            REQUIRE( form->findChild<QLineEdit*>( "extcapArg--level" ) );
+            REQUIRE_FALSE( form->findChild<QLineEdit*>( "extcapArg--remote-host" ) );
             const auto choice = form->choice();
             REQUIRE( choice.options.value( "fake0:--remote-host" ) == "kept" );
             REQUIRE( extcaps.kind()->command( choice ).arguments
@@ -1117,7 +1119,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
 {
     FakeHost host;
     FakeExtcaps extcaps;
-    QTemporaryDir tempRoot;
+    WorkerSession live( registryOf( extcaps.kind() ) );
     const auto marker = extcaps.path( "pwned" );
     LiveChoice choice{ "extcap", "fakedump", "fake0", "udp port 9999", 4096 };
     choice.options = { { "fake0:--remote-host", QString( "x'; touch %1; echo '" ).arg( marker ) },
@@ -1126,16 +1128,17 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
 
     GIVEN( "an extcap that writes its capture and exits" )
     {
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForOutcome() );
 
         THEN( "the capture is converted, its bytes as they were written" )
         {
-            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
-            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
-            REQUIRE( host.openedFiles.size() == 1 );
-            const QFileInfo log( host.openedFiles.first() );
+            INFO( live.outcome().error.toStdString() );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+            REQUIRE( live.outcome().stoppedBy == StopCondition::None );
+            REQUIRE( live.outcome().files.size() == 1 );
+            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            const QFileInfo log( live.outcome().files.first() );
             REQUIRE( log.fileName() == "fakedump-fake0.log" );
             QFile raw( log.dir().filePath( "fakedump-fake0.pcap" ) );
             REQUIRE( raw.open( QIODevice::ReadOnly ) );
@@ -1160,9 +1163,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
 
         THEN( "its stderr is shown, its stdout is not taken for the capture, and the FIFO is gone" )
         {
-            REQUIRE( sidebar->findChild<QPlainTextEdit*>( "liveStderr" )
-                         ->toPlainText()
-                         .contains( "fakedump: capturing" ) );
+            REQUIRE( live.stderrText().contains( "fakedump: capturing" ) );
             const auto call = extcaps.captures().front();
             const auto fifo = call.section( "[--fifo][", 1 ).section( ']', 0, 0 );
             REQUIRE( fifo.endsWith( "/capture.fifo" ) );
@@ -1173,22 +1174,24 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
     GIVEN( "an extcap that runs until it is stopped" )
     {
         writeFile( extcaps.path( "hang" ), {} );
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1; } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForFile() );
         const auto fifo
             = extcaps.captures().value( 0 ).section( "[--fifo][", 1 ).section( ']', 0, 0 );
         REQUIRE( QFileInfo::exists( fifo ) );
 
-        sidebar->stopLiveCapture();
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        live.session.stop();
+        REQUIRE( live.waitForOutcome() );
 
         THEN( "Stop ends the extcap and removes the FIFO, and the capture is kept" )
         {
             REQUIRE( waitFor( [ & ] { return extcaps.calls().contains( "killed" ); } ) );
             REQUIRE( waitFor( [ & ] { return !QFileInfo::exists( QFileInfo( fifo ).path() ); } ) );
-            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
-            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
+            INFO( live.outcome().error.toStdString() );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+            REQUIRE( live.outcome().stoppedBy == StopCondition::None );
+            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            REQUIRE( live.adapters.notifications.isEmpty() );
         }
     }
 
@@ -1196,19 +1199,22 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
     {
         writeFile( extcaps.path( "hang" ), {} );
         choice.limits.packets = 1;
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForOutcome() );
 
         THEN( "the capture stops by itself, as for any source, and ends the extcap" )
         {
-            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
-            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
-            REQUIRE( host.notifications.size() == 1 );
-            REQUIRE( host.notifications.first().contains( "stopped after 1 packets" ) );
+            INFO( live.outcome().error.toStdString() );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+            REQUIRE( live.outcome().stoppedBy == StopCondition::Packets );
+            REQUIRE( live.adapters.notifications
+                     == QStringList{ liveStopText( "fakedump-fake0", StopCondition::Packets,
+                                                   choice.limits ) } );
+            REQUIRE( live.adapters.notifications.first().contains( "stopped after 1 packets" ) );
             REQUIRE( waitFor( [ & ] { return extcaps.calls().contains( "killed" ); } ) );
-            REQUIRE( host.openedFiles.size() == 1 );
-            REQUIRE( readText( host.openedFiles.first() ).count( "UDP" ) == 1 );
+            REQUIRE( live.outcome().files.size() == 1 );
+            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            REQUIRE( readText( live.outcome().files.first() ).count( "UDP" ) == 1 );
         }
     }
 
@@ -1216,16 +1222,16 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
     {
         choice.limits.ringFiles = 1;
         choice.limits.fileBytes = 1;
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForOutcome() );
 
         THEN( "the raw capture is split, only the newest file kept, each file's text in a tab" )
         {
-            INFO( sidebar->findChild<QLabel*>( "liveError" )->text().toStdString() );
-            REQUIRE( sidebar->findChild<QLabel*>( "liveError" )->isHidden() );
-            REQUIRE( host.openedFiles.size() == 2 );
-            const QFileInfo log( host.openedFiles.last() );
+            INFO( live.outcome().error.toStdString() );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
+            REQUIRE( live.outcome().files.size() == 2 );
+            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            const QFileInfo log( live.outcome().files.last() );
             const auto files = log.dir().entryList( { "fakedump-fake0_*.pcap" }, QDir::Files );
             REQUIRE( files.size() == 1 );
             REQUIRE( files.first().startsWith( "fakedump-fake0_00002_" ) );
@@ -1234,39 +1240,39 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             REQUIRE( text.count( "UDP" ) == 1 );
             REQUIRE( text.contains( "two" ) );
             // The first file's text stays as it was.
-            REQUIRE( readText( host.openedFiles.first() ).count( "UDP" ) == 1 );
+            REQUIRE( readText( live.outcome().files.first() ).count( "UDP" ) == 1 );
         }
     }
 
     GIVEN( "an extcap that writes something else than a capture into the FIFO" )
     {
         writeFile( extcaps.path( "capture.pcap" ), text( "usage: fakedump [options]\n" ) );
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForOutcome() );
 
         THEN( "it is not a capture, with what the extcap wrote on stderr" )
         {
-            const auto error = sidebar->findChild<QLabel*>( "liveError" )->text();
-            REQUIRE( error.contains( "Not a capture" ) );
-            REQUIRE( error.contains( "fakedump: capturing" ) );
-            REQUIRE( host.openedFiles.isEmpty() );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Failed );
+            REQUIRE( live.outcome().error.contains( "Not a capture" ) );
+            REQUIRE( live.outcome().error.contains( "fakedump: capturing" ) );
+            REQUIRE( live.outcome().files.isEmpty() );
+            REQUIRE( live.adapters.openedTabs.isEmpty() );
         }
     }
 
     GIVEN( "an extcap that fails" )
     {
         writeFile( extcaps.path( "fail" ), {} );
-        auto sidebar = sidebarFor( extcaps, tempRoot );
-        REQUIRE( sidebar->startLiveCapture( choice ) );
-        REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+        REQUIRE( live.session.start( choice ) );
+        REQUIRE( live.waitForOutcome() );
 
         THEN( "its exit code and stderr are the error" )
         {
-            const auto text = sidebar->findChild<QLabel*>( "liveError" )->text();
-            REQUIRE( text.contains( "fakedump exited with code 1" ) );
-            REQUIRE( text.contains( "cannot reach the host" ) );
-            REQUIRE( host.openedFiles.isEmpty() );
+            REQUIRE( live.outcome().status == LiveOutcome::Status::Failed );
+            REQUIRE( live.outcome().error.contains( "fakedump exited with code 1" ) );
+            REQUIRE( live.outcome().error.contains( "cannot reach the host" ) );
+            REQUIRE( live.outcome().files.isEmpty() );
+            REQUIRE( live.adapters.openedTabs.isEmpty() );
         }
     }
 }
