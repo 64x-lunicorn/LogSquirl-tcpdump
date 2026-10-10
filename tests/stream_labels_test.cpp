@@ -28,10 +28,7 @@
 #include <cstring>
 
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_labels.h"
-#include "stream_tracker.h"
-#include "tcp_analysis.h"
+#include "pipeline_harness.h"
 
 using namespace tcpdump;
 using namespace tcpdump_test;
@@ -65,21 +62,25 @@ Bytes datagram( uint16_t server, const Bytes& payload )
     return eth( EthertypeIpv4, ipv4( IpProtoUdp, udp( kClient, server, payload ) ) );
 }
 
-/// The packets after the Converter's steps, in order: Stream Tracker, TCP
-/// Analysis, the Payload Describer in the stream, Stream Labels.
+/// The packets of @p frames after the Packet Pipeline, with @p options, as a
+/// conversion runs them.
 std::vector<PacketRecord> labelled( const std::vector<Bytes>& frames,
-                                    StreamTracker tracker = StreamTracker() )
+                                    const PipelineOptions& options = {} )
 {
-    auto packets = parse( pcapOf( frames ) ).packets;
-    REQUIRE( packets.size() == frames.size() );
-    StreamLabels labels;
-    for ( auto& pkt : packets ) {
-        const auto stream = tracker.track( pkt );
-        analyseTcp( pkt, stream );
-        describeInStream( pkt, stream );
-        labels.apply( pkt, stream );
+    std::vector<PacketRecord> packets;
+    for ( const auto& p : piped( pcapOf( frames ), options ) ) {
+        packets.push_back( p.pkt );
     }
+    REQUIRE( packets.size() == frames.size() );
     return packets;
+}
+
+/// Options that number @p streams conversations at most.
+PipelineOptions streamCap( size_t streams )
+{
+    PipelineOptions options;
+    options.maxStreams = streams;
+    return options;
 }
 
 /// The description of @p pkt: Info after " | ", empty without one.
@@ -279,7 +280,7 @@ SCENARIO( "A protocol a detector recognised sticks to the stream", "[stream_labe
                 segment( 3000, false, kPshAck, 1, 1, kGet ),
                 segment( 3000, false, kPshAck, 1 + kGet.size(), 1, kBody ),
             },
-            StreamTracker( 1 ) );
+            streamCap( 1 ) );
 
         THEN( "it has no state, and each segment is named on its own" )
         {

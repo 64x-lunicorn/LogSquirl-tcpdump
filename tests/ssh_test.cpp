@@ -29,7 +29,6 @@
 
 #include "payload_describer.h"
 #include "pipeline_harness.h"
-#include "tcp_reassembly.h"
 
 #include <limits>
 #include <random>

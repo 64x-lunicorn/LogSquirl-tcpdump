@@ -28,8 +28,7 @@
 #include <catch2/catch.hpp>
 
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_tracker.h"
+#include "pipeline_harness.h"
 
 #include <random>
 #include <string>
@@ -92,32 +91,13 @@ Bytes prefix( const Bytes& bytes, size_t n )
     return Bytes( bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>( n ) );
 }
 
-/// A segment between client and server.
-struct Segment {
-    bool fromClient;
-    Bytes payload;
-};
-
-/// Parse @p segments as a capture and describe each packet in its stream,
-/// as the Converter does.
-std::vector<PacketRecord> describedInStreams( const std::vector<Segment>& segments )
+/// @p turns between client and server, run through the Packet Pipeline as
+/// a conversion runs them.
+std::vector<PacketRecord> describedInStreams( const std::vector<Turn>& turns )
 {
-    std::vector<Bytes> frames;
-    for ( const auto& s : segments ) {
-        Ipv4Options o;
-        if ( !s.fromClient ) {
-            std::swap( o.src, o.dst );
-        }
-        frames.push_back(
-            eth( EthertypeIpv4, ipv4( IpProtoTcp,
-                                      s.fromClient ? tcp( kClientPort, kServerPort, s.payload )
-                                                   : tcp( kServerPort, kClientPort, s.payload ),
-                                      o ) ) );
-    }
-    auto packets = parse( pcapOf( frames ) ).packets;
-    StreamTracker tracker;
-    for ( auto& pkt : packets ) {
-        describeInStream( pkt, tracker.track( pkt ) );
+    std::vector<PacketRecord> packets;
+    for ( const auto& p : piped( tcpConversation( turns, kClientPort, kServerPort ) ) ) {
+        packets.push_back( p.pkt );
     }
     return packets;
 }
@@ -357,7 +337,7 @@ SCENARIO( "Frames in a stream that began with the preface are HTTP2", "[http][ht
             REQUIRE( descriptionOf( packets[ 1 ] ) == "SETTINGS[0], SETTINGS[0]" );
             REQUIRE( packets[ 2 ].protocol == "HTTP2" );
             REQUIRE( packets[ 2 ].info
-                     == "50080 \xe2\x86\x92 80 [ACK, PSH] Seq=1 Ack=0 Win=65535 Len=39 | "
+                     == "50080 \xe2\x86\x92 80 [ACK, PSH] Seq=40 Ack=25 Win=65535 Len=39 | "
                         "HEADERS[1]" );
             REQUIRE( descriptionOf( packets[ 3 ] ) == "HEADERS[1], DATA[1]" );
             REQUIRE( packets[ 4 ].protocol == "HTTP2" );
@@ -410,12 +390,14 @@ SCENARIO( "Frames in a stream that began with the preface are HTTP2", "[http][ht
             { true, {} },
         } );
 
-        THEN( "they are not HTTP2" )
+        THEN( "no frame is read in them: they are continuations of the HTTP2 stream" )
         {
-            for ( size_t i = 1; i < packets.size(); ++i ) {
+            for ( size_t i = 1; i + 1 < packets.size(); ++i ) {
                 INFO( "packet " << i );
-                REQUIRE( packets[ i ].protocol == "HTTP" );
+                REQUIRE( packets[ i ].protocol == "HTTP2" );
+                REQUIRE( descriptionOf( packets[ i ] ).rfind( "Continuation", 0 ) == 0 );
             }
+            REQUIRE( descriptionOf( packets.back() ).empty() );
         }
     }
 

@@ -1683,9 +1683,13 @@ of the steps: `piped()` in `tests/pipeline_harness.h` reads a capture built
 in the test, runs each packet through a `PacketPipeline` with its payload
 (`withKeyLog()` gives it the secrets of a key log) and hands back each
 packet as the pipeline left it, with its stream, its TCP Analysis and the
-messages it completed. The TCP Reassembly, TLS Decryption and SSH tests use
-it, and read what the reassembly or the decryption holds through the
-pipeline (`reassembly()`, `tlsDecryption()`).
+messages it completed; `tcpConversation()` builds the capture of a TCP
+connection from what each end sends, its sequence numbers going on as a
+real one's do. The TCP Reassembly, TLS Decryption, SSH, WebSocket, HTTP,
+MQTT, QUIC and Stream Labels tests use it, and read what the reassembly or
+the decryption holds through the pipeline (`reassembly()`,
+`tlsDecryption()`). A test that needs a stream in some state gets it from a
+capture with the packets that put it there, not by setting its bits.
 
 `formatAllPackets()` (`packet_formatter.h`), which tests use for the lines
 of a capture, reads a capture held in memory the same way: its reader, each

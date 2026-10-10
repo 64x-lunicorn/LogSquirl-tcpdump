@@ -27,8 +27,7 @@
 #include <catch2/catch.hpp>
 
 #include "payload_describer.h"
-#include "pcapbuilder.h"
-#include "stream_tracker.h"
+#include "pipeline_harness.h"
 
 #include <random>
 #include <string>
@@ -127,10 +126,12 @@ Bytes prefix( const Bytes& bytes, size_t n )
 struct Datagram {
     bool fromClient;
     Bytes payload;
+    /// The client's port, kClientPort unless another client sends it.
+    uint16_t clientPort = kClientPort;
 };
 
-/// Parse @p datagrams as a capture and describe each packet in its stream,
-/// as the Converter does.
+/// @p datagrams as a capture, run through the Packet Pipeline as a
+/// conversion runs them.
 std::vector<PacketRecord> describedInStreams( const std::vector<Datagram>& datagrams )
 {
     std::vector<Bytes> frames;
@@ -141,14 +142,13 @@ std::vector<PacketRecord> describedInStreams( const std::vector<Datagram>& datag
         }
         frames.push_back(
             eth( EthertypeIpv4, ipv4( IpProtoUdp,
-                                      d.fromClient ? udp( kClientPort, kServerPort, d.payload )
-                                                   : udp( kServerPort, kClientPort, d.payload ),
+                                      d.fromClient ? udp( d.clientPort, kServerPort, d.payload )
+                                                   : udp( kServerPort, d.clientPort, d.payload ),
                                       o ) ) );
     }
-    auto packets = parse( pcapOf( frames ) ).packets;
-    StreamTracker tracker;
-    for ( auto& pkt : packets ) {
-        describeInStream( pkt, tracker.track( pkt ) );
+    std::vector<PacketRecord> packets;
+    for ( const auto& p : piped( pcapOf( frames ) ) ) {
+        packets.push_back( p.pkt );
     }
     return packets;
 }
@@ -430,11 +430,15 @@ SCENARIO( "Short header packets are QUIC in a stream that began as QUIC", "[quic
             { true, {} },
         } );
 
-        THEN( "they are not QUIC" )
+        THEN( "no QUIC header is read in them: they are continuations of the QUIC stream" )
         {
-            REQUIRE( packets[ 2 ].protocol == "HTTPS" );
-            REQUIRE( packets[ 3 ].protocol == "HTTPS" );
-            REQUIRE( packets[ 4 ].protocol == "HTTPS" );
+            for ( size_t i = 2; i < 4; ++i ) {
+                INFO( "packet " << i );
+                REQUIRE( packets[ i ].protocol == "QUIC" );
+                REQUIRE( descriptionOf( packets[ i ] ).rfind( "Continuation", 0 ) == 0 );
+            }
+            REQUIRE( packets[ 4 ].protocol == "QUIC" );
+            REQUIRE( descriptionOf( packets[ 4 ] ).empty() );
         }
     }
 
@@ -442,19 +446,13 @@ SCENARIO( "Short header packets are QUIC in a stream that began as QUIC", "[quic
     {
         const auto packets = describedInStreams( {
             { true, initial( kV1, kClientDcid, kClientScid ) },
+            { true, shortPacket( kServerScid ), 40000 },
         } );
-        auto other
-            = parse( pcapOf( { eth( EthertypeIpv4,
-                                    ipv4( IpProtoUdp, udp( 40000, kServerPort,
-                                                           shortPacket( kServerScid ) ) ) ) } ) )
-                  .packets;
-        StreamTracker tracker;
-        describeInStream( other[ 0 ], tracker.track( other[ 0 ] ) );
 
         THEN( "its state is not another stream's" )
         {
             REQUIRE( packets[ 0 ].protocol == "QUIC" );
-            REQUIRE( other[ 0 ].protocol == "HTTPS" );
+            REQUIRE( packets[ 1 ].protocol == "HTTPS" );
         }
     }
 }
@@ -536,10 +534,12 @@ SCENARIO( "A cut or malformed QUIC header is never read beyond the payload", "[q
                         { random() % 2 == 0, prefix( mutated, random() % mutated.size() ) } );
                 }
                 datagrams.push_back( { true, shortPacket( kServerScid, random() % 64 ) } );
-                for ( const auto& pkt : describedInStreams( datagrams ) ) {
-                    REQUIRE( pkt.info.find( '\n' ) == std::string::npos );
-                    if ( pkt.protocol == "QUIC" ) {
-                        REQUIRE( !descriptionOf( pkt ).empty() );
+                const auto packets = describedInStreams( datagrams );
+                for ( size_t i = 0; i < packets.size(); ++i ) {
+                    REQUIRE( packets[ i ].info.find( '\n' ) == std::string::npos );
+                    // An empty datagram carries its stream's label alone.
+                    if ( packets[ i ].protocol == "QUIC" && !datagrams[ i ].payload.empty() ) {
+                        REQUIRE( !descriptionOf( packets[ i ] ).empty() );
                     }
                 }
             }

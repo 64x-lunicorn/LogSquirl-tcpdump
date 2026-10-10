@@ -79,6 +79,39 @@ inline std::vector<Piped> piped( const Bytes& capture,
     return piped( capture, pipeline );
 }
 
+/// A payload one end of a TCP connection sends, in a segment of its own.
+struct Turn {
+    bool fromClient = true;
+    Bytes payload;
+};
+
+/// @p turns between the client's @p clientPort and the server's
+/// @p serverPort, a second apart, as a pcap file: each end's sequence
+/// numbers go on where its last segment ended, and acknowledge all the
+/// other end sent.
+inline Bytes tcpConversation( const std::vector<Turn>& turns, uint16_t clientPort,
+                              uint16_t serverPort )
+{
+    std::vector<Record> records;
+    uint32_t sec = 1000;
+    uint32_t seq[ 2 ] = { 1000, 5000 }; // the client's, the server's
+    for ( const auto& [ fromClient, payload ] : turns ) {
+        Ipv4Options o;
+        if ( !fromClient ) {
+            std::swap( o.src, o.dst );
+        }
+        auto& next = seq[ fromClient ? 0 : 1 ];
+        const auto ack = seq[ fromClient ? 1 : 0 ];
+        const auto segment = fromClient
+                                 ? tcp( clientPort, serverPort, payload, 5, 0x18, next, ack )
+                                 : tcp( serverPort, clientPort, payload, 5, 0x18, next, ack );
+        records.push_back(
+            { eth( tcpdump::EthertypeIpv4, ipv4( tcpdump::IpProtoTcp, segment, o ) ), sec++ } );
+        next += static_cast<uint32_t>( payload.size() );
+    }
+    return pcapFile( records );
+}
+
 /// Options that decrypt TLS with the secrets of @p keys, which must outlive
 /// the pipeline.
 inline tcpdump::PipelineOptions withKeyLog( const tcpdump::tls::KeyLog& keys )
