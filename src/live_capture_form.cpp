@@ -32,6 +32,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSpinBox>
 #include <QStandardItemModel>
 #include <QVBoxLayout>
@@ -54,6 +55,55 @@ QString targetText( const LiveTarget& target )
 }
 
 } // namespace
+
+QString guidanceHtml( const QString& text )
+{
+    static const QRegularExpression url(
+        QStringLiteral( R"(https?://[^\s<>"()`]*[^\s<>"()`.,;:])" ) );
+    const auto prose = []( const QString& part ) {
+        QString html;
+        qsizetype at = 0;
+        for ( auto it = url.globalMatch( part ); it.hasNext(); ) {
+            const auto match = it.next();
+            html += part.mid( at, match.capturedStart() - at ).toHtmlEscaped();
+            html += QStringLiteral( "<a href=\"%1\">%1</a>" )
+                        .arg( match.captured().toHtmlEscaped() );
+            at = match.capturedEnd();
+        }
+        html += part.mid( at ).toHtmlEscaped();
+        return html.replace( QLatin1Char( '\n' ), QStringLiteral( "<br>" ) );
+    };
+    const auto parts = text.split( QLatin1Char( '`' ) );
+    if ( parts.size() % 2 == 0 ) {
+        return prose( text );
+    }
+    QString html;
+    for ( qsizetype i = 0; i < parts.size(); ++i ) {
+        if ( i % 2 == 1 ) {
+            html += QStringLiteral( "<pre>" ) + parts[ i ].toHtmlEscaped()
+                    + QStringLiteral( "</pre>" );
+            continue;
+        }
+        auto part = parts[ i ];
+        // The command is a block of its own: the blanks around it, and the
+        // comma or full stop that ends it in the sentence, go.
+        if ( i > 0 ) {
+            if ( !part.isEmpty() && QStringLiteral( ".,;" ).contains( part.front() ) ) {
+                part.remove( 0, 1 );
+            }
+            while ( !part.isEmpty() && part.front().isSpace() ) {
+                part.remove( 0, 1 );
+            }
+        }
+        if ( i + 1 < parts.size() ) {
+            while ( !part.isEmpty() && part.back().isSpace() ) {
+                part.chop( 1 );
+            }
+        }
+        html += prose( part );
+    }
+    return html;
+}
 
 LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     : QWidget( parent )
@@ -87,7 +137,9 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     status_ = new QLabel;
     status_->setObjectName( "liveSourceStatus" );
     status_->setWordWrap( true );
-    status_->setTextInteractionFlags( Qt::TextSelectableByMouse );
+    status_->setTextFormat( Qt::RichText );
+    status_->setTextInteractionFlags( Qt::TextBrowserInteraction );
+    status_->setOpenExternalLinks( true );
     status_->setHidden( true );
     layout->addRow( status_ );
 
@@ -538,7 +590,7 @@ QString LiveCaptureForm::currentId( const QComboBox* box )
 
 void LiveCaptureForm::showStatus( const QString& text )
 {
-    status_->setText( text );
+    status_->setText( guidanceHtml( text ) );
     status_->setHidden( text.isEmpty() );
 }
 

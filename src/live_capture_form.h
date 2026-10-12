@@ -76,6 +76,15 @@ class QSpinBox;
 namespace tcpdump {
 
 /**
+ * A source's text (a reason, a listing's error, a failure's Guidance) as
+ * rich text for a label: each `command` in backticks on a line of its own,
+ * in a fixed-width font, to be selected and copied whole; each http(s) URL
+ * a link; each line break kept.  The rest is escaped.  Backticks that do
+ * not pair are shown as they are.
+ */
+QString guidanceHtml( const QString& text );
+
+/**
  * The fields of a Live Source Kind's own options, below the form's while
  * the kind is chosen (LiveSourceKind::makeOptionsWidget()): the form hands
  * it the options kept for its kind and reads them back for choice().  It

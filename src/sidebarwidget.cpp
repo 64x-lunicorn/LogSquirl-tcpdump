@@ -284,7 +284,9 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     liveError_ = new QLabel;
     liveError_->setObjectName( "liveError" );
     liveError_->setWordWrap( true );
-    liveError_->setTextInteractionFlags( Qt::TextSelectableByMouse );
+    liveError_->setTextFormat( Qt::RichText );
+    liveError_->setTextInteractionFlags( Qt::TextBrowserInteraction );
+    liveError_->setOpenExternalLinks( true );
     liveError_->setHidden( true );
     liveLayout->addWidget( liveError_ );
 
@@ -917,11 +919,11 @@ void SidebarWidget::updateStartButton()
 
 void SidebarWidget::showLiveError( const LiveOutcome& outcome )
 {
-    auto text = "Error: " + outcome.error.toHtmlEscaped();
+    auto text = "Error: " + guidanceHtml( outcome.error );
     if ( !outcome.guidance.isEmpty() ) {
-        text += "<br>" + outcome.guidance.toHtmlEscaped();
+        text += "<br>" + guidanceHtml( outcome.guidance );
     }
-    liveError_->setText( text.replace( '\n', "<br>" ) );
+    liveError_->setText( text );
     liveError_->setHidden( false );
 }
 

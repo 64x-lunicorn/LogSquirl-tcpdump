@@ -552,6 +552,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source, before Interface and the limits, as the command is what is typed
   first; with no interface listed, the status says *No interfaces listed:
   if the command uses {interface}, type it in the Interface field.* (#144).
+- **Readable help in the live capture form.** A source's reason or error
+  (e.g. that /dev/bpf* cannot be read, or that no Android device is found)
+  shows each command on a line of its own in a fixed-width font, to be
+  selected and copied whole, and its URLs as links; the steps to turn on
+  USB debugging are a numbered list. The sidebar's live capture error does
+  the same. Notifications show the commands in backticks (#142).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

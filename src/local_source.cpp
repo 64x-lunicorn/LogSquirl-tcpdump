@@ -94,36 +94,39 @@ CaptureOs runningCaptureOs()
 
 QString capturePermissionGuidance( CaptureOs os, const QString& program )
 {
+    // Each command in backticks: the form shows it on a line of its own
+    // (guidanceHtml()), a notification as it is.
     const QString never = QStringLiteral(
-        " LogSquirl never runs sudo or asks for a password: run the command in a terminal "
+        "\n\nLogSquirl never runs sudo or asks for a password: run the command in a terminal "
         "yourself." );
     switch ( os ) {
     case CaptureOs::MacOS:
         return QStringLiteral( "Capturing needs read access to /dev/bpf*, which macOS gives root "
-                               "alone. Install ChmodBPF from the Wireshark disk image (%1, "
+                               "alone.\n\nInstall ChmodBPF from the Wireshark disk image (%1, "
                                "\"Install ChmodBPF.pkg\"): it lets the group access_bpf read "
-                               "/dev/bpf* and adds you to it. If ChmodBPF is installed but you "
-                               "are not in the group: sudo dseditgroup -o edit -a \"$USER\" -t "
-                               "user access_bpf, then log out and log in again." )
+                               "/dev/bpf* and adds you to it.\n\nIf ChmodBPF is installed but "
+                               "you are not in the group, run `sudo dseditgroup -o edit -a "
+                               "\"$USER\" -t user access_bpf`, then log out and log in again." )
                    .arg( kWiresharkDownload )
                + never;
     case CaptureOs::Linux: {
         const auto path = program.isEmpty() ? QStringLiteral( "/usr/bin/dumpcap" ) : program;
         const auto setcap
-            = QStringLiteral( "sudo setcap cap_net_raw,cap_net_admin=eip %1" ).arg( path );
+            = QStringLiteral( "`sudo setcap cap_net_raw,cap_net_admin=eip %1`" ).arg( path );
         if ( QFileInfo( path ).fileName().startsWith( QStringLiteral( "dumpcap" ) ) ) {
             return QStringLiteral( "Capturing needs the capabilities CAP_NET_RAW and "
-                                   "CAP_NET_ADMIN. Either join the wireshark group, which may "
-                                   "run dumpcap (on Debian and Ubuntu first: sudo "
-                                   "dpkg-reconfigure wireshark-common, answering Yes): sudo "
-                                   "usermod -aG wireshark \"$USER\", then log out and log in "
-                                   "again; or give dumpcap the capabilities: %1." )
+                                   "CAP_NET_ADMIN.\n\nEither join the wireshark group, which may "
+                                   "run dumpcap: `sudo usermod -aG wireshark \"$USER\"`, then log "
+                                   "out and log in again (on Debian and Ubuntu, first `sudo "
+                                   "dpkg-reconfigure wireshark-common` and answer Yes).\n\nOr "
+                                   "give dumpcap the capabilities: %1." )
                        .arg( setcap )
                    + never;
         }
-        return QStringLiteral( "Capturing needs the capabilities CAP_NET_RAW and CAP_NET_ADMIN. "
-                               "Give them to tcpdump: %1 (or install Wireshark's dumpcap, which "
-                               "members of the group wireshark may run)." )
+        return QStringLiteral( "Capturing needs the capabilities CAP_NET_RAW and "
+                               "CAP_NET_ADMIN.\n\nGive them to tcpdump: %1. Or install "
+                               "Wireshark's dumpcap, which members of the group wireshark may "
+                               "run." )
                    .arg( setcap )
                + never;
     }

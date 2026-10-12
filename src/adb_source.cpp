@@ -294,7 +294,7 @@ QString adbRootGuidance()
 {
     return QStringLiteral(
         "Capturing on Android needs root. On an emulator (a system image without Google Play) "
-        "or a userdebug or eng build, run adb root once (LogSquirl never runs it itself) and "
+        "or a userdebug or eng build, run `adb root` once (LogSquirl never runs it itself) and "
         "refresh. On a rooted device, let the su manager (e.g. Magisk) grant root to the Shell "
         "app (com.android.shell) without asking each time. A stock, unrooted device cannot "
         "capture this way." );
@@ -304,17 +304,18 @@ QString adbTcpdumpGuidance()
 {
     return QStringLiteral(
         "Emulator images and userdebug builds have tcpdump in /system/bin (older ones in "
-        "/system/xbin). On another device, push a static tcpdump built for its CPU (adb shell "
-        "getprop ro.product.cpu.abi): adb push tcpdump /data/local/tmp/, then adb shell chmod "
-        "755 /data/local/tmp/tcpdump; the Android source finds it there." );
+        "/system/xbin). On another device, push a static tcpdump built for its CPU, which `adb "
+        "shell getprop ro.product.cpu.abi` names: `adb push tcpdump /data/local/tmp/` and `adb "
+        "shell chmod 755 /data/local/tmp/tcpdump`. The Android source finds it there." );
 }
 
 QString adbConnectGuidance()
 {
     return QStringLiteral(
-        "Connect the device by USB with USB debugging on (Settings > About phone: tap Build "
-        "number seven times; then Settings > System > Developer options > USB debugging), or "
-        "start an emulator. If it is offline, reconnect it or restart adb: adb kill-server." );
+        "Connect the device by USB with USB debugging on, or start an emulator. To turn USB "
+        "debugging on:\n1. Settings > About phone: tap Build number seven times.\n2. Settings > "
+        "System > Developer options: turn on USB debugging.\nIf the device is offline, "
+        "reconnect it or restart adb: `adb kill-server`." );
 }
 
 QString adbAuthorizeGuidance()
