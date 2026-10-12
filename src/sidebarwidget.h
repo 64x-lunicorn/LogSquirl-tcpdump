@@ -100,6 +100,11 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *     packet of the line selected in the tab in front, and the
  *     Conversations table of the capture in front
  *
+ * A long summary scrolls in itself, up to kSummaryMaxLines tall, so that
+ * the Packet Panel keeps kPacketPanelMinLines.  A sidebar shorter than the
+ * minimum of all of it scrolls as a whole ("sidebarScroll"), rather than
+ * squeeze its widgets over one another or cut off its bottom.
+ *
  * Plugins > tcpdump > Start live capture… shows the same form in a dialog
  * (LiveCaptureDialog).  The last choice started is kept in settings.ini and
  * shown again after a restart.  Start is disabled while a capture is read

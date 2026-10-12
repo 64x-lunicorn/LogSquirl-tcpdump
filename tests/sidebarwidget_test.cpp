@@ -47,6 +47,7 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -132,6 +133,28 @@ T* child( const SidebarWidget& widget, const char* name )
     auto* found = widget.findChild<T*>( name );
     REQUIRE( found );
     return found;
+}
+
+/// Scroll each scroll area @p widget is in so that @p rect of it is in view,
+/// innermost first, as a user would; true if then the widgets it is in clip
+/// none of it.
+bool scrollIntoView( QWidget* widget, const QRect& rect )
+{
+    for ( auto* parent = widget->parentWidget(); parent; parent = parent->parentWidget() ) {
+        if ( auto* area = qobject_cast<QScrollArea*>( parent ) ) {
+            const auto top = widget->mapTo( area->widget(), rect.topLeft() );
+            // ensureVisible() takes a point and margins around it.
+            const auto half = rect.height() / 2;
+            area->ensureVisible( top.x() + rect.width() / 2, top.y() + half, rect.width() / 2,
+                                 rect.height() - half );
+            QCoreApplication::processEvents();
+        }
+    }
+    auto shown = rect;
+    for ( auto* parent = widget->parentWidget(); parent; parent = parent->parentWidget() ) {
+        shown &= QRect( widget->mapFrom( parent, QPoint( 0, 0 ) ), parent->size() );
+    }
+    return shown == rect;
 }
 
 } // namespace
@@ -658,19 +681,23 @@ SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
 
 SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[sidebar]" )
 {
-    GIVEN( "a sidebar of a given height showing a summary longer than it" )
+    GIVEN( "a sidebar in a host's sidebar tabs of a given height, showing a long summary" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        const auto height = GENERATE( 300, 600, 900 );
-        widget.resize( 380, height );
-        widget.show();
+        // As the host's sidebar holds it: a page of a QTabWidget, which a
+        // splitter may make shorter than the sidebar's minimum.
+        QTabWidget tabs;
+        auto* widget = new SidebarWidget;
+        tabs.addTab( widget, "tcpdump" );
+        const auto height = GENERATE( 250, 400, 600, 900 );
+        tabs.setFixedSize( 380, height );
+        tabs.show();
         QCoreApplication::processEvents();
-        auto* summary = child<QLabel>( widget, "summary" );
-        auto* area = child<QScrollArea>( widget, "summaryArea" );
-        auto* panel = child<QWidget>( widget, "packetPanel" );
-        auto* conversations = child<QWidget>( widget, "conversationTable" );
-        const auto line = widget.fontMetrics().lineSpacing();
+        auto* summary = child<QLabel>( *widget, "summary" );
+        auto* area = child<QScrollArea>( *widget, "summaryArea" );
+        auto* panel = child<QWidget>( *widget, "packetPanel" );
+        auto* conversations = child<QWidget>( *widget, "conversationTable" );
+        const auto line = widget->fontMetrics().lineSpacing();
 
         // The summary comes after the sidebar is shown, as a capture's does,
         // and takes the room the Packet panel leaves, up to 24 lines.
@@ -688,8 +715,8 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
 
         THEN( "the summary ends above the Packet panel, and both keep a usable height" )
         {
-            const auto areaBottom = area->mapTo( &widget, QPoint( 0, area->height() ) ).y();
-            const auto panelTop = panel->mapTo( &widget, QPoint( 0, 0 ) ).y();
+            const auto areaBottom = area->mapTo( widget, QPoint( 0, area->height() ) ).y();
+            const auto panelTop = panel->mapTo( widget, QPoint( 0, 0 ) ).y();
             REQUIRE( areaBottom <= panelTop );
             REQUIRE( area->height() >= SidebarWidget::kSummaryMinLines * line );
             REQUIRE( panel->height() >= SidebarWidget::kPacketPanelMinLines * line );
@@ -697,20 +724,26 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
                      >= tcpdump::PacketPanel::kConversationsMinLines * line );
         }
 
-        WHEN( "the summary is scrolled to its end" )
+        THEN( "the summary's last line can be scrolled into view, whole" )
         {
-            REQUIRE( area->verticalScrollBar()->maximum() > 0 );
-            area->verticalScrollBar()->setValue( area->verticalScrollBar()->maximum() );
-            QCoreApplication::processEvents();
+            // The label is as tall as its text: none of it is cut off.
+            REQUIRE( summary->height() >= summary->heightForWidth( summary->width() ) );
+            REQUIRE( scrollIntoView(
+                summary, QRect( 0, summary->height() - line, summary->width(), line ) ) );
+        }
 
-            THEN( "its last line is in view, whole" )
+        THEN( "the bottom of the Conversations can be scrolled into view" )
+        {
+            REQUIRE( scrollIntoView( conversations, QRect( 0, conversations->height() - line,
+                                                           conversations->width(), line ) ) );
+        }
+
+        if ( height >= 900 ) {
+            THEN( "a sidebar taller than its minimum does not scroll as a whole" )
             {
-                // The label is as tall as its text: none of it is cut off.
-                REQUIRE( summary->height() >= summary->heightForWidth( summary->width() ) );
-                const auto bottom
-                    = summary->mapTo( area->viewport(), QPoint( 0, summary->height() ) ).y();
-                REQUIRE( bottom <= area->viewport()->height() );
-                REQUIRE( bottom >= line );
+                REQUIRE(
+                    child<QScrollArea>( *widget, "sidebarScroll" )->verticalScrollBar()->maximum()
+                    == 0 );
             }
         }
     }

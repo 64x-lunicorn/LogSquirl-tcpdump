@@ -221,6 +221,61 @@ protected:
     }
 };
 
+/// The sidebar's content, scrolled as a whole only when the sidebar is
+/// shorter than the content's minimum: the summary's and the Packet panel's
+/// minimums and the widgets above them.  Down to that minimum the content is
+/// as tall as the sidebar, and only the summary scrolls, in itself; below
+/// it the content keeps its minimum height and scrolls, so that no widget is
+/// squeezed over another or cut off.  It is not widgetResizable: a
+/// QScrollArea that is would make the content as tall as its word-wrapped
+/// labels prefer, not as tall as they need at least.
+class ContentArea : public QScrollArea {
+public:
+    explicit ContentArea( QWidget* content )
+    {
+        setFrameShape( QFrame::NoFrame );
+        setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+        setWidget( content );
+        content->installEventFilter( this );
+    }
+
+    QSize sizeHint() const override
+    {
+        return widget()->sizeHint();
+    }
+
+protected:
+    bool eventFilter( QObject* watched, QEvent* event ) override
+    {
+        // A widget of the content shown, hidden or of another size.
+        if ( watched == widget() && event->type() == QEvent::LayoutRequest ) {
+            fit();
+        }
+        return QScrollArea::eventFilter( watched, event );
+    }
+
+    bool viewportEvent( QEvent* event ) override
+    {
+        // The sidebar resized, or the scroll bar came or went.
+        if ( event->type() == QEvent::Resize ) {
+            fit();
+        }
+        return QScrollArea::viewportEvent( event );
+    }
+
+private:
+    void fit()
+    {
+        const auto width = viewport()->width();
+        const auto* layout = widget()->layout();
+        auto minimum = layout->totalMinimumSize().height();
+        if ( layout->hasHeightForWidth() ) {
+            minimum = std::max( minimum, layout->totalMinimumHeightForWidth( width ) );
+        }
+        widget()->resize( width, std::max( viewport()->height(), minimum ) );
+    }
+};
+
 } // namespace
 
 void SidebarWidget::setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
@@ -266,7 +321,9 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     pool_.setMaxThreadCount( 1 );
     exportPool_.setMaxThreadCount( 1 );
 
-    auto* layout = new QVBoxLayout( this );
+    // All of it scrolls when the sidebar is shorter than its minimum.
+    auto* content = new QWidget;
+    auto* layout = new QVBoxLayout( content );
     layout->setContentsMargins( 8, 8, 8, 8 );
     layout->setSpacing( 6 );
 
@@ -406,6 +463,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     packetPanel_->setObjectName( "packetPanel" );
     packetPanel_->setMinimumHeight( kPacketPanelMinLines * fontMetrics().lineSpacing() );
     layout->addWidget( packetPanel_, 1 );
+    auto* contentArea = new ContentArea( content );
+    contentArea->setObjectName( "sidebarScroll" );
+    auto* outer = new QVBoxLayout( this );
+    outer->setContentsMargins( 0, 0, 0, 0 );
+    outer->addWidget( contentArea );
     if ( streamLinesButton_ ) {
         connect( packetPanel_, &PacketPanel::streamActionsChanged, this,
                  &SidebarWidget::updateStreamLinesButton );
