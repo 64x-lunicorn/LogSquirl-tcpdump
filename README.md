@@ -465,7 +465,8 @@ but no shell runs it**: blanks separate arguments, `'…'` and `"…"` quote
 quotes; nothing is expanded (`$HOME`, `~`, `*`, `$(…)` stay as they are)
 and `|`, `;`, `&&` or `>` make no pipe, list or redirection (the form
 refuses them unquoted). The placeholders `{interface}`, `{filter}` and
-`{snaplen}` are replaced by the fields above inside the argument they are
+`{snaplen}` are replaced by the Interface, Capture filter and Snaplen fields
+below the command inside the argument they are
 in, so a filter with spaces or quotes is still one argument; `{filter}`
 alone is left out when the filter is empty. `{interface}` needs an
 interface (this computer's are suggested; type any).

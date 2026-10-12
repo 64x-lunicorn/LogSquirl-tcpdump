@@ -241,6 +241,13 @@ public:
         fillSaved();
     }
 
+    /// The command is what the user gives first: the interface only fills
+    /// its {interface}.
+    bool comesFirst() const override
+    {
+        return true;
+    }
+
     LiveOptions options() const override
     {
         return { { kCommandLineOption, line_->text() },
@@ -628,8 +635,8 @@ LiveListing CustomCommandSourceKind::listInterfaces( const QString& device,
     }
     if ( !listing.error.isEmpty() || listing.targets.empty() ) {
         listing.targets.clear();
-        listing.error = QStringLiteral( "Type the interface {interface} stands for, if the "
-                                        "command uses it." );
+        listing.error = QStringLiteral( "No interfaces listed: if the command uses {interface}, "
+                                        "type it in the Interface field." );
     }
     return listing;
 }

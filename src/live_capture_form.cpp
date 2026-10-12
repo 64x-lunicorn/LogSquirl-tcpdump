@@ -544,7 +544,14 @@ void LiveCaptureForm::showOptionsWidget()
         options_->setOptions( kept->second );
     }
     auto* layout = static_cast<QFormLayout*>( this->layout() );
-    layout->addRow( options_ );
+    if ( options_->comesFirst() ) {
+        int statusRow = 0;
+        layout->getWidgetPosition( status_, &statusRow, nullptr );
+        layout->insertRow( statusRow + 1, options_ );
+    }
+    else {
+        layout->addRow( options_ );
+    }
     options_->setEnabled( kind->availability().available );
     connect( options_, &LiveOptionsWidget::changed, this, &LiveCaptureForm::changed );
     connect( options_, &LiveOptionsWidget::listingChanged, this, [ this ] {
