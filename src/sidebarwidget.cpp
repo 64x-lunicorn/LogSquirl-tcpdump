@@ -857,13 +857,16 @@ void SidebarWidget::followStreamContent()
 
 void SidebarWidget::openStreamLines()
 {
-    // The panel reads the selection now, not at its next poll.
+    // The panel reads the selection now, not at its next poll; the stream
+    // followed is that of the line it read, which its problem is about.
     packetPanel_->refresh();
     if ( const auto problem = packetPanel_->streamLinesProblem(); !problem.isEmpty() ) {
         hostNotify( "Stream lines in Regex Lab: " + problem );
         return;
     }
-    followSelectedStream();
+    if ( const auto line = packetPanel_->selectedLine() ) {
+        followStream( *line );
+    }
 }
 
 void SidebarWidget::updateStreamLinesButton()

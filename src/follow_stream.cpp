@@ -21,14 +21,12 @@
  * @file follow_stream.cpp
  * @brief Stream lines in Regex Lab, from the selected packet line.
  *
- * Reads the first Log Line the user selected through the host's
- * get_selected_log_lines, builds a pattern for its stream and opens it in
- * LogSquirl's Regex Lab, where the user sees the matches and applies it as
- * a filter.
+ * Builds a pattern for the stream of the packet line the Packet Panel read
+ * from the selection (Selected Packet Line) and opens it in LogSquirl's
+ * Regex Lab, where the user sees the matches and applies it as a filter.
  */
 
 #include "follow_stream.h"
-#include "packet_line.h"
 #include "plugin.h"
 #include "regex_lab.h"
 
@@ -85,44 +83,16 @@ QString streamPattern( const QString& stream, const QString& source, const QStri
     return pattern;
 }
 
-/// Why get_selected_log_lines() returned no line, for the user.
-QString selectionFailure( int result )
-{
-    switch ( result ) {
-    case LOGSQUIRL_LOG_LINES_NO_SELECTION:
-        return "select a packet line first.";
-    case LOGSQUIRL_LOG_LINES_NO_LOG_FILE:
-        return "the tab in front shows no capture.";
-    default:
-        return QString( "LogSquirl did not tell the selected line (%1)." ).arg( result );
-    }
-}
-
 } // namespace
 
-FollowStream followStreamPattern( const QString& packetLine )
+QString followStreamPattern( const PacketLine& packet )
 {
-    const auto line = packetLine.section( '\n', 0, 0 );
-    const auto packet = readPacketLine( line );
-    if ( !packet ) {
-        return { {}, "the selected line is not a packet line of a capture." };
+    if ( packet.stream < 0 ) {
+        return {}; // kNoStream or kUnnumbered
     }
-    if ( packet->stream == kNoStream ) {
-        return { {},
-                 QString( "packet %1 belongs to no stream: only TCP and UDP packets do." )
-                     .arg( packet->number ) };
-    }
-    if ( packet->stream == kUnnumbered ) {
-        return { {},
-                 QString( "packet %1 has no stream number: the capture has more "
-                          "conversations than the plugin numbers." )
-                     .arg( packet->number ) };
-    }
-
-    const auto ports = portsRegex().match( packet->body );
-    return { streamPattern( QString::number( packet->stream ), packet->source, packet->destination,
-                            ports.captured( 1 ), ports.captured( 2 ) ),
-             {} };
+    const auto ports = portsRegex().match( packet.body );
+    return streamPattern( QString::number( packet.stream ), packet.source, packet.destination,
+                          ports.captured( 1 ), ports.captured( 2 ) );
 }
 
 QString conversationPattern( int stream, const QString& addressA, uint16_t portA,
@@ -132,31 +102,16 @@ QString conversationPattern( int stream, const QString& addressA, uint16_t portA
                           QString::number( portB ) );
 }
 
-void followSelectedStream()
+void followStream( const PacketLine& packet )
 {
     const auto& st = g_state;
-    if ( !st.api || !st.handle || !st.hostCapabilities.regexLab
-         || !st.hostCapabilities.selectedLogLines ) {
+    if ( !st.api || !st.handle || !st.hostCapabilities.regexLab ) {
         return;
     }
-
-    const char* text = nullptr;
-    size_t length = 0;
-    const int result = st.api->get_selected_log_lines( st.handle, &text, &length, nullptr );
-    if ( result < 0 || !text ) {
-        hostNotify( "Stream lines in Regex Lab: " + selectionFailure( result ) );
-        return;
+    const auto pattern = followStreamPattern( packet );
+    if ( !pattern.isEmpty() ) {
+        openRegexLab( "Stream lines in Regex Lab", pattern );
     }
-
-    // The first selected line is the one followed.
-    const auto follow
-        = followStreamPattern( QString::fromUtf8( text, static_cast<qsizetype>( length ) ) );
-    if ( follow.pattern.isEmpty() ) {
-        hostNotify( "Stream lines in Regex Lab: " + follow.reason );
-        return;
-    }
-
-    openRegexLab( "Stream lines in Regex Lab", follow.pattern );
 }
 
 } // namespace tcpdump

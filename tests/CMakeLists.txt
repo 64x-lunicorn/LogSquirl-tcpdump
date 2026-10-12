@@ -73,6 +73,7 @@ add_executable(logsquirl_tcpdump_tests
     presets_test.cpp
     packet_formatter_test.cpp
     packet_line_test.cpp
+    selected_packet_line_test.cpp
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
@@ -171,6 +172,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/export_dialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/conversation_table.cpp"
+        "${CMAKE_SOURCE_DIR}/src/selected_packet_line.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_session.cpp"

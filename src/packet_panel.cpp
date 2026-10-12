@@ -25,10 +25,8 @@
 #include "packet_panel.h"
 
 #include "conversation_table.h"
-#include "packet_line.h"
 #include "plugin.h"
 #include "stream_content_view.h"
-#include "stream_tracker.h"
 
 #include <QFontDatabase>
 #include <QFutureWatcher>
@@ -56,13 +54,6 @@ constexpr size_t kBytesPerLine = 16;
 constexpr int kHexWidth = 16 * 3;
 constexpr int kOffsetGap = 2; ///< Between the offset and the hex.
 constexpr int kAsciiGap = 3;  ///< Between the hex and the ASCII.
-
-/// The status while no line is selected in a capture's tab, which the
-/// layer tree's and the hex dump's placeholders say in their words.
-QString selectPacketLine()
-{
-    return QStringLiteral( "Select a packet line to see its packet." );
-}
 
 /// The tree item's roles holding the bytes of its layer or field.
 constexpr int kOffsetRole = Qt::UserRole;
@@ -94,19 +85,6 @@ int asciiColumn( int width, size_t column )
 int lineLength( int width )
 {
     return asciiColumn( width, kBytesPerLine ) + 1;
-}
-
-/// What get_selected_log_lines()'s failure @p result means, for the user.
-QString selectionProblem( int result )
-{
-    switch ( result ) {
-    case LOGSQUIRL_LOG_LINES_NO_SELECTION:
-        return selectPacketLine();
-    case LOGSQUIRL_LOG_LINES_NO_LOG_FILE:
-        return QStringLiteral( "The tab in front shows no capture." );
-    default:
-        return QStringLiteral( "LogSquirl did not tell the selected line (%1)." ).arg( result );
-    }
 }
 
 } // namespace
@@ -298,7 +276,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     }
     index_ = std::move( index );
     cursor_.reset(); // a read of the capture before keeps its own
-    haveLast_ = false;
+    last_.reset();
     // The stream shown was one of the capture of the tab before.
     streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Show stream "
                                                  "content." )
@@ -317,7 +295,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
         poll();
     }
     else {
-        showReason( selectPacketLine() );
+        showReason( selectPacketLineReason() );
     }
 }
 
@@ -370,43 +348,27 @@ void PacketPanel::poll( bool force )
         return;
     }
 
-    const char* text = nullptr;
-    size_t length = 0;
-    const int result = st.api->get_selected_log_lines( st.handle, &text, &length, nullptr );
-    const QByteArray selection
-        = result >= 0 && text ? QByteArray( text, static_cast<qsizetype>( length ) ) : QByteArray();
-    if ( !force && haveLast_ && result == lastResult_ && selection == lastSelection_ ) {
+    auto selection = readSelectedLines();
+    if ( !force && last_ && selection == *last_ ) {
         return; // nothing changed
     }
-    haveLast_ = true;
-    lastResult_ = result;
-    lastSelection_ = selection;
-
-    if ( result < 0 || !text ) {
-        showReason( selectionProblem( result ) );
-        return;
-    }
-    showSelection( QString::fromUtf8( selection ) );
+    last_ = std::move( selection );
+    showSelection( selectedPacketLine( *last_ ) );
 }
 
-void PacketPanel::showSelection( const QString& selection )
+void PacketPanel::showSelection( const SelectedPacketLine& selected )
 {
-    // The first selected line is the one shown.
-    const auto line = selection.section( '\n', 0, 0 );
-    const auto packet = readPacketLine( line );
-    if ( !packet ) {
-        showReason( QStringLiteral( "The selected line is not a packet line of a capture." ) );
+    selected_ = selected;
+    if ( !selected_.packet ) {
+        showReason( selected_.reason );
         return;
     }
-    if ( packet->number == 0 ) {
-        showReason( QStringLiteral( "The selected line has no packet number." ) );
-        return;
-    }
-    shownStream_ = packet->stream;
-    // The TCP Analysis tells the handshake's iRTT on the line of the ACK
-    // that completes it; the packet read back alone has no stream to know it.
-    selectedIrtt_ = packet->irtt.toStdString();
-    showPacket( packet->number );
+    showPacket( selected_.packet->number );
+}
+
+std::optional<PacketLine> PacketPanel::selectedLine() const
+{
+    return selectedPacket_ != 0 ? selected_.packet : std::nullopt;
 }
 
 QString PacketPanel::streamContentProblem() const
@@ -416,25 +378,15 @@ QString PacketPanel::streamContentProblem() const
     if ( selectedPacket_ == 0 ) {
         return statusText();
     }
-    if ( shownStream_ == kNoStream ) {
-        return QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
-            .arg( selectedPacket_ );
-    }
-    return {};
+    return selected_.streamContentProblem();
 }
 
 QString PacketPanel::streamLinesProblem() const
 {
-    if ( auto problem = streamContentProblem(); !problem.isEmpty() ) {
-        return problem;
+    if ( selectedPacket_ == 0 ) {
+        return statusText();
     }
-    // Its content is read by its addresses, but no pattern picks its lines.
-    if ( shownStream_ == kUnnumbered ) {
-        return QStringLiteral( "Packet %1 has no stream number: the capture has more "
-                               "conversations than the plugin numbers." )
-            .arg( selectedPacket_ );
-    }
-    return {};
+    return selected_.streamLinesProblem();
 }
 
 void PacketPanel::updateStreamActions()
@@ -454,7 +406,7 @@ bool PacketPanel::followStreamContent( QString* why )
         }
         return false;
     }
-    streamView_->follow( index_, selectedPacket_, shownStream_ );
+    streamView_->follow( index_, selectedPacket_, selected_.packet->stream );
     tabs_->setCurrentWidget( streamView_ );
     return true;
 }
@@ -534,10 +486,13 @@ void PacketPanel::showRead( const PacketRead& read )
     const auto& packet = read.packet;
     const auto number = read.number;
     layers_ = read.layers;
-    if ( !selectedIrtt_.empty() ) {
+    // The TCP Analysis tells the handshake's iRTT on the line of the ACK
+    // that completes it; the packet read back alone has no stream to know it.
+    const auto irtt = selected_.packet ? selected_.packet->irtt.toStdString() : std::string();
+    if ( !irtt.empty() ) {
         for ( auto& layer : layers_ ) {
             if ( layer.name == "Transmission Control Protocol" ) {
-                layer.fields.push_back( { "iRTT", selectedIrtt_ + " seconds", 0, 0 } );
+                layer.fields.push_back( { "iRTT", irtt + " seconds", 0, 0 } );
             }
         }
     }
@@ -588,7 +543,7 @@ void PacketPanel::showReason( const QString& reason )
     // Said once: the sidebar's summary above says the tab holds no capture,
     // the empty layer tree and hex dump to select a packet line.  The
     // status still tells statusText() and the stream buttons' tooltips.
-    status_->setHidden( !index_ || reason == selectPacketLine() );
+    status_->setHidden( !index_ || reason == selectPacketLineReason() );
     tree_->clear();
     dump_->clear();
     updateStreamActions();

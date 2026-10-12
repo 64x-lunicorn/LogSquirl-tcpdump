@@ -1003,9 +1003,10 @@ A packet line is read back next to where it is written: `readPacketLine()`
 (its number, `kNoStream` or `kUnnumbered`), Source, Destination, Protocol,
 the rest of the line from Info on, and the iRTT that Info shows on the ACK
 that completes a handshake (see *TCP analysis markers*), or none for a
-line that is no packet line. The Packet Panel, Stream lines in Regex Lab
-and Export packets read the selected lines with it and have no regex of
-their own for the columns. `packet_line_test.cpp` formats TCP packets with
+line that is no packet line. The Packet Panel and Stream lines in Regex
+Lab read the selected line with it through Selected Packet Line (see
+*Packet Panel*), Export packets the selected lines; none has a regex of
+its own for the columns. `packet_line_test.cpp` formats TCP packets with
 and without an iRTT, UDP, a packet in no stream and one in an unnumbered
 stream in every `LineLayout` and reads back the same packet number, stream
 and iRTT, so that a change of the line that the reader does not follow
@@ -2268,7 +2269,9 @@ Qt UI that provides:
   button shares); `PacketPanel::streamActionsChanged()` updates it as the
   selection changes. A click and the menu entry both go through
   `SidebarWidget::openStreamLines()`, which refreshes the panel and
-  notifies that same reason instead of opening the Lab
+  notifies that same reason instead of opening the Lab, or opens it on the
+  line the panel read (`PacketPanel::selectedLine()`): the selection is
+  read once for both
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints (on a host with `regexLab`, each protocol and endpoint is a
   link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
@@ -2417,9 +2420,9 @@ so that the host's spelling of a tab's path (on macOS `/var/folders/…` for
 updating, the tab in front, a capture ending, a failed file's error, and
 the parts of a ring buffer and of a capture without an index.
 
-### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`)
+### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`, `selected_packet_line.h/cpp`)
 The sidebar's companion to the packet list: the layer tree and hex dump of
-the packet of the selected line, as Wireshark's lower panes. Three parts,
+the packet of the selected line, as Wireshark's lower panes. Four parts,
 each usable on its own by later features (follow-stream content, packet
 export, conversation statistics):
 
@@ -2457,17 +2460,31 @@ export, conversation statistics):
   its header with `layer()` and `field()` behind `if ( auto* layers =
   pkt.layers )`, using `hexField()`, `etherTypeField()` and
   `ipProtocolField()` for values.
+- **Selected Packet Line** (`selected_packet_line.h/cpp`). The one reader
+  of the selection. `readSelectedLines()` asks the host's
+  `get_selected_log_lines` and keeps its result, text and line count
+  (`SelectedLines`, which compares equal for the same answer);
+  `selectedPacketLine()` reads its first line with `readPacketLine()` and
+  answers with the `PacketLine` (number, stream, endpoints, iRTT) or one
+  reason for the user: no selection, a tab without a Log File, another
+  failure of the host, a line that is no packet line, a packet number no
+  packet has. `streamContentProblem()` adds a packet of no stream,
+  `streamLinesProblem()` also an unnumbered one. Each reason text is
+  written there once; the Packet Panel shows them, Show stream content
+  and Stream lines in Regex Lab notify them.
+  `selected_packet_line_test.cpp` is a table over the `FakeHost`: each
+  result of `get_selected_log_lines` and each kind of line, with the packet
+  or the reason it gives.
 - **The widget.** `PacketPanel` gets the tab in front's index from
   `SidebarWidget::showSummaryFor()` (null for a foreign tab) and reads the
-  selection through `get_selected_log_lines`. LogSquirl has no
+  selection through Selected Packet Line. LogSquirl has no
   selection-changed callback, so it asks every `kPollIntervalMs` (250 ms)
   while it is visible: the timer starts in `showEvent()` and stops in
-  `hideEvent()`, and a selection whose text and result did not change
+  `hideEvent()`, and a selection whose `SelectedLines` did not change
   leaves the panel as it is. `refresh()` asks at once; Plugins → tcpdump →
   Packet details calls it through `SidebarWidget::showPacketDetails()`,
-  which notifies the packet's layers when the panel is out of view. The
-  first selected line is read with `readPacketLine()`; a line that is not a
-  packet line, no selection, a foreign tab or a cursor error show the
+  which notifies the packet's layers when the panel is out of view. No
+  packet line, no capture in the tab in front or a cursor error show the
   reason in the status line. With a capture, the empty tree (`LayerTree`,
   which paints its placeholder) and dump say to select a packet line. The
   status line is hidden where it would say the same again: for a foreign
@@ -2496,12 +2513,13 @@ export, conversation statistics):
   `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Show
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
-  panel keeps the number and Stream column of the line selected
-  (`selectedPacket_`, `shownStream_`), so that a stream can be followed
+  panel keeps the line selected as Selected Packet Line read it
+  (`selected_`, `selectedLine()`), so that a stream can be followed
   while its packet is still read. `streamContentProblem()` and
   `streamLinesProblem()` say why Show stream content and Stream lines in
-  Regex Lab cannot work for the line selected now (no capture, no packet
-  line, no stream, for the Lab also an unnumbered one); the panel enables
+  Regex Lab cannot work for the line selected now (no capture or a read
+  that failed, else what the `SelectedPacketLine` says: no packet line,
+  no stream, for the Lab also an unnumbered one); the panel enables
   its button by the first, and `streamActionsChanged()` has the sidebar
   enable its Stream lines in Regex Lab button by the second, each tooltip
   saying the reason.
@@ -2671,16 +2689,17 @@ ends before it. Keep the pointer the host passed: never copy `*api`.
 #### Stream lines in Regex Lab (`follow_stream.h/cpp`)
 `Plugins → tcpdump → Stream lines in Regex Lab` and the sidebar button call
 `SidebarWidget::openStreamLines()`, offered only on a host with `regexLab`
-and `selectedLogLines`. It first asks the Packet Panel's
-`streamLinesProblem()`, so that a line that only looks like a packet line,
-in a tab that shows no capture, opens nothing, with the reason the
-button's tooltip gives; then `followSelectedStream()` reads the first selected Log Line through
-`get_selected_log_lines`, and `followStreamPattern()` turns it into a
-pattern for `open_regex_lab` (with Match case); the Lab's answer, the
-applied pattern or a cancel, is logged. The line is read with
-`readPacketLine()`, through the Log Format's regex, which
-`packetLineRegex()` in `packet_line.cpp` repeats; `logformat_test.cpp`
-fails when the two differ.
+and `selectedLogLines`. It has the Packet Panel read the selection
+through Selected Packet Line and asks its `streamLinesProblem()`, so that
+a line that only looks like a packet line, in a tab that shows no
+capture, opens nothing, with the reason the button's tooltip gives; then
+`followStream()` takes the `PacketLine` the panel read
+(`PacketPanel::selectedLine()`), not a second reading of the selection,
+and `followStreamPattern()` turns it into a pattern for `open_regex_lab`
+(with Match case); the Lab's answer, the applied pattern or a cancel, is
+logged. The line is read with `readPacketLine()`, through the Log
+Format's regex, which `packetLineRegex()` in `packet_line.cpp` repeats;
+`logformat_test.cpp` fails when the two differ.
 The pattern requires the line's stream number, its two addresses and the
 two ports at the start of a TCP or UDP Info (markers in brackets may come
 first), each pair in either order. The Stream column alone is not enough:
@@ -2692,11 +2711,13 @@ may put at its start and the tunnels a tunnelled packet names first (its
 ports are the inner packet's, as its stream is); the rest of Info is not read, so a change there does
 not break the pattern. A
 line that is no packet line, one with stream `-` or `?`, no selection or a
-tab without a Log File give a notification with the reason instead.
-`follow_stream_test.cpp` checks the pattern against every corpus line,
-checks that it finds the same packets in the corpus converted in every
-`LineLayout`, and drives the menu entry and the button through the
-`FakeHost`.
+tab without a Log File give a notification with Selected Packet Line's
+reason instead (`followStreamPattern()` has no pattern for a stream
+without a number). `follow_stream_test.cpp` checks the pattern against
+every corpus line, checks that it finds the same packets in the corpus
+converted in every `LineLayout`, and drives the menu entry and the button
+through the `FakeHost`, which counts that the selection is read once; the
+reasons themselves are `selected_packet_line_test.cpp`'s.
 
 #### Summary filters (`regex_lab.h/cpp`)
 `summaryHtml()` with `filterLinks`, which `showSummaryFor()` passes as

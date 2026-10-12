@@ -858,20 +858,6 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
             }
         }
 
-        WHEN( "a line of another log is selected" )
-        {
-            host.selectedLines = { "2026-10-09 12:00:00 INFO server started" };
-            panel->refresh();
-
-            THEN( "both are disabled and say it is no packet line" )
-            {
-                REQUIRE_FALSE( lines->isEnabled() );
-                REQUIRE_FALSE( content->isEnabled() );
-                REQUIRE( lines->toolTip().contains( "not a packet line" ) );
-                REQUIRE( content->toolTip().contains( "not a packet line" ) );
-            }
-        }
-
         WHEN( "a packet line without a stream is selected" )
         {
             host.selectedLines = { loaded.lines[ 20 ] };
@@ -916,14 +902,18 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
 
             AND_WHEN( "Stream lines in Regex Lab is clicked" )
             {
+                const auto callsBefore = host.selectionCalls;
                 lines->click();
 
-                THEN( "the Regex Lab opens with the pattern of that UDP stream's lines" )
+                THEN( "the Regex Lab opens with the pattern of that UDP stream's lines, read "
+                      "once for both" )
                 {
                     REQUIRE( host.regexLabs.size() == 1 );
                     REQUIRE( host.regexLabs.first().pattern
-                             == tcpdump::followStreamPattern( loaded.lines[ 5 ] ).pattern );
+                             == tcpdump::followStreamPattern(
+                                 *tcpdump::readPacketLine( loaded.lines[ 5 ] ) ) );
                     REQUIRE( host.notifications.isEmpty() );
+                    REQUIRE( host.selectionCalls == callsBefore + 1 );
                 }
             }
 

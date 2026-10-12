@@ -194,10 +194,11 @@ public:
     void followStreamContent();
 
     /// Plugins > tcpdump > Stream lines in Regex Lab: open the Regex Lab on
-    /// the lines of the selected line's stream (followSelectedStream()), or
-    /// notify the user why not, as the sidebar's button says in its tooltip
+    /// the lines of the selected line's stream (followStream()), or notify
+    /// the user why not, as the sidebar's button says in its tooltip
     /// (PacketPanel::streamLinesProblem()): a line that only looks like a
-    /// packet line, in a tab that shows no capture, opens nothing.
+    /// packet line, in a tab that shows no capture, opens nothing.  The
+    /// selection is read once, by the Packet Panel, for both.
     void openStreamLines();
 
     /// Plugins > tcpdump > Export packets…: the packets of the lines selected
