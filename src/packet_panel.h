@@ -160,6 +160,9 @@ public:
     }
 
     /// The panel's status line: the packet shown, or why there is none.
+    /// It is hidden while it would say what the summary or the empty layer
+    /// tree and hex dump say (no capture, no line selected), and tells it
+    /// all the same.
     QString statusText() const;
 
     /// Show stream content: show the content of the selected packet's

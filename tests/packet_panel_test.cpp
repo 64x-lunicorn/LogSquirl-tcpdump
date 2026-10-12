@@ -219,6 +219,7 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
             {
                 REQUIRE( waitFor(
                     [ panel ] { return panel->statusText().contains( "not a packet line" ); } ) );
+                REQUIRE_FALSE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
                 REQUIRE( panel->shownPacket() == 0 );
             }
         }
@@ -227,11 +228,15 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
         {
             host.selectedLines.clear();
 
-            THEN( "the panel asks for a selection, and its empty views what they show" )
+            THEN( "the panel asks for a selection once, in its empty views" )
             {
                 REQUIRE( waitFor( [ panel ] {
                     return panel->statusText() == "Select a packet line to see its packet.";
                 } ) );
+                // The status still says it to the stream buttons' tooltips.
+                REQUIRE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
+                REQUIRE( panel->findChild<QPushButton*>( "streamContentButton" )->toolTip()
+                         == "Select a packet line to see its packet." );
                 auto* tree = panel->findChild<tcpdump::LayerTree*>( "packetLayers" );
                 REQUIRE( tree );
                 REQUIRE( tree->topLevelItemCount() == 0 );

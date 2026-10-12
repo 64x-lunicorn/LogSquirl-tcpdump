@@ -58,6 +58,13 @@ constexpr int kHexWidth = 16 * 3;
 constexpr int kOffsetGap = 2; ///< Between the offset and the hex.
 constexpr int kAsciiGap = 3;  ///< Between the hex and the ASCII.
 
+/// The status while no line is selected in a capture's tab, which the
+/// layer tree's and the hex dump's placeholders say in their words.
+QString selectPacketLine()
+{
+    return QStringLiteral( "Select a packet line to see its packet." );
+}
+
 /// The tree item's roles holding the bytes of its layer or field.
 constexpr int kOffsetRole = Qt::UserRole;
 constexpr int kLengthRole = Qt::UserRole + 1;
@@ -95,7 +102,7 @@ QString selectionProblem( int result )
 {
     switch ( result ) {
     case LOGSQUIRL_LOG_LINES_NO_SELECTION:
-        return QStringLiteral( "Select a packet line to see its packet." );
+        return selectPacketLine();
     case LOGSQUIRL_LOG_LINES_NO_LOG_FILE:
         return QStringLiteral( "The tab in front shows no capture." );
     default:
@@ -305,7 +312,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
         poll();
     }
     else {
-        showReason( QStringLiteral( "Select a packet line to see its packet." ) );
+        showReason( selectPacketLine() );
     }
 }
 
@@ -581,8 +588,10 @@ void PacketPanel::showReason( const QString& reason )
     shownBytes_ = 0;
     layers_.clear();
     status_->setText( reason );
-    // The sidebar's summary above says the tab holds no capture.
-    status_->setHidden( !index_ );
+    // Said once: the sidebar's summary above says the tab holds no capture,
+    // the empty layer tree and hex dump to select a packet line.  The
+    // status still tells statusText() and the stream buttons' tooltips.
+    status_->setHidden( !index_ || reason == selectPacketLine() );
     tree_->clear();
     dump_->clear();
     updateStreamActions();
