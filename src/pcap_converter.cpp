@@ -205,8 +205,6 @@ std::optional<ConversionResult> stoppedBeforeHeader( const ByteSource& input )
     return result;
 }
 
-using Clock = std::chrono::steady_clock;
-
 /**
  * The conversion of the capture in @p input, named @p name; whatever it
  * throws, the caller turns into Failed.  @p file is the capture file
@@ -219,7 +217,8 @@ using Clock = std::chrono::steady_clock;
  * Every packet goes through the same steps for a file and a stream: the
  * Parser's record through the Packet Pipeline, then the Packet Recorder,
  * which counts it, makes its line, learns its names and notes its place,
- * and the line into the text.
+ * and the line into the text; live, the Live Output then says whether to
+ * flush, open the text or send a snapshot, and whether the capture stops.
  */
 ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QString& inputPath,
                                  const QString& name, const QString& outputRoot,
@@ -237,20 +236,21 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     }
     const SomeIpScope someIpScope( someIp );
 
-    const auto started = Clock::now();
-    // The limits' durations, by the clock they are measured with.
-    auto clockNow = [ &clock ] { return clock ? clock() : Clock::now(); };
-    const auto limitsStarted = clockNow();
-    auto fileStarted = limitsStarted; ///< When the ring buffer's file was started.
+    // Live: when the capture stops, and when what was written is flushed
+    // and a snapshot goes out, by the one clock.
+    std::optional<LiveOutput> liveOutput;
+    std::chrono::steady_clock::time_point fileStarted; ///< When the ring buffer's file was started.
     StopCondition stoppedBy = StopCondition::None;
 
     // What to do before a wait for the stream, once there is output.
     std::function<void()> beforeWait;
     std::optional<LiveInput> liveInput;
     if ( live ) {
+        liveOutput.emplace( limits, clock, options.lastPacketNumber );
+        fileStarted = liveOutput->now();
         std::function<bool()> expired;
         if ( limits.duration.count() > 0 ) {
-            expired = [ & ] { return clockNow() - limitsStarted >= limits.duration; };
+            expired = [ &liveOutput ] { return liveOutput->durationOver(); };
         }
         liveInput.emplace(
             input,
@@ -371,54 +371,55 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     }
 
     const auto& index = recorder.index();
-    // Live: what was written is made readable before every wait and at
-    // least every kLiveFlushInterval; snapshots go out with the first packet
-    // and then at most every kLiveSnapshotInterval.
-    auto lastFlush = started;
-    auto lastSnapshot = started;
+    // Live: what was written is made readable, a text opened and snapshots
+    // sent when the Live Output says so (act()).
     bool flushFailed = false;
-    bool snapshotDue = false; ///< Packets came since the last snapshot.
     auto flush = [ & ] {
-        lastFlush = Clock::now();
         if ( !output.flush() || ( live && !raw->flush() ) ) {
             flushFailed = true;
         }
     };
     auto sendSnapshot = [ & ] {
-        lastSnapshot = Clock::now();
-        snapshotDue = false;
         if ( !live->snapshot ) {
             return;
         }
         LiveSnapshot snapshot;
         snapshot.summary = recorder.summary();
-        snapshot.elapsed
-            = std::chrono::duration_cast<std::chrono::milliseconds>( lastSnapshot - started );
+        snapshot.elapsed = liveOutput->elapsed();
         snapshot.rawBytes = liveInput->bytesRead();
         snapshot.rawFile = raw->fileNumber();
         // The packets so far, for the Packet Panel: their bytes are in the
-        // raw file once it is flushed, which goes on growing behind them.
-        flush();
+        // raw file, flushed first, which goes on growing behind them.
         auto soFar = std::make_shared<CaptureIndex>( *index );
         soFar->setCaptureParts( raw->parts(), CaptureIndex::Growth::Growing );
         snapshot.index = std::move( soFar );
         live->snapshot( std::move( snapshot ) );
     };
+    auto act = [ & ]( const LiveStep& step ) {
+        if ( step.flush ) {
+            flush();
+        }
+        if ( step.firstOfText && !flushFailed && live->firstPacket ) {
+            live->firstPacket( QFileInfo( output.fileName() ).absoluteFilePath(),
+                               QFileInfo( raw->path() ).absoluteFilePath() );
+        }
+        if ( step.snapshot ) {
+            sendSnapshot();
+        }
+    };
     if ( live ) {
         beforeWait = [ & ] {
-            flush();
-            if ( !snapshotDue || !live->snapshot ) {
+            act( liveOutput->beforeWait() );
+            if ( !live->snapshot || !liveOutput->snapshotWaits() ) {
                 return;
             }
             // The packets of a burst would wait for the next packet to be
             // in a snapshot: while the stream has nothing new, wait for the
             // snapshot's turn instead.  ready() also turns on a stop.
-            while ( !liveInput->ready() && Clock::now() - lastSnapshot < kLiveSnapshotInterval ) {
+            while ( !liveInput->ready() && liveOutput->snapshotWaits() ) {
                 std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
             }
-            if ( Clock::now() - lastSnapshot >= kLiveSnapshotInterval ) {
-                sendSnapshot();
-            }
+            act( liveOutput->beforeWait() );
         };
     }
 
@@ -437,8 +438,6 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         }
     };
     bool firstPacket = true;
-    // The text file written has no packet line yet: the next one opens it.
-    bool firstOfText = true;
     // A ring buffer's file ends after the packet that filled it, or the last
     // one before its duration was over, when the next packet comes: where
     // that packet's record ends, and the headers a file needs there.
@@ -457,17 +456,17 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
             return rawFailed();
         }
         fileFull = false;
-        fileStarted = clockNow();
+        fileStarted = liveOutput->now();
         output.setFileName( textPath() );
         if ( !openText() || !writeLine( recorder.header() ) ) {
             return writeFailed();
         }
-        firstOfText = true;
         // Not the checkpoints of the files deleted: a capture that runs for
         // days keeps those of its files only.
         index->setCaptureParts( raw->parts(), CaptureIndex::Growth::Growing );
-        // The Packet Panel's index follows the files at once.
-        sendSnapshot();
+        // The Packet Panel's index follows the files at once, and the next
+        // packet opens the new text.
+        act( liveOutput->textStarted() );
         if ( flushFailed ) {
             return writeFailed();
         }
@@ -485,7 +484,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         if ( limits.ringBuffer() && !firstPacket
              && ( fileFull
                   || ( limits.fileDuration.count() > 0
-                       && clockNow() - fileStarted >= limits.fileDuration ) ) ) {
+                       && liveOutput->now() - fileStarted >= limits.fileDuration ) ) ) {
             if ( auto failure = rotate() ) {
                 return std::move( *failure );
             }
@@ -496,26 +495,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
             return writeFailed();
         }
         if ( live ) {
-            snapshotDue = true;
-            const auto now = Clock::now();
-            if ( firstOfText ) {
-                // The header and this line are in the file before it is opened.
-                firstOfText = false;
-                flush();
-                if ( !flushFailed && live->firstPacket ) {
-                    live->firstPacket( QFileInfo( output.fileName() ).absoluteFilePath(),
-                                       QFileInfo( raw->path() ).absoluteFilePath() );
-                }
-                sendSnapshot();
-            }
-            else {
-                if ( now - lastFlush >= kLiveFlushInterval ) {
-                    flush();
-                }
-                if ( now - lastSnapshot >= kLiveSnapshotInterval ) {
-                    sendSnapshot();
-                }
-            }
+            const auto step = liveOutput->packet( recorder.packets(), liveInput->bytesRead() );
+            act( step );
             if ( flushFailed ) {
                 return writeFailed();
             }
@@ -523,18 +504,11 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
                 return rawFailed();
             }
 
-            // The first stop condition reached ends the capture with this packet.
-            if ( limits.packets > 0 && recorder.packets() >= limits.packets ) {
-                stoppedBy = StopCondition::Packets;
-            }
-            else if ( limits.bytes > 0 && liveInput->bytesRead() >= limits.bytes ) {
-                stoppedBy = StopCondition::Bytes;
-            }
-            else if ( limits.duration.count() > 0
-                      && clockNow() - limitsStarted >= limits.duration ) {
-                stoppedBy = StopCondition::Duration;
-            }
-            if ( stoppedBy != StopCondition::None ) {
+            // The first stop condition reached ends the capture with this
+            // packet, as does the last packet number.
+            if ( step.stop != StopCondition::None ) {
+                stoppedBy = step.stop;
+                numbersUsedUp = step.stop == StopCondition::PacketNumbers;
                 break;
             }
 
@@ -549,17 +523,11 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         reportProgress();
 
         // No packet is numbered past the last number, where a 32-bit count
-        // would wrap: a live capture stops with it, as at a stop condition;
-        // a file is converted that far, its summary saying it had more.
-        if ( reader.packetsRead() >= options.lastPacketNumber ) {
-            if ( live ) {
-                numbersUsedUp = true;
-                stoppedBy = StopCondition::PacketNumbers;
-            }
-            else {
-                PacketRecord rest;
-                numbersUsedUp = reader.next( rest );
-            }
+        // would wrap: a file is converted that far, its summary saying it
+        // had more (a live capture's Live Output stops it there).
+        if ( !live && reader.packetsRead() >= options.lastPacketNumber ) {
+            PacketRecord rest;
+            numbersUsedUp = reader.next( rest );
             break;
         }
     }

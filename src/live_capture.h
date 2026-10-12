@@ -100,7 +100,8 @@ public:
         return limits_;
     }
 
-    /// Measure the limits' durations with @p clock (a test's); before start().
+    /// Measure the limits' durations and the flush and snapshot cadence with
+    /// @p clock (a test's); before start().
     void setClock( LiveClock clock )
     {
         clock_ = std::move( clock );

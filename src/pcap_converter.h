@@ -29,6 +29,7 @@
 #include "conversations.h"
 #include "gzip_source.h"
 #include "host_names.h"
+#include "live_output.h"
 #include "packet_formatter.h"
 #include "packet_recorder.h"
 #include "payload_describer.h"
@@ -56,17 +57,6 @@ namespace tcpdump {
  * exception on the thread that runs it, ends as Failed with a message.
  * No exception leaves the Converter.
  */
-/// Which stop condition of a live capture (LiveLimits) ended it.
-enum class StopCondition : uint8_t {
-    None,     ///< None: Stop, or the stream ended.
-    Duration, ///< It ran for LiveLimits::duration.
-    Packets,  ///< It converted LiveLimits::packets packets.
-    Bytes,    ///< It read LiveLimits::bytes bytes.
-    /// It converted the packet of the last number the No. column has
-    /// (kMaxPacketNumber); not a LiveLimits setting.
-    PacketNumbers,
-};
-
 struct ConversionResult {
     enum class Status {
         Converted, ///< outputPath holds the capture's text.
@@ -95,11 +85,6 @@ struct ConversionResult {
     StopCondition stoppedBy = StopCondition::None;
 };
 
-/// How often at least a live conversion makes its lines readable.
-constexpr std::chrono::milliseconds kLiveFlushInterval{ 100 };
-/// How often at most a live conversion hands out a LiveSnapshot.
-constexpr std::chrono::milliseconds kLiveSnapshotInterval{ 1000 };
-
 /// What a live conversion has converted so far, while it runs.
 struct LiveSnapshot {
     CaptureSummary summary;              ///< As the final one, of the packets so far.
@@ -112,53 +97,6 @@ struct LiveSnapshot {
     /// goes up with each file it starts.
     uint32_t rawFile = 1;
 };
-
-/**
- * When a live capture stops by itself, and whether its raw capture is a ring
- * buffer, as dumpcap's -a and -b say it (raw_capture.h).  0 is "none"
- * throughout: the defaults capture until Stop, into one file.
- *
- * The stop conditions are checked after each packet, so the packet that
- * reaches a count or a size is the last one; the duration is also checked
- * while the stream has nothing to read.  The first one reached ends the
- * capture as Stop does: Converted, with what was captured.
- *
- * A ring buffer starts a new file after the packet that filled the current
- * one, by size or duration, and keeps the newest ringFiles files.  Each file
- * has a text file of its own, named after it, which LiveObserver::firstPacket
- * hands out to be opened; a text is never rewritten, also once its raw file
- * is deleted.
- */
-struct LiveLimits {
-    std::chrono::seconds duration{ 0 };     ///< Stop after this long.
-    uint64_t packets = 0;                   ///< Stop after this many packets.
-    uint64_t bytes = 0;                     ///< Stop once this many bytes were read.
-    uint32_t ringFiles = 0;                 ///< The ring buffer's files; 0: no ring buffer.
-    uint64_t fileBytes = 0;                 ///< A new file once one is this big.
-    std::chrono::seconds fileDuration{ 0 }; ///< A new file once one is this old.
-
-    /// Whether the raw capture is a ring buffer: files kept, and a size or
-    /// duration to start a new one at.
-    bool ringBuffer() const
-    {
-        return ringFiles > 0 && ( fileBytes > 0 || fileDuration.count() > 0 );
-    }
-
-    bool operator==( const LiveLimits& other ) const
-    {
-        return duration == other.duration && packets == other.packets && bytes == other.bytes
-               && ringFiles == other.ringFiles && fileBytes == other.fileBytes
-               && fileDuration == other.fileDuration;
-    }
-    bool operator!=( const LiveLimits& other ) const
-    {
-        return !( *this == other );
-    }
-};
-
-/// The clock a live conversion measures LiveLimits' durations with; a test
-/// hands it a fake one.  Empty: the steady clock.
-using LiveClock = std::function<std::chrono::steady_clock::time_point()>;
 
 /**
  * What a live conversion tells while it runs (convertStream()).  Both are
@@ -272,7 +210,8 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
  * @param cancel  If set, checked between packets; stops the conversion and
  *                removes what was written.  The source must be given it
  *                too, so that a wait for the next packet ends with it.
- * @param clock   What the limits' durations are measured with.
+ * @param clock   What the limits' durations and the flush and snapshot
+ *                cadence are measured with (LiveOutput).
  */
 ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
                                 const std::atomic_bool* cancel = nullptr,

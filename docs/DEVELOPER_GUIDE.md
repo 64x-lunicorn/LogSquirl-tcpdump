@@ -1691,9 +1691,9 @@ The order, and why each step comes where it does, is stated once, in
     (`StreamLabels::apply()`).
 
 What becomes of the packet after that (the counts, the line, the names,
-the index) is the Packet Recorder's (below); the live output stays the
-Converter's. Tests go in `tests/packet_pipeline_test.cpp`, through `run()`
-over a capture built with the frame builders or a corpus capture.
+the index) is the Packet Recorder's (below); when a live capture flushes,
+sends a snapshot or stops is the Live Output's (below). Tests go in
+`tests/packet_pipeline_test.cpp`, through `run()` over a capture built with the frame builders or a corpus capture.
 
 The tests of the steps it runs take their captures through it too, so that
 they test what a conversion does rather than a loop of their own with some
@@ -1777,8 +1777,8 @@ output directory exists, the header the format is told by, are kept until
 it does. Before every read that would wait (`ByteSource::ready()` is
 false), it flushes the text and the raw file, so a line is readable as soon
 as the stream pauses; a stream that never pauses is flushed at least every
-`kLiveFlushInterval` (100 ms). A `LiveObserver` is told on the converting
-thread: `firstPacket( logPath, rawPath )` once, after the header and the
+`kLiveFlushInterval` (100 ms), as the Live Output (below) decides. A
+`LiveObserver` is told on the converting thread: `firstPacket( logPath, rawPath )` once, after the header and the
 first packet line are flushed (LogSquirl recognises a Log Format once, at
 the first load with lines, LogSquirl#794, so the tab must not open on the
 header alone), and `snapshot( LiveSnapshot )` with the first packet and
@@ -1798,10 +1798,47 @@ breaks off with an error after its first packet ends Failed with the
 message *and* `outputPath`, `rawPath` and the summary of what was captured;
 before a packet, it leaves nothing behind, as before.
 
+#### The Live Output (`live_output.h/cpp`)
+When a live capture flushes, opens a text, sends a snapshot and stops is
+decided in one place, a `LiveOutput` (pure C++), on one clock: the
+`LiveClock` measures the limits' durations and the flush and snapshot
+cadence alike. The Converter makes one per live conversion, from the
+`LiveLimits`, the clock and `ConversionOptions::lastPacketNumber`, and a
+file conversion none, so a file's loop does none of this work. It asks it
+`packet( packets, bytesRead )` after each packet line is written,
+`beforeWait()` before each read that would wait and `textStarted()` when a
+ring buffer starts its next text; each hands back a `LiveStep`, which the
+Converter does in its order and which counts as done once handed out:
+
+1. `flush`: the text and the raw file are made readable up to here;
+2. `firstOfText`: this line is the first of its text, which
+   `LiveObserver::firstPacket` hands out once flushed;
+3. `snapshot`: a `LiveSnapshot` goes out (always with a flush, as its index
+   points into the raw file);
+4. `stop`: the capture ends with this packet, by this `StopCondition`.
+
+The first packet of a text flushes it, opens it and sends a snapshot; after
+that a line is flushed at least every `kLiveFlushInterval` and before every
+wait, and a snapshot goes out at most every `kLiveSnapshotInterval` while
+packets come; `snapshotWaits()` says that one is due but its turn has not
+come, which the Converter waits for while the stream is idle, then asks
+`beforeWait()` again. `elapsed()` is the snapshot's time since the start.
+The stop conditions are checked in this order, so the first reached wins
+and a packet that reaches several stops by the first of them:
+`LiveLimits::packets`, `bytes`, `duration`, then the last packet number
+(`StopCondition::PacketNumbers`); `durationOver()` ends a wait for the
+stream at the deadline. `now()` is the clock the ring buffer's file
+durations are measured with too. Tests go in
+`tests/live_output_test.cpp`: a fake clock and packet counts and sizes, no
+thread, sleep or file, for each stop condition, the order they win in, and
+the cadence; `tests/live_limits_test.cpp` and
+`tests/live_conversion_test.cpp` check the same end to end.
+
 #### Stop conditions and the ring buffer (`LiveLimits`, `raw_capture.h/cpp`)
 `convertStream()` takes `LiveLimits` (dumpcap's `-a` and `-b`; 0 is "none"
-throughout) and a `LiveClock`, the clock their durations are measured with
-(a test's fake one; empty: the steady clock). The stop conditions, a
+throughout) and a `LiveClock`, the clock their durations and the flush and
+snapshot cadence are measured with (a test's fake one; empty: the steady
+clock); the Live Output (above) decides by them. The stop conditions, a
 duration, a packet count and a size (bytes read from the stream), are
 checked after each packet, so the packet that reaches a count or a size is
 the last one; the duration is also checked while the stream has nothing to

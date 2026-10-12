@@ -85,6 +85,7 @@ add_executable(logsquirl_tcpdump_tests
     tcp_reassembly_test.cpp
     packet_pipeline_test.cpp
     packet_recorder_test.cpp
+    live_output_test.cpp
     hpack_test.cpp
     tls_crypto_test.cpp
     tls_key_log_test.cpp
@@ -166,6 +167,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_pipeline.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_recorder.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_output.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
