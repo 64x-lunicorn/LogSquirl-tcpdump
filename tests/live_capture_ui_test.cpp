@@ -104,6 +104,19 @@ struct Fields {
     QPushButton* start;
 };
 
+/// Press Start live capture… in @p sidebar, and start what @p dialog shows,
+/// as if the dialog it opens were filled so and its Start pressed.
+void startFrom( SidebarWidget& sidebar, const LiveCaptureDialog& dialog )
+{
+    sidebar.setLiveChoiceAsker( [ &dialog ]( QWidget*, LiveChoice& choice ) {
+        choice = dialog.choice();
+        return true;
+    } );
+    auto* button = sidebar.findChild<QPushButton*>( "liveCaptureButton" );
+    REQUIRE( button );
+    button->click();
+}
+
 /// Wait until @p form has listed the fake's two interfaces.
 bool listed( const LiveCaptureForm* form, const Fields& fields )
 {
@@ -112,7 +125,7 @@ bool listed( const LiveCaptureForm* form, const Fields& fields )
 
 } // namespace
 
-SCENARIO( "The Live capture section starts a capture from a source, and Stop finalises it",
+SCENARIO( "Start live capture… captures what its dialog is given, and Stop finalises it",
           "[live_ui]" )
 {
     FakeHost host;
@@ -123,11 +136,22 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
     SidebarWidget sidebar;
     sidebar.setTempRoot( root.path() );
     sidebar.setLiveSources( registryOf( fake ) );
-    auto* form = sidebar.liveForm();
-    const Fields fields( &sidebar );
+    auto* button = sidebar.findChild<QPushButton*>( "liveCaptureButton" );
     auto* stop = sidebar.findChild<QPushButton*>( "stopButton" );
     auto* stderrView = sidebar.findChild<QPlainTextEdit*>( "liveStderr" );
     REQUIRE( sidebar.findChild<QWidget*>( "liveSection" ) );
+
+    THEN( "the sidebar has no form of its own, and lists nothing until the dialog opens" )
+    {
+        REQUIRE_FALSE( sidebar.findChild<LiveCaptureForm*>() );
+        REQUIRE( fake->interfaceListings == 0 );
+        REQUIRE( button->isEnabled() );
+        REQUIRE_FALSE( button->isHidden() );
+    }
+
+    const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+    auto* form = dialog->form();
+    const Fields fields( dialog.get() );
 
     GIVEN( "the fake source chosen and its two interfaces listed" )
     {
@@ -143,7 +167,7 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
             fields.networkInterface->setCurrentIndex( 1 );
             fields.filter->setText( "udp port 9999 and host 10.0.0.1" );
             fields.snaplen->setValue( 1500 );
-            fields.start->click();
+            startFrom( sidebar, *dialog );
 
             THEN( "the source is asked for exactly that, and the tab opens following the file" )
             {
@@ -161,11 +185,9 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
                 REQUIRE( host.openedFollowing == QList<bool>{ true } );
             }
 
-            THEN( "Start is gone and the form is locked while it runs; the counters and stderr "
-                  "show" )
+            THEN( "Start live capture… is gone while it runs; Stop, the counters and stderr show" )
             {
-                REQUIRE( fields.start->isHidden() );
-                REQUIRE_FALSE( form->isEnabled() );
+                REQUIRE( button->isHidden() );
                 REQUIRE_FALSE( stop->isHidden() );
                 auto* live = sidebar.findChild<QLabel*>( "liveProgress" );
                 REQUIRE( waitFor( [ & ] { return live->text().contains( "Packets: 3" ); } ) );
@@ -184,24 +206,24 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
                 stop->click();
                 REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
 
-                THEN( "the capture is final, and Start is back" )
+                THEN( "the capture is final, and Start live capture… is back" )
                 {
                     REQUIRE( sidebar.findChild<QLabel*>( "summary" )
                                  ->text()
                                  .contains( "Packets: <b>3</b>" ) );
-                    REQUIRE_FALSE( fields.start->isHidden() );
-                    REQUIRE( fields.start->isEnabled() );
-                    REQUIRE( form->isEnabled() );
+                    REQUIRE_FALSE( button->isHidden() );
+                    REQUIRE( button->isEnabled() );
                     REQUIRE( host.notifications.isEmpty() );
                 }
 
-                THEN( "the choice is restored after a restart" )
+                THEN( "the dialog shows the choice again after a restart" )
                 {
                     SidebarWidget restarted;
                     restarted.setLiveSources( registryOf( fake ) );
-                    const Fields again( &restarted );
-                    REQUIRE( listed( restarted.liveForm(), again ) );
-                    REQUIRE( restarted.liveForm()->choice()
+                    const auto shown = restarted.makeLiveCaptureDialog( nullptr );
+                    const Fields again( shown.get() );
+                    REQUIRE( listed( shown->form(), again ) );
+                    REQUIRE( shown->choice()
                              == LiveChoice{ "fake", "", "fake1", "udp port 9999 and host 10.0.0.1",
                                             1500 } );
                     REQUIRE( again.networkInterface->currentIndex() == 1 );
@@ -256,12 +278,12 @@ SCENARIO( "The Live capture section starts a capture from a source, and Stop fin
             sidebar.openPcapFile(
                 QDir( QStringLiteral( TCPDUMP_CORPUS_DIR ) ).filePath( "mixed.pcap" ) );
 
-            THEN( "Start is disabled until it is done" )
+            THEN( "Start live capture… is disabled until it is done" )
             {
-                REQUIRE_FALSE( fields.start->isEnabled() );
-                REQUIRE( fields.start->toolTip().contains( "being read" ) );
+                REQUIRE_FALSE( button->isEnabled() );
+                REQUIRE( button->toolTip().contains( "being read" ) );
                 REQUIRE( waitFor( [ & ] { return !sidebar.isConverting(); } ) );
-                REQUIRE( fields.start->isEnabled() );
+                REQUIRE( button->isEnabled() );
             }
         }
     }
@@ -278,10 +300,11 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
     SidebarWidget sidebar;
     sidebar.setTempRoot( root.path() );
     sidebar.setLiveSources( registryOf( fake ) );
-    auto* form = sidebar.liveForm();
-    const Fields fields( &sidebar );
+    const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+    auto* form = dialog->form();
+    const Fields fields( dialog.get() );
     auto spin = [ & ]( const char* name ) {
-        auto* box = sidebar.findChild<QSpinBox*>( name );
+        auto* box = dialog->findChild<QSpinBox*>( name );
         REQUIRE( box );
         return box;
     };
@@ -324,7 +347,7 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
             REQUIRE( fields.start->isEnabled() );
         }
 
-        AND_WHEN( "the form is shown a choice in a new sidebar after a capture" )
+        AND_WHEN( "the dialog is opened in a new sidebar after a capture" )
         {
             REQUIRE( saveLiveChoice( host.configDir(), form->choice() ) );
             SidebarWidget restarted;
@@ -332,7 +355,8 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
 
             THEN( "the fields are restored" )
             {
-                REQUIRE( restarted.liveForm()->choice().limits == form->choice().limits );
+                REQUIRE( restarted.makeLiveCaptureDialog( nullptr )->choice().limits
+                         == form->choice().limits );
             }
         }
     }
@@ -353,7 +377,7 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
     WHEN( "the capture is to stop after two packets, and three come" )
     {
         stopPackets->setValue( 2 );
-        fields.start->click();
+        startFrom( sidebar, *dialog );
         REQUIRE( sidebar.isCapturing() );
         auto* live = sidebar.findChild<QLabel*>( "liveProgress" );
         const auto progress = live->text();
@@ -371,7 +395,8 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
     }
 }
 
-SCENARIO( "An unavailable source says why, and a failed capture shows its error in the section",
+SCENARIO( "An unavailable source says why in the dialog, and a failed capture shows its error in "
+          "the section",
           "[live_ui]" )
 {
     FakeHost host;
@@ -384,9 +409,10 @@ SCENARIO( "An unavailable source says why, and a failed capture shows its error 
         SidebarWidget sidebar;
         sidebar.setTempRoot( root.path() );
         sidebar.setLiveSources( registryOf( fake ) );
-        const Fields fields( &sidebar );
+        const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+        const Fields fields( dialog.get() );
 
-        THEN( "the section shows the reason, lists nothing, and Start is disabled" )
+        THEN( "the dialog shows the reason, lists nothing, and Start is disabled" )
         {
             REQUIRE_FALSE( fields.status->isHidden() );
             REQUIRE( fields.status->text() == fake->unavailableReason );
@@ -413,9 +439,10 @@ SCENARIO( "An unavailable source says why, and a failed capture shows its error 
         SidebarWidget sidebar;
         sidebar.setTempRoot( root.path() );
         sidebar.setLiveSources( registryOf( fake ) );
-        const Fields fields( &sidebar );
-        REQUIRE( listed( sidebar.liveForm(), fields ) );
-        fields.start->click();
+        const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+        const Fields fields( dialog.get() );
+        REQUIRE( listed( dialog->form(), fields ) );
+        startFrom( sidebar, *dialog );
         REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
 
         THEN( "the section shows the error and what the source says to do" )
@@ -430,7 +457,7 @@ SCENARIO( "An unavailable source says why, and a failed capture shows its error 
         AND_WHEN( "the next capture starts" )
         {
             fake->failure.clear();
-            fields.start->click();
+            startFrom( sidebar, *dialog );
 
             THEN( "the error goes" )
             {
@@ -448,9 +475,10 @@ SCENARIO( "An unavailable source says why, and a failed capture shows its error 
         SidebarWidget sidebar;
         sidebar.setTempRoot( root.path() );
         sidebar.setLiveSources( registryOf( fake ) );
-        const Fields fields( &sidebar );
-        REQUIRE( listed( sidebar.liveForm(), fields ) );
-        fields.start->click();
+        const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+        const Fields fields( dialog.get() );
+        REQUIRE( listed( dialog->form(), fields ) );
+        startFrom( sidebar, *dialog );
         REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
 
         THEN( "the section shows the error's lines and the Guidance as text, the summary the "
@@ -483,9 +511,10 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     SidebarWidget sidebar;
     sidebar.setTempRoot( root.path() );
     sidebar.setLiveSources( registryOf( fake ) );
-    const Fields fields( &sidebar );
-    auto* device = sidebar.findChild<QComboBox*>( "liveDevice" );
-    REQUIRE( listed( sidebar.liveForm(), fields ) );
+    const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+    const Fields fields( dialog.get() );
+    auto* device = dialog->findChild<QComboBox*>( "liveDevice" );
+    REQUIRE( listed( dialog->form(), fields ) );
 
     THEN( "the unauthorized device is listed with its problem but not chosen" )
     {
@@ -496,9 +525,9 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
         REQUIRE( fake->listedDevices() == QStringList{ "phoneA" } );
     }
 
-    WHEN( "Start is pressed" )
+    WHEN( "it is started" )
     {
-        fields.start->click();
+        startFrom( sidebar, *dialog );
         REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
 
         THEN( "the device is part of the choice and of the capture's name" )
@@ -511,7 +540,7 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     }
 }
 
-SCENARIO( "A source's own options show in the form, are part of the choice, and are kept",
+SCENARIO( "A source's own options show in the dialog, are part of the choice, and are kept",
           "[live_ui]" )
 {
     FakeHost host;
@@ -526,10 +555,11 @@ SCENARIO( "A source's own options show in the form, are part of the choice, and 
     auto sidebar = std::make_unique<SidebarWidget>();
     sidebar->setTempRoot( root.path() );
     sidebar->setLiveSources( registry );
-    auto* form = sidebar->liveForm();
-    const Fields fields( sidebar.get() );
+    auto dialog = sidebar->makeLiveCaptureDialog( nullptr );
+    auto* form = dialog->form();
+    const Fields fields( dialog.get() );
     REQUIRE( listed( form, fields ) );
-    auto* note = sidebar->findChild<QLineEdit*>( "fakeNote" );
+    auto* note = dialog->findChild<QLineEdit*>( "fakeNote" );
     REQUIRE( note );
 
     WHEN( "an option is set" )
@@ -552,11 +582,11 @@ SCENARIO( "A source's own options show in the form, are part of the choice, and 
 
             THEN( "the other source has no options widget, and this one's options stay" )
             {
-                REQUIRE_FALSE( sidebar->findChild<QLineEdit*>( "fakeNote" ) );
+                REQUIRE_FALSE( dialog->findChild<QLineEdit*>( "fakeNote" ) );
                 REQUIRE( form->choice().options.isEmpty() );
                 fields.source->setCurrentIndex( 0 );
                 emit fields.source->activated( 0 );
-                auto* again = sidebar->findChild<QLineEdit*>( "fakeNote" );
+                auto* again = dialog->findChild<QLineEdit*>( "fakeNote" );
                 REQUIRE( again );
                 REQUIRE( again->text() == "hello" );
                 REQUIRE( form->choice().options == LiveOptions{ { "note", "hello" } } );
@@ -565,22 +595,24 @@ SCENARIO( "A source's own options show in the form, are part of the choice, and 
 
         AND_WHEN( "the capture is started and the plugin restarts" )
         {
-            fields.start->click();
+            startFrom( *sidebar, *dialog );
             REQUIRE( fake->started().size() == 1 );
             REQUIRE( fake->started().front().options == LiveOptions{ { "note", "hello" } } );
             sidebar->stopLiveCapture();
             REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+            // The dialog lists on the sidebar's pool: it goes first.
+            dialog.reset();
             sidebar.reset();
             SidebarWidget restarted;
             restarted.setLiveSources( registry );
+            const auto shown = restarted.makeLiveCaptureDialog( nullptr );
 
             THEN( "the option is shown again" )
             {
-                auto* again = restarted.findChild<QLineEdit*>( "fakeNote" );
+                auto* again = shown->findChild<QLineEdit*>( "fakeNote" );
                 REQUIRE( again );
                 REQUIRE( again->text() == "hello" );
-                REQUIRE( restarted.liveForm()->choice().options
-                         == LiveOptions{ { "note", "hello" } } );
+                REQUIRE( shown->choice().options == LiveOptions{ { "note", "hello" } } );
             }
         }
     }
@@ -602,7 +634,7 @@ SCENARIO( "A source's own options show in the form, are part of the choice, and 
 
         THEN( "the widget shows them" )
         {
-            REQUIRE( sidebar->findChild<QLineEdit*>( "fakeNote" )->text() == "given" );
+            REQUIRE( dialog->findChild<QLineEdit*>( "fakeNote" )->text() == "given" );
         }
     }
 }
@@ -802,14 +834,16 @@ SCENARIO( "A listing that hangs does not hold up closing the sidebar or a dialog
         REQUIRE( form->isListing() );
     };
 
-    WHEN( "the sidebar goes while its form lists" )
+    WHEN( "the sidebar's dialog and the sidebar go while it lists" )
     {
         auto sidebar = std::make_unique<SidebarWidget>();
         sidebar->setTempRoot( dir.path() );
         sidebar->setLiveSources( registryOf( fake ) );
-        whileListing( sidebar->liveForm() );
+        auto dialog = sidebar->makeLiveCaptureDialog( nullptr );
+        whileListing( dialog->form() );
         QElapsedTimer took;
         took.start();
+        dialog.reset();
         sidebar.reset();
 
         THEN( "the listing is cancelled, not waited for" )

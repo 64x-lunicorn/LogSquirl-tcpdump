@@ -248,25 +248,21 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     layout->addWidget( cancelButton_ );
     connect( cancelButton_, &QPushButton::clicked, this, &SidebarWidget::cancel );
 
-    // Live capture: what to capture, Start and Stop, the progress (no
-    // percentage, a stream has no size) and what the capture program says.
+    // Live capture: Start live capture… asks what to capture in its dialog;
+    // while one runs, its progress (no percentage, a stream has no size),
+    // Stop and what the capture program says.
     auto* liveSection = new QGroupBox( "Live capture" );
     liveSection->setObjectName( "liveSection" );
     auto* liveLayout = new QVBoxLayout( liveSection );
     liveLayout->setSpacing( 4 );
 
     listingPool_.setMaxThreadCount( 4 );
-    liveForm_ = new LiveCaptureForm( &listingPool_ );
-    liveForm_->setObjectName( "liveForm" );
-    liveLayout->addWidget( liveForm_ );
-    connect( liveForm_, &LiveCaptureForm::changed, this, &SidebarWidget::updateStartButton );
-
-    startButton_ = new QPushButton( "Start" );
-    startButton_->setObjectName( "liveStartButton" );
+    startButton_ = new QPushButton( "Start live capture\u2026" );
+    startButton_->setObjectName( "liveCaptureButton" );
     liveLayout->addWidget( startButton_ );
     connect( startButton_, &QPushButton::clicked, this, [ this ] {
         try {
-            startLiveCapture( liveForm_->choice() );
+            chooseAndStartLiveCapture();
         } catch ( const std::exception& e ) {
             // An exception must not escape into Qt or the host.
             hostLog( LOGSQUIRL_LOG_ERROR,
@@ -336,20 +332,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     askLiveChoice_ = [ this ]( QWidget* parent, LiveChoice& choice ) {
         // Neither this widget nor its members are used after the dialog:
         // it may be gone when it returns (its pool waits for the listings).
-        LiveCaptureDialog dialog( liveSources_, choice, parent, &listingPool_ );
-        // Another source chosen there starts with the options saved for it.
-        if ( liveSources_ ) {
-            for ( const auto& kind : liveSources_->kinds() ) {
-                if ( kind->id() != choice.source ) {
-                    dialog.form()->setSourceOptions(
-                        kind->id(), loadLiveOptions( hostConfigDir(), kind->id() ) );
-                }
-            }
-        }
-        if ( dialog.exec() != QDialog::Accepted ) {
+        const auto dialog = makeLiveCaptureDialog( parent, choice );
+        if ( dialog->exec() != QDialog::Accepted ) {
             return false;
         }
-        choice = dialog.choice();
+        choice = dialog->choice();
         return true;
     };
     confirmStop_ = []( QWidget* parent, const QString& running ) {
@@ -882,7 +869,7 @@ void SidebarWidget::chooseAndStartLiveCapture()
             return;
         }
     }
-    auto choice = liveForm_->choice();
+    auto choice = loadLiveChoice( hostConfigDir() );
     if ( !askLiveChoice_( this, choice ) || !self ) {
         return;
     }
@@ -894,35 +881,38 @@ void SidebarWidget::setLiveSources( std::shared_ptr<const LiveSourceRegistry> so
 {
     liveSources_ = std::move( sources );
     live_->setSources( liveSources_ );
-    liveForm_->setSources( liveSources_ );
+}
+
+std::unique_ptr<LiveCaptureDialog> SidebarWidget::makeLiveCaptureDialog( QWidget* parent )
+{
+    return makeLiveCaptureDialog( parent, loadLiveChoice( hostConfigDir() ) );
+}
+
+std::unique_ptr<LiveCaptureDialog> SidebarWidget::makeLiveCaptureDialog( QWidget* parent,
+                                                                         const LiveChoice& choice )
+{
+    auto dialog
+        = std::make_unique<LiveCaptureDialog>( liveSources_, choice, parent, &listingPool_ );
+    // Another source chosen there starts with the options saved for it.
     if ( liveSources_ ) {
         for ( const auto& kind : liveSources_->kinds() ) {
-            liveForm_->setSourceOptions( kind->id(),
-                                         loadLiveOptions( hostConfigDir(), kind->id() ) );
+            if ( kind->id() != choice.source ) {
+                dialog->form()->setSourceOptions( kind->id(),
+                                                  loadLiveOptions( hostConfigDir(), kind->id() ) );
+            }
         }
     }
-    liveForm_->setChoice( loadLiveChoice( hostConfigDir() ) );
-    updateStartButton();
+    return dialog;
 }
 
 void SidebarWidget::updateStartButton()
 {
-    if ( !startButton_ || !liveForm_ ) {
+    if ( !startButton_ ) {
         return;
     }
-    QString why;
-    if ( converting_ ) {
-        why = "A capture is being read.";
-    }
-    else if ( isCapturing() ) {
-        why = "A live capture is running.";
-    }
-    else {
-        why = liveForm_->problem();
-    }
+    const QString why = converting_ ? "A capture is being read." : QString();
     startButton_->setEnabled( why.isEmpty() );
-    startButton_->setToolTip( why.isEmpty() ? "Start capturing live" : why );
-    liveForm_->setEnabled( !isCapturing() );
+    startButton_->setToolTip( why.isEmpty() ? "Choose what to capture, and start capturing" : why );
 }
 
 void SidebarWidget::showLiveError( const LiveOutcome& outcome )
@@ -946,11 +936,6 @@ void SidebarWidget::showLiveStart()
     liveStderr_->setHidden( true );
     liveError_->clear();
     liveError_->setHidden( true );
-    // A choice started otherwise than from the form (the dialog, a pending
-    // start) is shown in it.
-    if ( const auto& choice = live_->choice(); choice && liveForm_->choice() != *choice ) {
-        liveForm_->setChoice( *choice );
-    }
     summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6 waiting for the first packet." )
                                 .arg( live_->name().toHtmlEscaped() ) );
 }
