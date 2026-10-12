@@ -139,6 +139,8 @@ public:
     LiveAvailability availability() const override;
     Devices devices() const override;
     QString deviceLabel() const override;
+    QString deviceFormat() const override;
+    QString noDevicesText() const override;
     LiveListing listDevices( std::chrono::milliseconds timeout ) const override;
     /// With the default options: sudo -n.
     LiveListing listInterfaces( const QString& device,
