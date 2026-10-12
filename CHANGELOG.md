@@ -530,6 +530,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first says `[TCP segment of a reassembled PDU]`, the last describes
   the whole message (see *TCP reassembly*). A message the capture never
   completes is described by none of its segments.
+- **The live capture form is in the Start live capture dialog only.** The
+  sidebar's Live capture section is a **Start live capture…** button,
+  which opens the same dialog as the tcpdump menu entry, with the choice
+  last started; while a capture runs the section shows its counters and
+  Stop as before. The sidebar is shorter and can be made narrower (it was
+  at least as wide as the longest interface name), and opening it runs no
+  capture program to list interfaces (#140).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
