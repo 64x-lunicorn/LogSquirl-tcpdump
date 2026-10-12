@@ -27,9 +27,9 @@
 
 #include "fakehost.h"
 #include "follow_stream.h"
+#include "packet_line.h"
 #include "packet_panel.h"
 #include "pcapbuilder.h"
-#include "regex_lab.h"
 #include "sidebarwidget.h"
 #include "stream_content_view.h"
 

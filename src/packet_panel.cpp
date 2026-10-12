@@ -25,8 +25,8 @@
 #include "packet_panel.h"
 
 #include "conversation_table.h"
+#include "packet_line.h"
 #include "plugin.h"
-#include "regex_lab.h"
 #include "stream_content_view.h"
 #include "stream_tracker.h"
 
@@ -37,7 +37,6 @@
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QRegularExpression>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTextCursor>
@@ -394,25 +393,20 @@ void PacketPanel::showSelection( const QString& selection )
 {
     // The first selected line is the one shown.
     const auto line = selection.section( '\n', 0, 0 );
-    const auto match = packetLineRegex().match( line );
-    if ( !match.hasMatch() ) {
+    const auto packet = readPacketLine( line );
+    if ( !packet ) {
         showReason( QStringLiteral( "The selected line is not a packet line of a capture." ) );
         return;
     }
-    bool ok = false;
-    const auto number = match.captured( "number" ).toUInt( &ok );
-    if ( !ok || number == 0 ) {
+    if ( packet->number == 0 ) {
         showReason( QStringLiteral( "The selected line has no packet number." ) );
         return;
     }
-    const auto stream = match.captured( "stream" );
-    shownStream_ = stream == "-" ? kNoStream : stream == "?" ? kUnnumbered : stream.toInt();
+    shownStream_ = packet->stream;
     // The TCP Analysis tells the handshake's iRTT on the line of the ACK
     // that completes it; the packet read back alone has no stream to know it.
-    static const QRegularExpression irtt( QStringLiteral( "\\[iRTT=([0-9.]+)\\]" ) );
-    const auto irttMatch = irtt.match( line );
-    selectedIrtt_ = irttMatch.hasMatch() ? irttMatch.captured( 1 ).toStdString() : std::string();
-    showPacket( number );
+    selectedIrtt_ = packet->irtt.toStdString();
+    showPacket( packet->number );
 }
 
 QString PacketPanel::streamContentProblem() const

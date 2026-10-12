@@ -147,6 +147,7 @@ add_library(logsquirl_tcpdump SHARED
     src/hpack.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp
+    src/packet_line.cpp
     src/stream_tracker.cpp
     src/stream_labels.cpp
     src/tcp_analysis.cpp

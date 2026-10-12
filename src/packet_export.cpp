@@ -25,7 +25,7 @@
 #include "packet_export.h"
 
 #include "capture_file.h"
-#include "regex_lab.h"
+#include "packet_line.h"
 
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -226,12 +226,9 @@ PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
         if ( trimmed.isEmpty() ) {
             continue;
         }
-        const auto packetLine = packetLineRegex().match( line );
-        if ( packetLine.hasMatch() ) {
-            bool ok = false;
-            const auto number
-                = packetLine.captured( QStringLiteral( "number" ) ).toULongLong( &ok );
-            ok ? add( number, number ) : void( ++set.skipped );
+        if ( const auto packet = readPacketLine( line ) ) {
+            // A number no packet has is 0, which add() skips.
+            add( packet->number, packet->number );
             continue;
         }
         if ( !numbersToo ) {

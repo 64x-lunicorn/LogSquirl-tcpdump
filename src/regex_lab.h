@@ -30,15 +30,9 @@
 
 #pragma once
 
-#include <QRegularExpression>
 #include <QString>
 
 namespace tcpdump {
-
-/// A packet line, as the Log Format formats/tcpdump_log.json reads it, with
-/// the same named groups: the two must be the same, which
-/// logformat_test.cpp checks.
-const QRegularExpression& packetLineRegex();
 
 /// The pattern of a packet line's columns up to Source, in any Line Layout:
 /// No., Stream as @p stream, a pattern, and the time columns there are.

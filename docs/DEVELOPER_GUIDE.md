@@ -937,7 +937,7 @@ name what nothing dissects; a detector that recognises a protocol by its
 port or content (DNS, NTP, DHCP, DHCPv6) runs before the port hint and decides
 alone, and may take its name from the table to keep the two in step.
 
-### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 3. Packet Formatter (`packet_formatter.h/cpp`, `packet_line.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
 Time, Source, Destination, Protocol, Length, Info. Both times have 6
@@ -995,6 +995,21 @@ reader knows why its description stops short.
 The Formatter keeps no conversations: the Stream column shows the stream
 number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
 `kUnnumbered`.
+
+A packet line is read back next to where it is written: `readPacketLine()`
+(`packet_line.h/cpp`) reads a line of any `LineLayout` with
+`packetLineRegex()`, the Log Format's regex, and answers with a
+`PacketLine`: the packet number (0 for a number no packet has), the stream
+(its number, `kNoStream` or `kUnnumbered`), Source, Destination, Protocol,
+the rest of the line from Info on, and the iRTT that Info shows on the ACK
+that completes a handshake (see *TCP analysis markers*), or none for a
+line that is no packet line. The Packet Panel, Stream lines in Regex Lab
+and Export packets read the selected lines with it and have no regex of
+their own for the columns. `packet_line_test.cpp` formats TCP packets with
+and without an iRTT, UDP, a packet in no stream and one in an unnumbered
+stream in every `LineLayout` and reads back the same packet number, stream
+and iRTT, so that a change of the line that the reader does not follow
+fails there.
 
 `StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Packet Pipeline,
 follows the conversations of a capture. Only TCP and UDP packets have a
@@ -1457,7 +1472,7 @@ in seconds with 6 decimals, or 9 at nanosecond precision, and
 pure ACK in either direction even without a SYN-ACK; here it is in Info,
 and a stream whose handshake was not captured whole has none. The Packet
 Panel, which reads a packet back alone, without its stream, takes it from
-the selected line's `[iRTT=…]` into the TCP layer (`iRTT: 0.012345
+the selected line's `[iRTT=…]`, as `readPacketLine()` reads it, into the TCP layer (`iRTT: 0.012345
 seconds`). Each stream
 shows it once: a SYN sent after the handshake does not arm it again, a new
 connection on the same ports does. The Converter collects the times in
@@ -2379,7 +2394,7 @@ export, conversation statistics):
   leaves the panel as it is. `refresh()` asks at once; Plugins → tcpdump →
   Packet details calls it through `SidebarWidget::showPacketDetails()`,
   which notifies the packet's layers when the panel is out of view. The
-  first selected line is read with `packetLineRegex()`; a line that is not a
+  first selected line is read with `readPacketLine()`; a line that is not a
   packet line, no selection, a foreign tab or a cursor error show the
   reason in the status line. With a capture, the empty tree (`LayerTree`,
   which paints its placeholder) and dump say to select a packet line. The
@@ -2509,7 +2524,8 @@ export, conversation statistics):
   A pcapng is thus exported as a pcapng, never converted to a pcap; other
   blocks (name resolution, interface statistics, custom) are not exported.
   Nothing is written from what was dissected. Writing over the capture
-  itself is refused. `parsePacketSet()` reads packet lines (their No.) and
+  itself is refused. `parsePacketSet()` reads packet lines (their No., with
+  `readPacketLine()`) and
   numbers and ranges ("1-5, 9") and counts what names no packet;
   `packetLinesOf()` reads packet lines only, as the selection holds them;
   `formatPacketRanges()` writes numbers back as ranges. The numbers are a
@@ -2589,9 +2605,10 @@ in a tab that shows no capture, opens nothing, with the reason the
 button's tooltip gives; then `followSelectedStream()` reads the first selected Log Line through
 `get_selected_log_lines`, and `followStreamPattern()` turns it into a
 pattern for `open_regex_lab` (with Match case); the Lab's answer, the
-applied pattern or a cancel, is logged. The line is read with the Log
-Format's regex, which `packetLineRegex()` in `regex_lab.cpp` repeats;
-`logformat_test.cpp` fails when the two differ.
+applied pattern or a cancel, is logged. The line is read with
+`readPacketLine()`, through the Log Format's regex, which
+`packetLineRegex()` in `packet_line.cpp` repeats; `logformat_test.cpp`
+fails when the two differ.
 The pattern requires the line's stream number, its two addresses and the
 two ports at the start of a TCP or UDP Info (markers in brackets may come
 first), each pair in either order. The Stream column alone is not enough:

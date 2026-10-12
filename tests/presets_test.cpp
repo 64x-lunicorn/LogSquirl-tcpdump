@@ -37,7 +37,7 @@
 
 #include "corpus_layouts.h"
 #include "packet_formatter.h"
-#include "regex_lab.h"
+#include "packet_line.h"
 
 #include <QColor>
 #include <QDir>

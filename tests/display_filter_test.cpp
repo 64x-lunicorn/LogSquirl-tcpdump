@@ -30,6 +30,7 @@
 #include "display_filter.h"
 #include "display_filter_dialog.h"
 #include "fakehost.h"
+#include "packet_line.h"
 #include "plugin.h"
 #include "regex_lab.h"
 #include "sidebarwidget.h"

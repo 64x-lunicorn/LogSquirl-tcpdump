@@ -28,6 +28,7 @@
  */
 
 #include "follow_stream.h"
+#include "packet_line.h"
 #include "plugin.h"
 #include "regex_lab.h"
 
@@ -102,27 +103,24 @@ QString selectionFailure( int result )
 FollowStream followStreamPattern( const QString& packetLine )
 {
     const auto line = packetLine.section( '\n', 0, 0 );
-    const auto match = packetLineRegex().match( line );
-    if ( !match.hasMatch() ) {
+    const auto packet = readPacketLine( line );
+    if ( !packet ) {
         return { {}, "the selected line is not a packet line of a capture." };
     }
-    const auto number = match.captured( "number" );
-    const auto stream = match.captured( "stream" );
-    if ( stream == "-" ) {
-        return {
-            {},
-            QString( "packet %1 belongs to no stream: only TCP and UDP packets do." ).arg( number )
-        };
+    if ( packet->stream == kNoStream ) {
+        return { {},
+                 QString( "packet %1 belongs to no stream: only TCP and UDP packets do." )
+                     .arg( packet->number ) };
     }
-    if ( stream == "?" ) {
+    if ( packet->stream == kUnnumbered ) {
         return { {},
                  QString( "packet %1 has no stream number: the capture has more "
                           "conversations than the plugin numbers." )
-                     .arg( number ) };
+                     .arg( packet->number ) };
     }
 
-    const auto ports = portsRegex().match( match.captured( "body" ) );
-    return { streamPattern( stream, match.captured( "source" ), match.captured( "destination" ),
+    const auto ports = portsRegex().match( packet->body );
+    return { streamPattern( QString::number( packet->stream ), packet->source, packet->destination,
                             ports.captured( 1 ), ports.captured( 2 ) ),
              {} };
 }

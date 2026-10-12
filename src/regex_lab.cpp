@@ -26,6 +26,8 @@
 #include "host_names.h"
 #include "plugin.h"
 
+#include <QRegularExpression>
+
 namespace tcpdump {
 
 namespace {
@@ -44,15 +46,6 @@ void regexLabClosed( void* user_data, int result, const char* pattern, int /* fl
 }
 
 } // namespace
-
-const QRegularExpression& packetLineRegex()
-{
-    static const QRegularExpression regex(
-        R"(^(?<number>\d++) ++(?<stream>\d++|[-?]) ++(?:(?<timestamp>[+-]?\d{4,}-\d{2}-\d{2} )"
-        R"(\d{2}:\d{2}:\d{2}\.\d++Z) ++)?(?:(?<time>-?\d++\.\d++) ++)?(?<source>\S++) ++)"
-        R"((?<destination>\S++) ++(?<protocol>\S++) ++(?<length>\d++) ++(?<body>.*)$)" );
-    return regex;
-}
 
 QString upToSourcePattern( const QString& stream )
 {

@@ -34,8 +34,8 @@
 #include <catch2/catch.hpp>
 
 #include "packet_formatter.h"
+#include "packet_line.h"
 #include "pcap_converter.h"
-#include "regex_lab.h"
 
 #include <QDate>
 #include <QDateTime>

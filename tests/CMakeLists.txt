@@ -71,6 +71,7 @@ add_executable(logsquirl_tcpdump_tests
     logformat_test.cpp
     presets_test.cpp
     packet_formatter_test.cpp
+    packet_line_test.cpp
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
@@ -142,6 +143,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/hpack.cpp"
         "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_line.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_labels.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
