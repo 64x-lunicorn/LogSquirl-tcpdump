@@ -87,6 +87,10 @@ QString hexDump( const std::vector<uint8_t>& bytes );
 /// their ASCII on each line they are on.
 std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length );
 
+/// Enable @p button, its tooltip @p whatItDoes, when @p problem is empty;
+/// otherwise disable it, its tooltip @p problem: why it would not work.
+void enableUnlessProblem( QPushButton* button, const QString& problem, const QString& whatItDoes );
+
 /// The tree of a packet's layers, which says what it will show while it
 /// holds none.
 class LayerTree : public QTreeWidget {

@@ -161,6 +161,12 @@ std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, siz
     return ranges;
 }
 
+void enableUnlessProblem( QPushButton* button, const QString& problem, const QString& whatItDoes )
+{
+    button->setEnabled( problem.isEmpty() );
+    button->setToolTip( problem.isEmpty() ? whatItDoes : problem );
+}
+
 void LayerTree::setPlaceholderText( const QString& text )
 {
     placeholderText_ = text;
@@ -439,12 +445,9 @@ QString PacketPanel::streamLinesProblem() const
 
 void PacketPanel::updateStreamActions()
 {
-    const auto problem = streamContentProblem();
-    followButton_->setEnabled( problem.isEmpty() );
-    followButton_->setToolTip( problem.isEmpty()
-                                   ? QStringLiteral( "Show the payload of this packet's "
-                                                     "conversation, as text or hex" )
-                                   : problem );
+    enableUnlessProblem( followButton_, streamContentProblem(),
+                         QStringLiteral( "Show the payload of this packet's conversation, as "
+                                         "text or hex" ) );
     emit streamActionsChanged();
 }
 

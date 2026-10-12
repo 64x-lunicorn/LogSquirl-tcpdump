@@ -878,13 +878,9 @@ void SidebarWidget::openStreamLines()
 
 void SidebarWidget::updateStreamLinesButton()
 {
-    const auto problem = packetPanel_->streamLinesProblem();
-    streamLinesButton_->setEnabled( problem.isEmpty() );
-    streamLinesButton_->setToolTip( problem.isEmpty()
-                                        ? QStringLiteral( "Open the Regex Lab with the pattern of "
-                                                          "the lines of this packet's "
-                                                          "conversation" )
-                                        : problem );
+    enableUnlessProblem( streamLinesButton_, packetPanel_->streamLinesProblem(),
+                         QStringLiteral( "Open the Regex Lab with the pattern of the lines of "
+                                         "this packet's conversation" ) );
 }
 
 void SidebarWidget::openLink( const QString& link )
