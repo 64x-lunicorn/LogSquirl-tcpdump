@@ -39,19 +39,19 @@
  * packets that carried a tunnelled one show in no column, so no pattern
  * could pick their lines.
  *
- * It keeps each converted capture's summary and CaptureIndex under the path
- * of its .log file and shows the one of the tab in front, as the host
- * reports tab switches; its Packet Panel shows the packets of that capture.
+ * Its CaptureCatalog keeps each converted capture's summary and CaptureIndex
+ * under the path of its .log file and says which is in the tab in front, as
+ * the host reports tab switches; the sidebar shows that one's summary, and
+ * its Packet Panel the packets of that capture.
  *
  * A live capture (startLiveCapture()) is its LiveCaptureSession's, which
  * decides what it does: the sidebar is the session's host (a tab, opened
- * on the UI thread once the first packet line is there; a notification)
- * and keeps the summaries of its text files, which follow the snapshots
- * until the capture ends; it shows the session's state, progress, stderr
- * lines and outcome.  The Live capture section, and the Start live
- * capture… dialog, choose what to capture from the Live Source Kinds
- * (live_source.h): the kind chosen makes the stream, and explains a
- * failure.
+ * on the UI thread once the first packet line is there; a notification),
+ * and the session keeps the summaries of its text files in the catalog,
+ * which follow the snapshots until the capture ends; the sidebar shows the
+ * session's state, progress, stderr lines and outcome.  The Live capture section, and the Start
+ * live capture… dialog, choose what to capture from the Live Source Kinds (live_source.h): the kind
+ * chosen makes the stream, and explains a failure.
  *
  * Export packets… reads the selected lines, lets the user confirm or change
  * their packets in the ExportDialog, asks where to write them, and writes
@@ -131,19 +131,6 @@ QString filterPattern( const QString& link )
         return protocolPattern( nameOf( filter, kProtocolFilter ) );
     }
     return {};
-}
-
-/// One spelling of @p filePath, so that the path the host reports for a tab
-/// finds the file the plugin wrote: e.g. on macOS the temporary directory
-/// /var/folders/... is a link to /private/var/folders/....
-QString fileKey( const QString& filePath )
-{
-    if ( filePath.isEmpty() ) {
-        return {};
-    }
-    const QFileInfo info( filePath );
-    const auto canonical = info.canonicalFilePath();
-    return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
 /// What setDefaultLiveSources() set; null: builtInLiveSources().
@@ -492,14 +479,18 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                == QMessageBox::Yes;
     };
 
-    // This widget is the session's host and keeps its captures' summaries.
+    // This widget is the session's host; the session keeps its captures'
+    // summaries in the catalog, and the sidebar shows the one in front.
     LiveCaptureHost& host = *this;
-    LiveCaptureCatalog& catalog = *this;
-    live_ = std::make_unique<LiveCaptureSession>( host, catalog );
+    live_ = std::make_unique<LiveCaptureSession>( host, catalog_ );
     live_->setOutputRoot( tempRoot_ );
     connect( live_.get(), &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
     connect( live_.get(), &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
-    connect( live_.get(), &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
+    connect( live_.get(), &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
+    connect( live_.get(), &LiveCaptureSession::progressed, this, [ this ] {
+        showLiveProgress();
+        showLiveSummary();
+    } );
     connect( live_.get(), &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
         liveStderr_->appendPlainText( line );
         liveStderr_->setHidden( false );
@@ -669,8 +660,8 @@ void SidebarWidget::exportSelectedPackets()
         hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
         return;
     }
-    const auto found = converted_.find( frontKey_ );
-    if ( found == converted_.end() ) {
+    const auto* front = catalog_.front();
+    if ( !front ) {
         hostNotify( "Export packets: the tab in front shows no capture opened by the tcpdump "
                     "plugin." );
         return;
@@ -681,9 +672,9 @@ void SidebarWidget::exportSelectedPackets()
                     "lines." );
         return;
     }
-    const auto index = found->second.index;
+    const auto index = front->index;
     ExportRequest request;
-    request.captureName = found->second.fileName;
+    request.captureName = front->fileName;
     request.packets = index->packets();
     request.format = captureFormatOf( index->capturePath() );
 
@@ -935,22 +926,11 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         break;
     }
 
-    // Whether LogSquirl has the Log Format installed is not known to the
-    // plugin, so the hint is shown regardless, but only with the first
-    // capture of a load.
-    ConvertedCapture capture;
-    capture.fileName = QFileInfo( filePath ).fileName();
-    capture.fileSize = QFileInfo( filePath ).size();
-    capture.summary = std::move( result.summary );
-    capture.index = std::move( result.index );
-    capture.withFormatHint = !formatHintShown_;
-    formatHintShown_ = true;
-    const auto packets = capture.summary.packets;
-
     // Kept before the tab is opened: the host may report it in front at once.
-    const auto key = fileKey( result.outputPath );
-    converted_.insert_or_assign( key, std::move( capture ) );
-    showSummaryFor( key );
+    const auto packets = result.summary.packets;
+    catalog_.addConverted( result.outputPath, filePath, std::move( result.summary ),
+                           std::move( result.index ) );
+    showSummaryFor( result.outputPath );
 
     // Open in LogSquirl viewer; the file stays until LogSquirl quits
     if ( g_state.api && g_state.handle ) {
@@ -963,30 +943,29 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
 
 void SidebarWidget::showSummaryFor( const QString& filePath )
 {
-    frontKey_ = fileKey( filePath );
-    const auto found = converted_.find( frontKey_ );
-    packetPanel_->setCapture( found == converted_.end() ? nullptr : found->second.index );
-    packetPanel_->conversationTable()->setSummary(
-        found == converted_.end() ? nullptr : &found->second.summary );
+    catalog_.setFront( filePath );
+    const auto* front = catalog_.front();
+    packetPanel_->setCapture( front ? front->index : nullptr );
+    packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
 
     // The capture being read is shown in a tab of its own when it is done.
     if ( converting_ ) {
         return;
     }
-    saveButton_->setHidden( found == converted_.end() || found->second.rawPath.isEmpty() );
+    saveButton_->setHidden( catalog_.partsToSave().empty() );
     shownSummary_ = frontSummaryHtml();
     summaryLabel_->setText( shownSummary_ );
 }
 
 QString SidebarWidget::frontSummaryHtml() const
 {
-    const auto found = converted_.find( frontKey_ );
-    if ( found == converted_.end() ) {
+    const auto* front = catalog_.front();
+    if ( !front ) {
         return kNoCaptureText;
     }
-    const auto& capture = found->second;
+    const auto& capture = *front;
     QString html;
-    if ( isCapturing() && isLiveKey( frontKey_ ) ) {
+    if ( catalog_.isCapturing( catalog_.frontFile() ) ) {
         html += "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br>";
     }
     if ( !capture.error.isEmpty() ) {
@@ -1182,62 +1161,29 @@ QString SidebarWidget::busyElsewhere() const
                : QString();
 }
 
-void SidebarWidget::addFile( const QString& logPath, const QString& rawPath, const QString& name )
+void SidebarWidget::showLiveFile( const QString& logPath )
 {
-    ConvertedCapture capture;
-    capture.fileName = QFileInfo( rawPath ).fileName();
-    capture.fileSize = QFileInfo( rawPath ).size();
-    capture.rawPath = rawPath;
-    capture.captureName = name;
-    capture.withFormatHint = !formatHintShown_;
-    formatHintShown_ = true;
-    const auto key = fileKey( logPath );
-    converted_.insert_or_assign( key, std::move( capture ) );
-    summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6" ).arg( name.toHtmlEscaped() ) );
-}
-
-void SidebarWidget::updateFile( const QString& logPath, const CaptureSummary& summary,
-                                std::shared_ptr<const CaptureIndex> index, qint64 fileSize )
-{
-    const auto key = fileKey( logPath );
-    const auto found = converted_.find( key );
-    if ( found == converted_.end() ) {
-        return;
-    }
-    found->second.fileSize = fileSize;
-    if ( index ) {
-        found->second.index = std::move( index );
-    }
-    updateSummary( key, summary );
-}
-
-void SidebarWidget::setFileError( const QString& logPath, const QString& error )
-{
-    if ( const auto found = converted_.find( fileKey( logPath ) ); found != converted_.end() ) {
-        found->second.error = error;
+    // The host may have brought its tab to the front at once, showing its
+    // summary; otherwise the label says the capture goes on.
+    if ( !catalog_.isFront( logPath ) ) {
+        summaryLabel_->setText(
+            QString( "Capturing %1\xe2\x80\xa6" ).arg( live_->name().toHtmlEscaped() ) );
     }
 }
 
-bool SidebarWidget::isLiveKey( const QString& key ) const
+void SidebarWidget::showLiveSummary()
 {
-    // The session's files, spelled as converted_ keys them.
-    const auto& files = live_->files();
-    return !key.isEmpty()
-           && std::any_of( files.begin(), files.end(),
-                           [ &key ]( const QString& file ) { return fileKey( file ) == key; } );
+    // showSummaryFor() redraws the summary and the Conversations table.
+    if ( catalog_.isLive( catalog_.frontFile() ) ) {
+        showSummaryFor( catalog_.frontFile() );
+    }
 }
 
 void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
 {
-    const auto key = fileKey( textPath );
-    const auto found = converted_.find( key );
-    if ( found == converted_.end() ) {
-        return;
-    }
-    // showSummaryFor() redraws the summary and the Conversations table.
-    found->second.summary = std::move( summary );
-    if ( frontKey_ == key ) {
-        showSummaryFor( key );
+    if ( catalog_.updateSummary( textPath, std::move( summary ) )
+         && catalog_.isFront( textPath ) ) {
+        showSummaryFor( textPath );
     }
 }
 
@@ -1259,7 +1205,10 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
         break;
     }
     // Its tabs show the final summary.
-    if ( !isLiveKey( frontKey_ ) ) {
+    if ( catalog_.isLive( catalog_.frontFile() ) ) {
+        showSummaryFor( catalog_.frontFile() );
+    }
+    else {
         summaryLabel_->setText( QString( "The capture %1 has ended: its tab shows its summary." )
                                     .arg( outcome.name.toHtmlEscaped() ) );
     }
@@ -1267,30 +1216,14 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
 
 void SidebarWidget::saveCapture()
 {
-    const auto found = converted_.find( frontKey_ );
-    if ( found == converted_.end() || found->second.rawPath.isEmpty() ) {
-        return;
-    }
-    // The files of the capture, those a ring buffer keeps, as the latest
-    // index has them; before the first one, the raw file.
-    std::vector<CapturePart> parts;
-    if ( found->second.index ) {
-        parts = found->second.index->parts();
-    }
+    const auto parts = catalog_.partsToSave();
     if ( parts.empty() ) {
-        CapturePart part;
-        part.path = found->second.rawPath;
-        parts.push_back( part );
+        return;
     }
     if ( lastDir_.isEmpty() ) {
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
-
-    // Named after the capture, <name>.pcap: a ring buffer's files are numbered.
-    const auto name = found->second.captureName.isEmpty()
-                          ? QFileInfo( frontKey_ ).completeBaseName()
-                          : found->second.captureName;
-    const auto suggested = name + "." + QFileInfo( found->second.rawPath ).suffix();
+    const auto suggested = catalog_.saveName();
     // The dialog runs its own event loop, as in chooseAndOpen().
     const QPointer<SidebarWidget> self( this );
     const auto target = chooseSaveFile_( this, QDir( lastDir_ ).filePath( suggested ) );

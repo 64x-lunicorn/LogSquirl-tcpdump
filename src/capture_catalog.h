@@ -124,6 +124,12 @@ public:
     void setFront( const QString& filePath );
     /// The capture in the tab in front, or null for a tab that holds none.
     const Entry* front() const;
+    /// The file in the tab in front, as fileKey() spells it, whether or not
+    /// it holds a capture; empty for a tab without a Log File.
+    const QString& frontFile() const
+    {
+        return frontKey_;
+    }
     /// Whether the text file @p logPath is the one in the tab in front.
     bool isFront( const QString& logPath ) const;
 

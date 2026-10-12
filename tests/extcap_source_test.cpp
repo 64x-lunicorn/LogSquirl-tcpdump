@@ -838,7 +838,7 @@ SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as 
             REQUIRE( shown == "Port must be from 1 to 65535." );
             REQUIRE( liveChoiceProblem( sources.get(), saved ) == shown );
             REQUIRE_FALSE( live.session.start( loadLiveChoice( host.configDir() ) ) );
-            REQUIRE( live.adapters.notifications
+            REQUIRE( live.host.notifications
                      == QStringList{ "Cannot start the live capture: " + shown } );
             REQUIRE_FALSE( live.session.isBusy() );
             REQUIRE_FALSE( live.session.outcome() );
@@ -858,7 +858,7 @@ SCENARIO( "Starting an extcap choice that breaks an argument rule is refused as 
             INFO( form->problem().toStdString() );
             REQUIRE( form->problem() == "Remote host is required." );
             REQUIRE_FALSE( live.session.start( choice ) );
-            REQUIRE( live.adapters.notifications
+            REQUIRE( live.host.notifications
                      == QStringList{ "Cannot start the live capture: Remote host is required." } );
             REQUIRE( extcaps.captures().isEmpty() );
         }
@@ -890,7 +890,7 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
     const auto kind = extcaps.kind();
     WorkerSession live( registryOf( kind ) );
     auto& session = live.session;
-    auto& adapters = live.adapters;
+    auto& liveHost = live.host;
     LiveChoice saved{ "extcap", "fakedump", "fake0", "", 4096 };
     saved.options = { { "fake0:--remote-host", "host" }, { "fake0:--remote-port", "70000" } };
 
@@ -908,11 +908,11 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
             {
                 REQUIRE(
                     extcaps.calls().contains( "[--extcap-interface][fake0][--extcap-config]" ) );
-                REQUIRE( adapters.notifications
+                REQUIRE( liveHost.notifications
                          == QStringList{ "Cannot start the live capture: Port must be from 1 to "
                                          "65535." } );
                 REQUIRE( extcaps.captures().isEmpty() );
-                REQUIRE( adapters.openedTabs.isEmpty() );
+                REQUIRE( liveHost.openedTabs.isEmpty() );
                 REQUIRE_FALSE( session.outcome() );
             }
 
@@ -920,8 +920,8 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
             {
                 REQUIRE_FALSE( kind->validationNeedsAsking( saved ) );
                 REQUIRE_FALSE( session.start( saved ) );
-                REQUIRE( adapters.notifications.size() == 2 );
-                REQUIRE( adapters.notifications.last() == adapters.notifications.first() );
+                REQUIRE( liveHost.notifications.size() == 2 );
+                REQUIRE( liveHost.notifications.last() == liveHost.notifications.first() );
             }
         }
 
@@ -937,7 +937,7 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
 
             THEN( "only the start that was not stopped is refused" )
             {
-                REQUIRE( adapters.notifications
+                REQUIRE( liveHost.notifications
                          == QStringList{ "Cannot start the live capture: Port must be from 1 to "
                                          "65535." } );
                 REQUIRE( extcaps.captures().isEmpty() );
@@ -964,7 +964,7 @@ SCENARIO( "A Live Capture Session asks an extcap for arguments it never listed b
                 REQUIRE( calls.indexOf( extcaps.captures().front() ) > config );
                 INFO( session.outcome()->error.toStdString() );
                 REQUIRE( session.outcome()->status == LiveOutcome::Status::Captured );
-                REQUIRE( adapters.openedTabs.size() == 1 );
+                REQUIRE( liveHost.openedTabs.size() == 1 );
                 REQUIRE( loadLiveChoice( host.configDir() ).device == "fakedump" );
             }
         }
@@ -1009,7 +1009,7 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
         REQUIRE( form->problem() == "Remote host is required." );
         WorkerSession live( sources );
         REQUIRE_FALSE( live.session.start( form->choice() ) );
-        REQUIRE( live.adapters.notifications
+        REQUIRE( live.host.notifications
                  == QStringList{ "Cannot start the live capture: Remote host is required." } );
         REQUIRE( extcaps.captures().isEmpty() );
     }
@@ -1137,7 +1137,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
             REQUIRE( live.outcome().stoppedBy == StopCondition::None );
             REQUIRE( live.outcome().files.size() == 1 );
-            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            REQUIRE( live.outcome().files == live.host.openedTabs );
             const QFileInfo log( live.outcome().files.first() );
             REQUIRE( log.fileName() == "fakedump-fake0.log" );
             QFile raw( log.dir().filePath( "fakedump-fake0.pcap" ) );
@@ -1190,8 +1190,8 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             INFO( live.outcome().error.toStdString() );
             REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
             REQUIRE( live.outcome().stoppedBy == StopCondition::None );
-            REQUIRE( live.outcome().files == live.adapters.openedTabs );
-            REQUIRE( live.adapters.notifications.isEmpty() );
+            REQUIRE( live.outcome().files == live.host.openedTabs );
+            REQUIRE( live.host.notifications.isEmpty() );
         }
     }
 
@@ -1207,13 +1207,13 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             INFO( live.outcome().error.toStdString() );
             REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
             REQUIRE( live.outcome().stoppedBy == StopCondition::Packets );
-            REQUIRE( live.adapters.notifications
+            REQUIRE( live.host.notifications
                      == QStringList{ liveStopText( "fakedump-fake0", StopCondition::Packets,
                                                    choice.limits ) } );
-            REQUIRE( live.adapters.notifications.first().contains( "stopped after 1 packets" ) );
+            REQUIRE( live.host.notifications.first().contains( "stopped after 1 packets" ) );
             REQUIRE( waitFor( [ & ] { return extcaps.calls().contains( "killed" ); } ) );
             REQUIRE( live.outcome().files.size() == 1 );
-            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            REQUIRE( live.outcome().files == live.host.openedTabs );
             REQUIRE( readText( live.outcome().files.first() ).count( "UDP" ) == 1 );
         }
     }
@@ -1230,7 +1230,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             INFO( live.outcome().error.toStdString() );
             REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
             REQUIRE( live.outcome().files.size() == 2 );
-            REQUIRE( live.outcome().files == live.adapters.openedTabs );
+            REQUIRE( live.outcome().files == live.host.openedTabs );
             const QFileInfo log( live.outcome().files.last() );
             const auto files = log.dir().entryList( { "fakedump-fake0_*.pcap" }, QDir::Files );
             REQUIRE( files.size() == 1 );
@@ -1256,7 +1256,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             REQUIRE( live.outcome().error.contains( "Not a capture" ) );
             REQUIRE( live.outcome().error.contains( "fakedump: capturing" ) );
             REQUIRE( live.outcome().files.isEmpty() );
-            REQUIRE( live.adapters.openedTabs.isEmpty() );
+            REQUIRE( live.host.openedTabs.isEmpty() );
         }
     }
 
@@ -1272,7 +1272,7 @@ SCENARIO( "The extcap source captures live through a FIFO", "[extcap_source]" )
             REQUIRE( live.outcome().error.contains( "fakedump exited with code 1" ) );
             REQUIRE( live.outcome().error.contains( "cannot reach the host" ) );
             REQUIRE( live.outcome().files.isEmpty() );
-            REQUIRE( live.adapters.openedTabs.isEmpty() );
+            REQUIRE( live.host.openedTabs.isEmpty() );
         }
     }
 }

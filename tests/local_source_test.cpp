@@ -424,7 +424,7 @@ SCENARIO( "The Local source captures live with a fake dumpcap or tcpdump", "[loc
         REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
         REQUIRE( live.outcome().error.isEmpty() );
         REQUIRE( live.outcome().files.size() == 1 );
-        REQUIRE( live.outcome().files == live.adapters.openedTabs );
+        REQUIRE( live.outcome().files == live.host.openedTabs );
         REQUIRE( QFileInfo( live.outcome().files.first() ).fileName() == "en0.log" );
         REQUIRE( live.stderrText().contains( "[udp port 9999]" ) );
         REQUIRE( live.stderrText().contains( "[96]" ) );
@@ -458,7 +458,7 @@ SCENARIO( "A capture that fails for want of permissions gets the guidance for th
                  == guidance );
         REQUIRE( live.outcome().guidance == guidance );
         REQUIRE( live.outcome().files.isEmpty() );
-        REQUIRE( live.adapters.openedTabs.isEmpty() );
+        REQUIRE( live.host.openedTabs.isEmpty() );
     }
 
     THEN( "a failure that is not about permissions gets no guidance" )

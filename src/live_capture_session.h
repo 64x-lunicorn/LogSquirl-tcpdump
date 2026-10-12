@@ -39,16 +39,19 @@
  *     says to do about it (its Guidance), keeping what was captured.
  *
  * It reaches LogSquirl (a tab, a notification) through a LiveCaptureHost
- * and the summaries the sidebar keeps through a LiveCaptureCatalog, and
- * runs a capture through a LiveRun: in the app a LiveCapture on a worker
- * thread, in a test a run the test scripts, so that what the session does
- * with each event is tested without a widget or an event loop.
+ * and keeps what each tab shows in a CaptureCatalog (capture_catalog.h),
+ * which it tells when a capture starts and ends, so that the catalog knows
+ * the tabs of the running or the last capture.  It runs a capture through
+ * a LiveRun: in the app a LiveCapture on a worker thread, in a test a run
+ * the test scripts, so that what the session does with each event is
+ * tested without a widget or an event loop.
  *
  * Nothing cancels a live capture: its outcome is never Cancelled.
  */
 
 #pragma once
 
+#include "capture_catalog.h"
 #include "live_capture.h"
 #include "live_source.h"
 #include "pcap_converter.h"
@@ -93,26 +96,6 @@ public:
     {
         return {};
     }
-};
-
-/// Where a Live Capture Session keeps what the tab of each text file of a
-/// capture shows: the sidebar's summaries and indices, by text file, in the
-/// app; a fake in tests.
-class LiveCaptureCatalog {
-public:
-    virtual ~LiveCaptureCatalog() = default;
-
-    /// The text file @p logPath of the capture @p name, written from the raw
-    /// file @p rawPath, is about to open in a tab: keep it.
-    virtual void addFile( const QString& logPath, const QString& rawPath, const QString& name ) = 0;
-    /// What the text file @p logPath shows from now on: @p summary, the
-    /// capture's @p index (null: the one it has) and the size of its raw
-    /// capture, @p fileSize; so far, or final.
-    virtual void updateFile( const QString& logPath, const CaptureSummary& summary,
-                             std::shared_ptr<const CaptureIndex> index, qint64 fileSize ) = 0;
-    /// The capture of the text file @p logPath failed with @p error; what it
-    /// captured is kept.
-    virtual void setFileError( const QString& logPath, const QString& error ) = 0;
 };
 
 /// What a capture is run with.
@@ -205,8 +188,7 @@ public:
 
     /// A session opening tabs on @p host and keeping summaries in @p
     /// catalog, both outliving it.
-    LiveCaptureSession( LiveCaptureHost& host, LiveCaptureCatalog& catalog,
-                        QObject* parent = nullptr );
+    LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
     /// Lets go of a capture that may still run (its run is retired, not
     /// waited for), and cancels and waits for a check that runs.
     ~LiveCaptureSession() override;
@@ -349,7 +331,7 @@ private:
     void runDone( unsigned run );
 
     LiveCaptureHost& host_;
-    LiveCaptureCatalog& catalog_;
+    CaptureCatalog& catalog_;
     std::shared_ptr<const LiveSourceRegistry> sources_;
     QString outputRoot_;
     LiveRunFactory makeRun_;

@@ -489,7 +489,7 @@ SCENARIO( "A custom command's capture converts live", "[command_source]" )
             INFO( run.outcome().error.toStdString() );
             REQUIRE( run.outcome().status == LiveOutcome::Status::Captured );
             REQUIRE( run.outcome().files.size() == 1 );
-            REQUIRE( run.live.adapters.openedTabs == run.outcome().files );
+            REQUIRE( run.live.host.openedTabs == run.outcome().files );
             const auto text = run.live.stderrText();
             REQUIRE( text.contains( "[-i]\n[" + iface + "]\n[-s]\n[77]\n[" + filter + "]" ) );
             REQUIRE_FALSE( QFileInfo::exists( pwned ) );
@@ -507,7 +507,7 @@ SCENARIO( "A custom command's capture converts live", "[command_source]" )
             INFO( run.outcome().error.toStdString() );
             REQUIRE( run.outcome().status == LiveOutcome::Status::Captured );
             REQUIRE( run.outcome().files.size() == 1 );
-            REQUIRE( run.live.adapters.openedTabs == run.outcome().files );
+            REQUIRE( run.live.host.openedTabs == run.outcome().files );
             REQUIRE( run.live.stderrText().contains( "[-i]\n[" + iface + "]\n[-s]\n[77]\n[" + filter
                                                      + "]" ) );
             REQUIRE_FALSE( QFileInfo::exists( pwned ) );
@@ -530,7 +530,7 @@ SCENARIO( "A custom command whose stdout is not a capture says so, with its stde
     {
         REQUIRE( run.outcome().status == LiveOutcome::Status::Failed );
         REQUIRE( run.outcome().files.isEmpty() );
-        REQUIRE( run.live.adapters.openedTabs.isEmpty() );
+        REQUIRE( run.live.host.openedTabs.isEmpty() );
         REQUIRE( run.outcome().error.contains( "Not a capture" ) );
         REQUIRE( run.outcome().error.contains( "not-pcap: writing text, use -w -" ) );
         REQUIRE( run.outcome().guidance.contains( "pcap or pcapng" ) );
@@ -545,7 +545,7 @@ SCENARIO( "A custom command that cannot be started says what to check", "[comman
     REQUIRE( run.outcome().status == LiveOutcome::Status::Failed );
     REQUIRE( run.outcome().error.contains( "Cannot start no-such-program" ) );
     REQUIRE( run.outcome().guidance.contains( "full path" ) );
-    REQUIRE( run.live.adapters.openedTabs.isEmpty() );
+    REQUIRE( run.live.host.openedTabs.isEmpty() );
 }
 
 #endif

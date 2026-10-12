@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include "capture_catalog.h"
 #include "export_dialog.h"
 #include "live_capture.h"
 #include "live_capture_session.h"
@@ -48,7 +49,6 @@
 
 #include <atomic>
 #include <functional>
-#include <map>
 #include <memory>
 
 namespace tcpdump {
@@ -116,9 +116,11 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * a worker thread of its own, with a progress dialog and Cancel.
  *
  * The summaries of all captures converted while the plugin is loaded are
- * kept with their CaptureIndex, keyed by the text file written for each, so
- * that a capture's tab that comes to the front again shows its own, and the
- * Packet Panel its packets.
+ * kept with their CaptureIndex in a CaptureCatalog (capture_catalog.h),
+ * keyed by the text file written for each, so that a capture's tab that
+ * comes to the front again shows its own, and the Packet Panel its packets.
+ * The sidebar renders the capture the catalog says is in front: its
+ * summary, the Packet Panel's index, and whether Save capture… shows.
  *
  * A live capture's tab is opened, following its file, once the header and
  * the first packet line are in it; with a ring buffer, each file's text in
@@ -127,8 +129,9 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * of the capture, and is final when it ends.
  *
  * A live capture's lifecycle and outcome are its LiveCaptureSession's
- * (live_capture_session.h): the sidebar is its host (a tab, a notification)
- * and keeps its summaries, and shows what it is told.
+ * (live_capture_session.h): the sidebar is its host (a tab, a notification),
+ * the session keeps its summaries in the sidebar's catalog, and the sidebar
+ * shows what it is told.
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -136,7 +139,7 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * plugin runs on the worker thread afterwards, and the host may unload the
  * library.
  */
-class SidebarWidget : public QWidget, private LiveCaptureHost, private LiveCaptureCatalog {
+class SidebarWidget : public QWidget, private LiveCaptureHost {
     Q_OBJECT
 
 public:
@@ -352,45 +355,29 @@ protected:
     void changeEvent( QEvent* event ) override;
 
 private:
-    /// A capture converted while the plugin is loaded, as its summary shows it.
-    struct ConvertedCapture {
-        QString fileName;       ///< The capture's name, without directory.
-        qint64 fileSize = 0;    ///< The capture's size in bytes.
-        CaptureSummary summary; ///< What was converted.
-        /// Where its packets are in the capture file, for the Packet Panel.
-        std::shared_ptr<const CaptureIndex> index;
-        bool withFormatHint = false; ///< Links to the Log Format section.
-        QString rawPath;             ///< A live capture's raw file; empty for a file.
-        /// What Save capture… names the capture: a live capture's name (a
-        /// ring buffer's text files are numbered); empty for a file.
-        QString captureName;
-        QString error; ///< Why a live capture failed, keeping what it had.
-    };
-
     /// Open a link of the summary: a filter in the Regex Lab, or a web page.
     void openLink( const QString& link );
     /// Show the outcome of a conversion and return to idle.
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
-    // The Live Capture Session's host and capture catalog.
+    // The Live Capture Session's host.
     void openTab( const QString& logPath ) override;
     void notify( const QString& message ) override;
     QString busyElsewhere() const override;
-    void addFile( const QString& logPath, const QString& rawPath, const QString& name ) override;
-    void updateFile( const QString& logPath, const CaptureSummary& summary,
-                     std::shared_ptr<const CaptureIndex> index, qint64 fileSize ) override;
-    void setFileError( const QString& logPath, const QString& error ) override;
 
     /// A live capture started: clear the last one's error and stderr lines.
     void showLiveStart();
     /// Show the live capture's state: the controls of a capture running,
     /// stopping, being checked, or none.
     void showLiveState();
+    /// The live capture's text file @p logPath was kept and opened in a tab:
+    /// say it is capturing, unless its tab came to the front at once.
+    void showLiveFile( const QString& logPath );
+    /// Show the summary of the tab in front again if it is the live capture's.
+    void showLiveSummary();
     /// Show the outcome of a live capture.
     void showLiveOutcome( const LiveOutcome& outcome );
-    /// Whether @p key is a text file of the live capture, running or the last.
-    bool isLiveKey( const QString& key ) const;
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();
     /// Whether a capture is being read or captured, said in a notification.
@@ -425,16 +412,13 @@ private:
     QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
     QLabel* liveError_ = nullptr;              ///< Why the last live capture failed.
     QString lastDir_;                          ///< Remembers the last browsed directory.
-    bool formatHintShown_ = false;             ///< The Log Format hint was shown once.
     FileChooser chooseFile_;                   ///< Shows the file dialog.
     SaveChooser chooseSaveFile_;               ///< Shows the save dialog.
-    /// The key in converted_ of the file in the tab in front, as fileKey()
-    /// spells it, whether or not it holds a capture.
-    QString frontKey_;
     /// The summary frontSummaryHtml() made last, as the label showed it.
     QString shownSummary_;
-    /// The captures converted so far, by the text file written for each.
-    std::map<QString, ConvertedCapture> converted_;
+    /// The captures converted and captured so far, by the text file written
+    /// for each, and which is in front; the Live Capture Session's catalog.
+    CaptureCatalog catalog_;
 
     bool converting_ = false;
     /// Cancels the running conversion.

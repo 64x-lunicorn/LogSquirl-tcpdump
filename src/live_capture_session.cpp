@@ -150,7 +150,7 @@ std::unique_ptr<LiveRun> runOnWorker( LiveRunRequest request )
     return std::make_unique<WorkerRun>( std::move( request ) );
 }
 
-LiveCaptureSession::LiveCaptureSession( LiveCaptureHost& host, LiveCaptureCatalog& catalog,
+LiveCaptureSession::LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog,
                                         QObject* parent )
     : QObject( parent )
     , host_( host )
@@ -294,6 +294,7 @@ void LiveCaptureSession::run( LiveRunRequest request, std::shared_ptr<const Live
     progress_ = {};
     files_.clear();
     rawFiles_.clear();
+    catalog_.startLive();
     outcome_.reset();
     clockStarted_.start();
     run_ = makeRun_( std::move( request ) );
@@ -421,6 +422,7 @@ void LiveCaptureSession::finish( unsigned run, const ConversionResult& result )
     outcome.name = name_;
     outcome.files = files_;
     outcome.stoppedBy = result.stoppedBy;
+    catalog_.endLive();
     setState( State::Idle );
     const bool opened = !files_.isEmpty();
 

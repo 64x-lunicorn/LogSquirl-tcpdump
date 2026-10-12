@@ -1853,11 +1853,12 @@ A live capture's lifecycle and outcome are decided in one place, a
 `LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
 drives and listens to; the sidebar only shows what it is told. The session
 reaches LogSquirl through a `LiveCaptureHost` (`openTab( logPath )`,
-`notify( message )`, and `busyElsewhere()`: a capture file being read) and
-the summaries the sidebar keeps per text file through a
-`LiveCaptureCatalog` (`addFile( logPath, rawPath, name )`, `updateFile(
-logPath, summary, index, fileSize )`, `setFileError( logPath, error )`);
-the sidebar is both. A capture runs through a `LiveRun` (`start( Listener
+`notify( message )`, and `busyElsewhere()`: a capture file being read),
+which the sidebar is, and keeps what each text file's tab shows in the
+sidebar's `CaptureCatalog` (see *The Capture Catalog*): `startLive()` as
+a run starts, `addFile( logPath, rawPath, name )`, `updateFile( logPath,
+summary, index, fileSize )`, `setFileError( logPath, error )`, and
+`endLive()` as it finishes. A capture runs through a `LiveRun` (`start( Listener
 )`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
 stderrLine, finished and done, as `LiveCapture`'s signals) made by a
 `LiveRunFactory` from a `LiveRunRequest` (name, output root, options,
@@ -1895,11 +1896,12 @@ The session's signals (`stateChanged`, `started`, `fileOpened`,
 `progressed`, `stderrLine`, `finished`) are what the sidebar renders:
 the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
 the error and Guidance, the summary label. `tests/fake_live_session.h`
-has `FakeLiveHost` (both adapters, recording) and `ScriptedRuns` (runs the
+has `FakeLiveHost` (the host, recording) and `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
-`tests/live_capture_session_test.cpp` tests the session without a widget
-or an event loop. Its `WorkerSession` is a session whose captures run on a
-worker as in the app, on a `FakeLiveHost`: the tests of each source kind
+`tests/live_capture_session_test.cpp` tests the session, with a real
+`CaptureCatalog`, without a widget or an event loop. Its `WorkerSession`
+is a session whose captures run on a worker as in the app, on a
+`FakeLiveHost` and a `CaptureCatalog`: the tests of each source kind
 (local, adb, ssh, extcap, command) start their captures with it, run by the
 kind's fake programs, and assert on the outcome (status, error, Guidance,
 files opened) and the stderr lines, waiting in the event loop for what the
@@ -2273,30 +2275,35 @@ Qt UI that provides:
   sidebar in a `QTabWidget` of fixed heights below and above the minimum
   and scrolls to the summary's last line and the Conversations' bottom
 - The summary of the capture in the tab in front. Every converted capture's
-  summary, and its `CaptureIndex`, is kept for the session, under the path of the text file written
-  for it (canonical, so that the host's spelling of the path finds it); the
-  plugin's active-file callback calls `showSummaryFor()` on every tab
-  switch, which shows the kept summary or "No capture in this tab." for a
-  file the plugin did not write or a tab without a Log File. While a capture
+  summary, and its `CaptureIndex`, is kept in the sidebar's
+  `CaptureCatalog` (see *The Capture Catalog* below), under the path of
+  the text file written for it; the plugin's active-file callback calls
+  `showSummaryFor()` on every tab switch, which tells the catalog the tab
+  in front and renders its `front()`: the summary, the Packet Panel's
+  index and whether **Save capture…** shows, or "No capture in this tab."
+  for a file the plugin did not write or a tab without a Log File. While a capture
   is being read the label keeps saying so. The summaries are lost when the
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
 
 A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
 `startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
-(`liveSession()`; see *The Live Capture Session*), whose host and capture
-catalog the sidebar is: `addFile()` keeps the capture's entry under its
-text file, `openTab()` calls `open_file( path, follow = 1 )` on the UI
-thread (LogSquirl#796), `updateFile()` replaces the entry's summary, index
-and size through `updateSummary( textPath, summary )`, which redraws it if
-its tab is in front, so the Packet Panel shows the packets captured so far,
-and `setFileError()` keeps a failure's error, shown above the summary. A
-label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
+(`liveSession()`; see *The Live Capture Session*), whose host the sidebar
+is: `openTab()` calls `open_file( path, follow = 1 )` on the UI thread
+(LogSquirl#796). The session keeps the capture's entries in the sidebar's
+catalog; the sidebar redraws the summary in front when it belongs to the
+live capture, on the session's `progressed` and `finished`, so the Packet
+Panel shows the packets captured so far, and a failure's error is shown
+above the summary. On `fileOpened` the label says the capture goes on,
+unless the host brought the new tab to the front at once.
+`updateSummary( textPath, summary )` replaces a kept summary and redraws
+it if its tab is in front. A label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
 time (ticked by a 1 s timer) in place of the progress bar. **Stop** calls
 `stopLiveCapture()`. The outcome's summary label is the sidebar's: stopped
 before anything was captured, without packets, the error, or that the
 capture's tab shows its summary. **Save capture…**, shown for a tab whose
-capture has a raw file, copies it where `setSaveChooser()`'s dialog says.
+capture has a raw file, copies the catalog's `partsToSave()` where
+`setSaveChooser()`'s dialog says, suggesting its `saveName()`.
 stderr lines go to the host's log. Opening a file and a live capture
 exclude each other (`busyElsewhere()`, `isCapturing()`).
 
@@ -2344,6 +2351,36 @@ Directories of running processes, links and, on Unix, other users'
 directories are left alone. Only regular files are read, so the worker
 cannot block on a FIFO or device; destroying the widget cancels a running
 conversion and waits for the worker.
+
+#### The Capture Catalog (`capture_catalog.h/cpp`)
+What the tab of each text file the plugin wrote shows, with no widget in
+it: the sidebar owns one, and it is its Live Capture Session's catalog.
+Entries (`CaptureCatalog::Entry`: file name and size, summary, index, the
+Log Format hint, a live capture's raw file, capture name and error) are
+keyed by `fileKey()`, the canonical path (absolute when the file is gone),
+so that the host's spelling of a tab's path (on macOS `/var/folders/…` for
+`/private/var/folders/…`) finds the file the plugin wrote.
+
+- `addConverted( logPath, capturePath, summary, index )` keeps a capture
+  file converted; the first entry of a load, converted or live, gets the
+  Log Format hint.
+- `startLive()`, `addFile()`, `updateFile()` (a null index keeps the one
+  the entry has), `setFileError()` and `endLive()` are what the Live
+  Capture Session tells. A file not kept is ignored.
+- `setFront( filePath )` on every tab switch; `front()` is the entry in
+  front or null, `frontFile()` its key, `isFront( path )`.
+- `isLive( path )`: a text file of the running or the last live capture;
+  `isCapturing( path )`: of the one that runs. `startLive()` drops the
+  tabs before from it, `endLive()` leaves them the last capture's.
+- `partsToSave()`: what **Save capture…** saves for the tab in front, the
+  latest index's `parts()` (a ring buffer's files that are kept) or, before
+  an index has any, the raw file; none for a converted file or no capture.
+  `saveName()` is `<capture name>.<raw suffix>`, the text file's base name
+  for a capture without a name.
+
+`tests/capture_catalog_test.cpp` tests it with plain Catch2: adding and
+updating, the tab in front, a capture ending, a failed file's error, and
+the parts of a ring buffer and of a capture without an index.
 
 ### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`)
 The sidebar's companion to the packet list: the layer tree and hex dump of

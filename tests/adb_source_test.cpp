@@ -568,7 +568,7 @@ SCENARIO( "The Android source captures live through a fake adb", "[adb_source]" 
                 REQUIRE( live->outcome().status == LiveOutcome::Status::Captured );
                 REQUIRE( live->outcome().error.isEmpty() );
                 REQUIRE( live->outcome().files.size() == 1 );
-                REQUIRE( live->outcome().files == live->adapters.openedTabs );
+                REQUIRE( live->outcome().files == live->host.openedTabs );
                 const QFileInfo log( live->outcome().files.first() );
                 REQUIRE( log.fileName() == "emulator-5554-wlan0.log" );
                 REQUIRE( readBytes( log.dir().filePath( "emulator-5554-wlan0.pcap" ) )
@@ -647,9 +647,9 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
         REQUIRE( live->session.start( { "adb", adb.serial, "any", "", 96 } ) );
         // A failure before the first packet ends the capture instead.
         REQUIRE( live->waitUntil(
-            [ & ] { return !live->adapters.openedTabs.isEmpty() || live->session.outcome(); } ) );
+            [ & ] { return !live->host.openedTabs.isEmpty() || live->session.outcome(); } ) );
         INFO( ( live->session.outcome() ? live->outcome().error : QString() ).toStdString() );
-        REQUIRE( live->adapters.openedTabs.size() == 1 );
+        REQUIRE( live->host.openedTabs.size() == 1 );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().size() == 2; } ) ); // pid, stderr
 
         live->session.stop();
@@ -661,7 +661,7 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
         INFO( live->outcome().error.toStdString() );
         REQUIRE( live->outcome().status == LiveOutcome::Status::Captured );
         REQUIRE( live->outcome().stoppedBy == StopCondition::None );
-        REQUIRE( live->outcome().files == live->adapters.openedTabs );
+        REQUIRE( live->outcome().files == live->host.openedTabs );
         QFile::remove( adb.path( "adb-root" ) );
         live.reset();
     }
@@ -729,7 +729,7 @@ SCENARIO( "A capture the device cannot make says why, and what to do", "[adb_sou
             REQUIRE( live->outcome().status == LiveOutcome::Status::Failed );
             REQUIRE( live->outcome().error.contains( "no root" ) );
             REQUIRE( live->outcome().guidance == adbRootGuidance() );
-            REQUIRE( live->adapters.openedTabs.isEmpty() );
+            REQUIRE( live->host.openedTabs.isEmpty() );
             REQUIRE( adb.tcpdumpLog().isEmpty() );
             REQUIRE_FALSE( adb.adbLog().contains( "exec-out" ) );
         }
@@ -748,7 +748,7 @@ SCENARIO( "A capture the device cannot make says why, and what to do", "[adb_sou
             REQUIRE( live->outcome().status == LiveOutcome::Status::Failed );
             REQUIRE( live->outcome().error.contains( "No such device exists" ) );
             REQUIRE( live->outcome().files.isEmpty() );
-            REQUIRE( live->adapters.openedTabs.isEmpty() );
+            REQUIRE( live->host.openedTabs.isEmpty() );
             REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
         }
     }

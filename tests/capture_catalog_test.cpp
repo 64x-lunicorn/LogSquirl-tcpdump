@@ -180,6 +180,7 @@ SCENARIO( "The catalog says which capture is in the tab in front", "[capture_cat
         {
             REQUIRE( catalog.front() == catalog.find( first ) );
             REQUIRE( catalog.front()->summary.packets == 1 );
+            REQUIRE( catalog.frontFile() == fileKey( first ) );
             REQUIRE_FALSE( catalog.isFront( second ) );
         }
     }
@@ -202,6 +203,7 @@ SCENARIO( "The catalog says which capture is in the tab in front", "[capture_cat
         THEN( "no capture is in front" )
         {
             REQUIRE_FALSE( catalog.front() );
+            REQUIRE( catalog.frontFile().isEmpty() );
             REQUIRE_FALSE( catalog.isFront( QString() ) );
         }
     }
