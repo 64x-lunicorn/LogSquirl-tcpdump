@@ -381,13 +381,10 @@ void LiveCaptureSession::openFile( unsigned run, const QString& logPath, const Q
     if ( run != runs_ ) {
         return;
     }
-    // Kept before the tab is opened: the host may report it in front at
-    // once.  A ring buffer's next file opens a tab of its own; the tabs
-    // before stay.
+    // A ring buffer's next file opens a tab of its own; the tabs before stay.
     files_ << logPath;
     rawFiles_.push_back( rawPath );
-    catalog_.addFile( logPath, rawPath, name_ );
-    host_.openTab( logPath );
+    catalog_.openLiveFile( logPath, rawPath, name_ );
     emit fileOpened( logPath );
 }
 

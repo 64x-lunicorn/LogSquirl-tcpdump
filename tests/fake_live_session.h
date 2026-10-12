@@ -22,16 +22,17 @@
  * @brief Fakes around a Live Capture Session: its host, captures the test
  *        scripts, and captures run for real.
  *
- * FakeLiveHost is the host of a LiveCaptureSession: it records the tabs
- * opened and the notifications, and can say something else is busy.  The
- * session keeps what each tab shows in a real CaptureCatalog, which the
- * tests read.  ScriptedRuns makes the session's runs (setRunFactory()):
- * each a ScriptedRun that records what it was asked to run and whether it
- * was told to stop, and tells the session what the test says, when the
- * test says it, on the test's thread, so that no event loop is needed.
- * WorkerSession is a session whose captures run on a worker, as in the
- * app (runOnWorker()), for a source kind's tests with its fake programs:
- * it runs the event loop until the session told what the test waits for.
+ * FakeLiveHost is the host of a LiveCaptureSession and of its catalog: it
+ * records the tabs opened and the notifications, and can say something else
+ * is busy.  The session keeps what each tab shows in a real CaptureCatalog,
+ * which opens the tabs and which the tests read.  ScriptedRuns makes the
+ * session's runs (setRunFactory()): each a ScriptedRun that records what it
+ * was asked to run and whether it was told to stop, and tells the session
+ * what the test says, when the test says it, on the test's thread, so that
+ * no event loop is needed.  WorkerSession is a session whose captures run on
+ * a worker, as in the app (runOnWorker()), for a source kind's tests with
+ * its fake programs: it runs the event loop until the session told what the
+ * test waits for.
  */
 
 #pragma once
@@ -51,10 +52,10 @@
 
 namespace tcpdump_test {
 
-/// A Live Capture Session's host, recording.
-class FakeLiveHost : public tcpdump::LiveCaptureHost {
+/// A Live Capture Session's host, and its catalog's tab host, recording.
+class FakeLiveHost : public tcpdump::LiveCaptureHost, public tcpdump::CaptureTabHost {
 public:
-    void openTab( const QString& logPath ) override
+    void openTab( const QString& logPath, bool /*follow*/ ) override
     {
         openedTabs << logPath;
     }
@@ -242,7 +243,7 @@ public:
     }
 
     FakeLiveHost host;
-    tcpdump::CaptureCatalog catalog;
+    tcpdump::CaptureCatalog catalog{ host };
     QTemporaryDir outputRoot; ///< Outlives the session, which writes below it.
     tcpdump::LiveCaptureSession session{ host, catalog };
     QStringList stderrLines; ///< What its capture programs wrote to stderr, in order.

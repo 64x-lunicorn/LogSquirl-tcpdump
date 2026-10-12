@@ -88,7 +88,7 @@ ConversionResult resultOf( ConversionResult::Status status, const QString& outpu
 struct Session {
     FakeHost host; // its config directory, for the saved choice
     FakeLiveHost liveHost;
-    CaptureCatalog catalog;
+    CaptureCatalog catalog{ liveHost };
     ScriptedRuns runs;
     std::shared_ptr<FakeSourceKind> kind = std::make_shared<FakeSourceKind>();
     LiveCaptureSession session{ liveHost, catalog };

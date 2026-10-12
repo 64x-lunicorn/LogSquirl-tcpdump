@@ -40,15 +40,16 @@
  * could pick their lines.
  *
  * Its CaptureCatalog keeps each converted capture's summary and CaptureIndex
- * under the path of its .log file and says which is in the tab in front, as
- * the host reports tab switches; the sidebar shows that one's summary, and
- * its Packet Panel the packets of that capture.
+ * under the path of its .log file, opens its tab and says which is in the
+ * tab in front, as the host reports tab switches; the sidebar shows that
+ * one's summary, and its Packet Panel the packets of that capture.  The
+ * sidebar is the catalog's tab host: it opens a tab on the UI thread.
  *
  * A live capture (startLiveCapture()) is its LiveCaptureSession's, which
- * decides what it does: the sidebar is the session's host (a tab, opened
- * on the UI thread once the first packet line is there; a notification),
+ * decides what it does: the sidebar is the session's host (a notification),
  * and the session keeps the summaries of its text files in the catalog,
- * which follow the snapshots until the capture ends; the sidebar shows the
+ * which opens each one's tab once the first packet line is there; the
+ * summaries follow the snapshots until the capture ends.  The sidebar shows the
  * session's state, progress, stderr lines and outcome.  The Live capture section, and the Start
  * live capture… dialog, choose what to capture from the Live Source Kinds (live_source.h): the kind
  * chosen makes the stream, and explains a failure.
@@ -929,16 +930,11 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         break;
     }
 
-    // Kept before the tab is opened: the host may report it in front at once.
+    // Its tab opens in the LogSquirl viewer; the file stays until LogSquirl quits.
     const auto packets = result.summary.packets;
-    catalog_.addConverted( result.outputPath, filePath, std::move( result.summary ),
-                           std::move( result.index ) );
+    catalog_.openConverted( result.outputPath, filePath, std::move( result.summary ),
+                            std::move( result.index ) );
     showSummaryFor( result.outputPath );
-
-    // Open in LogSquirl viewer; the file stays until LogSquirl quits
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
-    }
 
     hostLog( LOGSQUIRL_LOG_INFO,
              QString( "Opened %1 packets from %2" ).arg( packets ).arg( filePath ) );
@@ -1143,12 +1139,12 @@ void SidebarWidget::showLiveProgress()
     }
 }
 
-void SidebarWidget::openTab( const QString& logPath )
+void SidebarWidget::openTab( const QString& logPath, bool follow )
 {
-    // On this, the UI thread; following the file, which grows.  The header
-    // and a packet line are in it, so the host recognises the Log Format.
+    // On this, the UI thread.  The header and a packet line are in it, so
+    // the host recognises the Log Format; a live capture's grows.
     if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, logPath.toUtf8().constData(), 1 );
+        g_state.api->open_file( g_state.handle, logPath.toUtf8().constData(), follow ? 1 : 0 );
     }
 }
 

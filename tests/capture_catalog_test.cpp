@@ -20,8 +20,8 @@
 /**
  * @file capture_catalog_test.cpp
  * @brief BDD tests for the Capture Catalog: the captures' entries by text
- *        file, the tab in front, a live capture's tabs and the parts Save
- *        capture… saves, with no widget.
+ *        file and their tabs, the Log Format hint, the tab in front, a live
+ *        capture's tabs and the parts Save capture… saves, with no widget.
  */
 
 #include <catch2/catch.hpp>
@@ -31,6 +31,8 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QList>
+#include <QStringList>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -65,20 +67,52 @@ QString otherSpelling( const QTemporaryDir& dir, const QString& name )
     return dir.path() + "/./" + name;
 }
 
+/// The catalog's tab host, recording the tabs it opens and whether the
+/// catalog kept each file's entry, and a live one as live, by then.
+class RecordingTabs : public CaptureTabHost {
+public:
+    void openTab( const QString& logPath, bool follow ) override
+    {
+        opened << logPath;
+        following << follow;
+        keptFirst << ( catalog && catalog->find( logPath ) );
+        liveFirst << ( catalog && catalog->isLive( logPath ) );
+    }
+
+    const CaptureCatalog* catalog = nullptr; ///< Set: what the checks look in.
+    QStringList opened;                      ///< The text files opened in tabs, in order.
+    QList<bool> following;                   ///< Per tab: whether it follows its file.
+    QList<bool> keptFirst;                   ///< Per tab: its entry was kept before.
+    QList<bool> liveFirst;                   ///< Per tab: it was live before.
+};
+
+/// How many of @p logPaths carry the Log Format hint in @p catalog.
+int withHint( const CaptureCatalog& catalog, const QStringList& logPaths )
+{
+    int count = 0;
+    for ( const auto& log : logPaths ) {
+        const auto* entry = catalog.find( log );
+        REQUIRE( entry );
+        count += entry->withFormatHint ? 1 : 0;
+    }
+    return count;
+}
+
 } // namespace
 
 SCENARIO( "A capture's text file is kept in the catalog, and its entry replaced",
           "[capture_catalog]" )
 {
     QTemporaryDir dir;
-    CaptureCatalog catalog;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
 
     GIVEN( "a live capture's text file, added before its tab opens" )
     {
         const auto log = fileOf( dir, "eth0.log" );
         const auto raw = fileOf( dir, "eth0.pcap", 24 );
         catalog.startLive();
-        catalog.addFile( log, raw, "eth0" );
+        catalog.openLiveFile( log, raw, "eth0" );
 
         THEN( "its entry names its raw file and capture, and has no summary yet" )
         {
@@ -115,7 +149,7 @@ SCENARIO( "A capture's text file is kept in the catalog, and its entry replaced"
         const auto log = fileOf( dir, "trace.log" );
         const auto capture = fileOf( dir, "trace.pcap", 40 );
         const auto index = std::make_shared<CaptureIndex>();
-        catalog.addConverted( log, capture, summaryOf( 7 ), index );
+        catalog.openConverted( log, capture, summaryOf( 7 ), index );
 
         THEN( "its entry has the summary and index, and no raw file of a live capture" )
         {
@@ -155,14 +189,120 @@ SCENARIO( "A capture's text file is kept in the catalog, and its entry replaced"
     }
 }
 
+SCENARIO( "The catalog opens each capture's tab once it keeps its entry", "[capture_catalog]" )
+{
+    QTemporaryDir dir;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
+    tabs.catalog = &catalog;
+
+    WHEN( "a capture file converted is opened" )
+    {
+        const auto log = fileOf( dir, "trace.log" );
+        catalog.openConverted( log, fileOf( dir, "trace.pcap" ), summaryOf( 1 ), {} );
+
+        THEN( "its tab opens once, not following the file, which is written already" )
+        {
+            REQUIRE( tabs.opened == QStringList{ log } );
+            REQUIRE( tabs.following == QList<bool>{ false } );
+        }
+
+        THEN( "its entry was kept before: the host may report the tab in front at once" )
+        {
+            REQUIRE( tabs.keptFirst == QList<bool>{ true } );
+        }
+    }
+
+    WHEN( "a ring buffer's live capture opens its text files" )
+    {
+        const auto log1 = fileOf( dir, "eth0_00001.log" );
+        const auto log2 = fileOf( dir, "eth0_00002.log" );
+        catalog.startLive();
+        catalog.openLiveFile( log1, fileOf( dir, "eth0_00001.pcap" ), "eth0" );
+        catalog.openLiveFile( log2, fileOf( dir, "eth0_00002.pcap" ), "eth0" );
+
+        THEN( "each opens a tab of its own, following its file, which grows" )
+        {
+            REQUIRE( tabs.opened == QStringList{ log1, log2 } );
+            REQUIRE( tabs.following == QList<bool>{ true, true } );
+        }
+
+        THEN( "each was kept, and live, before its tab opened" )
+        {
+            REQUIRE( tabs.keptFirst == QList<bool>{ true, true } );
+            REQUIRE( tabs.liveFirst == QList<bool>{ true, true } );
+        }
+    }
+}
+
+SCENARIO( "The first capture of a load links to the Log Format, whichever kind it is",
+          "[capture_catalog]" )
+{
+    QTemporaryDir dir;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
+    const auto converted = fileOf( dir, "trace.log" );
+    const auto another = fileOf( dir, "other.log" );
+    const auto live1 = fileOf( dir, "eth0_00001.log" );
+    const auto live2 = fileOf( dir, "eth0_00002.log" );
+    const QStringList all{ converted, another, live1, live2 };
+
+    const auto openFiles = [ & ] {
+        catalog.openConverted( converted, fileOf( dir, "trace.pcap" ), summaryOf( 1 ), {} );
+        catalog.openConverted( another, fileOf( dir, "other.pcap" ), summaryOf( 2 ), {} );
+    };
+    const auto capture = [ & ] {
+        catalog.startLive();
+        catalog.openLiveFile( live1, fileOf( dir, "eth0_00001.pcap" ), "eth0" );
+        catalog.openLiveFile( live2, fileOf( dir, "eth0_00002.pcap" ), "eth0" );
+        catalog.endLive();
+    };
+
+    WHEN( "capture files are opened first, then a live capture runs" )
+    {
+        openFiles();
+        capture();
+
+        THEN( "only the first file's summary carries the hint" )
+        {
+            REQUIRE( catalog.find( converted )->withFormatHint );
+            REQUIRE( withHint( catalog, all ) == 1 );
+        }
+    }
+
+    WHEN( "a live capture runs first, then capture files are opened" )
+    {
+        capture();
+        openFiles();
+
+        THEN( "only the live capture's first text file carries the hint" )
+        {
+            REQUIRE( catalog.find( live1 )->withFormatHint );
+            REQUIRE( withHint( catalog, all ) == 1 );
+        }
+    }
+
+    WHEN( "the file with the hint is opened again, converted anew" )
+    {
+        openFiles();
+        catalog.openConverted( converted, fileOf( dir, "trace.pcap" ), summaryOf( 1 ), {} );
+
+        THEN( "the hint is not shown again" )
+        {
+            REQUIRE( withHint( catalog, { converted, another } ) == 0 );
+        }
+    }
+}
+
 SCENARIO( "The catalog says which capture is in the tab in front", "[capture_catalog]" )
 {
     QTemporaryDir dir;
-    CaptureCatalog catalog;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
     const auto first = fileOf( dir, "first.log" );
     const auto second = fileOf( dir, "second.log" );
-    catalog.addConverted( first, fileOf( dir, "first.pcap" ), summaryOf( 1 ), {} );
-    catalog.addConverted( second, fileOf( dir, "second.pcap" ), summaryOf( 2 ), {} );
+    catalog.openConverted( first, fileOf( dir, "first.pcap" ), summaryOf( 1 ), {} );
+    catalog.openConverted( second, fileOf( dir, "second.pcap" ), summaryOf( 2 ), {} );
 
     THEN( "no capture is in front before a tab is" )
     {
@@ -208,13 +348,29 @@ SCENARIO( "The catalog says which capture is in the tab in front", "[capture_cat
         }
     }
 
+    WHEN( "a third capture is opened and comes to the front" )
+    {
+        const auto third = fileOf( dir, "third.log" );
+        catalog.openConverted( third, fileOf( dir, "third.pcap" ), summaryOf( 3 ), {} );
+        catalog.setFront( third );
+        REQUIRE( catalog.front()->summary.packets == 3 );
+
+        THEN( "the captures before keep their summaries for their tabs" )
+        {
+            catalog.setFront( first );
+            REQUIRE( catalog.front()->summary.packets == 1 );
+            catalog.setFront( second );
+            REQUIRE( catalog.front()->summary.packets == 2 );
+        }
+    }
+
     WHEN( "a file is added after its tab came to the front" )
     {
         const auto log = fileOf( dir, "late.log" );
         catalog.setFront( log );
         REQUIRE_FALSE( catalog.front() );
         catalog.startLive();
-        catalog.addFile( log, fileOf( dir, "late.pcap" ), "late" );
+        catalog.openLiveFile( log, fileOf( dir, "late.pcap" ), "late" );
 
         THEN( "it is the one in front" )
         {
@@ -226,14 +382,15 @@ SCENARIO( "The catalog says which capture is in the tab in front", "[capture_cat
 SCENARIO( "A live capture's tabs stay the last capture's when it ends", "[capture_catalog]" )
 {
     QTemporaryDir dir;
-    CaptureCatalog catalog;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
     const auto converted = fileOf( dir, "trace.log" );
-    catalog.addConverted( converted, fileOf( dir, "trace.pcap" ), summaryOf( 1 ), {} );
+    catalog.openConverted( converted, fileOf( dir, "trace.pcap" ), summaryOf( 1 ), {} );
     const auto log1 = fileOf( dir, "eth0_00001.log" );
     const auto log2 = fileOf( dir, "eth0_00002.log" );
     catalog.startLive();
-    catalog.addFile( log1, fileOf( dir, "eth0_00001.pcap" ), "eth0" );
-    catalog.addFile( log2, fileOf( dir, "eth0_00002.pcap" ), "eth0" );
+    catalog.openLiveFile( log1, fileOf( dir, "eth0_00001.pcap" ), "eth0" );
+    catalog.openLiveFile( log2, fileOf( dir, "eth0_00002.pcap" ), "eth0" );
     catalog.setFront( log1 );
 
     THEN( "each of its tabs is the running capture's, and a converted file's is not" )
@@ -264,7 +421,7 @@ SCENARIO( "A live capture's tabs stay the last capture's when it ends", "[captur
         {
             const auto next = fileOf( dir, "wlan0.log" );
             catalog.startLive();
-            catalog.addFile( next, fileOf( dir, "wlan0.pcap" ), "wlan0" );
+            catalog.openLiveFile( next, fileOf( dir, "wlan0.pcap" ), "wlan0" );
 
             THEN( "the tabs before are no longer live, but keep their entries" )
             {
@@ -282,10 +439,11 @@ SCENARIO( "A live capture's failed file keeps its error with the final summary",
           "[capture_catalog]" )
 {
     QTemporaryDir dir;
-    CaptureCatalog catalog;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
     const auto log = fileOf( dir, "eth0.log" );
     catalog.startLive();
-    catalog.addFile( log, fileOf( dir, "eth0.pcap" ), "eth0" );
+    catalog.openLiveFile( log, fileOf( dir, "eth0.pcap" ), "eth0" );
     catalog.updateFile( log, summaryOf( 2 ), std::make_shared<CaptureIndex>(), 200 );
     catalog.setFileError( log, "tcpdump: permission denied" );
     catalog.updateFile( log, summaryOf( 3 ), std::make_shared<CaptureIndex>(), 300 );
@@ -302,7 +460,7 @@ SCENARIO( "A live capture's failed file keeps its error with the final summary",
     WHEN( "the same text file is captured again" )
     {
         catalog.startLive();
-        catalog.addFile( log, fileOf( dir, "eth0.pcap" ), "eth0" );
+        catalog.openLiveFile( log, fileOf( dir, "eth0.pcap" ), "eth0" );
 
         THEN( "its new entry has no error" )
         {
@@ -314,7 +472,8 @@ SCENARIO( "A live capture's failed file keeps its error with the final summary",
 SCENARIO( "Save capture… saves the parts of the capture in front", "[capture_catalog]" )
 {
     QTemporaryDir dir;
-    CaptureCatalog catalog;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
 
     THEN( "nothing is saved without a capture in front" )
     {
@@ -329,8 +488,8 @@ SCENARIO( "Save capture… saves the parts of the capture in front", "[capture_c
         const auto raw1 = fileOf( dir, "eth0_00001.pcapng", 90 );
         const auto raw2 = fileOf( dir, "eth0_00002.pcapng", 40 );
         catalog.startLive();
-        catalog.addFile( log1, raw1, "eth0" );
-        catalog.addFile( log2, raw2, "eth0" );
+        catalog.openLiveFile( log1, raw1, "eth0" );
+        catalog.openLiveFile( log2, raw2, "eth0" );
         auto index = std::make_shared<CaptureIndex>();
         CapturePart first;
         first.path = raw1;
@@ -361,7 +520,7 @@ SCENARIO( "Save capture… saves the parts of the capture in front", "[capture_c
         const auto log = fileOf( dir, "usb0.log" );
         const auto raw = fileOf( dir, "usb0.pcap", 24 );
         catalog.startLive();
-        catalog.addFile( log, raw, "usb0" );
+        catalog.openLiveFile( log, raw, "usb0" );
         catalog.setFront( log );
 
         THEN( "its one part is the raw file" )
@@ -390,7 +549,7 @@ SCENARIO( "Save capture… saves the parts of the capture in front", "[capture_c
     {
         const auto log = fileOf( dir, "anon.log" );
         catalog.startLive();
-        catalog.addFile( log, fileOf( dir, "anon_raw.pcap" ), QString() );
+        catalog.openLiveFile( log, fileOf( dir, "anon_raw.pcap" ), QString() );
         catalog.setFront( log );
 
         THEN( "it is named after its text file" )
@@ -402,8 +561,8 @@ SCENARIO( "Save capture… saves the parts of the capture in front", "[capture_c
     GIVEN( "a capture file converted, in front" )
     {
         const auto log = fileOf( dir, "trace.log" );
-        catalog.addConverted( log, fileOf( dir, "trace.pcap" ), summaryOf( 1 ),
-                              std::make_shared<CaptureIndex>() );
+        catalog.openConverted( log, fileOf( dir, "trace.pcap" ), summaryOf( 1 ),
+                               std::make_shared<CaptureIndex>() );
         catalog.setFront( log );
 
         THEN( "there is nothing to save: the file is the user's already" )

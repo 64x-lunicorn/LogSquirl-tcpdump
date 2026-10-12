@@ -26,11 +26,16 @@
  * (fileKey()), so that the path the host reports for a tab finds the file
  * the plugin wrote:
  *
- *   - a capture file converted (addConverted()): its summary and index;
+ *   - a capture file converted (openConverted()): its summary and index;
  *   - each text file of a live capture (a ring buffer's, one per raw
- *     file), which its Live Capture Session adds before its tab opens and
- *     whose summary, index and size it replaces as the snapshots and the
- *     outcome come, and the error of a capture that failed.
+ *     file, openLiveFile()), whose summary, index and size its Live Capture
+ *     Session replaces as the snapshots and the outcome come, and the error
+ *     of a capture that failed.
+ *
+ * Either way the catalog keeps the entry first and then opens the file's
+ * tab through its CaptureTabHost, as the host may report that tab in front
+ * at once.  The first entry of a load, of either kind, links to the Log
+ * Format section (Entry::withFormatHint); no other does.
  *
  * It knows the tab in front (setFront(), on every tab switch), which text
  * files are the live capture's, running or the last (isLive(),
@@ -62,6 +67,17 @@ namespace tcpdump {
 /// Empty for an empty path.
 QString fileKey( const QString& filePath );
 
+/// Where the Capture Catalog opens a capture's tab: LogSquirl, through the
+/// sidebar, in the app; a fake in tests.
+class CaptureTabHost {
+public:
+    virtual ~CaptureTabHost() = default;
+
+    /// Open the text file @p logPath in a tab, on the UI thread; @p follow:
+    /// follow the file as it grows (a live capture's).
+    virtual void openTab( const QString& logPath, bool follow ) = 0;
+};
+
 /**
  * The entries of the captures' text files, the tab in front, the live
  * capture's tabs and the parts to save (see the file comment).
@@ -76,7 +92,8 @@ public:
         /// Where its packets are in the capture file, for the Packet Panel;
         /// null before a live capture's first snapshot.
         std::shared_ptr<const CaptureIndex> index;
-        /// Links to the Log Format section: the first capture of a load.
+        /// Links to the Log Format section: the first capture of a load,
+        /// converted or live.
         bool withFormatHint = false;
         QString rawPath; ///< A live capture's raw file; empty for a file.
         /// What Save capture… names the capture: a live capture's name (a
@@ -85,17 +102,23 @@ public:
         QString error; ///< Why a live capture failed, keeping what it had.
     };
 
+    /// Open tabs through @p tabs, which outlives the catalog.
+    explicit CaptureCatalog( CaptureTabHost& tabs )
+        : tabs_( tabs )
+    {
+    }
+
     /// Keep the capture file @p capturePath converted into the text file
-    /// @p logPath, with its @p summary and @p index.
-    void addConverted( const QString& logPath, const QString& capturePath, CaptureSummary summary,
-                       std::shared_ptr<const CaptureIndex> index );
+    /// @p logPath, with its @p summary and @p index, and open its tab.
+    void openConverted( const QString& logPath, const QString& capturePath, CaptureSummary summary,
+                        std::shared_ptr<const CaptureIndex> index );
 
     /// A live capture starts: the text files of the one before are no
     /// longer live.
     void startLive();
-    /// The text file @p logPath of the live capture @p name, written from
-    /// the raw file @p rawPath, is about to open in a tab: keep it, live.
-    void addFile( const QString& logPath, const QString& rawPath, const QString& name );
+    /// Keep the text file @p logPath of the live capture @p name, written
+    /// from the raw file @p rawPath, live, and open its tab, following it.
+    void openLiveFile( const QString& logPath, const QString& rawPath, const QString& name );
     /// What the text file @p logPath shows from now on: @p summary, the
     /// capture's @p index (null: the one it has) and the size of its raw
     /// capture, @p fileSize; so far, or final.  Nothing for a file not kept.
@@ -149,9 +172,13 @@ public:
     QString saveName() const;
 
 private:
+    /// Keep @p entry for the text file of @p key, with the Log Format hint
+    /// if it is the first of the load, then open the tab of @p logPath.
+    void keepAndOpen( const QString& key, const QString& logPath, Entry entry, bool follow );
     /// The entry of @p key; null for one not kept.
     Entry* entryOf( const QString& key );
 
+    CaptureTabHost& tabs_; ///< Where the captures' tabs open.
     /// The text files kept, by fileKey().
     std::map<QString, Entry> entries_;
     /// The key of the text file in the tab in front, kept or not.

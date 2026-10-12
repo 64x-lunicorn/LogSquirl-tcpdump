@@ -39,21 +39,17 @@ QString fileKey( const QString& filePath )
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
-void CaptureCatalog::addConverted( const QString& logPath, const QString& capturePath,
-                                   CaptureSummary summary,
-                                   std::shared_ptr<const CaptureIndex> index )
+void CaptureCatalog::openConverted( const QString& logPath, const QString& capturePath,
+                                    CaptureSummary summary,
+                                    std::shared_ptr<const CaptureIndex> index )
 {
-    // Whether LogSquirl has the Log Format installed is not known to the
-    // plugin, so the hint is shown regardless, but only with the first
-    // capture of a load.
     Entry entry;
     entry.fileName = QFileInfo( capturePath ).fileName();
     entry.fileSize = QFileInfo( capturePath ).size();
     entry.summary = std::move( summary );
     entry.index = std::move( index );
-    entry.withFormatHint = !formatHintShown_;
-    formatHintShown_ = true;
-    entries_.insert_or_assign( fileKey( logPath ), std::move( entry ) );
+    // Written in full already: the tab need not follow it.
+    keepAndOpen( fileKey( logPath ), logPath, std::move( entry ), false );
 }
 
 void CaptureCatalog::startLive()
@@ -62,18 +58,19 @@ void CaptureCatalog::startLive()
     capturing_ = true;
 }
 
-void CaptureCatalog::addFile( const QString& logPath, const QString& rawPath, const QString& name )
+void CaptureCatalog::openLiveFile( const QString& logPath, const QString& rawPath,
+                                   const QString& name )
 {
     Entry entry;
     entry.fileName = QFileInfo( rawPath ).fileName();
     entry.fileSize = QFileInfo( rawPath ).size();
     entry.rawPath = rawPath;
     entry.captureName = name;
-    entry.withFormatHint = !formatHintShown_;
-    formatHintShown_ = true;
+    // Live before its tab opens, so that a tab in front at once shows that
+    // it is capturing.
     const auto key = fileKey( logPath );
-    entries_.insert_or_assign( key, std::move( entry ) );
     liveKeys_.insert( key );
+    keepAndOpen( key, logPath, std::move( entry ), true );
 }
 
 void CaptureCatalog::updateFile( const QString& logPath, const CaptureSummary& summary,
@@ -174,6 +171,19 @@ QString CaptureCatalog::saveName() const
     const auto name = entry->captureName.isEmpty() ? QFileInfo( frontKey_ ).completeBaseName()
                                                    : entry->captureName;
     return name + "." + QFileInfo( entry->rawPath ).suffix();
+}
+
+void CaptureCatalog::keepAndOpen( const QString& key, const QString& logPath, Entry entry,
+                                  bool follow )
+{
+    // Whether LogSquirl has the Log Format installed is not known to the
+    // plugin, so the hint is shown regardless, but only with the first
+    // capture of a load, converted or live.
+    entry.withFormatHint = !formatHintShown_;
+    formatHintShown_ = true;
+    // Kept before the tab is opened: the host may report it in front at once.
+    entries_.insert_or_assign( key, std::move( entry ) );
+    tabs_.openTab( logPath, follow );
 }
 
 CaptureCatalog::Entry* CaptureCatalog::entryOf( const QString& key )

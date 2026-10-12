@@ -38,13 +38,13 @@
  *     packets has its files removed; a failure is told with what the kind
  *     says to do about it (its Guidance), keeping what was captured.
  *
- * It reaches LogSquirl (a tab, a notification) through a LiveCaptureHost
- * and keeps what each tab shows in a CaptureCatalog (capture_catalog.h),
- * which it tells when a capture starts and ends, so that the catalog knows
- * the tabs of the running or the last capture.  It runs a capture through
- * a LiveRun: in the app a LiveCapture on a worker thread, in a test a run
- * the test scripts, so that what the session does with each event is
- * tested without a widget or an event loop.
+ * It reaches LogSquirl (a notification) through a LiveCaptureHost and keeps
+ * what each tab shows in a CaptureCatalog (capture_catalog.h), which opens
+ * the tabs and which it tells when a capture starts and ends, so that the
+ * catalog knows the tabs of the running or the last capture.  It runs a
+ * capture through a LiveRun: in the app a LiveCapture on a worker thread,
+ * in a test a run the test scripts, so that what the session does with each
+ * event is tested without a widget or an event loop.
  *
  * Nothing cancels a live capture: its outcome is never Cancelled.
  */
@@ -80,14 +80,13 @@ QString clockTime( qint64 seconds );
 /// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
 QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
 
-/// Where a Live Capture Session opens tabs and tells the user: LogSquirl,
-/// through the sidebar, in the app; a fake in tests.
+/// Where a Live Capture Session tells the user: LogSquirl, through the
+/// sidebar, in the app; a fake in tests.  Its tabs open through its
+/// CaptureCatalog.
 class LiveCaptureHost {
 public:
     virtual ~LiveCaptureHost() = default;
 
-    /// Open the text file @p logPath in a tab, following it; on the UI thread.
-    virtual void openTab( const QString& logPath ) = 0;
     /// Tell the user @p message in a notification.
     virtual void notify( const QString& message ) = 0;
     /// Why no capture can start now for something outside the session, e.g.
@@ -186,8 +185,8 @@ public:
         Stopping,  ///< A capture was told to stop, and has not ended yet.
     };
 
-    /// A session opening tabs on @p host and keeping summaries in @p
-    /// catalog, both outliving it.
+    /// A session telling the user on @p host and keeping summaries in, and
+    /// opening tabs through, @p catalog, both outliving it.
     LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
     /// Lets go of a capture that may still run (its run is retired, not
     /// waited for), and cancels and waits for a check that runs.

@@ -119,8 +119,10 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * kept with their CaptureIndex in a CaptureCatalog (capture_catalog.h),
  * keyed by the text file written for each, so that a capture's tab that
  * comes to the front again shows its own, and the Packet Panel its packets.
- * The sidebar renders the capture the catalog says is in front: its
- * summary, the Packet Panel's index, and whether Save capture… shows.
+ * The catalog opens each capture's tab, through the sidebar, and decides
+ * which summary links to the Log Format.  The sidebar renders the capture
+ * the catalog says is in front: its summary, the Packet Panel's index, and
+ * whether Save capture… shows.
  *
  * A live capture's tab is opened, following its file, once the header and
  * the first packet line are in it; with a ring buffer, each file's text in
@@ -129,9 +131,9 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * of the capture, and is final when it ends.
  *
  * A live capture's lifecycle and outcome are its LiveCaptureSession's
- * (live_capture_session.h): the sidebar is its host (a tab, a notification),
- * the session keeps its summaries in the sidebar's catalog, and the sidebar
- * shows what it is told.
+ * (live_capture_session.h): the sidebar is its host (a notification), the
+ * session keeps its summaries in the sidebar's catalog, which opens their
+ * tabs, and the sidebar shows what it is told.
  *
  * A capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
@@ -139,7 +141,7 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * plugin runs on the worker thread afterwards, and the host may unload the
  * library.
  */
-class SidebarWidget : public QWidget, private LiveCaptureHost {
+class SidebarWidget : public QWidget, private LiveCaptureHost, private CaptureTabHost {
     Q_OBJECT
 
 public:
@@ -362,8 +364,9 @@ private:
     void finishConversion( const QString& filePath, ConversionResult result );
     /// Show the idle or the converting controls.
     void setConverting( bool converting );
+    // The Capture Catalog's tab host.
+    void openTab( const QString& logPath, bool follow ) override;
     // The Live Capture Session's host.
-    void openTab( const QString& logPath ) override;
     void notify( const QString& message ) override;
     QString busyElsewhere() const override;
 
@@ -419,7 +422,8 @@ private:
     QString shownSummary_;
     /// The captures converted and captured so far, by the text file written
     /// for each, and which is in front; the Live Capture Session's catalog.
-    CaptureCatalog catalog_;
+    /// It opens their tabs through this sidebar.
+    CaptureCatalog catalog_{ *this };
 
     bool converting_ = false;
     /// Cancels the running conversion.

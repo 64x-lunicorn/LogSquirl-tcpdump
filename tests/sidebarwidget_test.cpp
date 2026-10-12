@@ -183,10 +183,11 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
                 REQUIRE_FALSE( child<QProgressBar>( widget, "progress" )->isHidden() );
             }
 
-            THEN( "the text file is opened in a tab once it is written" )
+            THEN( "the text file is opened in a tab once it is written, not followed" )
             {
                 REQUIRE( waitFor( [ &host ] { return !host.openedFiles.isEmpty(); } ) );
                 REQUIRE( host.openedFiles.size() == 1 );
+                REQUIRE( host.openedFollowing == QList<bool>{ false } );
                 QFile out( host.openedFiles.first() );
                 REQUIRE( out.open( QIODevice::ReadOnly ) );
                 REQUIRE( out.readAll().count( '\n' ) == 4 ); // header + 3 packets
@@ -475,6 +476,8 @@ SCENARIO( "each conversion writes a new private file", "[sidebar]" )
     }
 }
 
+// Which summary carries the Log Format hint is the Capture Catalog's rule,
+// tested in capture_catalog_test.cpp; here, that the sidebar shows its link.
 SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]" )
 {
     QTemporaryDir dir;
@@ -513,18 +516,6 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
                     }
                 }
             }
-
-            AND_WHEN( "another capture is converted" )
-            {
-                widget.openPcapFile( writeCapture( dir, "second.pcap", captureOf( 1 ) ) );
-                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
-
-                THEN( "its summary no longer carries the hint" )
-                {
-                    REQUIRE( summary->text().contains( "second.pcap" ) );
-                    REQUIRE_FALSE( summary->text().contains( readmeSection ) );
-                }
-            }
         }
 
         WHEN( "a conversion fails first" )
@@ -543,7 +534,11 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
     }
 }
 
-SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
+// Which capture is in front, by any spelling of its path, and that the
+// captures before keep theirs, are the Capture Catalog's rules, tested in
+// capture_catalog_test.cpp; here, that the host's tab switches reach it and
+// the sidebar renders what it says.
+SCENARIO( "the sidebar shows the summary of the capture in the tab in front", "[sidebar]" )
 {
     QTemporaryDir dir;
     QTemporaryDir tempRoot;
@@ -575,7 +570,6 @@ SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
             {
                 REQUIRE( summary->text().contains( "first.pcap" ) );
                 REQUIRE_FALSE( summary->text().contains( "second.pcap" ) );
-                REQUIRE( summary->text().contains( "#log-format" ) );
             }
 
             AND_WHEN( "the second capture's tab comes to the front again" )
@@ -607,43 +601,6 @@ SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
                 {
                     REQUIRE( summary->text().contains( "first.pcap" ) );
                 }
-            }
-        }
-
-        WHEN( "a tab that holds no Log File comes to the front, such as the dashboard" )
-        {
-            host.activateFile( QString() );
-
-            THEN( "the sidebar says the tab holds no capture" )
-            {
-                REQUIRE( summary->text() == "No capture in this tab." );
-            }
-        }
-
-        WHEN( "the host names a capture's file by another spelling of its path" )
-        {
-            const QFileInfo info( first );
-            host.activateFile( info.absolutePath() + "/./" + info.fileName() );
-
-            THEN( "the capture is still recognised" )
-            {
-                REQUIRE( summary->text().contains( "first.pcap" ) );
-            }
-        }
-
-        WHEN( "a third capture is converted" )
-        {
-            widget->openPcapFile( writeCapture( dir, "third.pcap", captureOf( 3 ) ) );
-            REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
-            REQUIRE( host.openedFiles.size() == 3 );
-
-            THEN( "the summaries of the others are kept" )
-            {
-                REQUIRE( summary->text().contains( "third.pcap" ) );
-                host.activateFile( first );
-                REQUIRE( summary->text().contains( "first.pcap" ) );
-                host.activateFile( second );
-                REQUIRE( summary->text().contains( "second.pcap" ) );
             }
         }
 

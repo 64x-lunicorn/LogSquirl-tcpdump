@@ -1888,11 +1888,11 @@ worker, before the library is unloaded.
 A live capture's lifecycle and outcome are decided in one place, a
 `LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
 drives and listens to; the sidebar only shows what it is told. The session
-reaches LogSquirl through a `LiveCaptureHost` (`openTab( logPath )`,
-`notify( message )`, and `busyElsewhere()`: a capture file being read),
-which the sidebar is, and keeps what each text file's tab shows in the
-sidebar's `CaptureCatalog` (see *The Capture Catalog*): `startLive()` as
-a run starts, `addFile( logPath, rawPath, name )`, `updateFile( logPath,
+reaches LogSquirl through a `LiveCaptureHost` (`notify( message )`, and
+`busyElsewhere()`: a capture file being read), which the sidebar is, and
+keeps what each text file's tab shows in the sidebar's `CaptureCatalog`
+(see *The Capture Catalog*), which opens the tabs: `startLive()` as a run
+starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
 summary, index, fileSize )`, `setFileError( logPath, error )`, and
 `endLive()` as it finishes. A capture runs through a `LiveRun` (`start( Listener
 )`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
@@ -1911,8 +1911,8 @@ retired when the run is let go of, in the app; `setRunFactory()` in tests.
   `kind->makeSource( choice )` named `liveCaptureName( choice )`.
   `start( name, SourceFactory, limits, kind )` starts a stream by name; the
   kind, if given, explains its failure as for a choice.
-- Each text file (a ring buffer's, one per raw file) goes into the catalog
-  before its tab is opened; each snapshot replaces the summary, index and
+- Each text file (a ring buffer's, one per raw file) is opened through the
+  catalog, which keeps it before its tab opens; each snapshot replaces the summary, index and
   size of every text file of the capture, and so does the outcome, each
   file then with its own raw file's size.
 - `stop()` stops the capture (`Stopping`), or drops a check that runs.
@@ -2280,9 +2280,10 @@ Qt UI that provides:
   at the snaplen when there are any, and under *Analysis* the median
   initial round-trip time of the handshakes and how many there were, and
   the TCP segments per analysis marker kind, when there are any
-- On the first converted capture after the plugin is loaded, a link to
-  README's *Log Format* section. The plugin cannot know whether LogSquirl
-  has the format, so the hint is static and shown once per load
+- On the first capture after the plugin is loaded, converted or live, a
+  link to README's *Log Format* section. The plugin cannot know whether
+  LogSquirl has the format, so the hint is static and shown once per load;
+  the catalog decides which entry carries it (`Entry::withFormatHint`)
 - The summary scrolls in a `SummaryArea`, a `QScrollArea` that asks for
   the height of its text at its width, up to `kSummaryMaxLines` (24), so
   that a long summary leaves the Packet Panel room in a tall sidebar, and
@@ -2315,7 +2316,8 @@ Qt UI that provides:
 - The summary of the capture in the tab in front. Every converted capture's
   summary, and its `CaptureIndex`, is kept in the sidebar's
   `CaptureCatalog` (see *The Capture Catalog* below), under the path of
-  the text file written for it; the plugin's active-file callback calls
+  the text file written for it, and the catalog opens its tab
+  (`openConverted()`); the plugin's active-file callback calls
   `showSummaryFor()` on every tab switch, which tells the catalog the tab
   in front and renders its `front()`: the summary, the Packet Panel's
   index and whether **Save capture…** shows, or "No capture in this tab."
@@ -2327,9 +2329,8 @@ Qt UI that provides:
 A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
 `startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
 (`liveSession()`; see *The Live Capture Session*), whose host the sidebar
-is: `openTab()` calls `open_file( path, follow = 1 )` on the UI thread
-(LogSquirl#796). The session keeps the capture's entries in the sidebar's
-catalog; the sidebar redraws the summary in front when it belongs to the
+is. The session keeps the capture's entries in the sidebar's catalog,
+which opens their tabs; the sidebar redraws the summary in front when it belongs to the
 live capture, on the session's `progressed` and `finished`, so the Packet
 Panel shows the packets captured so far, and a failure's error is shown
 above the summary. On `fileOpened` the label says the capture goes on,
@@ -2399,12 +2400,21 @@ keyed by `fileKey()`, the canonical path (absolute when the file is gone),
 so that the host's spelling of a tab's path (on macOS `/var/folders/…` for
 `/private/var/folders/…`) finds the file the plugin wrote.
 
-- `addConverted( logPath, capturePath, summary, index )` keeps a capture
-  file converted; the first entry of a load, converted or live, gets the
-  Log Format hint.
-- `startLive()`, `addFile()`, `updateFile()` (a null index keeps the one
-  the entry has), `setFileError()` and `endLive()` are what the Live
-  Capture Session tells. A file not kept is ignored.
+The catalog opens each capture's tab, through the `CaptureTabHost` it is
+constructed with (`openTab( logPath, follow )`): the sidebar, which calls
+the host's `open_file()` on the UI thread (LogSquirl#796); a recording fake
+in tests. It keeps the entry first, as the host may report the tab in front
+at once. Both kinds of capture come in this way, so the Log Format hint is
+decided in one place: the first entry of a load, converted or live, gets
+it, and no other.
+
+- `openConverted( logPath, capturePath, summary, index )` keeps a capture
+  file converted and opens its tab, not following the file, which is
+  written in full.
+- `startLive()`, `openLiveFile( logPath, rawPath, name )` (keeps the file,
+  live, and opens its tab following it), `updateFile()` (a null index keeps
+  the one the entry has), `setFileError()` and `endLive()` are what the
+  Live Capture Session tells. A file not kept is ignored.
 - `setFront( filePath )` on every tab switch; `front()` is the entry in
   front or null, `frontFile()` its key, `isFront( path )`.
 - `isLive( path )`: a text file of the running or the last live capture;
@@ -2417,8 +2427,11 @@ so that the host's spelling of a tab's path (on macOS `/var/folders/…` for
   for a capture without a name.
 
 `tests/capture_catalog_test.cpp` tests it with plain Catch2: adding and
-updating, the tab in front, a capture ending, a failed file's error, and
-the parts of a ring buffer and of a capture without an index.
+updating, the tabs it opens and that each entry is kept first, the Log
+Format hint once whichever kind of capture comes first, the tab in front, a
+capture ending, a failed file's error, and the parts of a ring buffer and
+of a capture without an index. The sidebar's tests check only that it
+renders what the catalog says.
 
 ### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`, `selected_packet_line.h/cpp`)
 The sidebar's companion to the packet list: the layer tree and hex dump of
