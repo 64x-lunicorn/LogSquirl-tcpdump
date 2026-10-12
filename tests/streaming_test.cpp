@@ -27,6 +27,7 @@
 #include "capture_stats.h"
 #include "packet_formatter.h"
 #include "packet_pipeline.h"
+#include "packet_recorder.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "tls_key_log.h"

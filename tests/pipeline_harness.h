@@ -19,25 +19,30 @@
 
 /**
  * @file pipeline_harness.h
- * @brief A capture built in a test, taken through the Packet Pipeline as a
- *        conversion takes it, for the tests of the steps the pipeline runs.
+ * @brief A capture built in a test, taken through the Packet Pipeline and
+ *        the Packet Recorder as a conversion takes it, for the tests of the
+ *        steps they run.
  */
 
 #pragma once
 
 #include "capture_reader.h"
 #include "packet_pipeline.h"
+#include "packet_recorder.h"
 #include "pcapbuilder.h"
 #include "tls_key_log.h"
 
 #include <catch2/catch.hpp>
 
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace tcpdump_test {
 
-/// A packet as the Packet Pipeline left it, and what it found out.
+/// A packet as the Packet Pipeline left it, what it found out, and the line
+/// the Packet Recorder wrote of it.
 struct Piped {
     tcpdump::PacketRecord pkt;
     /// Its stream; the state it points to is the pipeline's.
@@ -45,29 +50,61 @@ struct Piped {
     tcpdump::TcpAnalysis analysis;
     Bytes completed;       ///< The messages it completed (PacketOutcome::messages)
     uint32_t segments = 0; ///< The segments they were put together from
+    std::string line;      ///< Its line (PacketRecorder::record())
+};
+
+/// A capture as a conversion records it.
+struct Recording {
+    std::string header;         ///< The column header line.
+    std::vector<Piped> packets; ///< Each packet, in capture order.
+    tcpdump::CaptureSummary summary;
+    std::shared_ptr<tcpdump::CaptureIndex> index;
 };
 
 /// The packets of @p capture, a pcap or pcapng file, each taken through
-/// @p pipeline with its payload as the reader hands it out, as a conversion
-/// takes them.
-inline std::vector<Piped> piped( const Bytes& capture, tcpdump::PacketPipeline& pipeline )
+/// @p pipeline with its payload as the reader hands it out and recorded by a
+/// Packet Recorder with @p options, as a conversion takes them.
+inline Recording recorded( const Bytes& capture, tcpdump::PacketPipeline& pipeline,
+                           const tcpdump::RecorderOptions& options = {} )
 {
     tcpdump::MemorySource memory( capture.data(), capture.size() );
     tcpdump::HeadSource head( memory );
     const auto reader = tcpdump::makeCaptureReader( head );
     REQUIRE( reader->open() );
-    std::vector<Piped> out;
+    tcpdump::PacketRecorder recorder( *reader, pipeline, options );
+    Recording out;
+    out.header = recorder.header();
     tcpdump::PacketRecord pkt;
     while ( reader->next( pkt ) ) {
-        const auto outcome = pipeline.run( pkt, reader->payloadOf( pkt ) );
-        Piped one{ pkt, outcome.stream, outcome.analysis, {}, outcome.messages.segments };
+        const auto payload = reader->payloadOf( pkt );
+        const auto outcome = pipeline.run( pkt, payload );
+        Piped one{ pkt, outcome.stream, outcome.analysis, {}, outcome.messages.segments, {} };
         if ( outcome.messages.bytes.data ) {
             one.completed.assign( outcome.messages.bytes.data,
                                   outcome.messages.bytes.data + outcome.messages.bytes.size );
         }
-        out.push_back( std::move( one ) );
+        one.line = recorder.record( pkt, payload, outcome );
+        out.packets.push_back( std::move( one ) );
     }
+    out.summary = recorder.finalSummary();
+    out.index = recorder.index();
     return out;
+}
+
+/// @p capture recorded through a Packet Pipeline of its own, with
+/// @p pipelineOptions; the state its streams point to is gone with it.
+inline Recording recorded( const Bytes& capture,
+                           const tcpdump::PipelineOptions& pipelineOptions = {},
+                           const tcpdump::RecorderOptions& options = {} )
+{
+    tcpdump::PacketPipeline pipeline( pipelineOptions );
+    return recorded( capture, pipeline, options );
+}
+
+/// The packets of @p capture, each taken through @p pipeline, as recorded().
+inline std::vector<Piped> piped( const Bytes& capture, tcpdump::PacketPipeline& pipeline )
+{
+    return recorded( capture, pipeline ).packets;
 }
 
 /// The packets of @p capture through a Packet Pipeline of their own, with

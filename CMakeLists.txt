@@ -166,6 +166,7 @@ add_library(logsquirl_tcpdump SHARED
     src/raw_capture.cpp
     src/packet_export.cpp
     src/packet_pipeline.cpp
+    src/packet_recorder.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/settings.cpp

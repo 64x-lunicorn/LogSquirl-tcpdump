@@ -1355,13 +1355,13 @@ mutated records, and over HTTP/2 frames cut and mutated.
 #### Host Names (`host_names.h/cpp`)
 Passive name resolution, as Wireshark's from the capture (#54). With
 `LineLayout::hostNames` (the option *Show names from the capture's DNS
-answers with the addresses*, off by default) the Converter keeps a
+answers with the addresses*, off by default) the Packet Recorder keeps a
 `HostNames` (pure C++) and hands it to the Packet Formatter, which writes a
 named address as `93.184.216.34(www.example.com)` in Source and
 Destination. Without the option no `HostNames` exists and the text is byte
 for byte the same as before.
 
-- **Learning**: after a packet's line is written, `HostNames::learn()`
+- **Learning**: after a packet's line is made, `HostNames::learn()`
   reads the DNS responses it carries: a UDP datagram from port 53 or 5353
   (mDNS), its payload one message (`CaptureReader::payloadOf()`), and a TCP
   segment from port 53, the whole messages the TCP Reassembly completed in
@@ -1622,12 +1622,11 @@ share a base name), and `cmake --install` puts them there too.
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it and takes each packet through the same
-steps: the Packet Pipeline (below) describes it in its stream, the
-`ConversationStats` and the `CaptureStats` count it, the Packet Formatter
-writes its line to a new output file, the `HostNames` learn from its DNS
-answers (with host names shown), and its place is noted in a `CaptureIndex`
-(see *Packet Panel*); progress is reported and a cancel flag checked
-between packets. `convertStream()` does the same for a
+steps: the Packet Pipeline (below) describes it in its stream, the Packet
+Recorder (below) counts it, makes its line, learns the names of its DNS
+answers and notes its place in a `CaptureIndex` (see *Packet Panel*), and
+the Converter writes the line to a new output file; progress is reported
+and a cancel flag checked between packets. `convertStream()` does the same for a
 capture read from a stream (*The Capture Source seam*), without progress
 but live (see *Live conversion* below): both run one loop
 (`convertOrThrow()`), so every packet of a file and of a stream goes
@@ -1635,9 +1634,9 @@ through the same steps. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three
-outcomes and a `CaptureSummary`, whose link-layer types are those of the
-packets followed by any the capture declares without a packet of it (so a
-pcap with no packets still names its one): Converted (with the output path), Failed
+outcomes and a `CaptureSummary` (the Packet Recorder's), whose link-layer
+types are those of the packets followed by any the capture declares without
+a packet of it (so a pcap with no packets still names its one): Converted (with the output path), Failed
 (with a message) or Cancelled, and for a stream Stopped: stopped before its
 capture header came (`StreamSource::stopped()`), so nothing was captured and
 nothing is left, which is not a failure. Failed is the only error mode: an unreadable
@@ -1661,7 +1660,7 @@ packet's protocol and Info and returns a `PacketOutcome`: the packet's
 stream, what the TCP Analysis found (its markers and iRTT, for the
 `CaptureStats`) and the messages the TCP Reassembly completed (for the
 `HostNames`, valid until the next packet). For the Capture Summary the
-Converter asks it for the Stream Tracker and the Stream Labels (the
+Packet Recorder asks it for the Stream Tracker and the Stream Labels (the
 Conversations table, the stream cap) and `tlsSessionsDecrypted()`.
 
 The order, and why each step comes where it does, is stated once, in
@@ -1689,18 +1688,21 @@ The order, and why each step comes where it does, is stated once, in
 10. the Stream Labels name it by its stream's protocol
     (`StreamLabels::apply()`).
 
-What the Converter does with the packet after that (the counts, the line,
-the names, the index, the live output) stays the Converter's. Tests go in
-`tests/packet_pipeline_test.cpp`, through `run()` over a capture built with
-the frame builders or a corpus capture.
+What becomes of the packet after that (the counts, the line, the names,
+the index) is the Packet Recorder's (below); the live output stays the
+Converter's. Tests go in `tests/packet_pipeline_test.cpp`, through `run()`
+over a capture built with the frame builders or a corpus capture.
 
 The tests of the steps it runs take their captures through it too, so that
 they test what a conversion does rather than a loop of their own with some
 of the steps: `piped()` in `tests/pipeline_harness.h` reads a capture built
 in the test, runs each packet through a `PacketPipeline` with its payload
-(`withKeyLog()` gives it the secrets of a key log) and hands back each
-packet as the pipeline left it, with its stream, its TCP Analysis and the
-messages it completed; `tcpConversation()` builds the capture of a TCP
+(`withKeyLog()` gives it the secrets of a key log), records it with a
+Packet Recorder and hands back each packet as the pipeline left it, with
+its stream, its TCP Analysis, the messages it completed and its line;
+`recorded()` hands back the header and the summary with them, and takes
+the recorder's options (the layout, host names);
+`tcpConversation()` builds the capture of a TCP
 connection from what each end sends, its sequence numbers going on as a
 real one's do. The TCP Reassembly, TLS Decryption, SSH, WebSocket, HTTP,
 MQTT, QUIC and Stream Labels tests use it, and read what the reassembly or
@@ -1721,15 +1723,48 @@ fed to it), never several of them in an order of their own. The order is
 stated in `packet_pipeline.h` and in the list above; a step's own header
 says that the Packet Pipeline runs it, not where.
 
-`formatAllPackets()` (`packet_formatter.h`), which tests use for the lines
+#### The Packet Recorder (`packet_recorder.h/cpp`)
+What becomes of a packet once the Packet Pipeline has run it has one home
+too: a `PacketRecorder`, which owns the state that keeps for the whole
+capture (the `CaptureStats`, the `ConversationStats`, the Packet
+Formatter, the `HostNames` with host names shown, and the `CaptureIndex`)
+and the order it is kept in. A file conversion and a live capture both make
+one per conversion, from the open reader, the Packet Pipeline and
+`RecorderOptions` (the layout, the endpoint and host name caps, the
+checkpoint interval and the key log, for its error), and call
+`record(pkt, payload, outcome)` once per packet, right after `run()`. It
+returns the packet's line, which the Converter writes to the text file
+(`header()` starts each one). The order, stated once in
+`packet_recorder.h`:
+
+1. the TCP Analysis's markers and iRTT into the `CaptureStats`;
+2. the packet into the `ConversationStats`, by its stream;
+3. the packet into the `CaptureStats`;
+4. its line, by the Packet Formatter, with the names known so far;
+5. with host names shown, the names its DNS answers give, after its line:
+   a name labels the packets after its answer, not the answer's own line;
+6. its stream's extent, then its place, in the `CaptureIndex`.
+
+It makes the `CaptureSummary` too, with what the TLS Decryption, the key
+log and the `HostNames` add to it: `summary()` from a copy of the
+statistics, for a live capture's snapshots, the recording going on
+unchanged, and `finalSummary()` once after the last packet, which takes
+them. `packets()` counts the packets recorded (a live capture's packet
+limit) and `index()` is the `CaptureIndex`, whose files the Converter sets.
+Tests go in `tests/packet_recorder_test.cpp`, through `recorded()` over a
+corpus capture: the order that matters (an mDNS announcement's own line
+shows its address alone, the next packet its name) and the summary, which
+equals a conversion's.
+
+`formatAllPackets()` (`packet_recorder.h`), which tests use for the lines
 of a capture, reads a capture held in memory the same way: its reader, each
 packet with its payload through a Packet Pipeline made from the
-`PipelineOptions` it is handed, the Packet Formatter at the reader's
-precision and, with host names in the layout, the `HostNames`. It takes the
-capture's bytes rather than parsed `PacketRecord`s because the TCP
-Reassembly needs the payloads, which only the reader hands out. With
-options to match a conversion's, its lines are the ones the conversion
-writes (`tests/streaming_test.cpp` checks this for every corpus capture).
+`PipelineOptions` it is handed and a Packet Recorder with the layout it is
+handed. It takes the capture's bytes rather than parsed `PacketRecord`s
+because the TCP Reassembly needs the payloads, which only the reader hands
+out. With options to match a conversion's, its lines are the ones the
+conversion writes (`tests/streaming_test.cpp` checks this for every corpus
+capture).
 
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the
@@ -1746,7 +1781,7 @@ first packet line are flushed (LogSquirl recognises a Log Format once, at
 the first load with lines, LogSquirl#794, so the tab must not open on the
 header alone), and `snapshot( LiveSnapshot )` with the first packet and
 then at most every `kLiveSnapshotInterval` (1 s): the summary so far
-(`summariseSoFar()`, from a copy of the statistics, its conversation rows
+(`PacketRecorder::summary()`, from a copy of the statistics, its conversation rows
 shared with the last snapshot's where they did not change), the time since
 the start, the bytes read and a copy of the `CaptureIndex` so far (its
 stream extents shared), pointing into the raw file (flushed first) as
@@ -2533,7 +2568,7 @@ export, conversation statistics):
   `SidebarWidget::updateSummary()` replaces a capture's summary and shows
   it if in front, the table keeping its sort and selected conversation; a
   live capture's snapshots come through it, each taken by
-  `summariseSoFar()` from a copy of the `CaptureStats` and the table as it
+  `PacketRecorder::summary()` from a copy of the `CaptureStats` and the table as it
   stands, so the conversion goes on with them unchanged. The rows are a
   `ConversationRows`, chunks of 4,096 a summary shares with the one before
   where their streams had no packet in between; the model orders pointers

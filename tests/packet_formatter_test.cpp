@@ -25,6 +25,7 @@
 #include <catch2/catch.hpp>
 
 #include "packet_formatter.h"
+#include "packet_recorder.h"
 #include "pcapbuilder.h"
 
 #include <algorithm>
