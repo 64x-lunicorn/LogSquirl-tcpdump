@@ -540,6 +540,29 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     }
 }
 
+SCENARIO( "A source of typed devices that lists none says where they come from, and how to type "
+          "one",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->deviceMode = LiveSourceKind::Devices::Typed;
+    fake->listsNoDevices = true;
+    LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    auto* device = dialog.findChild<QComboBox*>( "liveDevice" );
+    REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+
+    THEN( "the status says the source's text, and the empty field shows the form to type" )
+    {
+        REQUIRE_FALSE( fields.status->isHidden() );
+        REQUIRE( fields.status->text() == "No phone is plugged in: type its serial." );
+        REQUIRE( device->isEditable() );
+        REQUIRE( device->lineEdit()->placeholderText() == "serial" );
+        REQUIRE( fake->interfaceListings == 0 );
+    }
+}
+
 SCENARIO( "A source's own options show in the dialog, are part of the choice, and are kept",
           "[live_ui]" )
 {

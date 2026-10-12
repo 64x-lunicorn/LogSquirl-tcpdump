@@ -537,6 +537,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stop as before. The sidebar is shorter and can be made narrower (it was
   at least as wide as the longest interface name), and opening it runs no
   capture program to list interfaces (#140).
+- **SSH says where hosts come from.** With no `Host` in `~/.ssh/config`,
+  the Start live capture dialog said only *No host found.*; it now says
+  *No Host in ~/.ssh/config: type one as [user@]host[:port].*, and the
+  empty Host field shows `[user@]host[:port]` (#145).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
