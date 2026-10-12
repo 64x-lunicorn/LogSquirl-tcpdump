@@ -19,8 +19,9 @@
 
 /**
  * @file follow_stream_test.cpp
- * @brief BDD tests for Follow stream: the pattern for a packet line's stream,
- *        and the menu entry and sidebar button that open it in the Regex Lab.
+ * @brief BDD tests for Stream lines in Regex Lab: the pattern for a packet
+ *        line's stream, and the menu entry and sidebar button that open it
+ *        in the Regex Lab.
  */
 
 #include <catch2/catch.hpp>
@@ -104,7 +105,8 @@ const QString kArrow = QString::fromUtf8( "\xe2\x86\x92" );
 
 } // namespace
 
-SCENARIO( "Follow stream matches exactly the lines of a packet's stream", "[followstream]" )
+SCENARIO( "Stream lines in Regex Lab matches exactly the lines of a packet's stream",
+          "[followstream]" )
 {
     GIVEN( "a capture with TCP and UDP streams of the same numbers between the same hosts" )
     {
@@ -289,7 +291,8 @@ SCENARIO( "Follow stream matches exactly the lines of a packet's stream", "[foll
     }
 }
 
-SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "[followstream]" )
+SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet's stream",
+          "[followstream]" )
 {
     const auto lines = corpusLines( "mixed.txt" );
 
@@ -298,9 +301,9 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
         FakeHost host;
         REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
         auto* sidebar = tcpdump::g_state.sidebarWidget;
-        auto* button = sidebar->findChild<QPushButton*>( "followStreamButton" );
+        auto* button = sidebar->findChild<QPushButton*>( "streamLinesButton" );
 
-        THEN( "Plugins > tcpdump > Follow stream and the sidebar button are offered" )
+        THEN( "Plugins > tcpdump > Stream lines in Regex Lab and the sidebar button are offered" )
         {
             QStringList labels;
             for ( const auto& action : host.menuActions ) {
@@ -310,7 +313,7 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
                      == QStringList{ "Open pcap\xe2\x80\xa6", "Start live capture\xe2\x80\xa6",
                                      "Stop live capture", "Packet details",
                                      "Export packets\xe2\x80\xa6", "Display filter\xe2\x80\xa6",
-                                     "Follow stream content", "Follow stream" } );
+                                     "Show stream content", "Stream lines in Regex Lab" } );
             REQUIRE( host.menuActions.last().menuPath == "tcpdump" );
             REQUIRE( button );
         }
@@ -337,7 +340,7 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
 
                 THEN( "the applied pattern is logged" )
                 {
-                    REQUIRE( host.logs.contains( "Follow stream: applied "
+                    REQUIRE( host.logs.contains( "Stream lines in Regex Lab: applied "
                                                  + host.regexLabs.first().pattern ) );
                 }
             }
@@ -348,21 +351,8 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
 
                 THEN( "the cancel is logged" )
                 {
-                    REQUIRE( host.logs.contains( "Follow stream: cancelled" ) );
+                    REQUIRE( host.logs.contains( "Stream lines in Regex Lab: cancelled" ) );
                 }
-            }
-        }
-
-        WHEN( "a UDP packet line is selected and the sidebar button clicked" )
-        {
-            REQUIRE( button );
-            host.selectedLines = { packet( lines, 5 ) };
-            button->click();
-
-            THEN( "the Regex Lab opens with the pattern of that UDP stream" )
-            {
-                REQUIRE( host.regexLabs.size() == 1 );
-                REQUIRE( matched( host.regexLabs.first().pattern, lines ) == std::set<int>{ 5 } );
             }
         }
 
@@ -442,10 +432,10 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
         THEN( "neither the entry nor the button is offered" )
         {
             for ( const auto& action : host.menuActions ) {
-                REQUIRE( action.label != "Follow stream" );
+                REQUIRE( action.label != "Stream lines in Regex Lab" );
             }
             REQUIRE_FALSE(
-                tcpdump::g_state.sidebarWidget->findChild<QPushButton*>( "followStreamButton" ) );
+                tcpdump::g_state.sidebarWidget->findChild<QPushButton*>( "streamLinesButton" ) );
         }
 
         logsquirl_plugin_shutdown();
@@ -460,7 +450,7 @@ SCENARIO( "Follow stream opens the Regex Lab on the selected packet's stream", "
         {
             REQUIRE( host.menuActions.size() == 3 );
             REQUIRE_FALSE(
-                tcpdump::g_state.sidebarWidget->findChild<QPushButton*>( "followStreamButton" ) );
+                tcpdump::g_state.sidebarWidget->findChild<QPushButton*>( "streamLinesButton" ) );
         }
 
         logsquirl_plugin_shutdown();

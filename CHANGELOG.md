@@ -558,6 +558,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected and copied whole, and its URLs as links; the steps to turn on
   USB debugging are a numbered list. The sidebar's live capture error does
   the same. Notifications show the commands in backticks (#142).
+- **Stream lines in Regex Lab and Show stream content.** *Follow stream*
+  and *Follow stream content* said almost the same for two different
+  things: they are now **Stream lines in Regex Lab** (the sidebar button
+  and tcpdump menu entry that open the Regex Lab with the pattern of the
+  stream's lines) and **Show stream content** (the Packet panel's button
+  and menu entry that show the stream's payload), in the sidebar, the
+  menu, notifications and the README. Each button is enabled only when
+  it works, its tooltip saying why not: no capture in the tab in front, no
+  packet line selected, a packet of no stream, or, for the Regex Lab, a
+  stream past the numbered ones; Stream lines in Regex Lab was enabled
+  with no capture loaded (#147).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

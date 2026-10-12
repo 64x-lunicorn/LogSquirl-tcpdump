@@ -28,8 +28,10 @@
  *      to a temporary .log file
  *   3. Opens the .log file in LogSquirl's main viewer
  *
- * Its Follow stream button, on a host that offers it, opens the Regex Lab on
- * the conversation of the selected packet line (see follow_stream.h).
+ * Its Stream lines in Regex Lab button, on a host that offers it, opens the
+ * Regex Lab on the conversation of the selected packet line (see
+ * follow_stream.h); it is enabled only while the Packet Panel finds a
+ * packet line of a numbered stream selected in a capture's tab.
  *
  * The endpoints and protocols its summary lists are links, on a host that
  * has the Regex Lab: a click opens the Lab with the pattern of their lines
@@ -210,21 +212,20 @@ SidebarWidget::SidebarWidget( QWidget* parent )
 
     connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
 
-    // Follow stream, as in the Plugins menu: only a host that has the Regex
-    // Lab and tells the selected lines gets it.
+    // Stream lines in Regex Lab, as in the Plugins menu: only a host that
+    // has the Regex Lab and tells the selected lines gets it.  It is enabled
+    // as the Packet Panel finds the selected line, below.
     if ( g_state.hostCapabilities.regexLab && g_state.hostCapabilities.selectedLogLines ) {
-        auto* followButton = new QPushButton( "Follow stream" );
-        followButton->setObjectName( "followStreamButton" );
-        followButton->setToolTip( "Filter the conversation of the selected packet line in the "
-                                  "Regex Lab" );
-        layout->addWidget( followButton );
-        connect( followButton, &QPushButton::clicked, this, [] {
+        streamLinesButton_ = new QPushButton( "Stream lines in Regex Lab" );
+        streamLinesButton_->setObjectName( "streamLinesButton" );
+        layout->addWidget( streamLinesButton_ );
+        connect( streamLinesButton_, &QPushButton::clicked, this, [] {
             try {
                 followSelectedStream();
             } catch ( const std::exception& e ) {
                 // An exception must not escape into Qt or the host.
                 hostLog( LOGSQUIRL_LOG_ERROR,
-                         "Follow stream failed: " + QString::fromUtf8( e.what() ) );
+                         "Stream lines in Regex Lab failed: " + QString::fromUtf8( e.what() ) );
             }
         } );
     }
@@ -330,6 +331,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     packetPanel_ = new PacketPanel;
     packetPanel_->setObjectName( "packetPanel" );
     layout->addWidget( packetPanel_, 1 );
+    if ( streamLinesButton_ ) {
+        connect( packetPanel_, &PacketPanel::streamActionsChanged, this,
+                 &SidebarWidget::updateStreamLinesButton );
+        updateStreamLinesButton();
+    }
 
     askLiveChoice_ = [ this ]( QWidget* parent, LiveChoice& choice ) {
         // Neither this widget nor its members are used after the dialog:
@@ -712,14 +718,25 @@ void SidebarWidget::followStreamContent()
     packetPanel_->refresh();
     QString why;
     if ( !packetPanel_->followStreamContent( &why ) ) {
-        hostNotify( "Follow stream content: " + why );
+        hostNotify( "Show stream content: " + why );
         return;
     }
     if ( !packetPanel_->isVisible() ) {
-        hostNotify( QString( "Follow stream content: the stream of packet %1 is shown in the "
+        hostNotify( QString( "Show stream content: the stream of packet %1 is shown in the "
                              "tcpdump sidebar tab." )
                         .arg( packetPanel_->selectedPacket() ) );
     }
+}
+
+void SidebarWidget::updateStreamLinesButton()
+{
+    const auto problem = packetPanel_->streamLinesProblem();
+    streamLinesButton_->setEnabled( problem.isEmpty() );
+    streamLinesButton_->setToolTip( problem.isEmpty()
+                                        ? QStringLiteral( "Open the Regex Lab with the pattern of "
+                                                          "the lines of this packet's "
+                                                          "conversation" )
+                                        : problem );
 }
 
 void SidebarWidget::openLink( const QString& link )

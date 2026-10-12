@@ -122,14 +122,17 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    packet data; the plugin's [highlighter set and filter
    group](#highlighters-and-filters) colour and filter it as Wireshark does
 8. To follow a conversation, as Wireshark's *Follow TCP Stream* does, select
-   one of its packet lines and click **Follow stream** in the sidebar, or
-   choose **Plugins → tcpdump → Follow stream**. LogSquirl's Regex Lab opens
+   one of its packet lines and click **Stream lines in Regex Lab** in the
+   sidebar, or choose **Plugins → tcpdump → Stream lines in Regex Lab**.
+   LogSquirl's Regex Lab opens
    with a pattern that matches that TCP or UDP stream's lines: its number in
    the Stream column, its two addresses and its two ports, in either
    direction (TCP and UDP streams are numbered each on their own). Apply it,
-   and the filtered view shows the conversation alone. A line without a
-   stream (`-` or `?`), no selection, or a line of another log only shows a
-   notification saying why. Needs LogSquirl ≥ 26.11
+   and the filtered view shows the conversation alone. The button is
+   disabled, its tooltip saying why, while the tab in front shows no
+   capture, no packet line is selected, or the selected one has no stream
+   (`-` or `?`); the menu entry then shows a notification saying why.
+   Needs LogSquirl ≥ 26.11
 9. To filter by an endpoint or a protocol, as Wireshark's *Apply as Filter*
    from its statistics, click it in the sidebar summary: the Regex Lab opens
    with a pattern that matches the lines with that address in the Source or
@@ -154,9 +157,11 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    was changed, moved or removed after it was opened is reported, not
    misread; open it again. Needs LogSquirl ≥ 26.11
 11. To see what a conversation carried, as Wireshark's *Follow TCP/UDP
-   Stream* window does, select one of its packet lines and click **Follow
+   Stream* window does, select one of its packet lines and click **Show
    stream content** in the Packet panel, or choose **Plugins → tcpdump →
-   Follow stream content**. The panel's **Stream** tab shows the payload of
+   Show stream content**. The button is disabled, its tooltip saying why,
+   while the tab in front shows no capture, no packet line is selected, or
+   the selected one belongs to no stream (`-`). The panel's **Stream** tab shows the payload of
    the whole TCP or UDP stream, the client's bytes (the side that sent the
    first packet) in red and the server's in blue, as **Text** (UTF-8 kept,
    other control bytes as `\xNN`) or **Hex** (Wireshark's dump, the
@@ -180,8 +185,8 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    its start in seconds after the capture's first packet and its duration.
    Click a column header to sort by it. Click a conversation, or choose
    **Filter on this conversation** from its context menu, and the Regex
-   Lab opens with the pattern of that stream's lines, as **Follow stream**
-   builds it; apply it to filter the view (needs LogSquirl ≥ 26.11). The
+   Lab opens with the pattern of that stream's lines, as **Stream lines in
+   Regex Lab** builds it; apply it to filter the view (needs LogSquirl ≥ 26.11). The
    table is counted while converting, for the streams that get a number:
    past the stream cap (see [Options](#options)), the packets of all other
    streams are one row, `?` *Other streams*
@@ -548,7 +553,7 @@ gone). The packet numbers in the No. column go on across the files, up
 to 4,294,967,295: a capture that gets to that packet stops with it, saying
 so in a notification (some 12 hours at 100,000 packets/s); a capture file
 with more packets is converted up to it, the summary saying so.
-Follow stream content starts at the first packet kept. The `.log` files
+Show stream content starts at the first packet kept. The `.log` files
 stay in the private temporary directory until LogSquirl quits; close the
 tabs of old files to let LogSquirl forget them. **Save capture…** writes the files kept as one capture
 (packets of the deleted files are gone); **Export packets…** copies the
@@ -580,7 +585,7 @@ the options it was converted with; open it again to apply new ones.
 
 The defaults write the packet list shown under [Example Output](#example-output),
 which the Log Format and every highlighter and filter written for it expect.
-The plugin's own patterns, those of [Follow stream](#usage), the summary's
+The plugin's own patterns, those of [Stream lines in Regex Lab](#usage), the summary's
 filters, the [display filters](#display-filters) and the [highlighter set
 and filter group](#highlighters-and-filters),
 read every layout. Three options change the column layout:
@@ -638,7 +643,7 @@ Wireshark's name resolution does when it is fed from the capture:
   that, the one named longest ago loses its name
 - **Everything else works on the address**: stream numbers, the summary's
   endpoint counts and the Conversations table are the same as without
-  names. Follow stream, the summary's endpoint filters and the [display
+  names. Stream lines in Regex Lab, the summary's endpoint filters and the [display
   filters](#display-filters) (`ip.addr == 93.184.216.34`) match a line
   with or without the name. The sidebar summary lists an endpoint with the
   name it had last: `93.184.216.34 (www.example.com): 7 pkts`
@@ -921,7 +926,7 @@ graph TD
     L -->|selected line's No.| P[Packet Panel]
     X --> P
     P -->|re-read from the nearest checkpoint| D
-    P -->|Follow stream content: the stream's packets, in order| D
+    P -->|Show stream content: the stream's packets, in order| D
     L -->|selected lines' No.| Q[Export packets]
     X --> Q
     Q -->|records copied as they are| R[new .pcap / .pcapng]

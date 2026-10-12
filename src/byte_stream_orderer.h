@@ -20,7 +20,7 @@
 /**
  * @file byte_stream_orderer.h
  * @brief Puts the segments of one direction of a TCP stream in sequence
- *        order, for the TCP Reassembly and Follow stream content.
+ *        order, for the TCP Reassembly and Show stream content.
  *
  * Pure C++ — no Qt dependency.
  */

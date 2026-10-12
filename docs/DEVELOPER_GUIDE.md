@@ -357,7 +357,7 @@ size. A gzip stream read from a live source is not decompressed:
 `findCaptureStart()` names gzip data as such.
 
 A deflate stream cannot be entered in the middle, but the Packet Panel,
-Follow stream content and Export Packets read packets by their offset. So
+Show stream content and Export Packets read packets by their offset. So
 the Converter's `GzipSource` keeps *access points*, the technique of
 zlib's `examples/zran.c`: every `GzipSource::kAccessSpan` (32 MiB, the
 option `gzipAccessSpan` for tests) of output, at the next deflate block
@@ -1175,7 +1175,7 @@ completed (`ReassembledMessages`), those held over several segments and
 those whole in it alike, in sequence order and never twice, for the TLS
 Decryption. Bytes are taken in sequence order,
 by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
-C++, shared with Follow stream content): `place()` says whether a segment
+C++, shared with Show stream content): `place()` says whether a segment
 is next (and how many of its first bytes were taken), came early or was
 taken already; it holds the early ones (`holdEarly()`), pops them once they
 are next (`popNext()`) and skips a gap (`skipTo()`), and leaves the limits
@@ -1400,7 +1400,7 @@ for byte the same as before.
   none of them. The patterns built from a line or an address,
   `addressPattern()` in `regex_lab.h` (the address and
   `nameSuffixPattern()`), take an address with or without its name:
-  Follow stream reads the clicked line's columns with `columnAddress()`,
+  Stream lines in Regex Lab reads the clicked line's columns with `columnAddress()`,
   so that it finds a stream's lines from before and after the name was
   learned, the summary's endpoint filters and the display filters'
   `ip.*`/`ipv6.*` tests (`valuesPattern()`) allow the name behind the
@@ -1804,7 +1804,7 @@ records the checkpoint's state names lie there
 interfaces). A packet of a file deleted since, also through an index taken
 before the deletion, fails with *Rotated away: …*, never with another
 packet's bytes. `CapturedPacket::file` is the file it was read from:
-Export packets copies each packet from its own file, Follow stream content
+Export packets copies each packet from its own file, Show stream content
 starts at the first packet kept, and `saveCaptureParts()` writes the files
 kept as one capture (the first whole, the records of the others without
 their copied headers) for **Save capture…**.
@@ -2208,8 +2208,9 @@ Qt UI that provides:
   the disabled button, can be chosen during a conversion and then only shows
   a notification. Tests replace the dialog with `setFileChooser()`
 - A progress bar and Cancel button while a capture is converted
-- A "Follow stream" button, created only when `g_state.hostCapabilities`
-  has the Regex Lab and the selected lines (see *Follow stream* below)
+- A "Stream lines in Regex Lab" button, created only when
+  `g_state.hostCapabilities` has the Regex Lab and the selected lines (see
+  *Stream lines in Regex Lab* below)
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints (on a host with `regexLab`, each protocol and endpoint is a
   link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
@@ -2359,16 +2360,22 @@ export, conversation statistics):
   packet is shown, or why not, which Packet details uses for its
   notification; the destructor waits for the read that runs.
 
-- **Follow stream content** (`stream_content.h/cpp`,
+- **Show stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a
   `StreamContentView`, shows the payload of the shown packet's stream when
-  the user asks for it: the panel's *Follow stream content* button calls
-  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
+  the user asks for it: the panel's *Show stream content* button calls
+  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Show
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
   panel keeps the number and Stream column of the line selected
   (`selectedPacket_`, `shownStream_`), so that a stream can be followed
-  while its packet is still read.
+  while its packet is still read. `streamContentProblem()` and
+  `streamLinesProblem()` say why Show stream content and Stream lines in
+  Regex Lab cannot work for the line selected now (no capture, no packet
+  line, no stream, for the Lab also an unnumbered one); the panel enables
+  its button by the first, and `streamActionsChanged()` has the sidebar
+  enable its Stream lines in Regex Lab button by the second, each tooltip
+  saying the reason.
   `StreamContentReader` reads the stream back: `open()` reads the packet
   for its transport, addresses and ports, then `read()` reads the packets
   from the stream's first to its last, which the Converter notes in the
@@ -2438,7 +2445,7 @@ export, conversation statistics):
   where their streams had no packet in between; the model orders pointers
   to them.
   A click or *Filter on this conversation* opens the Regex Lab ("Filter")
-  with `conversationPattern()`, the Follow stream pattern built from the
+  with `conversationPattern()`, the Stream lines in Regex Lab pattern built from the
   row's stream number, addresses and ports.
 
 - **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
@@ -2483,7 +2490,7 @@ export, conversation statistics):
   repeats a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details, Export packets or Follow stream content entry and no polling; the
+details, Export packets or Show stream content entry and no polling; the
 panel says what it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
@@ -2505,8 +2512,8 @@ drives Export packets… and the `ExportDialog` through the `FakeHost`.
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
 the menu entries (Open pcap…, Start live capture…, Stop live capture, and Packet details, Export packets…, Display
-filter…, Follow stream content and
-Follow stream where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
+filter…, Show stream content and
+Stream lines in Regex Lab where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
@@ -2531,8 +2538,8 @@ nothing that needs it otherwise; it never calls or reads a member the record
 does not report, not even to compare it with null, as an older host's table
 ends before it. Keep the pointer the host passed: never copy `*api`.
 
-#### Follow stream (`follow_stream.h/cpp`)
-`Plugins → tcpdump → Follow stream` and the sidebar button call
+#### Stream lines in Regex Lab (`follow_stream.h/cpp`)
+`Plugins → tcpdump → Stream lines in Regex Lab` and the sidebar button call
 `followSelectedStream()`, offered only on a host with `regexLab` and
 `selectedLogLines`. It reads the first selected Log Line through
 `get_selected_log_lines`, and `followStreamPattern()` turns it into a
@@ -2600,7 +2607,7 @@ parser; an address is stored as the column shows it (`formatIpv4()`,
 `formatIpv6()`, an IPv4 network masked to its prefix).
 `filterPattern()` makes each test a pattern from the start of the line:
 `upToSourcePattern()` without its `^`, Source and Destination, Protocol
-and Length, and for a port or stream the start of Info as Follow stream
+and Length, and for a port or stream the start of Info as Stream lines in Regex Lab
 reads it (MAC columns, tunnels, `[TCP …]` markers, then `a → b` followed
 by `[` for TCP or `Len=` for UDP, which tells the transport). A filter of
 one test is `^` and that pattern; otherwise each test is a lookahead,

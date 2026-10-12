@@ -22,10 +22,10 @@
  * @brief Patterns over the packet list, for LogSquirl's Regex Lab, and
  *        opening one there.
  *
- * Follow stream (follow_stream.h) and the sidebar summary's filters, the
- * plugin's Apply as Filter, build their patterns from the columns of the
- * packet line and open them in the Lab, where the user sees the matches and
- * applies one as a filter.  The patterns are opened with Match case.
+ * Stream lines in Regex Lab (follow_stream.h) and the sidebar summary's
+ * filters, the plugin's Apply as Filter, build their patterns from the
+ * columns of the packet line and open them in the Lab, where the user sees
+ * the matches and applies one as a filter.  The patterns are opened with Match case.
  */
 
 #pragma once

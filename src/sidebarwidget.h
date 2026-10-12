@@ -75,9 +75,11 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does)
- *   - "Follow stream" button, as in Plugins > tcpdump, only on a host that
- *     has the Regex Lab and tells the selected lines: g_state.hostCapabilities
- *     when the widget is created
+ *   - "Stream lines in Regex Lab" button, as in Plugins > tcpdump, only on a
+ *     host that has the Regex Lab and tells the selected lines:
+ *     g_state.hostCapabilities when the widget is created; enabled only when
+ *     the Packet Panel can tell the selected line's stream, its tooltip
+ *     says why not
  *   - progress bar and Cancel button, while a capture is converted
  *   - the Live capture section: the live capture form (source, device,
  *     interface, capture filter, snaplen; live_capture_form.h) and Start;
@@ -166,7 +168,7 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
-    /// Plugins > tcpdump > Follow stream content: show the content of the
+    /// Plugins > tcpdump > Show stream content: show the content of the
     /// selected line's stream in the Packet Panel's Stream tab, or notify
     /// the user why not; if the panel is not in view, a notification says
     /// where it is.
@@ -377,6 +379,9 @@ private:
     void showLiveError( const LiveOutcome& outcome );
     /// Report the outcome of the export @p request asked for.
     void finishExport( const ExportRequest& request, ExportResult result );
+    /// Enable Stream lines in Regex Lab when the Packet Panel can tell the
+    /// selected line's stream; its tooltip says why not.
+    void updateStreamLinesButton();
 
     QPushButton* openButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
@@ -386,13 +391,14 @@ private:
     QPushButton* stopButton_ = nullptr;
     QPushButton* saveButton_ = nullptr;
     QLabel* liveLabel_ = nullptr;
-    QPushButton* startButton_ = nullptr;   ///< Start live capture…
-    QPlainTextEdit* liveStderr_ = nullptr; ///< The capture program's stderr lines.
-    QLabel* liveError_ = nullptr;          ///< Why the last live capture failed.
-    QString lastDir_;                      ///< Remembers the last browsed directory.
-    bool formatHintShown_ = false;         ///< The Log Format hint was shown once.
-    FileChooser chooseFile_;               ///< Shows the file dialog.
-    SaveChooser chooseSaveFile_;           ///< Shows the save dialog.
+    QPushButton* startButton_ = nullptr;       ///< Start live capture…
+    QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
+    QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
+    QLabel* liveError_ = nullptr;              ///< Why the last live capture failed.
+    QString lastDir_;                          ///< Remembers the last browsed directory.
+    bool formatHintShown_ = false;             ///< The Log Format hint was shown once.
+    FileChooser chooseFile_;                   ///< Shows the file dialog.
+    SaveChooser chooseSaveFile_;               ///< Shows the save dialog.
     /// The key in converted_ of the file in the tab in front, as fileKey()
     /// spells it, whether or not it holds a capture.
     QString frontKey_;

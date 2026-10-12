@@ -185,9 +185,8 @@ PacketPanel::PacketPanel( QWidget* parent )
     dump_->setFont( QFontDatabase::systemFont( QFontDatabase::FixedFont ) );
     splitter->addWidget( dump_ );
 
-    followButton_ = new QPushButton( "Follow stream content" );
-    followButton_->setObjectName( "followContentButton" );
-    followButton_->setToolTip( "Show the payload of this packet's conversation, as text or hex" );
+    followButton_ = new QPushButton( "Show stream content" );
+    followButton_->setObjectName( "streamContentButton" );
     followButton_->setEnabled( false );
     layout->addWidget( followButton_ );
     connect( followButton_, &QPushButton::clicked, this, [ this ] {
@@ -196,7 +195,7 @@ PacketPanel::PacketPanel( QWidget* parent )
         } catch ( const std::exception& e ) {
             // An exception must not escape into Qt or the host.
             hostLog( LOGSQUIRL_LOG_ERROR,
-                     "Follow stream content failed: " + QString::fromUtf8( e.what() ) );
+                     "Show stream content failed: " + QString::fromUtf8( e.what() ) );
         }
     } );
 
@@ -266,7 +265,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     cursor_.reset(); // a read of the capture before keeps its own
     haveLast_ = false;
     // The stream shown was one of the capture of the tab before.
-    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Follow stream "
+    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Show stream "
                                                  "content." )
                                : QStringLiteral( "No capture in this tab." ) );
     tabs_->setCurrentIndex( 0 );
@@ -375,16 +374,48 @@ void PacketPanel::showSelection( const QString& selection )
     showPacket( number );
 }
 
+QString PacketPanel::streamContentProblem() const
+{
+    // The status says why no packet is selected: no capture in the tab in
+    // front, no packet line selected, a read that failed.
+    if ( selectedPacket_ == 0 ) {
+        return statusText();
+    }
+    if ( shownStream_ == kNoStream ) {
+        return QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
+            .arg( selectedPacket_ );
+    }
+    return {};
+}
+
+QString PacketPanel::streamLinesProblem() const
+{
+    if ( auto problem = streamContentProblem(); !problem.isEmpty() ) {
+        return problem;
+    }
+    // Its content is read by its addresses, but no pattern picks its lines.
+    if ( shownStream_ == kUnnumbered ) {
+        return QStringLiteral( "Packet %1 has no stream number: the capture has more "
+                               "conversations than the plugin numbers." )
+            .arg( selectedPacket_ );
+    }
+    return {};
+}
+
+void PacketPanel::updateStreamActions()
+{
+    const auto problem = streamContentProblem();
+    followButton_->setEnabled( problem.isEmpty() );
+    followButton_->setToolTip( problem.isEmpty()
+                                   ? QStringLiteral( "Show the payload of this packet's "
+                                                     "conversation, as text or hex" )
+                                   : problem );
+    emit streamActionsChanged();
+}
+
 bool PacketPanel::followStreamContent( QString* why )
 {
-    QString reason;
-    if ( selectedPacket_ == 0 ) {
-        reason = statusText();
-    }
-    else if ( shownStream_ == kNoStream ) {
-        reason = QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
-                     .arg( selectedPacket_ );
-    }
+    const auto reason = streamContentProblem();
     if ( !reason.isEmpty() ) {
         if ( why ) {
             *why = reason;
@@ -406,7 +437,7 @@ void PacketPanel::showPacket( uint32_t number )
     }
     showReason( QStringLiteral( "Reading packet %1\u2026" ).arg( number ) );
     selectedPacket_ = number;
-    followButton_->setEnabled( shownStream_ != kNoStream );
+    updateStreamActions();
     const auto generation = ++generation_;
     latest_->store( generation );
     reading_ = true;
@@ -480,7 +511,6 @@ void PacketPanel::showRead( const PacketRead& read )
     }
     shownPacket_ = number;
     shownBytes_ = packet.bytes.size();
-    followButton_->setEnabled( shownStream_ != kNoStream );
     auto status = QStringLiteral( "Packet %1" ).arg( number );
     if ( packet.record.capturedLen > packet.bytes.size() ) {
         status += QStringLiteral( " (the first %1 bytes)" ).arg( packet.bytes.size() );
@@ -520,11 +550,11 @@ void PacketPanel::showReason( const QString& reason )
     selectedPacket_ = 0;
     shownPacket_ = 0;
     shownBytes_ = 0;
-    followButton_->setEnabled( false );
     layers_.clear();
     status_->setText( reason );
     tree_->clear();
     dump_->clear();
+    updateStreamActions();
 }
 
 void PacketPanel::highlight( QTreeWidgetItem* item )

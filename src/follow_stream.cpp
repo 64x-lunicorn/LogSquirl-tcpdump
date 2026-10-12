@@ -19,7 +19,7 @@
 
 /**
  * @file follow_stream.cpp
- * @brief Follow stream from the selected packet line.
+ * @brief Stream lines in Regex Lab, from the selected packet line.
  *
  * Reads the first Log Line the user selected through the host's
  * get_selected_log_lines, builds a pattern for its stream and opens it in
@@ -146,7 +146,7 @@ void followSelectedStream()
     size_t length = 0;
     const int result = st.api->get_selected_log_lines( st.handle, &text, &length, nullptr );
     if ( result < 0 || !text ) {
-        hostNotify( "Follow stream: " + selectionFailure( result ) );
+        hostNotify( "Stream lines in Regex Lab: " + selectionFailure( result ) );
         return;
     }
 
@@ -154,11 +154,11 @@ void followSelectedStream()
     const auto follow
         = followStreamPattern( QString::fromUtf8( text, static_cast<qsizetype>( length ) ) );
     if ( follow.pattern.isEmpty() ) {
-        hostNotify( "Follow stream: " + follow.reason );
+        hostNotify( "Stream lines in Regex Lab: " + follow.reason );
         return;
     }
 
-    openRegexLab( "Follow stream", follow.pattern );
+    openRegexLab( "Stream lines in Regex Lab", follow.pattern );
 }
 
 } // namespace tcpdump

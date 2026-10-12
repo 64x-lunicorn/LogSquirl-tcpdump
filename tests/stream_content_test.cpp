@@ -19,7 +19,7 @@
 
 /**
  * @file stream_content_test.cpp
- * @brief BDD tests for Follow stream content: a stream's payload read back
+ * @brief BDD tests for Show stream content: a stream's payload read back
  *        from its capture in order, rendered as text or hex, exported.
  */
 

@@ -32,7 +32,7 @@
  * most kCheckpointInterval - 1 packets more, and on from there in order.
  *
  * It also keeps where each numbered stream begins and ends, the numbers of
- * its first and last packet, 8 bytes a stream, so that Follow stream
+ * its first and last packet, 8 bytes a stream, so that Show stream
  * content reads only the packets between the two; in chunks a copy of the
  * index shares (SharedChunks), so that a live capture's snapshot of it
  * costs a pointer per 4,096 streams, not 8 bytes per stream.

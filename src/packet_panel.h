@@ -36,8 +36,11 @@
  * moved on from is dropped, not started if it has not begun.
  *
  * Its Stream tab shows the content of the shown packet's conversation
- * (Follow stream content, StreamContentView) once the user asks for it: by
- * the panel's button or Plugins > tcpdump > Follow stream content.
+ * (Show stream content, StreamContentView) once the user asks for it: by
+ * the panel's button or Plugins > tcpdump > Show stream content.  The
+ * button is enabled only when the selected line's stream can be shown, its
+ * tooltip says why not; streamActionsChanged() tells the sidebar, whose
+ * Stream lines in Regex Lab button follows the selection too.
  *
  * Below the tabs, the Conversations table (conversation_table.h) lists the
  * streams of the capture in front, from its Capture Summary.
@@ -135,11 +138,22 @@ public:
     /// The panel's status line: the packet shown, or why there is none.
     QString statusText() const;
 
-    /// Follow stream content: show the content of the selected packet's
+    /// Show stream content: show the content of the selected packet's
     /// stream in the Stream tab, also while the packet is being read.
     /// False, and the reason in @p why, when no packet line of a TCP or
     /// UDP stream is selected.
     bool followStreamContent( QString* why = nullptr );
+
+    /// Why Show stream content cannot show a stream now, for the user: no
+    /// capture in the tab in front, no packet line selected, a packet of no
+    /// stream; empty when it can.
+    QString streamContentProblem() const;
+
+    /// Why Stream lines in Regex Lab cannot filter a stream's lines now, as
+    /// streamContentProblem(), or because the stream has no number (the
+    /// capture has more conversations than the plugin numbers); empty when
+    /// it can.
+    QString streamLinesProblem() const;
 
     /// The Stream tab.
     StreamContentView* streamView() const
@@ -152,6 +166,11 @@ public:
     {
         return conversations_;
     }
+
+signals:
+    /// The selected line changed what streamContentProblem() and
+    /// streamLinesProblem() say (or may have).
+    void streamActionsChanged();
 
 protected:
     void showEvent( QShowEvent* event ) override;
@@ -173,6 +192,9 @@ private:
     void showReason( const QString& reason );
     /// Highlight the bytes of @p item in the dump.
     void highlight( QTreeWidgetItem* item );
+    /// Enable the Show stream content button, or say why not in its
+    /// tooltip, and tell streamActionsChanged().
+    void updateStreamActions();
 
     QLabel* status_ = nullptr;
     QPushButton* followButton_ = nullptr;
