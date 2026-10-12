@@ -207,6 +207,9 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     layout->addWidget( buttons );
 
     showOptions( options );
+    // Its own size: a window without one opens at most 2/3 of the screen high, and the
+    // dialog is taller than that on a laptop's screen, which cut off the notes.
+    resize( sizeHint() );
 }
 
 void ConfigDialog::showOptions( const ConversionOptions& options )

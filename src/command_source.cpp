@@ -261,7 +261,7 @@ private:
     void fillSaved()
     {
         saved_->clear();
-        saved_->addItem( QStringLiteral( "Saved commands and examples\xe2\x80\xa6" ) );
+        saved_->addItem( QStringLiteral( "Saved commands and examples\u2026" ) );
         saved_->setItemData( 0, Prompt, KindRole );
         for ( size_t i = 0; i < commands_.size(); ++i ) {
             saved_->addItem( commands_[ i ].name );

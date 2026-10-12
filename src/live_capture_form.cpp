@@ -370,7 +370,7 @@ void LiveCaptureForm::listDevices()
     if ( !kind ) {
         return;
     }
-    showStatus( QStringLiteral( "Listing %1s\xe2\x80\xa6" ).arg( kind->deviceLabel().toLower() ) );
+    showStatus( QStringLiteral( "Listing %1s\u2026" ).arg( kind->deviceLabel().toLower() ) );
     runListing( [ kind ] { return kind->listDevices( LiveSourceKind::kListTimeout ); },
                 [ this, kind ]( const LiveListing& listing ) {
                     const auto wanted = wanted_.source == kind->id() ? wanted_.device : QString();
@@ -405,7 +405,7 @@ void LiveCaptureForm::listInterfaces()
     const auto device
         = kind->devices() == LiveSourceKind::Devices::None ? QString() : currentId( device_ );
     const auto options = choice().options;
-    showStatus( QStringLiteral( "Listing interfaces\xe2\x80\xa6" ) );
+    showStatus( QStringLiteral( "Listing interfaces\u2026" ) );
     runListing(
         [ kind, device, options ] {
             return kind->listInterfacesWith( device, options, LiveSourceKind::kListTimeout );
