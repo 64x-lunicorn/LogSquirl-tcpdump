@@ -331,6 +331,9 @@ void LiveCaptureForm::sourceChanged()
     deviceLabel_->setHidden( devices == LiveSourceKind::Devices::None );
     device_->setHidden( devices == LiveSourceKind::Devices::None );
     device_->setEditable( devices == LiveSourceKind::Devices::Typed );
+    if ( device_->isEditable() ) {
+        device_->lineEdit()->setPlaceholderText( kind ? kind->deviceFormat() : QString() );
+    }
     if ( kind ) {
         deviceLabel_->setText( kind->deviceLabel() + QLatin1Char( ':' ) );
     }
@@ -388,8 +391,7 @@ void LiveCaptureForm::listDevices()
                         return;
                     }
                     if ( currentId( device_ ).isEmpty() ) {
-                        showStatus(
-                            QStringLiteral( "No %1 found." ).arg( kind->deviceLabel().toLower() ) );
+                        showStatus( kind->noDevicesText() );
                         return;
                     }
                     listInterfaces();
