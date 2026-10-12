@@ -38,6 +38,16 @@
 
 namespace tcpdump {
 
+QString displayFilterHelp()
+{
+    return QStringLiteral(
+        "A display filter as in Wireshark: the Regex Lab opens with the pattern of the packet "
+        "lines it selects. Fields: ip.addr, ip.src, ip.dst, ipv6.addr, ipv6.src, ipv6.dst, "
+        "tcp.port, tcp.srcport, tcp.dstport, tcp.stream, the same of udp, and frame.len, "
+        "compared with ==, !=, <, >, <= or >=; protocol names as in the Protocol column; "
+        "!, &&, || and parentheses." );
+}
+
 namespace {
 
 /// What is wrong with @p text, translated to @p translated, for the user:
@@ -76,12 +86,7 @@ DisplayFilterDialog::DisplayFilterDialog( const QString& filter, QWidget* parent
     setWindowTitle( QStringLiteral( "Display Filter" ) );
     auto* layout = new QVBoxLayout( this );
 
-    auto* intro = new QLabel( QStringLiteral(
-        "A display filter as in Wireshark: the Regex Lab opens with the pattern of the packet "
-        "lines it selects. Fields: ip.addr, ip.src, ip.dst, ipv6.addr, ipv6.src, ipv6.dst, "
-        "tcp.port, tcp.srcport, tcp.dstport, tcp.stream, the same of udp, and frame.len, "
-        "compared with ==, !=, <, >, <= or >=; protocol names as in the Protocol column; "
-        "!, &&, || and parentheses." ) );
+    auto* intro = new QLabel( displayFilterHelp() );
     intro->setTextFormat( Qt::PlainText );
     intro->setWordWrap( true );
     layout->addWidget( intro );
@@ -150,14 +155,23 @@ DisplayFilterField::DisplayFilterField( QWidget* parent )
 {
     auto* layout = new QVBoxLayout( this );
     layout->setContentsMargins( 0, 0, 0, 0 );
+    // A Wireshark filter is expected to filter the tab: say before anything
+    // is typed that it opens the Regex Lab instead.
+    const auto toolTip
+        = QStringLiteral( "It does not filter this tab: it opens the Regex Lab, as Plugins > "
+                          "tcpdump > Display filter\u2026 does.\n\n" )
+          + displayFilterHelp();
+    auto* label = new QLabel( QStringLiteral( "Display filter \u2192 Regex Lab" ) );
+    label->setObjectName( "displayFilterLabel" );
+    label->setToolTip( toolTip );
+    layout->addWidget( label );
     auto* row = new QHBoxLayout;
     edit_ = new QLineEdit;
     edit_->setObjectName( "displayFilter" );
-    edit_->setPlaceholderText( QStringLiteral( "Display filter: ip.addr == 10.0.0.1 && tcp" ) );
-    edit_->setToolTip( QStringLiteral(
-        "A display filter as in Wireshark (see Plugins > tcpdump > Display filter\u2026): the "
-        "Regex Lab opens with the pattern of the packet lines it selects" ) );
+    edit_->setPlaceholderText( QStringLiteral( "ip.addr == 10.0.0.1 && tcp" ) );
+    edit_->setToolTip( toolTip );
     edit_->setClearButtonEnabled( true );
+    label->setBuddy( edit_ );
     row->addWidget( edit_, 1 );
     openButton_ = new QPushButton( QStringLiteral( "Open in Regex Lab" ) );
     openButton_->setObjectName( "openDisplayFilter" );

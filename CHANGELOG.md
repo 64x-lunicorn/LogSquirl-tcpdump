@@ -569,6 +569,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packet line selected, a packet of no stream, or, for the Regex Lab, a
   stream past the numbered ones; Stream lines in Regex Lab was enabled
   with no capture loaded (#147).
+- **The sidebar's display filter says that it opens the Regex Lab.** The
+  field showed only a placeholder next to *Open in Regex Lab*; that the
+  filter does not filter the tab but opens the Regex Lab was said only in
+  the *Display filter…* dialog. The field is now labelled **Display filter
+  → Regex Lab**, and its tooltip says that it does not filter the tab and
+  lists the fields and operators, with the dialog's text. What is wrong
+  with a filter is shown below the field, as in the dialog (#143).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
