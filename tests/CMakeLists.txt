@@ -199,4 +199,19 @@ target_compile_definitions(logsquirl_tcpdump_tests
 )
 
 # ── Register with CTest ──────────────────────────────────────────────────
-add_test(NAME logsquirl_tcpdump_tests COMMAND logsquirl_tcpdump_tests)
+# One CTest test per Catch2 test case, so that `ctest -j` runs them side by
+# side, `ctest -R` selects by name and `--no-tests=error` fails a filter that
+# matches nothing. The build lists them by running the executable.
+#
+# The tests that run programs (fake adb, ssh, extcap, tcpdump) wait on them
+# with deadlines, and miss those deadlines beside each other: they take
+# turns, while the rest run alongside.
+list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/contrib")
+include(Catch)
+set(PROGRAM_TAGS
+    "[adb_source],[command_source],[extcap_source],[local_source],[ssh_source],[capture_source],[process_source],[live],[live_capture],[live_limits],[live_session],[live_source],[live_ui],[sidebar]")
+string(REPLACE "," "" NOT_PROGRAM_TAGS "~${PROGRAM_TAGS}")
+string(REPLACE "][" "]~[" NOT_PROGRAM_TAGS "${NOT_PROGRAM_TAGS}")
+catch_discover_tests(logsquirl_tcpdump_tests TEST_SPEC "${NOT_PROGRAM_TAGS}")
+catch_discover_tests(logsquirl_tcpdump_tests TEST_SPEC "${PROGRAM_TAGS}"
+    PROPERTIES RESOURCE_LOCK programs LABELS programs)

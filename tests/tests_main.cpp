@@ -34,6 +34,11 @@
 
 int main( int argc, char* argv[] )
 {
+    // No window opens: the build lists the tests to register them with CTest
+    // where there is no display, and the tests run as they do in the CI.
+    if ( qEnvironmentVariableIsEmpty( "QT_QPA_PLATFORM" ) ) {
+        qputenv( "QT_QPA_PLATFORM", "offscreen" );
+    }
     QApplication app( argc, argv );
     // Hermetic: a sidebar offers no kind a test did not give it, so none
     // runs a real capture program (tcpdump -D, adb devices) on this machine.

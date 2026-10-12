@@ -884,10 +884,12 @@ cmake --build build
 ### Running Tests
 
 ```bash
-cmake -B build -S . -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
+cmake --preset dev          # on macOS with Homebrew's Qt: dev-homebrew
 cmake --build build
-cd build && ctest --output-on-failure
+ctest --preset dev
 ```
+
+[Testing](docs/DEVELOPER_GUIDE.md#testing) in the developer guide has the rest.
 
 ## Architecture
 

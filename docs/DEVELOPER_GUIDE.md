@@ -2660,11 +2660,25 @@ contrast, is parsed in `pcap_parser.cpp`, a link layer beyond Ethernet in
 
 ## Testing
 
+The `dev` preset builds as the CI does: Ninja, Release, tests on. On macOS,
+`dev-homebrew` adds Homebrew's Qt 6.
+
 ```bash
-cmake -B build -S . -DBUILD_TESTS=ON
+cmake --preset dev-homebrew          # or: dev
 cmake --build build
-cd build && ctest --output-on-failure
+ctest --preset dev-homebrew          # all tests, side by side
+ctest --preset dev-homebrew -LE programs   # all but those that run programs: seconds
+ctest --preset dev-homebrew -R "Scenario: A Stop before"   # by name
+ctest --preset dev-homebrew -R "<name>" --repeat until-fail:30   # chase a flaky test
+scripts/format.sh main               # the CI's pinned clang-format over what changed
+scripts/format.sh --check            # the CI's Format job, locally
 ```
+
+Each Catch2 test case is a CTest test of its own, named as Catch2 names it: a
+`SCENARIO( "X" )` is `Scenario: X`. A name filter that matches nothing fails.
+The tests that run programs (fake adb, ssh, extcap, tcpdump; label
+`programs`) wait on them with deadlines and take turns; they are most of the
+run's time.
 
 The link, network and transport layer tests build synthetic packets with
 the helpers in `tests/pcapbuilder.h`; the application protocols are tested

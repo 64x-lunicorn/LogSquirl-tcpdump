@@ -1,0 +1,2 @@
+- Build, test and format: [Testing](docs/DEVELOPER_GUIDE.md#testing) — `cmake --preset dev-homebrew`, `ctest --preset dev-homebrew`, `scripts/format.sh main`
+- Issues and specs: [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md)
