@@ -122,6 +122,14 @@ public:
         return {};
     }
 
+    /// Whether the form shows the widget right under the source, before the
+    /// device and the interface: it holds what the user gives first (a
+    /// custom command).  By default it comes after the form's fields.
+    virtual bool comesFirst() const
+    {
+        return false;
+    }
+
 signals:
     void changed();
     /// An option changed how interfaces are listed (ssh's sudo): the form
@@ -195,6 +203,8 @@ private:
     void fill( QComboBox* box, const LiveListing& listing, const QString& wanted );
     /// The id of the target @p box shows (typed text for one not listed).
     static QString currentId( const QComboBox* box );
+    /// Show the start of @p box's entry where the field cuts it off.
+    static void showStart( QComboBox* box );
     /// Show the source's state: unavailable, listing, a listing's error.
     void showStatus( const QString& text );
     /// Show the capture filter's problem below it.

@@ -214,6 +214,18 @@ public:
     {
         return QStringLiteral( "Device" );
     }
+    /// How a device is typed, for a kind whose devices are Typed: shown in
+    /// the empty device field, e.g. "[user@]host[:port]"; empty for none.
+    virtual QString deviceFormat() const
+    {
+        return {};
+    }
+    /// What the form says when listDevices() finds none: where devices come
+    /// from, and for a Typed kind that one can be typed.
+    virtual QString noDevicesText() const
+    {
+        return QStringLiteral( "No %1 found." ).arg( deviceLabel().toLower() );
+    }
     /// The devices, at most @p timeout; on a worker thread.
     virtual LiveListing listDevices( std::chrono::milliseconds timeout ) const
     {

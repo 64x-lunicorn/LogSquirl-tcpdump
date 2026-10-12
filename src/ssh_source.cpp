@@ -502,6 +502,16 @@ QString SshSourceKind::deviceLabel() const
     return QStringLiteral( "Host" );
 }
 
+QString SshSourceKind::deviceFormat() const
+{
+    return QStringLiteral( "[user@]host[:port]" );
+}
+
+QString SshSourceKind::noDevicesText() const
+{
+    return QStringLiteral( "No Host in ~/.ssh/config: type one as [user@]host[:port]." );
+}
+
 LiveListing SshSourceKind::listDevices( std::chrono::milliseconds timeout ) const
 {
     (void)timeout;

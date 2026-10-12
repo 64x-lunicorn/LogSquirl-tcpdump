@@ -119,10 +119,19 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     auto* layout = new QFormLayout( this );
     layout->setContentsMargins( 0, 0, 0, 0 );
     layout->setFieldGrowthPolicy( QFormLayout::AllNonFixedFieldsGrow );
+    // A list as wide as the room it gets, its longest entry cut off rather
+    // than widening the dialog (an interface's flags, a long host name);
+    // the popup shows each entry whole.  An entry chosen shows its start.
+    const auto narrow = [ this ]( QComboBox* box ) {
+        box->setSizeAdjustPolicy( QComboBox::AdjustToMinimumContentsLengthWithIcon );
+        box->setMinimumContentsLength( 16 );
+        connect( box, &QComboBox::activated, this, [ box ] { showStart( box ); } );
+    };
 
     source_ = new QComboBox;
     source_->setObjectName( "liveSource" );
     source_->setToolTip( "Where to capture" );
+    narrow( source_ );
     layout->addRow( "Source:", source_ );
 
     status_ = new QLabel;
@@ -137,12 +146,14 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     deviceLabel_ = new QLabel( "Device:" );
     device_ = new QComboBox;
     device_->setObjectName( "liveDevice" );
+    narrow( device_ );
     layout->addRow( deviceLabel_, device_ );
 
     interface_ = new QComboBox;
     interface_->setObjectName( "liveInterface" );
     interface_->setEditable( true );
     interface_->setInsertPolicy( QComboBox::NoInsert );
+    narrow( interface_ );
     interface_->setToolTip( "The interface to capture on; one the source does not list can be "
                             "typed" );
     refresh_ = new QPushButton( "Refresh" );
@@ -383,6 +394,9 @@ void LiveCaptureForm::sourceChanged()
     deviceLabel_->setHidden( devices == LiveSourceKind::Devices::None );
     device_->setHidden( devices == LiveSourceKind::Devices::None );
     device_->setEditable( devices == LiveSourceKind::Devices::Typed );
+    if ( device_->isEditable() ) {
+        device_->lineEdit()->setPlaceholderText( kind ? kind->deviceFormat() : QString() );
+    }
     if ( kind ) {
         deviceLabel_->setText( kind->deviceLabel() + QLatin1Char( ':' ) );
     }
@@ -440,8 +454,7 @@ void LiveCaptureForm::listDevices()
                         return;
                     }
                     if ( currentId( device_ ).isEmpty() ) {
-                        showStatus(
-                            QStringLiteral( "No %1 found." ).arg( kind->deviceLabel().toLower() ) );
+                        showStatus( kind->noDevicesText() );
                         return;
                     }
                     listInterfaces();
@@ -554,6 +567,16 @@ void LiveCaptureForm::fill( QComboBox* box, const LiveListing& listing, const QS
     if ( index < 0 && box->isEditable() ) {
         box->setEditText( QString() );
     }
+    showStart( box );
+}
+
+void LiveCaptureForm::showStart( QComboBox* box )
+{
+    // An editable list puts its cursor after the entry, and so shows its
+    // end where it is cut off: the interface's flags, not its name.
+    if ( auto* edit = box->lineEdit() ) {
+        edit->setCursorPosition( 0 );
+    }
 }
 
 QString LiveCaptureForm::currentId( const QComboBox* box )
@@ -596,7 +619,14 @@ void LiveCaptureForm::showOptionsWidget()
         options_->setOptions( kept->second );
     }
     auto* layout = static_cast<QFormLayout*>( this->layout() );
-    layout->addRow( options_ );
+    if ( options_->comesFirst() ) {
+        int statusRow = 0;
+        layout->getWidgetPosition( status_, &statusRow, nullptr );
+        layout->insertRow( statusRow + 1, options_ );
+    }
+    else {
+        layout->addRow( options_ );
+    }
     options_->setEnabled( kind->availability().available );
     connect( options_, &LiveOptionsWidget::changed, this, &LiveCaptureForm::changed );
     connect( options_, &LiveOptionsWidget::listingChanged, this, [ this ] {

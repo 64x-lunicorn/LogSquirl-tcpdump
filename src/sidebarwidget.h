@@ -52,7 +52,7 @@
 
 namespace tcpdump {
 
-class LiveCaptureForm;
+class LiveCaptureDialog;
 class PacketPanel;
 
 /// The capture summary shown in the sidebar, as rich text.  With
@@ -259,9 +259,8 @@ public:
         confirmStop_ = std::move( confirmer );
     }
 
-    /// Offer the kinds of @p sources in the Live capture section and the
-    /// dialog, showing the choice saved in settings.ini (for tests; the
-    /// plugin's own are builtInLiveSources()).
+    /// Offer the kinds of @p sources in the Start live capture dialog (for
+    /// tests; the plugin's own are builtInLiveSources()).
     void setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
 
     /// The kinds every SidebarWidget constructed afterwards offers until
@@ -270,11 +269,10 @@ public:
     /// capture program (tcpdump -D, adb) by constructing a sidebar.
     static void setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources );
 
-    /// The Live capture section's form.
-    LiveCaptureForm* liveForm() const
-    {
-        return liveForm_;
-    }
+    /// The Start live capture dialog as Start live capture… shows it: the
+    /// choice last started, saved in settings.ini, and each other source
+    /// with its own saved options.  It lists on this widget's pool.
+    std::unique_ptr<LiveCaptureDialog> makeLiveCaptureDialog( QWidget* parent );
 
     /// End the running live capture and keep what was captured.
     void stopLiveCapture();
@@ -372,6 +370,9 @@ private:
     /// Enable Start if no capture is read or captured and the form's choice
     /// can be captured; its tooltip says why not.
     void updateStartButton();
+    /// The Start live capture dialog showing @p choice.
+    std::unique_ptr<LiveCaptureDialog> makeLiveCaptureDialog( QWidget* parent,
+                                                              const LiveChoice& choice );
     /// Show why the live capture failed, and what its source says to do.
     void showLiveError( const LiveOutcome& outcome );
     /// Report the outcome of the export @p request asked for.
@@ -385,8 +386,7 @@ private:
     QPushButton* stopButton_ = nullptr;
     QPushButton* saveButton_ = nullptr;
     QLabel* liveLabel_ = nullptr;
-    LiveCaptureForm* liveForm_ = nullptr;
-    QPushButton* startButton_ = nullptr;
+    QPushButton* startButton_ = nullptr;   ///< Start live capture…
     QPlainTextEdit* liveStderr_ = nullptr; ///< The capture program's stderr lines.
     QLabel* liveError_ = nullptr;          ///< Why the last live capture failed.
     QString lastDir_;                      ///< Remembers the last browsed directory.
@@ -412,7 +412,7 @@ private:
     /// The live capture, running or the last one, and what it comes to.
     std::unique_ptr<LiveCaptureSession> live_;
     QTimer liveTicker_; ///< Moves the elapsed time on.
-    /// Where the live capture form and dialog list devices and interfaces;
+    /// Where the Start live capture dialog lists devices and interfaces;
     /// cancelled and waited for when the widget goes.
     QThreadPool listingPool_;
     /// The kinds of live sources offered.

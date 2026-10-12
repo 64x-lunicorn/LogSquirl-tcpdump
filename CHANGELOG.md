@@ -530,6 +530,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first says `[TCP segment of a reassembled PDU]`, the last describes
   the whole message (see *TCP reassembly*). A message the capture never
   completes is described by none of its segments.
+- **The live capture form is in the Start live capture dialog only.** The
+  sidebar's Live capture section is a **Start live capture…** button,
+  which opens the same dialog as the tcpdump menu entry, with the choice
+  last started; while a capture runs the section shows its counters and
+  Stop as before. The sidebar is shorter and can be made narrower (it was
+  at least as wide as the longest interface name), and opening it runs no
+  capture program to list interfaces (#140).
+- **SSH says where hosts come from.** With no `Host` in `~/.ssh/config`,
+  the Start live capture dialog said only *No host found.*; it now says
+  *No Host in ~/.ssh/config: type one as [user@]host[:port].*, and the
+  empty Host field shows `[user@]host[:port]` (#145).
+- **Long interface names no longer widen the live capture form.** The
+  Source, Device and Interface lists were as wide as their longest entry
+  (`ap1 — Up, Running, Wireless, Not associated`), and the sidebar and the
+  Start live capture dialog with them; they now take the room they get and
+  cut the entry off, showing its start, the interface's name; the list
+  shows every entry whole (#141).
+- **Custom command: the command comes first.** The command line, the saved
+  commands and examples and *Run through the shell* are right under the
+  source, before Interface and the limits, as the command is what is typed
+  first; with no interface listed, the status says *No interfaces listed:
+  if the command uses {interface}, type it in the Interface field.* (#144).
 - **Readable help in the live capture form.** A source's reason or error
   (e.g. that /dev/bpf* cannot be read, or that no Android device is found)
   shows each command on a line of its own in a fixed-width font, to be
