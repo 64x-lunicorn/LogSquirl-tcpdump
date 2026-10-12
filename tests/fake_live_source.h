@@ -153,11 +153,21 @@ public:
     {
         return "Phone";
     }
+    QString deviceFormat() const override
+    {
+        return "serial";
+    }
+    QString noDevicesText() const override
+    {
+        return "No phone is plugged in: type its serial.";
+    }
     tcpdump::LiveListing listDevices( std::chrono::milliseconds ) const override
     {
         tcpdump::LiveListing listing;
-        listing.targets = { { "phoneB", {}, "unauthorized: accept the prompt on the phone" },
-                            { "phoneA", "Pixel 9", {} } };
+        if ( !listsNoDevices ) {
+            listing.targets = { { "phoneB", {}, "unauthorized: accept the prompt on the phone" },
+                                { "phoneA", "Pixel 9", {} } };
+        }
         return listing;
     }
     tcpdump::LiveListing listInterfaces( const QString& device,
@@ -239,6 +249,7 @@ public:
     /// Whether it has devices: then phoneA, and phoneB, which is unauthorized.
     Devices deviceMode = Devices::None;
     QString firstDescription = "Fake Ethernet"; ///< fake0's description.
+    bool listsNoDevices = false;                ///< listDevices() finds none.
     QString unavailableReason;                  ///< Set: the kind is unavailable, for this reason.
     Bytes capture;                              ///< What a capture hands out.
     std::string failure;                        ///< Set: a capture breaks off with it afterwards.

@@ -202,6 +202,9 @@ SCENARIO( "The SSH source runs ssh with BatchMode, a connect timeout and no tty"
             REQUIRE( kind.displayName() == "SSH" );
             REQUIRE( kind.devices() == LiveSourceKind::Devices::Typed );
             REQUIRE( kind.deviceLabel() == "Host" );
+            REQUIRE( kind.deviceFormat() == "[user@]host[:port]" );
+            REQUIRE( kind.noDevicesText().contains( "~/.ssh/config" ) );
+            REQUIRE( kind.noDevicesText().contains( "type one as [user@]host[:port]" ) );
             const auto registered = builtInLiveSources()->find( "ssh" );
             REQUIRE( registered );
             REQUIRE( registered->devices() == LiveSourceKind::Devices::Typed );

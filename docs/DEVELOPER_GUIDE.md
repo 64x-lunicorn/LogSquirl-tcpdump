@@ -2250,30 +2250,35 @@ capture has a raw file, copies it where `setSaveChooser()`'s dialog says.
 stderr lines go to the host's log. Opening a file and a live capture
 exclude each other (`busyElsewhere()`, `isCapturing()`).
 
-The **Live capture** section holds a `LiveCaptureForm`
-(`live_capture_form.h/cpp`): the source picker over a `LiveSourceRegistry`
-(`builtInLiveSources()`, or `setLiveSources()` in tests), the device and
-the interface (an editable list; a typed interface is taken as it is),
-Refresh, the capture filter with `captureFilterProblem()` below it, and the
-snaplen. Choosing a source shows its `availability()` reason, or lists its
-devices and then the interfaces of the device chosen on the sidebar's
-listing pool, each listing bounded by the kind's timeout; a result for a
-source or device chosen since is dropped (a generation counter). The form
-remembers the choice it was given and selects it once listed. A kind's
-options widget is made anew whenever the kind is chosen, and its options
-are kept per source when another is chosen. `problem()`
-(`liveChoiceProblem()`, then an options widget that cannot tell yet) keeps
-**Start** disabled, with the reason as its tooltip, as does a conversion or
-a capture running; the form is locked while a capture runs.
-A choice the session starts is shown in the form. The capture program's
-stderr lines fill a small read-only view; a failure's error, with its
-Guidance (`explainFailure()`), a label below Stop. **Plugins → tcpdump →
-Start live capture…** (`chooseAndStartLiveCapture()`) asks to stop a
-running capture (`setStopConfirmer()` in tests), shows a
-`LiveCaptureDialog` with the same form (`setLiveChoiceAsker()`), and hands
-the choice to `LiveCaptureSession::startWhenIdle()`, which starts it once
-the running capture's program has ended. **Stop live capture** calls
-`stopLiveCapture()`.
+The **Live capture** section holds **Start live capture…**, which does what
+**Plugins → tcpdump → Start live capture…** does
+(`chooseAndStartLiveCapture()`): it asks to stop a running capture
+(`setStopConfirmer()` in tests), shows the `LiveCaptureDialog` that
+`makeLiveCaptureDialog()` makes (`setLiveChoiceAsker()` in tests), and
+hands the choice to `LiveCaptureSession::startWhenIdle()`, which starts it
+once the running capture's program has ended. The button is disabled while
+a capture file is read and hidden while a capture runs. The sidebar lists
+nothing itself: no capture program runs until the dialog opens.
+
+The dialog holds a `LiveCaptureForm` (`live_capture_form.h/cpp`): the
+source picker over a `LiveSourceRegistry` (`builtInLiveSources()`, or
+`setLiveSources()` in tests), the device and the interface (an editable
+list; a typed interface is taken as it is), Refresh, the capture filter
+with `captureFilterProblem()` below it, and the snaplen.
+`makeLiveCaptureDialog()` gives it the choice last started (settings.ini)
+and every other source's saved options. Choosing a source shows its
+`availability()` reason, or lists its devices and then the interfaces of
+the device chosen on the sidebar's listing pool, each listing bounded by
+the kind's timeout; a result for a source or device chosen since is
+dropped (a generation counter). The form remembers the choice it was given
+and selects it once listed. A kind's options widget is made anew whenever
+the kind is chosen, and its options are kept per source when another is
+chosen. `problem()` (`liveChoiceProblem()`, then an options widget that
+cannot tell yet) keeps the dialog's **Start** disabled, with the reason as
+its tooltip. While a capture runs, the section shows its counters and
+**Stop**; the capture program's stderr lines fill a small read-only view; a
+failure's error, with its Guidance (`explainFailure()`), a label below
+Stop. **Stop live capture** calls `stopLiveCapture()`.
 
 It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
 the system's temporary directory as the output root, and shows the outcome

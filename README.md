@@ -214,9 +214,10 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
 
 ### Live capture
 
-Start a live capture from the **Live capture** section of the plugin's
-sidebar tab, or with **Plugins → tcpdump → Start live capture…** (also in
-the Command Palette), which shows the same fields in a dialog:
+Start a live capture with **Start live capture…** in the **Live capture**
+section of the plugin's sidebar tab, or with **Plugins → tcpdump → Start
+live capture…** (also in the Command Palette). Either opens a dialog with
+these fields:
 
 - **Source**: where to capture. Each source the plugin offers is listed;
   one that cannot be used on this computer shows why, e.g. that a program
@@ -230,7 +231,7 @@ the Command Palette), which shows the same fields in a dialog:
   break, a leading `-`, unbalanced parentheses or a Wireshark display
   filter field such as `ip.addr` are pointed out below the field and keep
   Start disabled; anything else is checked by the capture program, whose
-  error the section shows
+  error the sidebar's Live capture section shows
 - **Snaplen**: the bytes kept of each packet, 262144 by default; a packet
   cut shorter is marked `[cut to N bytes]`
 - **Stop after time / packets / size**: the capture stops by itself at the
@@ -242,10 +243,12 @@ the Command Palette), which shows the same fields in a dialog:
   or days (dumpcap's `-b`). With *N files*, the raw capture is split into
   files of the size or duration given, and only the newest N are kept;
   see *Ring buffer* below. *Off* by default
-- **Start** and **Stop** (also **Plugins → tcpdump → Stop live capture**).
-  Start is disabled while a capture file is read or a live capture runs;
-  one live capture runs at a time, and the menu entry offers to stop the
-  running one first
+- **Start**, disabled with the reason as its tooltip while a field is
+  wrong. While the capture runs, the sidebar's Live capture section shows
+  its counters and **Stop** (also **Plugins → tcpdump → Stop live
+  capture**). **Start live capture…** is disabled while a capture file is
+  read; one live capture runs at a time, and the menu entry offers to stop
+  the running one first
 
 The choices started last are remembered in the plugin's `settings.ini` and
 shown again after a restart, and so are each source's own options, for a
@@ -342,7 +345,8 @@ your system's OpenSSH client (`ssh` on `PATH`; on Windows
 Client*) and shows the traffic live. Type the **Host** as
 `[user@]host[:port]` (`[address]:port` for an IPv6 address with a port), or
 pick one of the `Host` entries of `~/.ssh/config` that name one host (no
-wildcards); press Enter to list its interfaces, which are what `tcpdump -D`
+wildcards; with none, the dialog says so and the empty field shows the form
+to type); press Enter to list its interfaces, which are what `tcpdump -D`
 lists on the server (run with `sudo -n` while *Run tcpdump with sudo -n* is
 on, and listed anew when it is turned on or off), or, if that lists
 nothing, what `ip -o link` lists, with what tcpdump said. Every ssh runs as
