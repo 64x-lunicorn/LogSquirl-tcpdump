@@ -36,6 +36,10 @@ class QPushButton;
 
 namespace tcpdump {
 
+/// What a display filter does and the fields and operators it knows, as
+/// the dialog says it above its field and the sidebar's field in its tooltip.
+QString displayFilterHelp();
+
 /**
  * Asks for a display filter.  Each change of the text is translated: a
  * filter outside the supported subset shows the column and the reason
@@ -69,8 +73,10 @@ private:
 void openDisplayFilter( QWidget* parent );
 
 /**
- * The sidebar's display filter: the field, below it what is wrong with the
- * filter, as the dialog says it, and Open in Regex Lab, which Enter in the
+ * The sidebar's display filter: a label saying that it opens the Regex Lab,
+ * the field, with displayFilterHelp() in its tooltip, below it what is
+ * wrong with the filter, as the dialog says it, and Open in Regex Lab,
+ * which Enter in the
  * field does too, for a filter of the subset.  What it opens is logged and
  * offered by the dialog next time.  Only for a host with the Regex Lab.
  */

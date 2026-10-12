@@ -34,6 +34,7 @@
 #include <QFutureWatcher>
 #include <QHeaderView>
 #include <QLabel>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -56,6 +57,13 @@ constexpr size_t kBytesPerLine = 16;
 constexpr int kHexWidth = 16 * 3;
 constexpr int kOffsetGap = 2; ///< Between the offset and the hex.
 constexpr int kAsciiGap = 3;  ///< Between the hex and the ASCII.
+
+/// The status while no line is selected in a capture's tab, which the
+/// layer tree's and the hex dump's placeholders say in their words.
+QString selectPacketLine()
+{
+    return QStringLiteral( "Select a packet line to see its packet." );
+}
 
 /// The tree item's roles holding the bytes of its layer or field.
 constexpr int kOffsetRole = Qt::UserRole;
@@ -94,7 +102,7 @@ QString selectionProblem( int result )
 {
     switch ( result ) {
     case LOGSQUIRL_LOG_LINES_NO_SELECTION:
-        return QStringLiteral( "Select a packet line to see its packet." );
+        return selectPacketLine();
     case LOGSQUIRL_LOG_LINES_NO_LOG_FILE:
         return QStringLiteral( "The tab in front shows no capture." );
     default:
@@ -153,6 +161,31 @@ std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, siz
     return ranges;
 }
 
+void enableUnlessProblem( QPushButton* button, const QString& problem, const QString& whatItDoes )
+{
+    button->setEnabled( problem.isEmpty() );
+    button->setToolTip( problem.isEmpty() ? whatItDoes : problem );
+}
+
+void LayerTree::setPlaceholderText( const QString& text )
+{
+    placeholderText_ = text;
+    viewport()->update();
+}
+
+void LayerTree::paintEvent( QPaintEvent* event )
+{
+    QTreeWidget::paintEvent( event );
+    if ( topLevelItemCount() > 0 || placeholderText_.isEmpty() ) {
+        return;
+    }
+    // As QPlainTextEdit shows its placeholder: in the palette's colour for it.
+    QPainter painter( viewport() );
+    painter.setPen( palette().color( QPalette::PlaceholderText ) );
+    painter.drawText( viewport()->rect().adjusted( 4, 4, -4, -4 ),
+                      Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, placeholderText_ );
+}
+
 PacketPanel::PacketPanel( QWidget* parent )
     : QWidget( parent )
 {
@@ -171,7 +204,7 @@ PacketPanel::PacketPanel( QWidget* parent )
     layout->addWidget( status_ );
 
     auto* splitter = new QSplitter( Qt::Vertical );
-    tree_ = new QTreeWidget;
+    tree_ = new LayerTree;
     tree_->setObjectName( "packetLayers" );
     tree_->setHeaderHidden( true );
     tree_->setColumnCount( 1 );
@@ -185,9 +218,8 @@ PacketPanel::PacketPanel( QWidget* parent )
     dump_->setFont( QFontDatabase::systemFont( QFontDatabase::FixedFont ) );
     splitter->addWidget( dump_ );
 
-    followButton_ = new QPushButton( "Follow stream content" );
-    followButton_->setObjectName( "followContentButton" );
-    followButton_->setToolTip( "Show the payload of this packet's conversation, as text or hex" );
+    followButton_ = new QPushButton( "Show stream content" );
+    followButton_->setObjectName( "streamContentButton" );
     followButton_->setEnabled( false );
     layout->addWidget( followButton_ );
     connect( followButton_, &QPushButton::clicked, this, [ this ] {
@@ -196,7 +228,7 @@ PacketPanel::PacketPanel( QWidget* parent )
         } catch ( const std::exception& e ) {
             // An exception must not escape into Qt or the host.
             hostLog( LOGSQUIRL_LOG_ERROR,
-                     "Follow stream content failed: " + QString::fromUtf8( e.what() ) );
+                     "Show stream content failed: " + QString::fromUtf8( e.what() ) );
         }
     } );
 
@@ -208,10 +240,13 @@ PacketPanel::PacketPanel( QWidget* parent )
     streamView_ = new StreamContentView;
     streamView_->setObjectName( "streamView" );
     tabs_->addTab( streamView_, "Stream" );
+    // Neither can be dragged away: the Conversations keep a few rows.
     auto* outer = new QSplitter( Qt::Vertical );
+    outer->setChildrenCollapsible( false );
     outer->addWidget( tabs_ );
     conversations_ = new ConversationTable;
     conversations_->setObjectName( "conversationTable" );
+    conversations_->setMinimumHeight( kConversationsMinLines * fontMetrics().lineSpacing() );
     outer->addWidget( conversations_ );
     layout->addWidget( outer, 1 );
 
@@ -266,10 +301,15 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     cursor_.reset(); // a read of the capture before keeps its own
     haveLast_ = false;
     // The stream shown was one of the capture of the tab before.
-    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Follow stream "
+    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Show stream "
                                                  "content." )
                                : QStringLiteral( "No capture in this tab." ) );
     tabs_->setCurrentIndex( 0 );
+    // Without a capture there is no packet line to select.
+    tree_->setPlaceholderText( index_ ? QStringLiteral( "Select a packet line to see its layers" )
+                                      : QString() );
+    dump_->setPlaceholderText( index_ ? QStringLiteral( "Select a packet line to see its bytes" )
+                                      : QString() );
     if ( !index_ ) {
         showReason( QStringLiteral( "No capture in this tab." ) );
         return;
@@ -278,7 +318,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
         poll();
     }
     else {
-        showReason( QStringLiteral( "Select a packet line to see its packet." ) );
+        showReason( selectPacketLine() );
     }
 }
 
@@ -375,16 +415,45 @@ void PacketPanel::showSelection( const QString& selection )
     showPacket( number );
 }
 
+QString PacketPanel::streamContentProblem() const
+{
+    // The status says why no packet is selected: no capture in the tab in
+    // front, no packet line selected, a read that failed.
+    if ( selectedPacket_ == 0 ) {
+        return statusText();
+    }
+    if ( shownStream_ == kNoStream ) {
+        return QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
+            .arg( selectedPacket_ );
+    }
+    return {};
+}
+
+QString PacketPanel::streamLinesProblem() const
+{
+    if ( auto problem = streamContentProblem(); !problem.isEmpty() ) {
+        return problem;
+    }
+    // Its content is read by its addresses, but no pattern picks its lines.
+    if ( shownStream_ == kUnnumbered ) {
+        return QStringLiteral( "Packet %1 has no stream number: the capture has more "
+                               "conversations than the plugin numbers." )
+            .arg( selectedPacket_ );
+    }
+    return {};
+}
+
+void PacketPanel::updateStreamActions()
+{
+    enableUnlessProblem( followButton_, streamContentProblem(),
+                         QStringLiteral( "Show the payload of this packet's conversation, as "
+                                         "text or hex" ) );
+    emit streamActionsChanged();
+}
+
 bool PacketPanel::followStreamContent( QString* why )
 {
-    QString reason;
-    if ( selectedPacket_ == 0 ) {
-        reason = statusText();
-    }
-    else if ( shownStream_ == kNoStream ) {
-        reason = QStringLiteral( "Packet %1 belongs to no stream: only TCP and UDP packets do." )
-                     .arg( selectedPacket_ );
-    }
+    const auto reason = streamContentProblem();
     if ( !reason.isEmpty() ) {
         if ( why ) {
             *why = reason;
@@ -406,7 +475,7 @@ void PacketPanel::showPacket( uint32_t number )
     }
     showReason( QStringLiteral( "Reading packet %1\u2026" ).arg( number ) );
     selectedPacket_ = number;
-    followButton_->setEnabled( shownStream_ != kNoStream );
+    updateStreamActions();
     const auto generation = ++generation_;
     latest_->store( generation );
     reading_ = true;
@@ -480,12 +549,12 @@ void PacketPanel::showRead( const PacketRead& read )
     }
     shownPacket_ = number;
     shownBytes_ = packet.bytes.size();
-    followButton_->setEnabled( shownStream_ != kNoStream );
     auto status = QStringLiteral( "Packet %1" ).arg( number );
     if ( packet.record.capturedLen > packet.bytes.size() ) {
         status += QStringLiteral( " (the first %1 bytes)" ).arg( packet.bytes.size() );
     }
     status_->setText( status );
+    status_->setHidden( false );
 
     tree_->clear();
     for ( const auto& layer : layers_ ) {
@@ -520,11 +589,15 @@ void PacketPanel::showReason( const QString& reason )
     selectedPacket_ = 0;
     shownPacket_ = 0;
     shownBytes_ = 0;
-    followButton_->setEnabled( false );
     layers_.clear();
     status_->setText( reason );
+    // Said once: the sidebar's summary above says the tab holds no capture,
+    // the empty layer tree and hex dump to select a packet line.  The
+    // status still tells statusText() and the stream buttons' tooltips.
+    status_->setHidden( !index_ || reason == selectPacketLine() );
     tree_->clear();
     dump_->clear();
+    updateStreamActions();
 }
 
 void PacketPanel::highlight( QTreeWidgetItem* item )

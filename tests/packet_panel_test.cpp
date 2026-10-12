@@ -26,6 +26,7 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "follow_stream.h"
 #include "packet_panel.h"
 #include "pcapbuilder.h"
 #include "regex_lab.h"
@@ -35,6 +36,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -217,6 +219,7 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
             {
                 REQUIRE( waitFor(
                     [ panel ] { return panel->statusText().contains( "not a packet line" ); } ) );
+                REQUIRE_FALSE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
                 REQUIRE( panel->shownPacket() == 0 );
             }
         }
@@ -225,11 +228,22 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
         {
             host.selectedLines.clear();
 
-            THEN( "the panel asks for a selection" )
+            THEN( "the panel asks for a selection once, in its empty views" )
             {
                 REQUIRE( waitFor( [ panel ] {
                     return panel->statusText() == "Select a packet line to see its packet.";
                 } ) );
+                // The status still says it to the stream buttons' tooltips.
+                REQUIRE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
+                REQUIRE( panel->findChild<QPushButton*>( "streamContentButton" )->toolTip()
+                         == "Select a packet line to see its packet." );
+                auto* tree = panel->findChild<tcpdump::LayerTree*>( "packetLayers" );
+                REQUIRE( tree );
+                REQUIRE( tree->topLevelItemCount() == 0 );
+                REQUIRE( tree->placeholderText() == "Select a packet line to see its layers" );
+                auto* dump = panel->findChild<QPlainTextEdit*>( "packetBytes" );
+                REQUIRE( dump->toPlainText().isEmpty() );
+                REQUIRE( dump->placeholderText() == "Select a packet line to see its bytes" );
             }
         }
 
@@ -239,19 +253,27 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
             REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
             host.activateFile( "/some/other.log" );
 
-            THEN( "the panel says the tab holds no capture" )
+            THEN( "the panel shows no packet and leaves it to the summary to say why" )
             {
                 REQUIRE( panel->shownPacket() == 0 );
                 REQUIRE( panel->statusText() == "No capture in this tab." );
+                REQUIRE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
+                REQUIRE( panel->findChild<tcpdump::LayerTree*>( "packetLayers" )
+                             ->placeholderText()
+                             .isEmpty() );
+                REQUIRE( panel->findChild<QPlainTextEdit*>( "packetBytes" )
+                             ->placeholderText()
+                             .isEmpty() );
             }
 
             AND_WHEN( "the capture's tab comes back" )
             {
                 host.activateFile( loaded.text );
 
-                THEN( "its packet is shown again" )
+                THEN( "its packet is shown again, and its status" )
                 {
                     REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+                    REQUIRE_FALSE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
                 }
             }
         }
@@ -276,7 +298,7 @@ SCENARIO( "The Packet Panel reads a packet off the UI thread", "[packet_panel]" 
                 REQUIRE( panel->statusText()
                          == QString::fromUtf8( "Reading packet 3\xe2\x80\xa6" ) );
                 REQUIRE( panel->shownPacket() == 0 );
-                REQUIRE( panel->findChild<QPushButton*>( "followContentButton" )->isEnabled() );
+                REQUIRE( panel->findChild<QPushButton*>( "streamContentButton" )->isEnabled() );
                 REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
                 REQUIRE( panel->statusText() == "Packet 3" );
             }
@@ -518,7 +540,7 @@ tcpdump::StreamContentView* followContent( LoadedCapture& loaded, const QString&
 {
     loaded.host.selectedLines = { line };
     loaded.panel->refresh();
-    auto* button = loaded.panel->findChild<QPushButton*>( "followContentButton" );
+    auto* button = loaded.panel->findChild<QPushButton*>( "streamContentButton" );
     REQUIRE( button->isEnabled() );
     button->click();
     auto* view = loaded.panel->streamView();
@@ -535,7 +557,7 @@ QByteArray fileBytes( const QString& path )
 
 } // namespace
 
-SCENARIO( "Follow stream content shows a conversation's payload in the Packet Panel",
+SCENARIO( "Show stream content shows a conversation's payload in the Packet Panel",
           "[packet_panel][stream_content]" )
 {
     GIVEN( "the synthetic reassembly capture in the tab in front" )
@@ -555,9 +577,13 @@ SCENARIO( "Follow stream content shows a conversation's payload in the Packet Pa
                          == "GET /index.html HTTP/1.1\nHost: example.com\nUser-Agent: "
                             "corpus/1.0\nAccept: */*\n\nHTTP/1.1 200 OK\nContent-Type: "
                             "text/html\nContent-Length: 31\n\n<html><body>Hello</body></html>" );
-                REQUIRE( view->statusText().startsWith(
-                    QString::fromUtf8( "TCP stream 1: 192.0.2.10:50002 \xe2\x86\x92 "
-                                       "198.51.100.7:80 84 bytes" ) ) );
+                // One direction to a line.
+                REQUIRE( view->statusText()
+                         == QString::fromUtf8( "TCP stream 1\n"
+                                               "192.0.2.10:50002 \xe2\x86\x92 198.51.100.7:80 "
+                                               "84 bytes\n"
+                                               "198.51.100.7:80 \xe2\x86\x92 192.0.2.10:50002 "
+                                               "95 bytes" ) );
                 REQUIRE_FALSE( view->hasMore() );
                 REQUIRE( view->noteText().isEmpty() );
             }
@@ -651,7 +677,7 @@ SCENARIO( "Follow stream content shows a conversation's payload in the Packet Pa
         THEN( "its datagrams are shown" )
         {
             auto* view = followContent( loaded, loaded.lines[ 5 ] );
-            REQUIRE( view->statusText().startsWith( "UDP stream 0: 192.168.1.1:40000" ) );
+            REQUIRE( view->statusText().startsWith( "UDP stream 0\n192.168.1.1:40000" ) );
             REQUIRE( view->contentText().contains( "example" ) );
         }
     }
@@ -729,7 +755,7 @@ SCENARIO( "A long stream is shown in part, read off the UI thread with Cancel",
     }
 }
 
-SCENARIO( "Follow stream content from the menu", "[packet_panel][stream_content]" )
+SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" )
 {
     GIVEN( "a capture whose sidebar is not in view" )
     {
@@ -737,7 +763,7 @@ SCENARIO( "Follow stream content from the menu", "[packet_panel][stream_content]
         auto& host = loaded.host;
         const auto entry
             = std::find_if( host.menuActions.begin(), host.menuActions.end(),
-                            []( const auto& a ) { return a.label == "Follow stream content"; } );
+                            []( const auto& a ) { return a.label == "Show stream content"; } );
         REQUIRE( entry != host.menuActions.end() );
 
         WHEN( "a packet line is selected and the entry chosen" )
@@ -761,8 +787,156 @@ SCENARIO( "Follow stream content from the menu", "[packet_panel][stream_content]
             THEN( "the notification says why no stream is followed" )
             {
                 REQUIRE( host.notifications
-                         == QStringList{ "Follow stream content: Select a packet line to see "
+                         == QStringList{ "Show stream content: Select a packet line to see "
                                          "its packet." } );
+            }
+        }
+    }
+}
+
+SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only when they work",
+          "[packet_panel][followstream]" )
+{
+    GIVEN( "a plugin loaded by a host with the Regex Lab, no capture in the tab in front" )
+    {
+        QTemporaryDir tempRoot;
+        REQUIRE( tempRoot.isValid() );
+        tcpdump::g_state.tempRoot = tempRoot.path();
+        FakeHost host;
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+        auto* sidebar = tcpdump::g_state.sidebarWidget;
+        auto* lines = sidebar->findChild<QPushButton*>( "streamLinesButton" );
+        auto* content = sidebar->findChild<QPushButton*>( "streamContentButton" );
+
+        THEN( "both are named by what they do, disabled, and say why" )
+        {
+            REQUIRE( lines );
+            REQUIRE( content );
+            REQUIRE( lines->text() == "Stream lines in Regex Lab" );
+            REQUIRE( content->text() == "Show stream content" );
+            REQUIRE_FALSE( lines->isEnabled() );
+            REQUIRE_FALSE( content->isEnabled() );
+            REQUIRE( lines->toolTip() == "No capture in this tab." );
+            REQUIRE( content->toolTip() == "No capture in this tab." );
+        }
+
+        THEN( "the menu entries have the same names" )
+        {
+            QStringList labels;
+            for ( const auto& action : host.menuActions ) {
+                labels << action.label;
+            }
+            REQUIRE( labels.contains( "Stream lines in Regex Lab" ) );
+            REQUIRE( labels.contains( "Show stream content" ) );
+            REQUIRE_FALSE( labels.contains( "Follow stream" ) );
+            REQUIRE_FALSE( labels.contains( "Follow stream content" ) );
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+
+    GIVEN( "a converted capture in the tab in front" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+        auto* lines = loaded.sidebar->findChild<QPushButton*>( "streamLinesButton" );
+        auto* content = panel->findChild<QPushButton*>( "streamContentButton" );
+        REQUIRE( lines );
+        REQUIRE( content );
+
+        WHEN( "no line is selected" )
+        {
+            panel->refresh();
+
+            THEN( "both are disabled and say to select a packet line" )
+            {
+                REQUIRE_FALSE( lines->isEnabled() );
+                REQUIRE_FALSE( content->isEnabled() );
+                REQUIRE( lines->toolTip() == "Select a packet line to see its packet." );
+                REQUIRE( content->toolTip() == "Select a packet line to see its packet." );
+            }
+        }
+
+        WHEN( "a line of another log is selected" )
+        {
+            host.selectedLines = { "2026-10-09 12:00:00 INFO server started" };
+            panel->refresh();
+
+            THEN( "both are disabled and say it is no packet line" )
+            {
+                REQUIRE_FALSE( lines->isEnabled() );
+                REQUIRE_FALSE( content->isEnabled() );
+                REQUIRE( lines->toolTip().contains( "not a packet line" ) );
+                REQUIRE( content->toolTip().contains( "not a packet line" ) );
+            }
+        }
+
+        WHEN( "a packet line without a stream is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 20 ] };
+            panel->refresh();
+
+            THEN( "both are disabled and say the packet has no stream" )
+            {
+                REQUIRE_FALSE( lines->isEnabled() );
+                REQUIRE_FALSE( content->isEnabled() );
+                REQUIRE( lines->toolTip().contains( "Packet 20 belongs to no stream" ) );
+                REQUIRE( content->toolTip().contains( "Packet 20 belongs to no stream" ) );
+            }
+        }
+
+        WHEN( "a packet line of a stream past the numbered ones is selected" )
+        {
+            auto line = loaded.lines[ 5 ];
+            line.replace( QRegularExpression( "^(5 +)0 " ), "\\1? " );
+            host.selectedLines = { line };
+            panel->refresh();
+
+            THEN( "its content can be shown, its lines not filtered" )
+            {
+                REQUIRE( content->isEnabled() );
+                REQUIRE_FALSE( lines->isEnabled() );
+                REQUIRE( lines->toolTip().contains( "Packet 5 has no stream number" ) );
+            }
+        }
+
+        WHEN( "a UDP packet line is selected" )
+        {
+            host.selectedLines = { loaded.lines[ 5 ] };
+            panel->refresh();
+
+            THEN( "both are enabled, and say what they do" )
+            {
+                REQUIRE( lines->isEnabled() );
+                REQUIRE( content->isEnabled() );
+                REQUIRE( lines->toolTip().contains( "Regex Lab" ) );
+                REQUIRE( content->toolTip().contains( "payload" ) );
+            }
+
+            AND_WHEN( "Stream lines in Regex Lab is clicked" )
+            {
+                lines->click();
+
+                THEN( "the Regex Lab opens with the pattern of that UDP stream's lines" )
+                {
+                    REQUIRE( host.regexLabs.size() == 1 );
+                    REQUIRE( host.regexLabs.first().pattern
+                             == tcpdump::followStreamPattern( loaded.lines[ 5 ] ).pattern );
+                    REQUIRE( host.notifications.isEmpty() );
+                }
+            }
+
+            AND_WHEN( "the tab in front no longer shows the capture" )
+            {
+                host.activateFile( "/some/other.log" );
+
+                THEN( "both are disabled again and say so" )
+                {
+                    REQUIRE_FALSE( lines->isEnabled() );
+                    REQUIRE_FALSE( content->isEnabled() );
+                    REQUIRE( lines->toolTip() == "No capture in this tab." );
+                }
             }
         }
     }

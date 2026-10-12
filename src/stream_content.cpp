@@ -19,7 +19,7 @@
 
 /**
  * @file stream_content.cpp
- * @brief Follow stream content: reading a stream back, rendering, export.
+ * @brief Show stream content: reading a stream back, rendering, export.
  */
 
 #include "stream_content.h"

@@ -19,8 +19,8 @@
 
 /**
  * @file follow_stream.h
- * @brief Follow stream: a Regex Lab pattern for the conversation of a
- *        selected packet line.
+ * @brief Stream lines in Regex Lab: a Regex Lab pattern for the
+ *        conversation of a selected packet line.
  *
  * The packet line's Stream column numbers TCP and UDP conversations each on
  * their own, so a stream number alone names two conversations.  The pattern
@@ -54,9 +54,12 @@ FollowStream followStreamPattern( const QString& packetLine );
 QString conversationPattern( int stream, const QString& addressA, uint16_t portA,
                              const QString& addressB, uint16_t portB );
 
-/// Plugins > tcpdump > Follow stream: open the Regex Lab with the pattern
-/// for the first Log Line selected in the tab in front, or notify the user
-/// why not.  The pattern the user applies or the cancel is logged.  Call
+/// Open the Regex Lab with the pattern for the first Log Line selected in
+/// the tab in front, or notify the user why not.  The pattern the user
+/// applies or the cancel is logged.  It tells a packet line by its text
+/// alone: Plugins > tcpdump > Stream lines in Regex Lab and the sidebar's
+/// button call it through SidebarWidget::openStreamLines(), which first
+/// asks the Packet Panel whether the tab in front shows a capture.  Call
 /// only when g_state.hostCapabilities has the Regex Lab and the selected
 /// lines, on the UI thread.
 void followSelectedStream();

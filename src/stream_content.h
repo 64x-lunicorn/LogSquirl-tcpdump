@@ -19,7 +19,7 @@
 
 /**
  * @file stream_content.h
- * @brief Follow stream content: the payload of a conversation, read back
+ * @brief Show stream content: the payload of a conversation, read back
  *        from its capture in order, shown as text or hex and exported.
  *
  * The packet list holds no payload, and the Converter keeps none: the

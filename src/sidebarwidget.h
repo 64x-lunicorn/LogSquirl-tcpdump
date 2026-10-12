@@ -35,6 +35,7 @@
 
 #include <QFutureWatcher>
 #include <QLabel>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProgressBar>
@@ -59,8 +60,9 @@ class PacketPanel;
 /// @p filterLinks, each endpoint and protocol listed is a link that
 /// SidebarWidget opens in the Regex Lab as a filter.  A tunnel's endpoints
 /// are listed apart and never a link: no column of a line shows them.
+/// The line under the capture's name is drawn in a colour of @p palette.
 QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
-                     bool filterLinks = false );
+                     bool filterLinks = false, const QPalette& palette = QPalette() );
 
 /// The progress of a live capture as the sidebar shows it, in place of a
 /// percentage (a stream has no size): packets, bytes and packets/s as of
@@ -75,9 +77,11 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does)
- *   - "Follow stream" button, as in Plugins > tcpdump, only on a host that
- *     has the Regex Lab and tells the selected lines: g_state.hostCapabilities
- *     when the widget is created
+ *   - "Stream lines in Regex Lab" button, as in Plugins > tcpdump, only on a
+ *     host that has the Regex Lab and tells the selected lines:
+ *     g_state.hostCapabilities when the widget is created; enabled only when
+ *     the Packet Panel can tell the selected line's stream, its tooltip
+ *     says why not
  *   - progress bar and Cancel button, while a capture is converted
  *   - the Live capture section: the live capture form (source, device,
  *     interface, capture filter, snaplen; live_capture_form.h) and Start;
@@ -95,6 +99,11 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
  *     packet of the line selected in the tab in front, and the
  *     Conversations table of the capture in front
+ *
+ * A long summary scrolls in itself, up to kSummaryMaxLines tall, so that
+ * the Packet Panel keeps kPacketPanelMinLines.  A sidebar shorter than the
+ * minimum of all of it scrolls as a whole ("sidebarScroll"), rather than
+ * squeeze its widgets over one another or cut off its bottom.
  *
  * Plugins > tcpdump > Start live capture… shows the same form in a dialog
  * (LiveCaptureDialog).  The last choice started is kept in settings.ini and
@@ -131,6 +140,15 @@ class SidebarWidget : public QWidget, private LiveCaptureHost, private LiveCaptu
     Q_OBJECT
 
 public:
+    /// The height the summary asks for at most, in lines of text: a longer
+    /// one scrolls and leaves the Packet panel room in a tall sidebar.
+    static constexpr int kSummaryMaxLines = 24;
+    /// The height the summary gives in to in a short sidebar, in lines.
+    static constexpr int kSummaryMinLines = 3;
+    /// The height the Packet panel keeps for its tabs and the
+    /// Conversations, however long the summary, in lines.
+    static constexpr int kPacketPanelMinLines = 16;
+
     /// Construct with an optional parent.
     explicit SidebarWidget( QWidget* parent = nullptr );
     ~SidebarWidget() override;
@@ -166,11 +184,18 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
-    /// Plugins > tcpdump > Follow stream content: show the content of the
+    /// Plugins > tcpdump > Show stream content: show the content of the
     /// selected line's stream in the Packet Panel's Stream tab, or notify
     /// the user why not; if the panel is not in view, a notification says
     /// where it is.
     void followStreamContent();
+
+    /// Plugins > tcpdump > Stream lines in Regex Lab: open the Regex Lab on
+    /// the lines of the selected line's stream (followSelectedStream()), or
+    /// notify the user why not, as the sidebar's button says in its tooltip
+    /// (PacketPanel::streamLinesProblem()): a line that only looks like a
+    /// packet line, in a tab that shows no capture, opens nothing.
+    void openStreamLines();
 
     /// Plugins > tcpdump > Export packets…: the packets of the lines selected
     /// in the tab in front, confirmed by the user, written to a new capture
@@ -323,6 +348,9 @@ public:
         return converting_;
     }
 
+protected:
+    void changeEvent( QEvent* event ) override;
+
 private:
     /// A capture converted while the plugin is loaded, as its summary shows it.
     struct ConvertedCapture {
@@ -377,6 +405,12 @@ private:
     void showLiveError( const LiveOutcome& outcome );
     /// Report the outcome of the export @p request asked for.
     void finishExport( const ExportRequest& request, ExportResult result );
+    /// The summary of the capture in the tab in front, in the palette's
+    /// colours, or that the tab holds no capture of this plugin.
+    QString frontSummaryHtml() const;
+    /// Enable Stream lines in Regex Lab when the Packet Panel can tell the
+    /// selected line's stream; its tooltip says why not.
+    void updateStreamLinesButton();
 
     QPushButton* openButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;
@@ -386,16 +420,19 @@ private:
     QPushButton* stopButton_ = nullptr;
     QPushButton* saveButton_ = nullptr;
     QLabel* liveLabel_ = nullptr;
-    QPushButton* startButton_ = nullptr;   ///< Start live capture…
-    QPlainTextEdit* liveStderr_ = nullptr; ///< The capture program's stderr lines.
-    QLabel* liveError_ = nullptr;          ///< Why the last live capture failed.
-    QString lastDir_;                      ///< Remembers the last browsed directory.
-    bool formatHintShown_ = false;         ///< The Log Format hint was shown once.
-    FileChooser chooseFile_;               ///< Shows the file dialog.
-    SaveChooser chooseSaveFile_;           ///< Shows the save dialog.
+    QPushButton* startButton_ = nullptr;       ///< Start live capture…
+    QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
+    QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
+    QLabel* liveError_ = nullptr;              ///< Why the last live capture failed.
+    QString lastDir_;                          ///< Remembers the last browsed directory.
+    bool formatHintShown_ = false;             ///< The Log Format hint was shown once.
+    FileChooser chooseFile_;                   ///< Shows the file dialog.
+    SaveChooser chooseSaveFile_;               ///< Shows the save dialog.
     /// The key in converted_ of the file in the tab in front, as fileKey()
     /// spells it, whether or not it holds a capture.
     QString frontKey_;
+    /// The summary frontSummaryHtml() made last, as the label showed it.
+    QString shownSummary_;
     /// The captures converted so far, by the text file written for each.
     std::map<QString, ConvertedCapture> converted_;
 

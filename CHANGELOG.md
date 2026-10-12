@@ -558,6 +558,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected and copied whole, and its URLs as links; the steps to turn on
   USB debugging are a numbered list. The sidebar's live capture error does
   the same. Notifications show the commands in backticks (#142).
+- **Stream lines in Regex Lab and Show stream content.** *Follow stream*
+  and *Follow stream content* said almost the same for two different
+  things: they are now **Stream lines in Regex Lab** (the sidebar button
+  and tcpdump menu entry that open the Regex Lab with the pattern of the
+  stream's lines) and **Show stream content** (the Packet panel's button
+  and menu entry that show the stream's payload), in the sidebar, the
+  menu, notifications and the README. Each button is enabled only when
+  it works, its tooltip saying why not: no capture in the tab in front, no
+  packet line selected, a packet of no stream, or, for the Regex Lab, a
+  stream past the numbered ones; Stream lines in Regex Lab was enabled
+  with no capture loaded. The menu entry refuses with the same reason,
+  where it opened the Regex Lab on a plain log's line that looked like a
+  packet line (#147).
+- **The sidebar's display filter says that it opens the Regex Lab.** The
+  field showed only a placeholder next to *Open in Regex Lab*; that the
+  filter does not filter the tab but opens the Regex Lab was said only in
+  the *Display filter…* dialog. The field is now labelled **Display filter
+  → Regex Lab**, and its tooltip says that it does not filter the tab and
+  lists the fields and operators, with the dialog's text. What is wrong
+  with a filter is shown below the field, as in the dialog (#143).
+- **Sidebar empty states, separator and stream header.** With nothing
+  loaded the sidebar said *No capture loaded.* and right under it *No
+  capture in this tab.*: the Packet section now leaves that to the summary.
+  With a capture but no packet selected, the Packet tab's layer tree and
+  hex dump say *Select a packet line to see its layers* and *… its
+  bytes* instead of being empty boxes, and the status line above them no
+  longer says it a third time. The line under the capture's name
+  in the summary was drawn in the text's colour, stark white in dark mode:
+  it is now a colour between the window's and the text's, also after a
+  switch between light and dark mode. The Stream tab's header shows each
+  direction on a line of its own, below *TCP stream 1*, instead of all on
+  one line (#146).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
@@ -575,6 +607,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The options dialog's notes are no longer cut off.** On a laptop's
   screen the dialog opened lower than it needs, and the last lines of the
   SOME/IP and Advanced notes were missing; it now opens at its full height.
+- **The sidebar's summary is no longer cut off.** In a sidebar not tall
+  enough for it, the summary was squeezed: its last lines were cut off,
+  overlapped the Packet heading and could not be reached. The summary now
+  scrolls; it takes the room it needs, up to 24 lines, and in a short
+  sidebar gives in down to three, while the Packet panel keeps room for
+  its tabs and the Conversations, which can no longer be dragged away. A
+  sidebar shorter than all that scrolls as a whole (#149).
 
 ## [0.3.0] — 2026-10-09
 

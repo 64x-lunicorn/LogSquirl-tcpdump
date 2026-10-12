@@ -882,6 +882,27 @@ SCENARIO( "The sidebar's display filter field opens its pattern in the Regex Lab
             REQUIRE( error->text().isEmpty() );
         }
 
+        THEN( "its label says that it opens the Regex Lab, and its tooltip what it knows, as "
+              "the dialog says it" )
+        {
+            auto* label = sidebar->findChild<QLabel*>( "displayFilterLabel" );
+            REQUIRE( label );
+            REQUIRE( label->text().contains( "Display filter" ) );
+            REQUIRE( label->text().contains( "Regex Lab" ) );
+            REQUIRE( label->buddy() == edit );
+            REQUIRE( edit->toolTip().contains( "does not filter" ) );
+            REQUIRE( edit->toolTip().contains( displayFilterHelp() ) );
+            REQUIRE( label->toolTip() == edit->toolTip() );
+            DisplayFilterDialog dialog;
+            const auto labels = dialog.findChildren<QLabel*>();
+            REQUIRE( std::any_of( labels.begin(), labels.end(), []( const QLabel* intro ) {
+                return intro->text() == displayFilterHelp();
+            } ) );
+            for ( const auto* field : { "tcp.stream", "frame.len", "ipv6.addr", "<=", "||" } ) {
+                REQUIRE( displayFilterHelp().contains( QString::fromLatin1( field ) ) );
+            }
+        }
+
         WHEN( "a filter outside the subset is typed" )
         {
             edit->setText( "tcp.port == 80 && http.host" );

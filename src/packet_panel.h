@@ -36,8 +36,11 @@
  * moved on from is dropped, not started if it has not begun.
  *
  * Its Stream tab shows the content of the shown packet's conversation
- * (Follow stream content, StreamContentView) once the user asks for it: by
- * the panel's button or Plugins > tcpdump > Follow stream content.
+ * (Show stream content, StreamContentView) once the user asks for it: by
+ * the panel's button or Plugins > tcpdump > Show stream content.  The
+ * button is enabled only when the selected line's stream can be shown, its
+ * tooltip says why not; streamActionsChanged() tells the sidebar, whose
+ * Stream lines in Regex Lab button follows the selection too.
  *
  * Below the tabs, the Conversations table (conversation_table.h) lists the
  * streams of the capture in front, from its Capture Summary.
@@ -52,6 +55,7 @@
 #include <QString>
 #include <QThreadPool>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QWidget>
 
 #include <atomic>
@@ -67,7 +71,6 @@ class QLabel;
 class QPlainTextEdit;
 class QPushButton;
 class QTabWidget;
-class QTreeWidget;
 class QTreeWidgetItem;
 
 namespace tcpdump {
@@ -84,6 +87,32 @@ QString hexDump( const std::vector<uint8_t>& bytes );
 /// their ASCII on each line they are on.
 std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length );
 
+/// Enable @p button, its tooltip @p whatItDoes, when @p problem is empty;
+/// otherwise disable it, its tooltip @p problem: why it would not work.
+void enableUnlessProblem( QPushButton* button, const QString& problem, const QString& whatItDoes );
+
+/// The tree of a packet's layers, which says what it will show while it
+/// holds none.
+class LayerTree : public QTreeWidget {
+    Q_OBJECT
+
+public:
+    using QTreeWidget::QTreeWidget;
+
+    /// The text shown while the tree is empty; none if empty.
+    QString placeholderText() const
+    {
+        return placeholderText_;
+    }
+    void setPlaceholderText( const QString& text );
+
+protected:
+    void paintEvent( QPaintEvent* event ) override;
+
+private:
+    QString placeholderText_;
+};
+
 /**
  * The Packet Panel.  Shows the reason when there is no packet to show: a tab
  * that holds no capture of the plugin, no selection, a line that is not a
@@ -95,6 +124,8 @@ class PacketPanel : public QWidget {
 public:
     /// How often the selection is asked for while the panel is visible.
     static constexpr int kPollIntervalMs = 250;
+    /// The rows the Conversations keep below the tabs, in lines of text.
+    static constexpr int kConversationsMinLines = 5;
 
     explicit PacketPanel( QWidget* parent = nullptr );
     ~PacketPanel() override;
@@ -133,13 +164,27 @@ public:
     }
 
     /// The panel's status line: the packet shown, or why there is none.
+    /// It is hidden while it would say what the summary or the empty layer
+    /// tree and hex dump say (no capture, no line selected), and tells it
+    /// all the same.
     QString statusText() const;
 
-    /// Follow stream content: show the content of the selected packet's
+    /// Show stream content: show the content of the selected packet's
     /// stream in the Stream tab, also while the packet is being read.
     /// False, and the reason in @p why, when no packet line of a TCP or
     /// UDP stream is selected.
     bool followStreamContent( QString* why = nullptr );
+
+    /// Why Show stream content cannot show a stream now, for the user: no
+    /// capture in the tab in front, no packet line selected, a packet of no
+    /// stream; empty when it can.
+    QString streamContentProblem() const;
+
+    /// Why Stream lines in Regex Lab cannot filter a stream's lines now, as
+    /// streamContentProblem(), or because the stream has no number (the
+    /// capture has more conversations than the plugin numbers); empty when
+    /// it can.
+    QString streamLinesProblem() const;
 
     /// The Stream tab.
     StreamContentView* streamView() const
@@ -152,6 +197,11 @@ public:
     {
         return conversations_;
     }
+
+signals:
+    /// The selected line changed what streamContentProblem() and
+    /// streamLinesProblem() say (or may have).
+    void streamActionsChanged();
 
 protected:
     void showEvent( QShowEvent* event ) override;
@@ -173,12 +223,15 @@ private:
     void showReason( const QString& reason );
     /// Highlight the bytes of @p item in the dump.
     void highlight( QTreeWidgetItem* item );
+    /// Enable the Show stream content button, or say why not in its
+    /// tooltip, and tell streamActionsChanged().
+    void updateStreamActions();
 
     QLabel* status_ = nullptr;
     QPushButton* followButton_ = nullptr;
     QTabWidget* tabs_ = nullptr;
     StreamContentView* streamView_ = nullptr;
-    QTreeWidget* tree_ = nullptr;
+    LayerTree* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
     ConversationTable* conversations_ = nullptr;
     QTimer timer_;

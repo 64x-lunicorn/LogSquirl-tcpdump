@@ -25,24 +25,33 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "packet_panel.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "regex_lab.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QLabel>
 #include <QLocale>
+#include <QPalette>
+#include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <cmath>
 #include <memory>
 #include <set>
 
@@ -124,6 +133,28 @@ T* child( const SidebarWidget& widget, const char* name )
     auto* found = widget.findChild<T*>( name );
     REQUIRE( found );
     return found;
+}
+
+/// Scroll each scroll area @p widget is in so that @p rect of it is in view,
+/// innermost first, as a user would; true if then the widgets it is in clip
+/// none of it.
+bool scrollIntoView( QWidget* widget, const QRect& rect )
+{
+    for ( auto* parent = widget->parentWidget(); parent; parent = parent->parentWidget() ) {
+        if ( auto* area = qobject_cast<QScrollArea*>( parent ) ) {
+            const auto top = widget->mapTo( area->widget(), rect.topLeft() );
+            // ensureVisible() takes a point and margins around it.
+            const auto half = rect.height() / 2;
+            area->ensureVisible( top.x() + rect.width() / 2, top.y() + half, rect.width() / 2,
+                                 rect.height() - half );
+            QCoreApplication::processEvents();
+        }
+    }
+    auto shown = rect;
+    for ( auto* parent = widget->parentWidget(); parent; parent = parent->parentWidget() ) {
+        shown &= QRect( widget->mapFrom( parent, QPoint( 0, 0 ) ), parent->size() );
+    }
+    return shown == rect;
 }
 
 } // namespace
@@ -630,6 +661,178 @@ SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
         }
 
         logsquirl_plugin_shutdown();
+    }
+}
+
+SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
+{
+    GIVEN( "a sidebar, as created when the plugin is loaded" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+
+        THEN( "the summary says no capture is loaded, and the Packet section not again" )
+        {
+            REQUIRE( child<QLabel>( widget, "summary" )->text() == "No capture loaded." );
+            REQUIRE( child<QLabel>( widget, "packetStatus" )->isHidden() );
+        }
+    }
+}
+
+SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[sidebar]" )
+{
+    GIVEN( "a sidebar in a host's sidebar tabs of a given height, showing a long summary" )
+    {
+        FakeHost host;
+        // As the host's sidebar holds it: a page of a QTabWidget, which a
+        // splitter may make shorter than the sidebar's minimum.
+        QTabWidget tabs;
+        auto* widget = new SidebarWidget;
+        tabs.addTab( widget, "tcpdump" );
+        const auto height = GENERATE( 250, 400, 600, 900 );
+        tabs.setFixedSize( 380, height );
+        tabs.show();
+        QCoreApplication::processEvents();
+        auto* summary = child<QLabel>( *widget, "summary" );
+        auto* area = child<QScrollArea>( *widget, "summaryArea" );
+        auto* panel = child<QWidget>( *widget, "packetPanel" );
+        auto* conversations = child<QWidget>( *widget, "conversationTable" );
+        const auto line = widget->fontMetrics().lineSpacing();
+
+        // The summary comes after the sidebar is shown, as a capture's does,
+        // and takes the room the Packet panel leaves, up to 24 lines.
+        QStringList lines;
+        for ( int i = 1; i < 80; ++i ) {
+            lines << QString( "Endpoint line %1" ).arg( i );
+        }
+        lines << "The last line";
+        summary->setText( lines.join( "<br>" ) );
+        REQUIRE( waitFor( [ & ] {
+            const auto fitted = area->height() == SidebarWidget::kSummaryMaxLines * line
+                                || panel->height() == panel->minimumHeight();
+            return area->verticalScrollBar()->maximum() > 0 && fitted;
+        } ) );
+
+        THEN( "the summary ends above the Packet panel, and both keep a usable height" )
+        {
+            const auto areaBottom = area->mapTo( widget, QPoint( 0, area->height() ) ).y();
+            const auto panelTop = panel->mapTo( widget, QPoint( 0, 0 ) ).y();
+            REQUIRE( areaBottom <= panelTop );
+            REQUIRE( area->height() >= SidebarWidget::kSummaryMinLines * line );
+            REQUIRE( panel->height() >= SidebarWidget::kPacketPanelMinLines * line );
+            REQUIRE( conversations->height()
+                     >= tcpdump::PacketPanel::kConversationsMinLines * line );
+        }
+
+        THEN( "the summary's last line can be scrolled into view, whole" )
+        {
+            // The label is as tall as its text: none of it is cut off.
+            REQUIRE( summary->height() >= summary->heightForWidth( summary->width() ) );
+            REQUIRE( scrollIntoView(
+                summary, QRect( 0, summary->height() - line, summary->width(), line ) ) );
+        }
+
+        THEN( "the bottom of the Conversations can be scrolled into view" )
+        {
+            REQUIRE( scrollIntoView( conversations, QRect( 0, conversations->height() - line,
+                                                           conversations->width(), line ) ) );
+        }
+
+        if ( height >= 900 ) {
+            THEN( "a sidebar taller than its minimum does not scroll as a whole" )
+            {
+                REQUIRE(
+                    child<QScrollArea>( *widget, "sidebarScroll" )->verticalScrollBar()->maximum()
+                    == 0 );
+            }
+        }
+    }
+}
+
+SCENARIO( "the line under the capture's name takes the palette's colours", "[sidebar]" )
+{
+    GIVEN( "a light and a dark palette" )
+    {
+        QPalette light;
+        light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
+        light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
+        QPalette dark;
+        dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
+        dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
+        const auto palette = GENERATE_COPY( light, dark );
+
+        WHEN( "a summary is shown in a label of that palette" )
+        {
+            QLabel label;
+            label.setPalette( palette );
+            label.setAutoFillBackground( true );
+            label.setTextFormat( Qt::RichText );
+            label.setText(
+                tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary(), false, palette ) );
+            label.resize( 300, label.sizeHint().height() );
+            const auto image = label.grab().toImage();
+
+            THEN( "the line is drawn between the window's and the text's colour" )
+            {
+                // The line is the one row mostly of one colour other than
+                // the window's.
+                const auto window = palette.color( QPalette::Window ).rgb();
+                const auto text = palette.color( QPalette::WindowText );
+                bool found = false;
+                for ( int y = 0; y < image.height() && !found; ++y ) {
+                    const QColor middle = image.pixelColor( image.width() / 2, y );
+                    if ( middle.rgb() == window ) {
+                        continue;
+                    }
+                    int same = 0;
+                    for ( int x = 0; x < image.width(); ++x ) {
+                        same += image.pixelColor( x, y ) == middle;
+                    }
+                    if ( same > image.width() / 2 ) {
+                        found = true;
+                        REQUIRE( std::abs( middle.lightness() - text.lightness() ) > 60 );
+                    }
+                }
+                REQUIRE( found );
+            }
+        }
+    }
+}
+
+SCENARIO( "the summary's line follows a switch of the colour scheme", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar showing a capture's summary in a light palette" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        QPalette light;
+        light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
+        light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
+        widget.setPalette( light );
+        auto* summary = child<QLabel>( widget, "summary" );
+        widget.openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+        const auto before = summary->text();
+        REQUIRE( before.contains( "<hr style=\"background-color:#a6a6a6\">" ) );
+
+        WHEN( "the palette turns dark" )
+        {
+            QPalette dark;
+            dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
+            dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
+            widget.setPalette( dark );
+
+            THEN( "the line takes the dark palette's colours, the rest as it was" )
+            {
+                auto expected = before;
+                expected.replace( "#a6a6a6", "#656565" );
+                REQUIRE( summary->text() == expected );
+            }
+        }
     }
 }
 
