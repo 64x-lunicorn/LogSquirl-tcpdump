@@ -233,7 +233,7 @@ PacketPanel::PacketPanel( QWidget* parent )
     outer->addWidget( tabs_ );
     conversations_ = new ConversationTable;
     conversations_->setObjectName( "conversationTable" );
-    conversations_->setMinimumHeight( 5 * fontMetrics().lineSpacing() );
+    conversations_->setMinimumHeight( kConversationsMinLines * fontMetrics().lineSpacing() );
     outer->addWidget( conversations_ );
     layout->addWidget( outer, 1 );
 

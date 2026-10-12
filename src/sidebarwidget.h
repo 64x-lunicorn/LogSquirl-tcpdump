@@ -135,6 +135,15 @@ class SidebarWidget : public QWidget, private LiveCaptureHost, private LiveCaptu
     Q_OBJECT
 
 public:
+    /// The height the summary asks for at most, in lines of text: a longer
+    /// one scrolls and leaves the Packet panel room in a tall sidebar.
+    static constexpr int kSummaryMaxLines = 24;
+    /// The height the summary gives in to in a short sidebar, in lines.
+    static constexpr int kSummaryMinLines = 3;
+    /// The height the Packet panel keeps for its tabs and the
+    /// Conversations, however long the summary, in lines.
+    static constexpr int kPacketPanelMinLines = 16;
+
     /// Construct with an optional parent.
     explicit SidebarWidget( QWidget* parent = nullptr );
     ~SidebarWidget() override;

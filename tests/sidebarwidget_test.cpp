@@ -25,6 +25,7 @@
 #include <catch2/catch.hpp>
 
 #include "fakehost.h"
+#include "packet_panel.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "regex_lab.h"
@@ -680,8 +681,8 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
         lines << "The last line";
         summary->setText( lines.join( "<br>" ) );
         REQUIRE( waitFor( [ & ] {
-            const auto fitted
-                = area->height() == 24 * line || panel->height() == panel->minimumHeight();
+            const auto fitted = area->height() == SidebarWidget::kSummaryMaxLines * line
+                                || panel->height() == panel->minimumHeight();
             return area->verticalScrollBar()->maximum() > 0 && fitted;
         } ) );
 
@@ -690,9 +691,10 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
             const auto areaBottom = area->mapTo( &widget, QPoint( 0, area->height() ) ).y();
             const auto panelTop = panel->mapTo( &widget, QPoint( 0, 0 ) ).y();
             REQUIRE( areaBottom <= panelTop );
-            REQUIRE( area->height() >= 3 * line );
-            REQUIRE( panel->height() >= 16 * line );
-            REQUIRE( conversations->height() >= 5 * line );
+            REQUIRE( area->height() >= SidebarWidget::kSummaryMinLines * line );
+            REQUIRE( panel->height() >= SidebarWidget::kPacketPanelMinLines * line );
+            REQUIRE( conversations->height()
+                     >= tcpdump::PacketPanel::kConversationsMinLines * line );
         }
 
         WHEN( "the summary is scrolled to its end" )

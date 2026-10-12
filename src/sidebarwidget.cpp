@@ -154,6 +154,10 @@ std::shared_ptr<const LiveSourceRegistry>& defaultLiveSources()
     return sources;
 }
 
+/// How far the line under the capture's name is from the window's colour
+/// to the text's: one part in this many.
+constexpr int kSeparatorShare = 3;
+
 /// The line under the capture's name.  A rule is drawn in the text's
 /// colour, stark on a dark window: this one a third of the way from the
 /// window's colour to the text's.
@@ -161,16 +165,17 @@ QString separatorHtml( const QPalette& palette )
 {
     const auto window = palette.color( QPalette::Window );
     const auto text = palette.color( QPalette::WindowText );
-    const auto mix = []( int from, int to ) { return from + ( to - from ) / 3; };
+    const auto mix = []( int from, int to ) { return from + ( to - from ) / kSeparatorShare; };
     const QColor line( mix( window.red(), text.red() ), mix( window.green(), text.green() ),
                        mix( window.blue(), text.blue() ) );
     return QString( "<hr style=\"background-color:%1\">" ).arg( line.name() );
 }
 
 /// The summary, scrolled when the sidebar is too short for all of it.  It
-/// asks for the height of its text at its width, up to 24 lines (as a
-/// QScrollArea does), so that a long summary leaves the Packet panel room
-/// in a tall sidebar; in a short one it gives in down to three lines.
+/// asks for the height of its text at its width, up to
+/// SidebarWidget::kSummaryMaxLines (as a QScrollArea does), so that a long
+/// summary leaves the Packet panel room in a tall sidebar; in a short one it
+/// gives in down to SidebarWidget::kSummaryMinLines.
 class SummaryArea : public QScrollArea {
 public:
     explicit SummaryArea( QLabel* summary )
@@ -187,12 +192,13 @@ public:
         const auto text
             = widget()->heightForWidth( width > 0 ? width : widget()->sizeHint().width() );
         return { QScrollArea::sizeHint().width(),
-                 std::min( text, 24 * fontMetrics().lineSpacing() ) };
+                 std::min( text, SidebarWidget::kSummaryMaxLines * fontMetrics().lineSpacing() ) };
     }
 
     QSize minimumSizeHint() const override
     {
-        return { QScrollArea::minimumSizeHint().width(), 3 * fontMetrics().lineSpacing() };
+        return { QScrollArea::minimumSizeHint().width(),
+                 SidebarWidget::kSummaryMinLines * fontMetrics().lineSpacing() };
     }
 
 protected:
@@ -398,7 +404,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     // keeps room for its tabs and the Conversations however long the summary.
     packetPanel_ = new PacketPanel;
     packetPanel_->setObjectName( "packetPanel" );
-    packetPanel_->setMinimumHeight( 16 * fontMetrics().lineSpacing() );
+    packetPanel_->setMinimumHeight( kPacketPanelMinLines * fontMetrics().lineSpacing() );
     layout->addWidget( packetPanel_, 1 );
     if ( streamLinesButton_ ) {
         connect( packetPanel_, &PacketPanel::streamActionsChanged, this,

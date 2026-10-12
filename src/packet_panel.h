@@ -120,6 +120,8 @@ class PacketPanel : public QWidget {
 public:
     /// How often the selection is asked for while the panel is visible.
     static constexpr int kPollIntervalMs = 250;
+    /// The rows the Conversations keep below the tabs, in lines of text.
+    static constexpr int kConversationsMinLines = 5;
 
     explicit PacketPanel( QWidget* parent = nullptr );
     ~PacketPanel() override;
