@@ -174,7 +174,7 @@ public:
             listing.error = output.error;
             return listing;
         }
-        listing.targets = { { "fake0", "Fake Ethernet", {} }, { "fake1", "Fake Wi-Fi", {} } };
+        listing.targets = { { "fake0", firstDescription, {} }, { "fake1", "Fake Wi-Fi", {} } };
         return listing;
     }
     tcpdump::ProcessCommand command( const tcpdump::LiveChoice& choice ) const override
@@ -238,13 +238,14 @@ public:
 
     /// Whether it has devices: then phoneA, and phoneB, which is unauthorized.
     Devices deviceMode = Devices::None;
-    QString unavailableReason; ///< Set: the kind is unavailable, for this reason.
-    Bytes capture;             ///< What a capture hands out.
-    std::string failure;       ///< Set: a capture breaks off with it afterwards.
-    QString hint;              ///< What explainFailure() says to a permission error.
-    QString program;           ///< Set: a capture runs this program.
-    QString listingProgram;    ///< Set: listing the interfaces runs this program.
-    bool withOptions = false;  ///< Whether it has an options widget.
+    QString firstDescription = "Fake Ethernet"; ///< fake0's description.
+    QString unavailableReason;                  ///< Set: the kind is unavailable, for this reason.
+    Bytes capture;                              ///< What a capture hands out.
+    std::string failure;                        ///< Set: a capture breaks off with it afterwards.
+    QString hint;             ///< What explainFailure() says to a permission error.
+    QString program;          ///< Set: a capture runs this program.
+    QString listingProgram;   ///< Set: listing the interfaces runs this program.
+    bool withOptions = false; ///< Whether it has an options widget.
     mutable std::atomic<int> interfaceListings{ 0 };
 
 private:

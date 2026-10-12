@@ -69,10 +69,19 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     auto* layout = new QFormLayout( this );
     layout->setContentsMargins( 0, 0, 0, 0 );
     layout->setFieldGrowthPolicy( QFormLayout::AllNonFixedFieldsGrow );
+    // A list as wide as the room it gets, its longest entry cut off rather
+    // than widening the dialog (an interface's flags, a long host name);
+    // the popup shows each entry whole.  An entry chosen shows its start.
+    const auto narrow = [ this ]( QComboBox* box ) {
+        box->setSizeAdjustPolicy( QComboBox::AdjustToMinimumContentsLengthWithIcon );
+        box->setMinimumContentsLength( 16 );
+        connect( box, &QComboBox::activated, this, [ box ] { showStart( box ); } );
+    };
 
     source_ = new QComboBox;
     source_->setObjectName( "liveSource" );
     source_->setToolTip( "Where to capture" );
+    narrow( source_ );
     layout->addRow( "Source:", source_ );
 
     status_ = new QLabel;
@@ -85,12 +94,14 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     deviceLabel_ = new QLabel( "Device:" );
     device_ = new QComboBox;
     device_->setObjectName( "liveDevice" );
+    narrow( device_ );
     layout->addRow( deviceLabel_, device_ );
 
     interface_ = new QComboBox;
     interface_->setObjectName( "liveInterface" );
     interface_->setEditable( true );
     interface_->setInsertPolicy( QComboBox::NoInsert );
+    narrow( interface_ );
     interface_->setToolTip( "The interface to capture on; one the source does not list can be "
                             "typed" );
     refresh_ = new QPushButton( "Refresh" );
@@ -501,6 +512,16 @@ void LiveCaptureForm::fill( QComboBox* box, const LiveListing& listing, const QS
     box->setCurrentIndex( index );
     if ( index < 0 && box->isEditable() ) {
         box->setEditText( QString() );
+    }
+    showStart( box );
+}
+
+void LiveCaptureForm::showStart( QComboBox* box )
+{
+    // An editable list puts its cursor after the entry, and so shows its
+    // end where it is cut off: the interface's flags, not its name.
+    if ( auto* edit = box->lineEdit() ) {
+        edit->setCursorPosition( 0 );
     }
 }
 

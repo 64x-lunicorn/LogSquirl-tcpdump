@@ -511,6 +511,26 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     }
 }
 
+SCENARIO( "A long interface name does not widen the Start live capture dialog", "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->firstDescription = QString( 200, 'w' );
+    LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    REQUIRE( listed( dialog.form(), fields ) );
+
+    THEN( "the dialog stays narrow, the field shows the start of the entry, the list it whole" )
+    {
+        const int longest = dialog.fontMetrics().horizontalAdvance( fake->firstDescription );
+        REQUIRE( dialog.minimumSizeHint().width() < longest / 2 );
+        REQUIRE( dialog.sizeHint().width() < longest / 2 );
+        REQUIRE( fields.networkInterface->currentIndex() == 0 );
+        REQUIRE( fields.networkInterface->itemText( 0 ).contains( fake->firstDescription ) );
+        REQUIRE( fields.networkInterface->lineEdit()->cursorPosition() == 0 );
+    }
+}
+
 SCENARIO( "A source's own options show in the form, are part of the choice, and are kept",
           "[live_ui]" )
 {

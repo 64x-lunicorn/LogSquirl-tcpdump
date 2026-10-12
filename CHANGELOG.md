@@ -530,6 +530,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first says `[TCP segment of a reassembled PDU]`, the last describes
   the whole message (see *TCP reassembly*). A message the capture never
   completes is described by none of its segments.
+- **Long interface names no longer widen the live capture form.** The
+  Source, Device and Interface lists were as wide as their longest entry
+  (`ap1 — Up, Running, Wireless, Not associated`), and the sidebar and the
+  Start live capture dialog with them; they now take the room they get and
+  cut the entry off, showing its start, the interface's name; the list
+  shows every entry whole (#141).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
