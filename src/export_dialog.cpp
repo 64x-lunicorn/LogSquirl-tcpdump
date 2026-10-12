@@ -73,8 +73,8 @@ ExportDialog::ExportDialog( const ExportRequest& request, QWidget* parent )
     layout->addWidget( count_ );
 
     auto* buttons = new QDialogButtonBox( QDialogButtonBox::Cancel );
-    exportButton_ = buttons->addButton( QStringLiteral( "Export\xe2\x80\xa6" ),
-                                        QDialogButtonBox::AcceptRole );
+    exportButton_
+        = buttons->addButton( QStringLiteral( "Export\u2026" ), QDialogButtonBox::AcceptRole );
     exportButton_->setObjectName( "exportButton" );
     layout->addWidget( buttons );
     connect( buttons, &QDialogButtonBox::accepted, this, &QDialog::accept );

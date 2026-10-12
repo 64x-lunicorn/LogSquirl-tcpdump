@@ -162,8 +162,8 @@ void ExtcapOptionsWidget::list()
     const auto generation = generation_;
     cancel_ = std::make_shared<std::atomic_bool>( false );
     listing_ = true;
-    showStatus( QStringLiteral( "Asking %1 for the arguments of %2\xe2\x80\xa6" )
-                    .arg( device_, interface_ ) );
+    showStatus(
+        QStringLiteral( "Asking %1 for the arguments of %2\u2026" ).arg( device_, interface_ ) );
     auto* watcher = new QFutureWatcher<ExtcapConfig>( this );
     connect( watcher, &QFutureWatcher<ExtcapConfig>::finished, this,
              [ this, watcher, generation, device = device_, networkInterface = interface_ ] {
@@ -394,7 +394,7 @@ QWidget* ExtcapOptionsWidget::makeField( const ExtcapArg& arg, const QString& va
         auto* path = new QLineEdit( value );
         path->setObjectName( fieldName( arg ) + QStringLiteral( "Path" ) );
         path->setPlaceholderText( arg.placeholder );
-        auto* browse = new QPushButton( QStringLiteral( "Browse\xe2\x80\xa6" ) );
+        auto* browse = new QPushButton( QStringLiteral( "Browse\u2026" ) );
         line->addWidget( path, 1 );
         line->addWidget( browse );
         connect( path, &QLineEdit::textChanged, this,
@@ -445,7 +445,7 @@ QString ExtcapOptionsWidget::problem() const
     // The arguments' rules are the kind's validate(): what is left is
     // whether this widget knows them yet.
     if ( isListing() && !device_.isEmpty() && !interface_.isEmpty() ) {
-        return QStringLiteral( "Asking %1 for the arguments of %2\xe2\x80\xa6" )
+        return QStringLiteral( "Asking %1 for the arguments of %2\u2026" )
             .arg( device_, interface_ );
     }
     return {};

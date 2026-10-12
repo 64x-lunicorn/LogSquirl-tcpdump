@@ -26,6 +26,7 @@
 
 #include "logsquirl_plugin_api.h"
 
+#include <QDir>
 #include <QFile>
 #include <QRegularExpression>
 
@@ -119,6 +120,36 @@ SCENARIO( "NOTICE names the exact source archives the build links in", "[plugini
                 INFO( each.toStdString() );
                 REQUIRE( notice.contains( each ) );
             }
+        }
+    }
+}
+
+SCENARIO( "No QStringLiteral spells a character by its UTF-8 bytes", "[plugininfo]" )
+{
+    GIVEN( "the plugin's sources" )
+    {
+        // QStringLiteral is a UTF-16 literal: "\xe2\x80\xa6" in it is three
+        // characters, shown as "â€¦", not the "…" it is in a UTF-8 string.
+        const QRegularExpression literal(
+            QStringLiteral( R"(QStringLiteral\(\s*((?:"(?:[^"\\]|\\.)*"\s*)+)\))" ) );
+        const QRegularExpression byteEscape( QStringLiteral( R"(\\x[89a-fA-F][0-9a-fA-F])" ) );
+        const QDir src( QStringLiteral( TCPDUMP_SOURCE_DIR "/src" ) );
+        QStringList found;
+        for ( const auto& name : src.entryList( { "*.cpp", "*.h" }, QDir::Files ) ) {
+            const auto text = sourceFile( qPrintable( "src/" + name ) );
+            for ( auto it = literal.globalMatch( text ); it.hasNext(); ) {
+                const auto match = it.next();
+                if ( byteEscape.match( match.captured( 1 ) ).hasMatch() ) {
+                    found << QString( "%1:%2" ).arg( name ).arg(
+                        text.left( match.capturedStart() ).count( '\n' ) + 1 );
+                }
+            }
+        }
+
+        THEN( "a character beyond ASCII is written as \\u, which a UTF-16 literal keeps whole" )
+        {
+            INFO( found.join( ", " ).toStdString() );
+            REQUIRE( found.isEmpty() );
         }
     }
 }

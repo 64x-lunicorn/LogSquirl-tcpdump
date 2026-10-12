@@ -35,6 +35,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScreen>
 #include <QSpinBox>
 #include <QTimer>
 
@@ -197,6 +198,32 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                      == static_cast<int>( kMaxEndpointCap ) );
             REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->maximum()
                      == static_cast<int>( kMaxReassemblyMegabytes ) );
+        }
+    }
+}
+
+SCENARIO( "The configuration dialog opens tall enough for its notes", "[configdialog]" )
+{
+    GIVEN( "the dialog, taller than 2/3 of the screen, at which Qt stops a window's height" )
+    {
+        ConfigDialog dialog( ConversionOptions{} );
+        REQUIRE( dialog.sizeHint().height()
+                 > dialog.screen()->availableGeometry().height() * 2 / 3 );
+
+        WHEN( "it is shown" )
+        {
+            dialog.show();
+            QApplication::processEvents();
+
+            THEN( "every note is as high as its wrapped lines, none cut off" )
+            {
+                for ( const auto* label : dialog.findChildren<QLabel*>() ) {
+                    if ( label->wordWrap() ) {
+                        INFO( label->text().toStdString() );
+                        REQUIRE( label->height() >= label->heightForWidth( label->width() ) );
+                    }
+                }
+            }
         }
     }
 }

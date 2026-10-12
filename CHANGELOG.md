@@ -540,6 +540,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Licence files in the release packages.** The packages now carry
   LICENSE and NOTICE; NOTICE names the corresponding source of the
   plugin, zlib and Mbed TLS (each archive by URL and SHA-256).
+- **"…" instead of "â€¦".** Export packets' *Export…* button, *Saved
+  commands and examples…*, *Listing interfaces…* and the Wireshark extcap
+  options' *Browse…* and *Asking … for the arguments* showed the ellipsis
+  as three wrong characters.
+- **The options dialog's notes are no longer cut off.** On a laptop's
+  screen the dialog opened lower than it needs, and the last lines of the
+  SOME/IP and Advanced notes were missing; it now opens at its full height.
 
 ## [0.3.0] — 2026-10-09
 
