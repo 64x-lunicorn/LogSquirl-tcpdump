@@ -1773,7 +1773,7 @@ capture).
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the
 reader writes every byte read, unchanged, to the raw capture next to the
-text (`<name>.pcap`, or `<name>.pcapng` when the reader is a
+text, both the Live Output's files (below) (`<name>.pcap`, or `<name>.pcapng` when the reader is a
 `PcapngReader`; `ConversionResult::rawPath`); the bytes read before the
 output directory exists, the header the format is told by, are kept until
 it does. Before every read that would wait (`ByteSource::ready()` is
@@ -1801,16 +1801,20 @@ message *and* `outputPath`, `rawPath` and the summary of what was captured;
 before a packet, it leaves nothing behind, as before.
 
 #### The Live Output (`live_output.h/cpp`)
-When a live capture flushes, opens a text, sends a snapshot and stops is
-decided in one place, a `LiveOutput` (pure C++), on one clock: the
-`LiveClock` measures the limits' durations and the flush and snapshot
-cadence alike. The Converter makes one per live conversion, from the
-`LiveLimits`, the clock and `ConversionOptions::lastPacketNumber`, and a
-file conversion none, so a file's loop does none of this work. It asks it
-`packet( packets, bytesRead )` after each packet line is written,
-`beforeWait()` before each read that would wait and `textStarted()` when a
-ring buffer starts its next text; each hands back a `LiveStep`, which the
-Converter does in its order and which counts as done once handed out:
+When a live capture flushes, opens a text, sends a snapshot, starts a ring
+buffer's next file and stops is decided in one place, a `LiveOutput`, on
+one clock: the `LiveClock` measures the limits' durations, the ring
+buffer's file durations and the flush and snapshot cadence alike. The
+Converter makes one per live conversion, from the `LiveLimits`, the clock
+and `ConversionOptions::lastPacketNumber`, and a file conversion none, so a
+file's loop does none of this work. Once the capture's format is known it
+hands it the capture's files and the reader (`open( files, reader )`):
+the Live Output owns the files from then on (`LiveFiles`, below). It asks
+it `beforePacket()` when a packet was read, before its line is written,
+`packet( packets, bytesRead )` after the line is written and
+`beforeWait()` before each read that would wait; each hands back a
+`LiveStep`, which the Converter does in its order and which counts as done
+once handed out:
 
 1. `flush`: the text and the raw file are made readable up to here;
 2. `firstOfText`: this line is the first of its text, which
@@ -1829,12 +1833,38 @@ The stop conditions are checked in this order, so the first reached wins
 and a packet that reaches several stops by the first of them:
 `LiveLimits::packets`, `bytes`, `duration`, then the last packet number
 (`StopCondition::PacketNumbers`); `durationOver()` ends a wait for the
-stream at the deadline. `now()` is the clock the ring buffer's file
-durations are measured with too. Tests go in
-`tests/live_output_test.cpp`: a fake clock and packet counts and sizes, no
-thread, sleep or file, for each stop condition, the order they win in, and
-the cadence; `tests/live_limits_test.cpp` and
-`tests/live_conversion_test.cpp` check the same end to end.
+stream at the deadline.
+
+The ring buffer's rotation (see *Stop conditions and the ring buffer*
+below) is the Live Output's too: `packet()` notes whether the packet
+filled its raw file (`LiveFiles::rawFileSize()` against
+`LiveLimits::fileBytes`) and, from the reader, where its record ends, the
+packets so far and the headers a file after it needs; `beforePacket()`
+then starts the next raw file and its text (`LiveFiles::startNext()`) if
+the file is full or its `fileDuration` is over, and hands back a step with
+a snapshot, after which the next packet opens the new text. A file
+without a packet is never left behind, and a file's duration counts from
+when it started. `beforePacket()` hands back nothing if the next file
+cannot be started; `LiveFiles::error()` says why, and the Converter fails
+with it.
+
+`LiveFiles` is the seam for the files: the text the Converter appends the
+lines to (`text()`, a `QIODevice`), the raw file `LiveInput` writes every
+byte read to (`writeRaw()`), `flush()`, `startNext()`, `close()`, the
+`parts()` and `fileNumber()` a snapshot carries, the paths
+`LiveObserver::firstPacket` hands out and an `error()` worded for the user
+(*Cannot write the output file: …*, *Cannot write the raw capture: …*).
+`DiskLiveFiles` is the one on disk: a `RawCapture` and a text per raw
+file, named after it, each starting with the column header, created
+`NewOnly` and owner-only. The Converter keeps the output directory alive
+longer than the Live Output, so that no file is open in it as it is
+removed. Tests go in `tests/live_output_test.cpp`: a fake clock, packet
+counts and sizes, a capture read from memory and fake `LiveFiles` that
+note each file started, no thread, sleep or file, for each stop
+condition, the order they win in, the cadence, and when a ring buffer's
+next file starts, by size or by duration; `tests/live_limits_test.cpp`,
+`tests/live_conversion_test.cpp` and `tests/live_capture_test.cpp` check
+the files on disk and the tabs end to end.
 
 #### Stop conditions and the ring buffer (`LiveLimits`, `raw_capture.h/cpp`)
 `convertStream()` takes `LiveLimits` (dumpcap's `-a` and `-b`; 0 is "none"
@@ -1859,7 +1889,8 @@ With a ring buffer (`LiveLimits::ringBuffer()`: files kept, and a file size
 or duration) the raw capture is a `RawCapture` of numbered files,
 `<name>_00001_<yyyyMMddHHmmss>.pcap` and on. A file that a packet filled
 (by size, the copied headers included), or whose duration is over, ends
-when the next packet comes, after the record of the last one before it:
+when the next packet comes, after the record of the last one before it, as
+the Live Output decides (above):
 `RawCapture::rotate( cut, packetsBefore, headers )` moves what was written
 past the cut into the new file, behind a copy of the headers the reader
 held after that packet (`CaptureReader::headers()`: a pcap's global
@@ -1871,19 +1902,20 @@ a file covers, not the most. Each file is a `CapturePart`
 start in the stream, the header bytes ahead of them, and where each copied
 header record lay in the stream. Each raw file has a text of its own,
 named after it (`<name>_00001_<time>.log`; without a ring buffer
-`<name>.log`): at a rotation the Converter closes the text, starts the
-next with the header, and calls `LiveObserver::firstPacket` again once its
-first packet line is flushed, so the sidebar opens it in a new followed
-tab (on the UI thread). A text is never rewritten (the maintainer's
+`<name>.log`): at a rotation `DiskLiveFiles` closes the text and starts
+the next with the header, and the Converter calls
+`LiveObserver::firstPacket` again once its first packet line is flushed,
+so the sidebar opens it in a new followed tab (on the UI thread). A text is never rewritten (the maintainer's
 choice, over cutting the deleted file's lines out of one `.log` in place):
 the tabs of deleted files stay as they are until the user closes them,
 and every tab of the capture reads packets through the latest index, so
 their Packet Panel says *Rotated away*. The sidebar keeps the text files
 of the live capture (`liveKeys_`) and hands each the snapshots' summary
 and index. A snapshot goes out right after each rotation, so the Packet
-Panel's index follows the files at once; the Converter's own index drops
-the checkpoints of the deleted files then (`setCaptureParts()`), so a
-capture that runs for days keeps those of its files only.
+Panel's index follows the files at once; the Converter sets the files kept
+on its own index before each snapshot is copied from it
+(`setCaptureParts()`), which drops the checkpoints of the deleted files,
+so a capture that runs for days keeps those of its files only.
 
 The `CaptureIndex` keeps the parts (`setCaptureParts()`, `parts()`,
 `partOf( number )`, `rotatedAway()`): its checkpoints stay in stream

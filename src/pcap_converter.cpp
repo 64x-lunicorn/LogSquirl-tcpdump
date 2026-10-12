@@ -31,7 +31,6 @@
 #include "packet_pipeline.h"
 #include "packet_recorder.h"
 #include "pcapng_reader.h"
-#include "raw_capture.h"
 #include "someip.h"
 #include "tempdirs.h"
 #include "tls_key_log.h"
@@ -43,6 +42,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <memory>
 #include <new>
 #include <thread>
 
@@ -99,11 +99,11 @@ public:
         return timedOut_;
     }
 
-    /// Write the bytes read so far, and from now on every byte read, to
-    /// @p raw.  False if they cannot be written.
-    bool attach( RawCapture& raw )
+    /// Write the bytes read so far, and from now on every byte read, to the
+    /// raw file of @p files.  False if they cannot be written.
+    bool attach( LiveFiles& files )
     {
-        raw_ = &raw;
+        files_ = &files;
         keep( pending_.data(), pending_.size() );
         pending_.clear();
         pending_.shrink_to_fit();
@@ -137,10 +137,10 @@ private:
         if ( n == 0 ) {
             return;
         }
-        if ( !raw_ ) {
+        if ( !files_ ) {
             pending_.insert( pending_.end(), data, data + n );
         }
-        else if ( !raw_->write( data, n ) ) {
+        else if ( !files_->writeRaw( data, n ) ) {
             failed_ = true;
         }
     }
@@ -149,7 +149,7 @@ private:
     std::function<void()> beforeWait_;
     std::function<bool()> expired_;
     std::vector<uint8_t> pending_;
-    RawCapture* raw_ = nullptr;
+    LiveFiles* files_ = nullptr;
     bool failed_ = false;
     bool timedOut_ = false;
     uint64_t bytesRead_ = 0;
@@ -217,8 +217,10 @@ std::optional<ConversionResult> stoppedBeforeHeader( const ByteSource& input )
  * Every packet goes through the same steps for a file and a stream: the
  * Parser's record through the Packet Pipeline, then the Packet Recorder,
  * which counts it, makes its line, learns its names and notes its place,
- * and the line into the text; live, the Live Output then says whether to
- * flush, open the text or send a snapshot, and whether the capture stops.
+ * and the line into the text.  Live, the Live Output, which owns the text
+ * and the raw capture, first starts a ring buffer's next file if one is
+ * due, then says whether to flush, open the text or send a snapshot, and
+ * whether the capture stops.
  */
 ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QString& inputPath,
                                  const QString& name, const QString& outputRoot,
@@ -236,10 +238,12 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     }
     const SomeIpScope someIpScope( someIp );
 
-    // Live: when the capture stops, and when what was written is flushed
-    // and a snapshot goes out, by the one clock.
+    // The output directory outlives the files in it, a Live Output's too.
+    std::optional<QTemporaryDir> outputDir;
+    // Live: when the capture stops, when what was written is flushed and a
+    // snapshot goes out, and when a ring buffer's next file starts, by the
+    // one clock; it owns the files once the capture's format is known.
     std::optional<LiveOutput> liveOutput;
-    std::chrono::steady_clock::time_point fileStarted; ///< When the ring buffer's file was started.
     StopCondition stoppedBy = StopCondition::None;
 
     // What to do before a wait for the stream, once there is output.
@@ -247,7 +251,6 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     std::optional<LiveInput> liveInput;
     if ( live ) {
         liveOutput.emplace( limits, clock, options.lastPacketNumber );
-        fileStarted = liveOutput->now();
         std::function<bool()> expired;
         if ( limits.duration.count() > 0 ) {
             expired = [ &liveOutput ] { return liveOutput->durationOver(); };
@@ -291,58 +294,15 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
 
     // The directory is removed with this object unless the conversion ends
     // Converted: on every other return, and when an exception unwinds.
-    QTemporaryDir outputDir( tempDirTemplate( outputRoot ) );
-    if ( !outputDir.isValid() ) {
+    outputDir.emplace( tempDirTemplate( outputRoot ) );
+    if ( !outputDir->isValid() ) {
         return failed( QStringLiteral( "Cannot create a temporary directory: %1" )
-                           .arg( outputDir.errorString() ) );
+                           .arg( outputDir->errorString() ) );
     }
     auto baseName = name;
     if ( baseName.isEmpty() ) {
         baseName = QStringLiteral( "capture" );
     }
-    // A live capture's bytes, as they were read, next to its text: one
-    // file, or a ring buffer's.
-    std::optional<RawCapture> raw;
-    auto rawFailed = [ &raw ] {
-        return failed( QStringLiteral( "Cannot write the raw capture: %1" ).arg( raw->error() ) );
-    };
-    if ( live ) {
-        const bool pcapng = dynamic_cast<const PcapngReader*>( &reader ) != nullptr;
-        raw.emplace( QDir( outputDir.path() ), baseName,
-                     pcapng ? CaptureFormat::Pcapng : CaptureFormat::Pcap,
-                     limits.ringBuffer() ? limits.ringFiles : 0 );
-        if ( !raw->open() || !liveInput->attach( *raw ) ) {
-            return rawFailed();
-        }
-    }
-    // The text of a raw file is named after it: <name>.log, or a ring
-    // buffer's <name>_00001_<time>.log, one per file.
-    auto textPath = [ & ] {
-        return outputDir.filePath( ( raw ? QFileInfo( raw->path() ).completeBaseName() : baseName )
-                                   + QStringLiteral( ".log" ) );
-    };
-
-    QFile output( textPath() );
-    auto writeFailed = [ &output ] {
-        return failed(
-            QStringLiteral( "Cannot write the output file: %1" ).arg( output.errorString() ) );
-    };
-    // Never write into an existing file or through a link planted in its place.
-    auto openText = [ &output ] {
-        if ( !output.open( QIODevice::WriteOnly | QIODevice::NewOnly | QIODevice::Text ) ) {
-            return false;
-        }
-        output.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
-        return true;
-    };
-    if ( !openText() ) {
-        return writeFailed();
-    }
-    auto writeLine = [ &output ]( const std::string& line ) {
-        return output.write( line.data(), static_cast<qint64>( line.size() ) )
-                   == static_cast<qint64>( line.size() )
-               && output.write( "\n", 1 ) == 1;
-    };
 
     // TLS sessions are decrypted only with a key log, read now and as it
     // grows; its secrets go with it when the conversion ends.
@@ -366,20 +326,58 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     recorderOptions.checkpointInterval = options.checkpointInterval;
     recorderOptions.keyLog = keyLog ? &*keyLog : nullptr;
     PacketRecorder recorder( reader, pipeline, recorderOptions );
-    if ( !writeLine( recorder.header() ) ) {
-        return writeFailed();
+
+    // The text the lines go to: a file's <name>.log, or a live capture's,
+    // which its Live Output owns with the raw capture next to it, each text
+    // starting with the column header.
+    QFile output;
+    QIODevice* text = &output;
+    LiveFiles* files = nullptr;
+    auto writeFailed = [ &text ] {
+        return failed(
+            QStringLiteral( "Cannot write the output file: %1" ).arg( text->errorString() ) );
+    };
+    auto liveFailed = [ &files ] { return failed( files->error() ); };
+    auto writeLine = [ &text ]( const std::string& line ) {
+        return text->write( line.data(), static_cast<qint64>( line.size() ) )
+                   == static_cast<qint64>( line.size() )
+               && text->write( "\n", 1 ) == 1;
+    };
+    if ( live ) {
+        const bool pcapng = dynamic_cast<const PcapngReader*>( &reader ) != nullptr;
+        auto disk = std::make_unique<DiskLiveFiles>(
+            QDir( outputDir->path() ), baseName,
+            pcapng ? CaptureFormat::Pcapng : CaptureFormat::Pcap,
+            limits.ringBuffer() ? limits.ringFiles : 0, recorder.header() );
+        const bool opened = disk->open();
+        liveOutput->open( std::move( disk ), reader );
+        files = &liveOutput->files();
+        if ( !opened || !liveInput->attach( *files ) ) {
+            return liveFailed();
+        }
+        text = &files->text();
+    }
+    else {
+        output.setFileName( outputDir->filePath( baseName + QStringLiteral( ".log" ) ) );
+        // Never write into an existing file or through a link planted in its place.
+        if ( !output.open( QIODevice::WriteOnly | QIODevice::NewOnly | QIODevice::Text ) ) {
+            return writeFailed();
+        }
+        output.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner );
+        if ( !writeLine( recorder.header() ) ) {
+            return writeFailed();
+        }
     }
 
     const auto& index = recorder.index();
     // Live: what was written is made readable, a text opened and snapshots
     // sent when the Live Output says so (act()).
     bool flushFailed = false;
-    auto flush = [ & ] {
-        if ( !output.flush() || ( live && !raw->flush() ) ) {
-            flushFailed = true;
-        }
-    };
     auto sendSnapshot = [ & ] {
+        // The index follows the raw files: not the checkpoints of the files
+        // a ring buffer deleted, so that a capture that runs for days keeps
+        // those of its files only.
+        index->setCaptureParts( files->parts(), CaptureIndex::Growth::Growing );
         if ( !live->snapshot ) {
             return;
         }
@@ -387,21 +385,20 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         snapshot.summary = recorder.summary();
         snapshot.elapsed = liveOutput->elapsed();
         snapshot.rawBytes = liveInput->bytesRead();
-        snapshot.rawFile = raw->fileNumber();
+        snapshot.rawFile = files->fileNumber();
         // The packets so far, for the Packet Panel: their bytes are in the
-        // raw file, flushed first, which goes on growing behind them.
-        auto soFar = std::make_shared<CaptureIndex>( *index );
-        soFar->setCaptureParts( raw->parts(), CaptureIndex::Growth::Growing );
-        snapshot.index = std::move( soFar );
+        // raw files, flushed first, the last of which goes on growing
+        // behind them.
+        snapshot.index = std::make_shared<CaptureIndex>( *index );
         live->snapshot( std::move( snapshot ) );
     };
     auto act = [ & ]( const LiveStep& step ) {
-        if ( step.flush ) {
-            flush();
+        if ( step.flush && !files->flush() ) {
+            flushFailed = true;
         }
         if ( step.firstOfText && !flushFailed && live->firstPacket ) {
-            live->firstPacket( QFileInfo( output.fileName() ).absoluteFilePath(),
-                               QFileInfo( raw->path() ).absoluteFilePath() );
+            live->firstPacket( QFileInfo( files->textPath() ).absoluteFilePath(),
+                               QFileInfo( files->rawPath() ).absoluteFilePath() );
         }
         if ( step.snapshot ) {
             sendSnapshot();
@@ -437,42 +434,6 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
             progress( permille );
         }
     };
-    bool firstPacket = true;
-    // A ring buffer's file ends after the packet that filled it, or the last
-    // one before its duration was over, when the next packet comes: where
-    // that packet's record ends, and the headers a file needs there.
-    bool fileFull = false;
-    uint64_t fileEnd = 0;
-    CaptureHeaders fileHeaders;
-    // Start the next file, and the text of it; why not, if they cannot be.
-    // The text of a file is never rewritten: it stays as it is, also once
-    // its raw file is deleted, for its tab.
-    auto rotate = [ & ]() -> std::optional<ConversionResult> {
-        if ( !output.flush() ) {
-            return writeFailed();
-        }
-        output.close();
-        if ( !raw->rotate( fileEnd, reader.packetsRead() - 1, fileHeaders ) ) {
-            return rawFailed();
-        }
-        fileFull = false;
-        fileStarted = liveOutput->now();
-        output.setFileName( textPath() );
-        if ( !openText() || !writeLine( recorder.header() ) ) {
-            return writeFailed();
-        }
-        // Not the checkpoints of the files deleted: a capture that runs for
-        // days keeps those of its files only.
-        index->setCaptureParts( raw->parts(), CaptureIndex::Growth::Growing );
-        // The Packet Panel's index follows the files at once, and the next
-        // packet opens the new text.
-        act( liveOutput->textStarted() );
-        if ( flushFailed ) {
-            return writeFailed();
-        }
-        return std::nullopt;
-    };
-
     bool numbersUsedUp = false;
     PacketRecord pkt;
     while ( reader.next( pkt ) ) {
@@ -481,12 +442,16 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
             result.status = ConversionResult::Status::Cancelled;
             return result;
         }
-        if ( limits.ringBuffer() && !firstPacket
-             && ( fileFull
-                  || ( limits.fileDuration.count() > 0
-                       && liveOutput->now() - fileStarted >= limits.fileDuration ) ) ) {
-            if ( auto failure = rotate() ) {
-                return std::move( *failure );
+        if ( live ) {
+            // A ring buffer's file that is full or old ends before this
+            // packet, which then opens the next text.
+            const auto started = liveOutput->beforePacket();
+            if ( !started ) {
+                return liveFailed();
+            }
+            act( *started );
+            if ( flushFailed ) {
+                return liveFailed();
             }
         }
         const auto payload = reader.payloadOf( pkt );
@@ -497,11 +462,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         if ( live ) {
             const auto step = liveOutput->packet( recorder.packets(), liveInput->bytesRead() );
             act( step );
-            if ( flushFailed ) {
-                return writeFailed();
-            }
-            if ( liveInput->failed() ) {
-                return rawFailed();
+            if ( flushFailed || liveInput->failed() ) {
+                return liveFailed();
             }
 
             // The first stop condition reached ends the capture with this
@@ -511,15 +473,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
                 numbersUsedUp = step.stop == StopCondition::PacketNumbers;
                 break;
             }
-
-            // A ring buffer's file that this packet filled ends with it.
-            if ( limits.ringBuffer() ) {
-                fileFull = limits.fileBytes > 0 && raw->fileSize() >= limits.fileBytes;
-                fileEnd = reader.recordOffset() + reader.recordLength();
-                fileHeaders = reader.headers();
-            }
         }
-        firstPacket = false;
         reportProgress();
 
         // No packet is numbered past the last number, where a 32-bit count
@@ -543,12 +497,16 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     if ( broken && ( !live || recorder.packets() == 0 ) ) {
         return std::move( *broken );
     }
-    if ( !output.flush() ) {
-        return writeFailed();
+    if ( live ) {
+        if ( liveInput->failed() || !files->close() ) {
+            return liveFailed();
+        }
     }
-    output.close();
-    if ( live && ( liveInput->failed() || !raw->close() ) ) {
-        return rawFailed();
+    else {
+        if ( !output.flush() ) {
+            return writeFailed();
+        }
+        output.close();
     }
 
     ConversionResult result;
@@ -558,7 +516,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     else {
         result.status = ConversionResult::Status::Converted;
     }
-    result.outputPath = QFileInfo( output.fileName() ).absoluteFilePath();
+    result.outputPath
+        = QFileInfo( live ? files->textPath() : output.fileName() ).absoluteFilePath();
     result.summary = recorder.finalSummary();
     result.summary.packetNumbersUsedUp = numbersUsedUp;
     if ( gzip && gzip->cutOff() ) {
@@ -567,9 +526,9 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         result.summary.compressionProblem = gzip->error();
     }
     if ( live ) {
-        result.rawPath = QFileInfo( raw->path() ).absoluteFilePath();
+        result.rawPath = QFileInfo( files->rawPath() ).absoluteFilePath();
         result.stoppedBy = stoppedBy;
-        index->setCaptureParts( raw->parts() );
+        index->setCaptureParts( files->parts() );
     }
     else {
         index->setCaptureFile( inputPath );
@@ -578,7 +537,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         index->setGzipAccessPoints( gzip->accessPoints() );
     }
     result.index = index;
-    outputDir.setAutoRemove( false );
+    outputDir->setAutoRemove( false );
     return applyCancelRequest( std::move( result ), cancel );
 }
 

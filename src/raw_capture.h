@@ -27,7 +27,7 @@
  * converted again or opened in Wireshark.  Without a ring buffer that is one
  * file, <name>.pcap or <name>.pcapng.
  *
- * With a ring buffer (dumpcap's -b) the Converter starts a new file after
+ * With a ring buffer (dumpcap's -b) the Live Output starts a new file after
  * the record of a packet that filled the current one, by size or duration:
  * the files are <name>_00001_<time>.pcap, <name>_00002_<time>.pcap, …, the
  * time the local one the file was started at, and only the newest few are

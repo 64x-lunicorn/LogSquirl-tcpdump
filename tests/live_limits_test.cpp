@@ -285,36 +285,6 @@ SCENARIO( "A live capture stops by itself at a packet count or a size", "[live_l
                 REQUIRE( result.summary.packets == 2 );
             }
         }
-
-        WHEN( "the size is a byte past two packets" )
-        {
-            LiveLimits limits;
-            limits.bytes = 24 + recordSize( packets[ 0 ] ) * 2 + 1;
-            LimitedRun run( out.path(), limits );
-            run.source.feed( whole );
-
-            THEN( "the packet that goes past it is the last" )
-            {
-                REQUIRE( run.endsWithin( seconds( 5 ) ) );
-                REQUIRE( run.finish().summary.packets == 3 );
-            }
-        }
-
-        WHEN( "the capture has no stop condition" )
-        {
-            LimitedRun run( out.path(), {} );
-            run.source.feed( whole );
-
-            THEN( "it goes on until Stop" )
-            {
-                REQUIRE_FALSE( run.endsWithin( milliseconds( 300 ) ) );
-                run.stop = true;
-                REQUIRE( run.endsWithin( seconds( 5 ) ) );
-                const auto result = run.finish();
-                REQUIRE( result.stoppedBy == StopCondition::None );
-                REQUIRE( result.summary.packets == 6 );
-            }
-        }
     }
 }
 
@@ -364,16 +334,6 @@ SCENARIO( "A live capture stops by itself after a duration, by the clock it is g
                                     + static_cast<std::ptrdiff_t>( recordSize( packets[ 0 ] ) ) ) );
         REQUIRE( soon( [ & ] { return run.opened.load(); } ) );
 
-        WHEN( "59 s have passed" )
-        {
-            fake.ms = 59000;
-
-            THEN( "it goes on" )
-            {
-                REQUIRE_FALSE( run.endsWithin( milliseconds( 200 ) ) );
-            }
-        }
-
         WHEN( "a minute has passed, though nothing more comes" )
         {
             fake.ms = 60000;
@@ -386,31 +346,6 @@ SCENARIO( "A live capture stops by itself after a duration, by the clock it is g
                 REQUIRE( result.stoppedBy == StopCondition::Duration );
                 REQUIRE( result.summary.packets == 1 );
                 REQUIRE_FALSE( result.summary.endsInsideRecord );
-            }
-        }
-    }
-
-    GIVEN( "a capture to stop after a minute whose packets keep coming" )
-    {
-        LimitedRun run( out.path(), limits, fake.clock() );
-        run.source.feed( Bytes( whole.begin(),
-                                whole.begin() + 24
-                                    + static_cast<std::ptrdiff_t>( recordSize( packets[ 0 ] ) ) ) );
-        REQUIRE( soon( [ & ] { return run.opened.load(); } ) );
-
-        WHEN( "the minute is over as the next packet comes" )
-        {
-            fake.ms = 60000;
-            run.source.feed( Bytes( whole.begin() + 24
-                                        + static_cast<std::ptrdiff_t>( recordSize( packets[ 0 ] ) ),
-                                    whole.end() ) );
-
-            THEN( "it ends, with no more than that packet" )
-            {
-                REQUIRE( run.endsWithin( seconds( 5 ) ) );
-                const auto result = run.finish();
-                REQUIRE( result.stoppedBy == StopCondition::Duration );
-                REQUIRE( result.summary.packets <= 2 );
             }
         }
     }
@@ -472,15 +407,10 @@ SCENARIO( "A ring buffer keeps the newest files, each a capture of its own", "[l
         options.checkpointInterval = 3;
         LimitedRun run( out.path(), limits, {}, options );
 
-        WHEN( "ten packets come and the capture is stopped" )
+        WHEN( "ten packets come and the stream ends" )
         {
             run.source.feed( whole );
-            REQUIRE( soon( [ & ] {
-                const auto snapshots = run.snapshots();
-                return !snapshots.empty() && snapshots.back().rawFile == 5;
-            } ) );
-            std::this_thread::sleep_for( milliseconds( 100 ) );
-            run.stop = true;
+            run.source.end();
             REQUIRE( run.endsWithin( seconds( 5 ) ) );
             const auto result = run.finish();
             REQUIRE( result.status == ConversionResult::Status::Converted );
@@ -593,51 +523,6 @@ SCENARIO( "A ring buffer keeps the newest files, each a capture of its own", "[l
                 const auto ninth = pcapSlice( packets, 8, 1 );
                 REQUIRE( fileBytes( target )
                          == pcapSlice( packets, 5, 1 ) + Bytes( ninth.begin() + 24, ninth.end() ) );
-            }
-        }
-    }
-
-    GIVEN( "a ring buffer of two files of a minute each" )
-    {
-        FakeClock fake;
-        LiveLimits limits;
-        limits.ringFiles = 2;
-        limits.fileDuration = seconds( 60 );
-        LimitedRun run( out.path(), limits, fake.clock() );
-        size_t at = 0;
-        auto send = [ & ]( size_t record ) {
-            const auto end = 24 + ( record + 1 ) * recordSize( packets[ 0 ] );
-            run.source.feed( Bytes( whole.begin() + static_cast<std::ptrdiff_t>( at ),
-                                    whole.begin() + static_cast<std::ptrdiff_t>( end ) ) );
-            at = end;
-        };
-
-        WHEN( "two packets come in the first minute and one after it" )
-        {
-            send( 0 );
-            send( 1 );
-            REQUIRE( soon( [ & ] {
-                const auto snapshots = run.snapshots();
-                return !snapshots.empty() && snapshots.back().summary.packets >= 1;
-            } ) );
-            std::this_thread::sleep_for( milliseconds( 100 ) );
-            fake.ms = 61000;
-            send( 2 );
-            REQUIRE( soon( [ & ] {
-                const auto snapshots = run.snapshots();
-                return !snapshots.empty() && snapshots.back().rawFile == 2;
-            } ) );
-            run.stop = true;
-            REQUIRE( run.endsWithin( seconds( 5 ) ) );
-            const auto result = run.finish();
-
-            THEN( "the third starts the second file" )
-            {
-                const auto parts = result.index->parts();
-                REQUIRE( parts.size() == 2 );
-                REQUIRE( fileBytes( parts[ 0 ].path ) == pcapOf( { packets[ 0 ], packets[ 1 ] } ) );
-                REQUIRE( parts[ 1 ].packetsBefore == 2 );
-                REQUIRE( parse( fileBytes( parts[ 1 ].path ) ).packets.size() == 1 );
             }
         }
     }
