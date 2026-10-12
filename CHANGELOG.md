@@ -547,6 +547,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Start live capture dialog with them; they now take the room they get and
   cut the entry off, showing its start, the interface's name; the list
   shows every entry whole (#141).
+- **Custom command: the command comes first.** The command line, the saved
+  commands and examples and *Run through the shell* are right under the
+  source, before Interface and the limits, as the command is what is typed
+  first; with no interface listed, the status says *No interfaces listed:
+  if the command uses {interface}, type it in the Interface field.* (#144).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

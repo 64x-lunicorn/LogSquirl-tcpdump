@@ -425,6 +425,42 @@ struct Captured {
 
 } // namespace
 
+SCENARIO( "The command comes first in the form, and the interface status says when one is needed",
+          "[command_source]" )
+{
+    FakeHost host;
+    QTemporaryDir configDir;
+    const auto dir = configDir.path();
+    auto registry = std::make_shared<LiveSourceRegistry>();
+    // No local capture program: no interfaces are listed, none is run.
+    registry->add(
+        std::make_shared<CustomCommandSourceKind>( [ dir ] { return dir; }, LocalPrograms{} ) );
+    LiveCaptureForm form;
+    form.setSources( registry );
+    form.resize( 600, 900 );
+    form.show();
+    REQUIRE( waitFor( [ & ] { return !form.isListing(); } ) );
+    auto* line = form.findChild<QLineEdit*>( "commandLine" );
+    auto* networkInterface = form.findChild<QComboBox*>( "liveInterface" );
+    auto* status = form.findChild<QLabel*>( "liveSourceStatus" );
+    REQUIRE( line );
+    REQUIRE( networkInterface );
+    REQUIRE( status );
+
+    THEN( "the command line is above the interface" )
+    {
+        REQUIRE( line->mapTo( &form, QPoint() ).y()
+                 < networkInterface->mapTo( &form, QPoint() ).y() );
+    }
+
+    THEN( "the status says to type an interface where the command uses one" )
+    {
+        REQUIRE( status->text()
+                 == "No interfaces listed: if the command uses {interface}, type it in the "
+                    "Interface field." );
+    }
+}
+
 SCENARIO( "A custom command's capture converts live", "[command_source]" )
 {
     QTemporaryDir dir;
