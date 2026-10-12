@@ -568,7 +568,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it works, its tooltip saying why not: no capture in the tab in front, no
   packet line selected, a packet of no stream, or, for the Regex Lab, a
   stream past the numbered ones; Stream lines in Regex Lab was enabled
-  with no capture loaded (#147).
+  with no capture loaded. The menu entry refuses with the same reason,
+  where it opened the Regex Lab on a plain log's line that looked like a
+  packet line (#147).
 - **The sidebar's display filter says that it opens the Regex Lab.** The
   field showed only a placeholder next to *Open in Regex Lab*; that the
   filter does not filter the tab but opens the Regex Lab was said only in
@@ -581,7 +583,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture in this tab.*: the Packet section now leaves that to the summary.
   With a capture but no packet selected, the Packet tab's layer tree and
   hex dump say *Select a packet line to see its layers* and *… its
-  bytes* instead of being empty boxes. The line under the capture's name
+  bytes* instead of being empty boxes, and the status line above them no
+  longer says it a third time. The line under the capture's name
   in the summary was drawn in the text's colour, stark white in dark mode:
   it is now a colour between the window's and the text's, also after a
   switch between light and dark mode. The Stream tab's header shows each
@@ -609,8 +612,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overlapped the Packet heading and could not be reached. The summary now
   scrolls; it takes the room it needs, up to 24 lines, and in a short
   sidebar gives in down to three, while the Packet panel keeps room for
-  its tabs and the Conversations, which can no longer be dragged away
-  (#149).
+  its tabs and the Conversations, which can no longer be dragged away. A
+  sidebar shorter than all that scrolls as a whole (#149).
 
 ## [0.3.0] — 2026-10-09
 

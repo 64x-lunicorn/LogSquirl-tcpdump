@@ -2210,7 +2210,13 @@ Qt UI that provides:
 - A progress bar and Cancel button while a capture is converted
 - A "Stream lines in Regex Lab" button, created only when
   `g_state.hostCapabilities` has the Regex Lab and the selected lines (see
-  *Stream lines in Regex Lab* below)
+  *Stream lines in Regex Lab* below). It is enabled only while
+  `PacketPanel::streamLinesProblem()` is empty, its tooltip that reason
+  otherwise (`enableUnlessProblem()`, which the panel's Show stream content
+  button shares); `PacketPanel::streamActionsChanged()` updates it as the
+  selection changes. A click and the menu entry both go through
+  `SidebarWidget::openStreamLines()`, which refreshes the panel and
+  notifies that same reason instead of opening the Lab
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints (on a host with `regexLab`, each protocol and endpoint is a
   link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
@@ -2222,7 +2228,35 @@ Qt UI that provides:
 - On the first converted capture after the plugin is loaded, a link to
   README's *Log Format* section. The plugin cannot know whether LogSquirl
   has the format, so the hint is static and shown once per load
+- The summary scrolls in a `SummaryArea`, a `QScrollArea` that asks for
+  the height of its text at its width, up to `kSummaryMaxLines` (24), so
+  that a long summary leaves the Packet Panel room in a tall sidebar, and
+  gives in down to `kSummaryMinLines` (3) in a short one. The label is top
+  aligned and as tall as its text; none of it is cut off or drawn over the
+  Packet heading. The line under the capture's name is not an `<hr>` in
+  the text's colour, stark white on a dark window, but `separatorHtml()`:
+  a colour one `kSeparatorShare`-th (a third) of the way from the window's
+  colour to the text's. On a `PaletteChange` (a switch between light and
+  dark mode) `changeEvent()` makes the summary again with
+  `frontSummaryHtml()`, when the label still shows the one it made last
 - The Packet Panel (see *Packet Panel* below), which takes the room left
+  and keeps at least `kPacketPanelMinLines` (16) for its tabs and the
+  Conversations
+- All of the above in a `ContentArea` ("sidebarScroll"), a `QScrollArea`
+  that scrolls the sidebar as a whole only when the sidebar is shorter
+  than the content's minimum (the summary's and the Packet Panel's
+  minimums and the widgets above them): down to that
+  minimum the content is as tall as the sidebar and only the summary
+  scrolls; below it the content keeps its minimum height, so that the
+  host's sidebar `QTabWidget` can still be made shorter and no widget is
+  squeezed over another or cut off. The area is not `widgetResizable`: a
+  scroll area that is sizes a content with word-wrapped labels to the
+  height they prefer (`heightForWidth()`), which would scroll a tall
+  sidebar too; `fit()` sizes it to the viewport's height or
+  `totalMinimumHeightForWidth()`, whichever is taller, on a viewport resize
+  and the content's `LayoutRequest`. `sidebarwidget_test.cpp` puts the
+  sidebar in a `QTabWidget` of fixed heights below and above the minimum
+  and scrolls to the summary's last line and the Conversations' bottom
 - The summary of the capture in the tab in front. Every converted capture's
   summary, and its `CaptureIndex`, is kept for the session, under the path of the text file written
   for it (canonical, so that the host's spelling of the path finds it); the
@@ -2347,10 +2381,15 @@ export, conversation statistics):
   which notifies the packet's layers when the panel is out of view. The
   first selected line is read with `packetLineRegex()`; a line that is not a
   packet line, no selection, a foreign tab or a cursor error show the
-  reason in the status line, which a foreign tab hides: the sidebar's
-  summary above already says "No capture in this tab.". With a capture,
-  the empty tree (`LayerTree`, which paints its placeholder) and dump say
-  to select a packet line. The tree items keep their layer's or field's
+  reason in the status line. With a capture, the empty tree (`LayerTree`,
+  which paints its placeholder) and dump say to select a packet line. The
+  status line is hidden where it would say the same again: for a foreign
+  tab, as the sidebar's summary above already says "No capture in this
+  tab.", and with no line selected, as the placeholders say it;
+  `statusText()` still tells it, and the stream buttons' tooltips show it.
+  The panel's tabs and the Conversations table below them are in a
+  vertical `QSplitter` whose children cannot be collapsed, the table
+  keeping at least `kConversationsMinLines` (5) lines. The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
   and ASCII on each line. The packet is read off the UI thread, up to
@@ -2543,8 +2582,11 @@ ends before it. Keep the pointer the host passed: never copy `*api`.
 
 #### Stream lines in Regex Lab (`follow_stream.h/cpp`)
 `Plugins → tcpdump → Stream lines in Regex Lab` and the sidebar button call
-`followSelectedStream()`, offered only on a host with `regexLab` and
-`selectedLogLines`. It reads the first selected Log Line through
+`SidebarWidget::openStreamLines()`, offered only on a host with `regexLab`
+and `selectedLogLines`. It first asks the Packet Panel's
+`streamLinesProblem()`, so that a line that only looks like a packet line,
+in a tab that shows no capture, opens nothing, with the reason the
+button's tooltip gives; then `followSelectedStream()` reads the first selected Log Line through
 `get_selected_log_lines`, and `followStreamPattern()` turns it into a
 pattern for `open_regex_lab` (with Match case); the Lab's answer, the
 applied pattern or a cancel, is logged. The line is read with the Log
@@ -2580,8 +2622,8 @@ require the columns before Info as `packetLineRegex()` reads them, through
 Source, Destination or Protocol column and never Info in every
 `LineLayout`, and escape the name with `literalPattern()`. Only the
 endpoints are links, not the tunnel endpoints: those appear in no column
-(see *Tunnels*). `openRegexLab()`, which Follow
-stream uses too, opens the Lab with Match case and logs the pattern, then
+(see *Tunnels*). `openRegexLab()`, which Stream
+lines in Regex Lab uses too, opens the Lab with Match case and logs the pattern, then
 the applied one or the cancel, under the feature's name ("Filter: …").
 `regex_lab_test.cpp` checks every endpoint and protocol of the summary of
 each corpus capture, converted in every `LineLayout`, against the columns of
@@ -2595,9 +2637,13 @@ every change with `displayFilterPattern()`, shows a rejection as "Column N:
 reason" below the field and enables *Open in Regex Lab* only for a valid
 filter; the filter accepted is logged and offered again next time, its
 pattern opened with `openRegexLab()` ("Display filter"). The sidebar has
-the same in a `DisplayFilterField` (on a host with `regexLab`): the field,
-*Open in Regex Lab* (or Enter) and the rejection below, sharing the
-dialog's error text, its opening and the filter it offers next time.
+the same in a `DisplayFilterField` (on a host with `regexLab`): the label
+**Display filter → Regex Lab**, the field, *Open in Regex Lab* (or Enter)
+and the rejection below, sharing the dialog's error text, its opening and
+the filter it offers next time. A Wireshark filter is expected to filter
+the tab, so the label's and the field's tooltip say first that it does
+not, it opens the Regex Lab, and then `displayFilterHelp()`, the fields
+and operators the dialog lists above its field too.
 `parseDisplayFilter()` is a tokenizer and a recursive-descent parser
 (`||` below `&&` below `!`) into a `FilterExpression`; each error is thrown
 as a `FilterError` with its index into the filter. Parentheses and
@@ -2777,8 +2823,8 @@ name a column cannot show and an answer that renames an address, is
 written by `tests/make_names_corpus.py`; its text is converted without host
 names, as every corpus text, and `tests/host_names_test.cpp` checks its
 lines with them. `allLineLayouts()` in `tests/corpus_layouts.h` has every
-layout with and without host names, so the Log Format, preset, Follow
-stream, summary filter and display filter tests over the corpus run with
+layout with and without host names, so the Log Format, preset, Stream
+lines in Regex Lab, summary filter and display filter tests over the corpus run with
 names too. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their
