@@ -20,7 +20,8 @@
 /**
  * @file selected_packet_line_test.cpp
  * @brief BDD tests for Selected Packet Line: what the host tells of the
- *        selection, and each kind of line, read into a packet or a reason.
+ *        selection, and each kind of line, read into a packet or a reason;
+ *        the packets of many selected lines, for Export packets.
  */
 
 #include <catch2/catch.hpp>
@@ -201,6 +202,105 @@ SCENARIO( "Selected Packet Line reads the first selected line as a packet, or sa
                     REQUIRE( selected.streamLinesProblem() == row.streamLines );
                 }
             }
+        }
+    }
+}
+
+SCENARIO( "Selected Packet Line reads the packets of many selected lines, or says why not",
+          "[selected_packet_line]" )
+{
+    // Of a capture of 10 packets.
+    constexpr uint32_t packets = 10;
+    const auto tcp = line( "1", "0", "50000" + kArrow + "80 [SYN] Seq=0 Win=65535" );
+    const auto udp = line( "5", "2", "40000" + kArrow + "53 Len=29 | Standard query" );
+    const auto past = line( "12", "0", "50000" + kArrow + "80 [ACK] Seq=1 Ack=1" );
+    const auto noNumber = line( "99999999999", "0", "50000" + kArrow + "80 [SYN] Seq=0" );
+    const QString header( "No.    Stream  UTC Time                     Time           Source   "
+                          "Destination   Protocol  Length Info" );
+    const QString otherLog( "2026-10-09 12:00:00 INFO server started" );
+
+    FakeHost host;
+
+    GIVEN( "packet lines mixed with the header, another log's line and lines of no packet" )
+    {
+        host.selectedLines = { header, udp, otherLog, tcp, past, noNumber, udp };
+        const auto selected = selectedPackets( readSelectedLines(), packets );
+
+        THEN( "the host is asked once, and the packet lines' packets are told, each once" )
+        {
+            REQUIRE( host.selectionCalls == 1 );
+            REQUIRE( selected.reason.isEmpty() );
+            REQUIRE( selected.set.numbers == std::vector<uint32_t>{ 1, 5 } );
+            REQUIRE( selected.lineCount == 7 );
+            REQUIRE_FALSE( selected.truncated );
+        }
+
+        THEN( "every other line is skipped and counted" )
+        {
+            REQUIRE( selected.set.skipped == 4 );
+        }
+    }
+
+    GIVEN( "no packet line among the selected lines" )
+    {
+        host.selectedLines = { header, otherLog };
+        const auto selected = selectedPackets( readSelectedLines(), packets );
+
+        THEN( "no packet is told, and no reason: the user may still name them" )
+        {
+            REQUIRE( selected.set.numbers.empty() );
+            REQUIRE( selected.set.skipped == 2 );
+            REQUIRE( selected.lineCount == 2 );
+            REQUIRE( selected.reason.isEmpty() );
+        }
+    }
+
+    GIVEN( "more lines selected than the host tells" )
+    {
+        host.selectedLines = { tcp, udp };
+        host.selectionResult = LOGSQUIRL_LOG_LINES_TRUNCATED;
+        const auto selected = selectedPackets( readSelectedLines(), packets );
+
+        THEN( "the packets of the lines told are told, and that there were more" )
+        {
+            REQUIRE( selected.set.numbers == std::vector<uint32_t>{ 1, 5 } );
+            REQUIRE( selected.lineCount == 2 );
+            REQUIRE( selected.truncated );
+            REQUIRE( selected.reason.isEmpty() );
+        }
+    }
+
+    GIVEN( "no line selected" )
+    {
+        const auto selected = selectedPackets( readSelectedLines(), packets );
+
+        THEN( "no packet is told, and no reason" )
+        {
+            REQUIRE( selected.set.numbers.empty() );
+            REQUIRE( selected.lineCount == 0 );
+            REQUIRE( selected.reason.isEmpty() );
+        }
+    }
+
+    GIVEN( "a host that refuses the selection" )
+    {
+        host.selectedLines = { tcp };
+
+        THEN( "a call off the UI thread is the reason, without a packet" )
+        {
+            host.selectionResult = LOGSQUIRL_LOG_LINES_NOT_ON_UI_THREAD;
+            const auto selected = selectedPackets( readSelectedLines(), packets );
+            REQUIRE( selected.set.numbers.empty() );
+            REQUIRE( selected.lineCount == 0 );
+            REQUIRE( selected.reason == "LogSquirl did not tell the selected lines (-1)." );
+        }
+
+        THEN( "a tab that shows no Log File is the reason" )
+        {
+            host.selectionResult = LOGSQUIRL_LOG_LINES_NO_LOG_FILE;
+            const auto selected = selectedPackets( readSelectedLines(), packets );
+            REQUIRE( selected.set.numbers.empty() );
+            REQUIRE( selected.reason == "The tab in front shows no capture." );
         }
     }
 }

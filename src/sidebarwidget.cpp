@@ -73,6 +73,7 @@
 #include "plugin.h"
 #include "raw_capture.h"
 #include "regex_lab.h"
+#include "selected_packet_line.h"
 #include "settings.h"
 #include "tempdirs.h"
 
@@ -680,23 +681,14 @@ void SidebarWidget::exportSelectedPackets()
     request.format = captureFormatOf( index->capturePath() );
 
     // Without a selection, the user may still name or paste the packets.
-    const char* text = nullptr;
-    size_t length = 0;
-    size_t lineCount = 0;
-    const int selected = st.api->get_selected_log_lines( st.handle, &text, &length, &lineCount );
-    if ( selected >= 0 && text ) {
-        request.numbers
-            = packetLinesOf( QString::fromUtf8( text, static_cast<qsizetype>( length ) ),
-                             request.packets )
-                  .numbers;
-        request.selectedLines = lineCount;
-        request.truncated = selected == LOGSQUIRL_LOG_LINES_TRUNCATED;
-    }
-    else if ( selected != LOGSQUIRL_LOG_LINES_NO_SELECTION ) {
-        hostNotify( QString( "Export packets: LogSquirl did not tell the selected lines (%1)." )
-                        .arg( selected ) );
+    const auto selected = selectedPackets( readSelectedLines(), request.packets );
+    if ( !selected.reason.isEmpty() ) {
+        hostNotify( "Export packets: " + selected.reason );
         return;
     }
+    request.numbers = selected.set.numbers;
+    request.selectedLines = selected.lineCount;
+    request.truncated = selected.truncated;
     if ( request.truncated ) {
         hostLog( LOGSQUIRL_LOG_INFO,
                  QString( "Export packets: LogSquirl told only the first %1 selected lines" )

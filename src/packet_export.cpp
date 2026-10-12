@@ -203,11 +203,7 @@ std::vector<uint32_t> PacketNumbers::list() const
     return numbers;
 }
 
-namespace {
-
-/// The packets of the packet lines in @p text and, if @p numbersToo, of the
-/// numbers and ranges in its other lines.
-PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
+PacketSet parsePacketSet( const QString& text, uint32_t packets )
 {
     PacketSet set;
     std::vector<PacketNumbers::Range> ranges;
@@ -231,10 +227,6 @@ PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
             add( packet->number, packet->number );
             continue;
         }
-        if ( !numbersToo ) {
-            ++set.skipped;
-            continue;
-        }
         auto pieces = trimmed;
         pieces.replace( dash, QStringLiteral( "-" ) );
         for ( const auto& piece : pieces.split( separators, Qt::SkipEmptyParts ) ) {
@@ -253,18 +245,6 @@ PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
     }
     set.numbers = PacketNumbers::ofRanges( std::move( ranges ) );
     return set;
-}
-
-} // namespace
-
-PacketSet parsePacketSet( const QString& text, uint32_t packets )
-{
-    return parse( text, packets, true );
-}
-
-PacketSet packetLinesOf( const QString& text, uint32_t packets )
-{
-    return parse( text, packets, false );
 }
 
 QString formatPacketRanges( const PacketNumbers& numbers )

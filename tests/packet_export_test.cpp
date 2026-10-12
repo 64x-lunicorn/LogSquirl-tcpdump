@@ -509,6 +509,21 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
         }
     }
 
+    GIVEN( "a host that refuses to tell the selection" )
+    {
+        host.selectedLines = { loaded.lines[ 1 ] };
+        host.selectionResult = LOGSQUIRL_LOG_LINES_NOT_ON_UI_THREAD;
+        loaded.exportSelected();
+
+        THEN( "nothing is asked and the user is told why" )
+        {
+            REQUIRE( loaded.requests.empty() );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first()
+                     == "Export packets: LogSquirl did not tell the selected lines (-1)." );
+        }
+    }
+
     GIVEN( "a tab in front that shows no capture" )
     {
         host.activateFile( QString() );

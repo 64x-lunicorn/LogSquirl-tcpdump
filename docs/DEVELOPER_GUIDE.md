@@ -1005,7 +1005,8 @@ the rest of the line from Info on, and the iRTT that Info shows on the ACK
 that completes a handshake (see *TCP analysis markers*), or none for a
 line that is no packet line. The Packet Panel and Stream lines in Regex
 Lab read the selected line with it through Selected Packet Line (see
-*Packet Panel*), Export packets the selected lines; none has a regex of
+*Packet Panel*), Export packets the selected lines through it too, and
+the Export dialog pasted lines; none has a regex of
 its own for the columns. `packet_line_test.cpp` formats TCP packets with
 and without an iRTT, UDP, a packet in no stream and one in an unnumbered
 stream in every `LineLayout` and reads back the same packet number, stream
@@ -2484,10 +2485,18 @@ export, conversation statistics):
   packet has. `streamContentProblem()` adds a packet of no stream,
   `streamLinesProblem()` also an unnumbered one. Each reason text is
   written there once; the Packet Panel shows them, Show stream content
-  and Stream lines in Regex Lab notify them.
+  and Stream lines in Regex Lab notify them. For Export packets,
+  `selectedPackets()` reads every selected line and answers with the
+  packets of the packet lines as a `PacketSet` (every other line, and a
+  number the capture has no packet of, skipped and counted), the line
+  count and whether the host told only the first lines
+  (`LOGSQUIRL_LOG_LINES_TRUNCATED`), or with the reason when the host told
+  no line; no line selected is no failure there, as the user may still
+  name the packets.
   `selected_packet_line_test.cpp` is a table over the `FakeHost`: each
   result of `get_selected_log_lines` and each kind of line, with the packet
-  or the reason it gives.
+  or the reason it gives; and the packets of selections mixing packet
+  lines with other lines, of none, of a truncated one and of a refused one.
 - **The widget.** `PacketPanel` gets the tab in front's index from
   `SidebarWidget::showSummaryFor()` (null for a foreign tab) and reads the
   selection through Selected Packet Line. LogSquirl has no
@@ -2630,16 +2639,16 @@ export, conversation statistics):
   itself is refused. `parsePacketSet()` reads packet lines (their No., with
   `readPacketLine()`) and
   numbers and ranges ("1-5, 9") and counts what names no packet;
-  `packetLinesOf()` reads packet lines only, as the selection holds them;
   `formatPacketRanges()` writes numbers back as ranges. The numbers are a
   `PacketNumbers`, ascending ranges apart from each other, never one entry
   per packet: "1-3000000000" takes a few bytes and is counted at once. The
   `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
   change, not on every key.
   `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
-  packets…) reads the selection with `get_selected_log_lines`, whose
-  `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
-  selected) is carried in the `ExportRequest`; the `ExportConfirmer`
+  packets…) takes the packets of the selection from Selected Packet Line's
+  `selectedPackets()` and notifies its reason when the host told no line;
+  a truncated selection (more than 1,000 lines or 1 MiB selected) is
+  carried in the `ExportRequest`; the `ExportConfirmer`
   (`setExportConfirmer()` for tests) shows the `ExportDialog`, where the
   user may change the numbers or paste lines copied in LogSquirl, then a
   save dialog. The host offers no call for the lines of a Filtered View

@@ -20,23 +20,27 @@
 /**
  * @file selected_packet_line.h
  * @brief Selected Packet Line: the packet of the first Log Line selected in
- *        the tab in front, read through the host, or why there is none.
+ *        the tab in front, or the packets of them all, read through the
+ *        host, or why there is none.
  *
  * The Packet Panel shows the selected line's packet, and Show stream
- * content and Stream lines in Regex Lab act on its stream.  Each asks here,
- * so that the host's answer and each kind of line turn into the same reason
- * for the user, written once, and a button and the action it starts decide
- * on the same reading of the selection.
+ * content and Stream lines in Regex Lab act on its stream; Export packets
+ * takes the packets of all selected lines.  Each asks here, so that the
+ * host's answer and each kind of line turn into the same reason for the
+ * user, written once, and a button and the action it starts decide on the
+ * same reading of the selection.
  */
 
 #pragma once
 
+#include "packet_export.h"
 #include "packet_line.h"
 
 #include <QByteArray>
 #include <QString>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 
 namespace tcpdump {
@@ -88,5 +92,25 @@ SelectedPacketLine readSelectedPacketLine();
 /// The reason when no Log Line is selected, which the Packet Panel's empty
 /// views say in their own words.
 QString selectPacketLineReason();
+
+/// The packets of every selected line, or why the host told no line.
+struct SelectedPackets {
+    /// The packets of the packet lines, ascending, each once; every other
+    /// line, and a packet line of a number the capture has no packet of,
+    /// skipped and counted.
+    PacketSet set;
+    size_t lineCount = 0; ///< Lines the host told.
+    /// The host told only the first lineCount lines: at most
+    /// LOGSQUIRL_SELECTED_LOG_LINES_MAX_LINES or _MAX_BYTES of them.
+    bool truncated = false;
+    /// Why the host told no line, for the user: a tab without a Log File,
+    /// another failure of the host.  Empty with no line selected, which is
+    /// no failure: the user may still name the packets.
+    QString reason;
+};
+
+/// The packets of the packet lines of @p selection, of a capture of
+/// @p packets packets, or why there are none.
+SelectedPackets selectedPackets( const SelectedLines& selection, uint32_t packets );
 
 } // namespace tcpdump

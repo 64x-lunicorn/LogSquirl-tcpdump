@@ -27,12 +27,15 @@
 #include "plugin.h"
 #include "stream_tracker.h"
 
+#include <vector>
+
 namespace tcpdump {
 
 namespace {
 
-/// Why get_selected_log_lines() returned no line, @p result, for the user.
-QString selectionFailure( int result )
+/// Why get_selected_log_lines() returned no line, @p result, for the user,
+/// who asked for the first selected line or, if @p allLines, for them all.
+QString selectionFailure( int result, bool allLines = false )
 {
     switch ( result ) {
     case LOGSQUIRL_LOG_LINES_NO_SELECTION:
@@ -40,7 +43,9 @@ QString selectionFailure( int result )
     case LOGSQUIRL_LOG_LINES_NO_LOG_FILE:
         return QStringLiteral( "The tab in front shows no capture." );
     default:
-        return QStringLiteral( "LogSquirl did not tell the selected line (%1)." ).arg( result );
+        return ( allLines ? QStringLiteral( "LogSquirl did not tell the selected lines (%1)." )
+                          : QStringLiteral( "LogSquirl did not tell the selected line (%1)." ) )
+            .arg( result );
     }
 }
 
@@ -91,6 +96,35 @@ SelectedPacketLine selectedPacketLine( const SelectedLines& selection )
 SelectedPacketLine readSelectedPacketLine()
 {
     return selectedPacketLine( readSelectedLines() );
+}
+
+SelectedPackets selectedPackets( const SelectedLines& selection, uint32_t packets )
+{
+    SelectedPackets selected;
+    if ( selection.result < 0 ) {
+        if ( selection.result != LOGSQUIRL_LOG_LINES_NO_SELECTION ) {
+            selected.reason = selectionFailure( selection.result, true );
+        }
+        return selected;
+    }
+    selected.lineCount = selection.lineCount;
+    selected.truncated = selection.result == LOGSQUIRL_LOG_LINES_TRUNCATED;
+    std::vector<uint32_t> numbers;
+    for ( const auto& line : QString::fromUtf8( selection.text ).split( QLatin1Char( '\n' ) ) ) {
+        if ( line.trimmed().isEmpty() ) {
+            continue;
+        }
+        // A number no packet has is 0.
+        const auto packet = readPacketLine( line );
+        if ( packet && packet->number != 0 && packet->number <= packets ) {
+            numbers.push_back( packet->number );
+        }
+        else {
+            ++selected.set.skipped;
+        }
+    }
+    selected.set.numbers = PacketNumbers( numbers );
+    return selected;
 }
 
 QString SelectedPacketLine::streamContentProblem() const
