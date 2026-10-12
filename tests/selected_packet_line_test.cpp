@@ -178,7 +178,7 @@ SCENARIO( "Selected Packet Line reads the first selected line as a packet, or sa
 
             WHEN( "the selected packet line is read" )
             {
-                const auto selected = readSelectedPacketLine();
+                const auto selected = selectedPacketLine( readSelectedLines() );
 
                 THEN( "the host is asked once, and the packet or the reason is told" )
                 {

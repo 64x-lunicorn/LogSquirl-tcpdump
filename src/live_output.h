@@ -217,7 +217,9 @@ public:
 private:
     /// Create the text of the raw file written, and write its header.
     bool openText();
+    /// Keep the text file's error for error(); false.
     bool textFailed();
+    /// Keep the raw capture's error for error(); false.
     bool rawFailed();
 
     QDir dir_;
@@ -325,9 +327,15 @@ public:
     std::chrono::milliseconds elapsed() const;
 
 private:
+    /// The time on the clock the Live Output was given.
     std::chrono::steady_clock::time_point now() const;
+    /// Whether LiveLimits::duration is over at @p now.
+    bool durationOverAt( std::chrono::steady_clock::time_point now ) const;
+    /// The stop condition reached with @p packets and @p bytesRead at
+    /// @p now, the first in their order; None if none is.
     StopCondition stopAt( uint64_t packets, uint64_t bytesRead,
                           std::chrono::steady_clock::time_point now ) const;
+    /// Add a snapshot to @p step if one is due at @p now.
     void snapshotAt( LiveStep& step, std::chrono::steady_clock::time_point now );
     /// Whether the ring buffer's file ends before the next packet.
     bool fileOver( std::chrono::steady_clock::time_point now ) const;

@@ -86,9 +86,6 @@ struct SelectedPacketLine {
 /// The packet line of the first line of @p selection, or why there is none.
 SelectedPacketLine selectedPacketLine( const SelectedLines& selection );
 
-/// selectedPacketLine() of readSelectedLines(), with its precondition.
-SelectedPacketLine readSelectedPacketLine();
-
 /// The reason when no Log Line is selected, which the Packet Panel's empty
 /// views say in their own words.
 QString selectPacketLineReason();

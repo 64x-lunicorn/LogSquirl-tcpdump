@@ -213,7 +213,12 @@ bool LiveOutput::snapshotWaits() const
 
 bool LiveOutput::durationOver() const
 {
-    return limits_.duration.count() > 0 && now() - started_ >= limits_.duration;
+    return durationOverAt( now() );
+}
+
+bool LiveOutput::durationOverAt( std::chrono::steady_clock::time_point now ) const
+{
+    return limits_.duration.count() > 0 && now - started_ >= limits_.duration;
 }
 
 std::chrono::steady_clock::time_point LiveOutput::now() const
@@ -235,7 +240,7 @@ StopCondition LiveOutput::stopAt( uint64_t packets, uint64_t bytesRead,
     if ( limits_.bytes > 0 && bytesRead >= limits_.bytes ) {
         return StopCondition::Bytes;
     }
-    if ( limits_.duration.count() > 0 && now - started_ >= limits_.duration ) {
+    if ( durationOverAt( now ) ) {
         return StopCondition::Duration;
     }
     // No packet is numbered past the last number, where a 32-bit count

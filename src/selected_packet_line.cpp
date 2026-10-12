@@ -93,11 +93,6 @@ SelectedPacketLine selectedPacketLine( const SelectedLines& selection )
     return { std::move( packet ), {} };
 }
 
-SelectedPacketLine readSelectedPacketLine()
-{
-    return selectedPacketLine( readSelectedLines() );
-}
-
 SelectedPackets selectedPackets( const SelectedLines& selection, uint32_t packets )
 {
     SelectedPackets selected;
