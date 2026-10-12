@@ -614,6 +614,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sidebar gives in down to three, while the Packet panel keeps room for
   its tabs and the Conversations, which can no longer be dragged away. A
   sidebar shorter than all that scrolls as a whole (#149).
+- **A live capture whose raw capture cannot be saved says so.** When the
+  raw capture file could not be flushed (a full disk), the capture failed
+  with "Cannot write the output file:" and the text file's error, often
+  none. It now says "Cannot write the raw capture:" with the raw file's
+  error (#165).
 
 ## [0.3.0] — 2026-10-09
 
