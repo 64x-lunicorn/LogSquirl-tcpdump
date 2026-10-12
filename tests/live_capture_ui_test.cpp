@@ -29,6 +29,7 @@
 #include "fake_live_source.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
+#include "local_source.h"
 #include "settings.h"
 #include "sidebarwidget.h"
 #include "stream_capture.h"
@@ -603,6 +604,58 @@ SCENARIO( "A source's own options show in the form, are part of the choice, and 
         THEN( "the widget shows them" )
         {
             REQUIRE( sidebar->findChild<QLineEdit*>( "fakeNote" )->text() == "given" );
+        }
+    }
+}
+
+SCENARIO( "A source's text shows its commands on lines of their own and its links as links",
+          "[live_ui]" )
+{
+    THEN( "a command in backticks is a block, without the punctuation that ended it" )
+    {
+        REQUIRE( guidanceHtml( "If not, run `sudo x -a \"$USER\"`, then log in again." )
+                 == "If not, run<pre>sudo x -a &quot;$USER&quot;</pre>then log in again." );
+        REQUIRE( guidanceHtml( "Restart adb: `adb kill-server`." )
+                 == "Restart adb:<pre>adb kill-server</pre>" );
+    }
+
+    THEN( "a URL is a link, without the punctuation after it" )
+    {
+        REQUIRE(
+            guidanceHtml( "Get it (https://example.org/a.html, \"pkg\")." )
+            == "Get it (<a href=\"https://example.org/a.html\">https://example.org/a.html</a>, "
+               "&quot;pkg&quot;)." );
+        REQUIRE(
+            guidanceHtml( "From https://npcap.com/#download." )
+            == "From <a href=\"https://npcap.com/#download\">https://npcap.com/#download</a>." );
+    }
+
+    THEN( "line breaks are kept, markup is escaped, and a lone backtick is shown as it is" )
+    {
+        REQUIRE( guidanceHtml( "a <b>\n1. & `c" ) == "a &lt;b&gt;<br>1. &amp; `c" );
+    }
+
+    THEN( "the macOS permission guidance shows its command and its download link so" )
+    {
+        const auto html = guidanceHtml( capturePermissionGuidance( CaptureOs::MacOS, {} ) );
+        REQUIRE( html.contains(
+            "<pre>sudo dseditgroup -o edit -a &quot;$USER&quot; -t user access_bpf</pre>" ) );
+        REQUIRE( html.contains( "<a href=\"https://www.wireshark.org/download.html\">" ) );
+    }
+
+    GIVEN( "a source unavailable for a reason with a command" )
+    {
+        FakeHost host;
+        auto fake = std::make_shared<FakeSourceKind>();
+        fake->unavailableReason = "fakecap cannot capture: run `fakecap --allow`.";
+        LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+        const Fields fields( &dialog );
+
+        THEN( "the dialog's status shows it so, its links open" )
+        {
+            REQUIRE( fields.status->text()
+                     == "fakecap cannot capture: run<pre>fakecap --allow</pre>" );
+            REQUIRE( fields.status->openExternalLinks() );
         }
     }
 }
