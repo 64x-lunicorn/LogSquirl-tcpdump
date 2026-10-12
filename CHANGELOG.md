@@ -576,6 +576,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   → Regex Lab**, and its tooltip says that it does not filter the tab and
   lists the fields and operators, with the dialog's text. What is wrong
   with a filter is shown below the field, as in the dialog (#143).
+- **Sidebar empty states, separator and stream header.** With nothing
+  loaded the sidebar said *No capture loaded.* and right under it *No
+  capture in this tab.*: the Packet section now leaves that to the summary.
+  With a capture but no packet selected, the Packet tab's layer tree and
+  hex dump say *Select a packet line to see its layers* and *… its
+  bytes* instead of being empty boxes. The line under the capture's name
+  in the summary was drawn in the text's colour, stark white in dark mode:
+  it is now a colour between the window's and the text's, also after a
+  switch between light and dark mode. The Stream tab's header shows each
+  direction on a line of its own, below *TCP stream 1*, instead of all on
+  one line (#146).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

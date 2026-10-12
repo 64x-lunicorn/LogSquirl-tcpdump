@@ -55,6 +55,7 @@
 #include <QString>
 #include <QThreadPool>
 #include <QTimer>
+#include <QTreeWidget>
 #include <QWidget>
 
 #include <atomic>
@@ -70,7 +71,6 @@ class QLabel;
 class QPlainTextEdit;
 class QPushButton;
 class QTabWidget;
-class QTreeWidget;
 class QTreeWidgetItem;
 
 namespace tcpdump {
@@ -86,6 +86,28 @@ QString hexDump( const std::vector<uint8_t>& bytes );
 /// @p length): the character ranges, as {start, length}, of their hex and
 /// their ASCII on each line they are on.
 std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length );
+
+/// The tree of a packet's layers, which says what it will show while it
+/// holds none.
+class LayerTree : public QTreeWidget {
+    Q_OBJECT
+
+public:
+    using QTreeWidget::QTreeWidget;
+
+    /// The text shown while the tree is empty; none if empty.
+    QString placeholderText() const
+    {
+        return placeholderText_;
+    }
+    void setPlaceholderText( const QString& text );
+
+protected:
+    void paintEvent( QPaintEvent* event ) override;
+
+private:
+    QString placeholderText_;
+};
 
 /**
  * The Packet Panel.  Shows the reason when there is no packet to show: a tab
@@ -200,7 +222,7 @@ private:
     QPushButton* followButton_ = nullptr;
     QTabWidget* tabs_ = nullptr;
     StreamContentView* streamView_ = nullptr;
-    QTreeWidget* tree_ = nullptr;
+    LayerTree* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
     ConversationTable* conversations_ = nullptr;
     QTimer timer_;

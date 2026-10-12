@@ -434,11 +434,12 @@ void StreamContentView::updateLabels()
                             ? QStringLiteral( "%1 stream %2" ).arg( transport ).arg( streamId_ )
                             : QStringLiteral( "%1 stream" ).arg( transport );
     const auto more = more_ ? QStringLiteral( "+" ) : QString();
-    auto status = QStringLiteral( "%1: %2 \u2192 %3 %4%6, %3 \u2192 %2 %5%6" )
+    // One direction to a line: two endpoints with ports run on in one.
+    auto status = QStringLiteral( "%1\n%2 \u2192 %3 %4%6\n%3 \u2192 %2 %5%6" )
                       .arg( stream, client, server, sizeText( reader_->bytesSent( 0 ) ),
                             sizeText( reader_->bytesSent( 1 ) ), more );
     if ( !lastError_.isEmpty() ) {
-        status += QStringLiteral( " (%1)" ).arg( lastError_ );
+        status += QStringLiteral( "\n%1" ).arg( lastError_ );
     }
     status_->setText( status );
     directionBox_->setItemText( 1, QStringLiteral( "%1 \u2192 %2" ).arg( client, server ) );

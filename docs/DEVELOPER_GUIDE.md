@@ -2347,7 +2347,10 @@ export, conversation statistics):
   which notifies the packet's layers when the panel is out of view. The
   first selected line is read with `packetLineRegex()`; a line that is not a
   packet line, no selection, a foreign tab or a cursor error show the
-  reason in the status line. The tree items keep their layer's or field's
+  reason in the status line, which a foreign tab hides: the sidebar's
+  summary above already says "No capture in this tab.". With a capture,
+  the empty tree (`LayerTree`, which paints its placeholder) and dump say
+  to select a packet line. The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
   and ASCII on each line. The packet is read off the UI thread, up to

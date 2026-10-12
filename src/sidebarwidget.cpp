@@ -84,6 +84,7 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QPromise>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QUrl>
@@ -149,6 +150,19 @@ std::shared_ptr<const LiveSourceRegistry>& defaultLiveSources()
 {
     static std::shared_ptr<const LiveSourceRegistry> sources;
     return sources;
+}
+
+/// The line under the capture's name.  A rule is drawn in the text's
+/// colour, stark on a dark window: this one a third of the way from the
+/// window's colour to the text's.
+QString separatorHtml( const QPalette& palette )
+{
+    const auto window = palette.color( QPalette::Window );
+    const auto text = palette.color( QPalette::WindowText );
+    const auto mix = []( int from, int to ) { return from + ( to - from ) / 3; };
+    const QColor line( mix( window.red(), text.red() ), mix( window.green(), text.green() ),
+                       mix( window.blue(), text.blue() ) );
+    return QString( "<hr style=\"background-color:%1\">" ).arg( line.name() );
 }
 
 } // namespace
@@ -845,13 +859,28 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
                     .arg( capture.error.toHtmlEscaped() );
     }
     html += summaryHtml( capture.fileName, capture.fileSize, capture.summary,
-                         g_state.hostCapabilities.regexLab );
+                         g_state.hostCapabilities.regexLab, palette() );
     if ( capture.withFormatHint ) {
         html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
                          "Log Format: <a href=\"%1\">install it once</a>.</i>" )
                     .arg( kLogFormatHelpUrl );
     }
     summaryLabel_->setText( html );
+}
+
+void SidebarWidget::changeEvent( QEvent* event )
+{
+    QWidget::changeEvent( event );
+    // A switch between light and dark mode: the line under the capture's
+    // name, coloured when the summary was made, takes the new colours.
+    if ( event->type() == QEvent::PaletteChange && summaryLabel_ ) {
+        static const QRegularExpression separator( "<hr style=\"[^\"]*\">" );
+        auto text = summaryLabel_->text();
+        text.replace( separator, separatorHtml( palette() ) );
+        if ( text != summaryLabel_->text() ) {
+            summaryLabel_->setText( text );
+        }
+    }
 }
 
 bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource,
@@ -1182,7 +1211,7 @@ byCount( const std::map<std::string, uint64_t>& counts )
 } // namespace
 
 QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
-                     bool filterLinks )
+                     bool filterLinks, const QPalette& palette )
 {
     const double duration = summary.durationSeconds;
 
@@ -1197,7 +1226,7 @@ QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSumm
     // since the label renders markup
     QString html;
     html += QString( "<b>%1</b><br>" ).arg( fileName.toHtmlEscaped() );
-    html += QString( "<hr>" );
+    html += separatorHtml( palette );
 
     // General stats
     html += QString( "<b>Overview</b><br>" );

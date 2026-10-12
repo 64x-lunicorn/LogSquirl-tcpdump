@@ -35,6 +35,7 @@
 
 #include <QFutureWatcher>
 #include <QLabel>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QProgressBar>
@@ -59,8 +60,9 @@ class PacketPanel;
 /// @p filterLinks, each endpoint and protocol listed is a link that
 /// SidebarWidget opens in the Regex Lab as a filter.  A tunnel's endpoints
 /// are listed apart and never a link: no column of a line shows them.
+/// The line under the capture's name is drawn in a colour of @p palette.
 QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
-                     bool filterLinks = false );
+                     bool filterLinks = false, const QPalette& palette = QPalette() );
 
 /// The progress of a live capture as the sidebar shows it, in place of a
 /// percentage (a stream has no size): packets, bytes and packets/s as of
@@ -324,6 +326,9 @@ public:
     {
         return converting_;
     }
+
+protected:
+    void changeEvent( QEvent* event ) override;
 
 private:
     /// A capture converted while the plugin is loaded, as its summary shows it.

@@ -34,6 +34,7 @@
 #include <QFutureWatcher>
 #include <QHeaderView>
 #include <QLabel>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -153,6 +154,25 @@ std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, siz
     return ranges;
 }
 
+void LayerTree::setPlaceholderText( const QString& text )
+{
+    placeholderText_ = text;
+    viewport()->update();
+}
+
+void LayerTree::paintEvent( QPaintEvent* event )
+{
+    QTreeWidget::paintEvent( event );
+    if ( topLevelItemCount() > 0 || placeholderText_.isEmpty() ) {
+        return;
+    }
+    // As QPlainTextEdit shows its placeholder: in the palette's colour for it.
+    QPainter painter( viewport() );
+    painter.setPen( palette().color( QPalette::PlaceholderText ) );
+    painter.drawText( viewport()->rect().adjusted( 4, 4, -4, -4 ),
+                      Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, placeholderText_ );
+}
+
 PacketPanel::PacketPanel( QWidget* parent )
     : QWidget( parent )
 {
@@ -171,7 +191,7 @@ PacketPanel::PacketPanel( QWidget* parent )
     layout->addWidget( status_ );
 
     auto* splitter = new QSplitter( Qt::Vertical );
-    tree_ = new QTreeWidget;
+    tree_ = new LayerTree;
     tree_->setObjectName( "packetLayers" );
     tree_->setHeaderHidden( true );
     tree_->setColumnCount( 1 );
@@ -269,6 +289,11 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
                                                  "content." )
                                : QStringLiteral( "No capture in this tab." ) );
     tabs_->setCurrentIndex( 0 );
+    // Without a capture there is no packet line to select.
+    tree_->setPlaceholderText( index_ ? QStringLiteral( "Select a packet line to see its layers" )
+                                      : QString() );
+    dump_->setPlaceholderText( index_ ? QStringLiteral( "Select a packet line to see its bytes" )
+                                      : QString() );
     if ( !index_ ) {
         showReason( QStringLiteral( "No capture in this tab." ) );
         return;
@@ -516,6 +541,7 @@ void PacketPanel::showRead( const PacketRead& read )
         status += QStringLiteral( " (the first %1 bytes)" ).arg( packet.bytes.size() );
     }
     status_->setText( status );
+    status_->setHidden( false );
 
     tree_->clear();
     for ( const auto& layer : layers_ ) {
@@ -552,6 +578,8 @@ void PacketPanel::showReason( const QString& reason )
     shownBytes_ = 0;
     layers_.clear();
     status_->setText( reason );
+    // The sidebar's summary above says the tab holds no capture.
+    status_->setHidden( !index_ );
     tree_->clear();
     dump_->clear();
     updateStreamActions();

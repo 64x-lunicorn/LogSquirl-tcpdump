@@ -35,14 +35,18 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QLabel>
 #include <QLocale>
+#include <QPalette>
+#include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <cmath>
 #include <memory>
 #include <set>
 
@@ -630,6 +634,108 @@ SCENARIO( "the sidebar summary follows the tab in front", "[sidebar]" )
         }
 
         logsquirl_plugin_shutdown();
+    }
+}
+
+SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
+{
+    GIVEN( "a sidebar, as created when the plugin is loaded" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+
+        THEN( "the summary says no capture is loaded, and the Packet section not again" )
+        {
+            REQUIRE( child<QLabel>( widget, "summary" )->text() == "No capture loaded." );
+            REQUIRE( child<QLabel>( widget, "packetStatus" )->isHidden() );
+        }
+    }
+}
+
+SCENARIO( "the line under the capture's name takes the palette's colours", "[sidebar]" )
+{
+    GIVEN( "a light and a dark palette" )
+    {
+        QPalette light;
+        light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
+        light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
+        QPalette dark;
+        dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
+        dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
+        const auto palette = GENERATE_COPY( light, dark );
+
+        WHEN( "a summary is shown in a label of that palette" )
+        {
+            QLabel label;
+            label.setPalette( palette );
+            label.setAutoFillBackground( true );
+            label.setTextFormat( Qt::RichText );
+            label.setText(
+                tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary(), false, palette ) );
+            label.resize( 300, label.sizeHint().height() );
+            const auto image = label.grab().toImage();
+
+            THEN( "the line is drawn between the window's and the text's colour" )
+            {
+                // The line is the one row mostly of one colour other than
+                // the window's.
+                const auto window = palette.color( QPalette::Window ).rgb();
+                const auto text = palette.color( QPalette::WindowText );
+                bool found = false;
+                for ( int y = 0; y < image.height() && !found; ++y ) {
+                    const QColor middle = image.pixelColor( image.width() / 2, y );
+                    if ( middle.rgb() == window ) {
+                        continue;
+                    }
+                    int same = 0;
+                    for ( int x = 0; x < image.width(); ++x ) {
+                        same += image.pixelColor( x, y ) == middle;
+                    }
+                    if ( same > image.width() / 2 ) {
+                        found = true;
+                        REQUIRE( std::abs( middle.lightness() - text.lightness() ) > 60 );
+                    }
+                }
+                REQUIRE( found );
+            }
+        }
+    }
+}
+
+SCENARIO( "the summary's line follows a switch of the colour scheme", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar showing a capture's summary in a light palette" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        QPalette light;
+        light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
+        light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
+        widget.setPalette( light );
+        auto* summary = child<QLabel>( widget, "summary" );
+        widget.openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+        const auto before = summary->text();
+        REQUIRE( before.contains( "<hr style=\"background-color:#a6a6a6\">" ) );
+
+        WHEN( "the palette turns dark" )
+        {
+            QPalette dark;
+            dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
+            dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
+            widget.setPalette( dark );
+
+            THEN( "the line takes the dark palette's colours, the rest as it was" )
+            {
+                auto expected = before;
+                expected.replace( "#a6a6a6", "#656565" );
+                REQUIRE( summary->text() == expected );
+            }
+        }
     }
 }
 

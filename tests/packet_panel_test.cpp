@@ -36,6 +36,7 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -226,11 +227,18 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
         {
             host.selectedLines.clear();
 
-            THEN( "the panel asks for a selection" )
+            THEN( "the panel asks for a selection, and its empty views what they show" )
             {
                 REQUIRE( waitFor( [ panel ] {
                     return panel->statusText() == "Select a packet line to see its packet.";
                 } ) );
+                auto* tree = panel->findChild<tcpdump::LayerTree*>( "packetLayers" );
+                REQUIRE( tree );
+                REQUIRE( tree->topLevelItemCount() == 0 );
+                REQUIRE( tree->placeholderText() == "Select a packet line to see its layers" );
+                auto* dump = panel->findChild<QPlainTextEdit*>( "packetBytes" );
+                REQUIRE( dump->toPlainText().isEmpty() );
+                REQUIRE( dump->placeholderText() == "Select a packet line to see its bytes" );
             }
         }
 
@@ -240,19 +248,27 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
             REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
             host.activateFile( "/some/other.log" );
 
-            THEN( "the panel says the tab holds no capture" )
+            THEN( "the panel shows no packet and leaves it to the summary to say why" )
             {
                 REQUIRE( panel->shownPacket() == 0 );
                 REQUIRE( panel->statusText() == "No capture in this tab." );
+                REQUIRE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
+                REQUIRE( panel->findChild<tcpdump::LayerTree*>( "packetLayers" )
+                             ->placeholderText()
+                             .isEmpty() );
+                REQUIRE( panel->findChild<QPlainTextEdit*>( "packetBytes" )
+                             ->placeholderText()
+                             .isEmpty() );
             }
 
             AND_WHEN( "the capture's tab comes back" )
             {
                 host.activateFile( loaded.text );
 
-                THEN( "its packet is shown again" )
+                THEN( "its packet is shown again, and its status" )
                 {
                     REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+                    REQUIRE_FALSE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
                 }
             }
         }
@@ -556,9 +572,13 @@ SCENARIO( "Show stream content shows a conversation's payload in the Packet Pane
                          == "GET /index.html HTTP/1.1\nHost: example.com\nUser-Agent: "
                             "corpus/1.0\nAccept: */*\n\nHTTP/1.1 200 OK\nContent-Type: "
                             "text/html\nContent-Length: 31\n\n<html><body>Hello</body></html>" );
-                REQUIRE( view->statusText().startsWith(
-                    QString::fromUtf8( "TCP stream 1: 192.0.2.10:50002 \xe2\x86\x92 "
-                                       "198.51.100.7:80 84 bytes" ) ) );
+                // One direction to a line.
+                REQUIRE( view->statusText()
+                         == QString::fromUtf8( "TCP stream 1\n"
+                                               "192.0.2.10:50002 \xe2\x86\x92 198.51.100.7:80 "
+                                               "84 bytes\n"
+                                               "198.51.100.7:80 \xe2\x86\x92 192.0.2.10:50002 "
+                                               "95 bytes" ) );
                 REQUIRE_FALSE( view->hasMore() );
                 REQUIRE( view->noteText().isEmpty() );
             }
@@ -652,7 +672,7 @@ SCENARIO( "Show stream content shows a conversation's payload in the Packet Pane
         THEN( "its datagrams are shown" )
         {
             auto* view = followContent( loaded, loaded.lines[ 5 ] );
-            REQUIRE( view->statusText().startsWith( "UDP stream 0: 192.168.1.1:40000" ) );
+            REQUIRE( view->statusText().startsWith( "UDP stream 0\n192.168.1.1:40000" ) );
             REQUIRE( view->contentText().contains( "example" ) );
         }
     }
