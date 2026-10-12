@@ -84,7 +84,6 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QPromise>
-#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QStandardPaths>
@@ -975,9 +974,15 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
         return;
     }
     saveButton_->setHidden( found == converted_.end() || found->second.rawPath.isEmpty() );
+    shownSummary_ = frontSummaryHtml();
+    summaryLabel_->setText( shownSummary_ );
+}
+
+QString SidebarWidget::frontSummaryHtml() const
+{
+    const auto found = converted_.find( frontKey_ );
     if ( found == converted_.end() ) {
-        summaryLabel_->setText( kNoCaptureText );
-        return;
+        return kNoCaptureText;
     }
     const auto& capture = found->second;
     QString html;
@@ -995,21 +1000,19 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
                          "Log Format: <a href=\"%1\">install it once</a>.</i>" )
                     .arg( kLogFormatHelpUrl );
     }
-    summaryLabel_->setText( html );
+    return html;
 }
 
 void SidebarWidget::changeEvent( QEvent* event )
 {
     QWidget::changeEvent( event );
-    // A switch between light and dark mode: the line under the capture's
-    // name, coloured when the summary was made, takes the new colours.
-    if ( event->type() == QEvent::PaletteChange && summaryLabel_ ) {
-        static const QRegularExpression separator( "<hr style=\"[^\"]*\">" );
-        auto text = summaryLabel_->text();
-        text.replace( separator, separatorHtml( palette() ) );
-        if ( text != summaryLabel_->text() ) {
-            summaryLabel_->setText( text );
-        }
+    // A switch between light and dark mode: the summary is made again, so
+    // that the line under the capture's name takes the new colours.  Not
+    // while the label says something else, a conversion's progress or end.
+    if ( event->type() == QEvent::PaletteChange && summaryLabel_
+         && summaryLabel_->text() == shownSummary_ ) {
+        shownSummary_ = frontSummaryHtml();
+        summaryLabel_->setText( shownSummary_ );
     }
 }
 

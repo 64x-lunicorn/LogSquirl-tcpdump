@@ -405,6 +405,9 @@ private:
     void showLiveError( const LiveOutcome& outcome );
     /// Report the outcome of the export @p request asked for.
     void finishExport( const ExportRequest& request, ExportResult result );
+    /// The summary of the capture in the tab in front, in the palette's
+    /// colours, or that the tab holds no capture of this plugin.
+    QString frontSummaryHtml() const;
     /// Enable Stream lines in Regex Lab when the Packet Panel can tell the
     /// selected line's stream; its tooltip says why not.
     void updateStreamLinesButton();
@@ -428,6 +431,8 @@ private:
     /// The key in converted_ of the file in the tab in front, as fileKey()
     /// spells it, whether or not it holds a capture.
     QString frontKey_;
+    /// The summary frontSummaryHtml() made last, as the label showed it.
+    QString shownSummary_;
     /// The captures converted so far, by the text file written for each.
     std::map<QString, ConvertedCapture> converted_;
 
