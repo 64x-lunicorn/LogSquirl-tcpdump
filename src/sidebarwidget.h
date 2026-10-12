@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include "background_job.h"
 #include "capture_catalog.h"
 #include "export_dialog.h"
 #include "live_capture.h"
@@ -34,7 +35,6 @@
 #include "live_source.h"
 #include "pcap_converter.h"
 
-#include <QFutureWatcher>
 #include <QLabel>
 #include <QPalette>
 #include <QPlainTextEdit>
@@ -223,7 +223,7 @@ public:
     /// Whether an export is running.
     bool isExporting() const
     {
-        return exportWatcher_ != nullptr;
+        return export_.isRunning();
     }
 
     /// Stop a running export; nothing is left of it then.
@@ -351,7 +351,7 @@ public:
     /// Whether a conversion is running.
     bool isConverting() const
     {
-        return converting_;
+        return conversion_.isRunning();
     }
 
 protected:
@@ -425,15 +425,11 @@ private:
     /// It opens their tabs through this sidebar.
     CaptureCatalog catalog_{ *this };
 
-    bool converting_ = false;
-    /// Cancels the running conversion.
-    std::shared_ptr<std::atomic_bool> cancelRunning_;
     /// Where the private temporary directories are created.
     QString tempRoot_;
-    /// The running conversion's outcome, delivered on this thread.
-    QFutureWatcher<ConversionResult>* watcher_ = nullptr;
-    /// One worker thread, owned here so that it can be waited for.
-    QThreadPool pool_;
+    /// The conversion of a capture file, on a worker thread of its own;
+    /// cancelled and waited for when the widget goes.
+    BackgroundJob<ConversionResult> conversion_{ "conversion" };
 
     /// The live capture, running or the last one, and what it comes to.
     std::unique_ptr<LiveCaptureSession> live_;
@@ -447,13 +443,9 @@ private:
     StopConfirmer confirmStop_;     ///< Asks whether to stop the running capture.
 
     ExportConfirmer confirmExport_; ///< Shows the Export dialog and a file dialog.
-    /// Cancels the running export.
-    std::shared_ptr<std::atomic_bool> cancelExport_;
-    /// The running export's outcome, delivered on this thread; null while none runs.
-    QFutureWatcher<ExportResult>* exportWatcher_ = nullptr;
+    /// The export of packets, on a worker thread apart from the conversion's.
+    BackgroundJob<ExportResult> export_{ "export" };
     QPointer<QProgressDialog> exportProgress_; ///< Its progress, and Cancel.
-    /// The export's worker thread, apart from the conversion's.
-    QThreadPool exportPool_;
 };
 
 } // namespace tcpdump

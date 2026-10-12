@@ -222,10 +222,15 @@ ConversionResult convertStream( ByteSource& source, const QString& name, const Q
 /**
  * The rule that a cancel request wins, even over a conversion that had
  * just finished when the request came: if @p cancel is set, @p result
- * becomes Cancelled, whatever it was, and its output is removed.  Decided
- * here for the Converter, which applies it when its loop ends, and for the
- * caller, which applies it to the result it receives from the worker.
+ * becomes Cancelled, whatever it was, and its output is removed
+ * (removeOutput()).  Applied by the Converter when its loop ends; the
+ * sidebar's Background Job applies the same rule to the result it
+ * receives from the worker (background_job.h).
  */
 ConversionResult applyCancelRequest( ConversionResult result, const std::atomic_bool* cancel );
+
+/// Remove the private directory of @p result's output, and all in it; none
+/// for a result without an output.
+void removeOutput( const ConversionResult& result );
 
 } // namespace tcpdump

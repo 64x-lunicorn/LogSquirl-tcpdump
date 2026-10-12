@@ -85,13 +85,11 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QPointer>
-#include <QPromise>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QUrl>
-#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <exception>
@@ -306,9 +304,6 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         return !request.outputPath.isEmpty();
     } )
 {
-    pool_.setMaxThreadCount( 1 );
-    exportPool_.setMaxThreadCount( 1 );
-
     // All of it scrolls when the sidebar is shorter than its minimum.
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout( content );
@@ -524,33 +519,24 @@ SidebarWidget::~SidebarWidget()
     // between packets, and convertPcap() reads regular files only, so it
     // cannot block on a FIFO or device; a regular file on a network share
     // that stalls can still hold it up until the system gives up on it.
-    if ( cancelRunning_ ) {
-        cancelRunning_->store( true );
-    }
-    pool_.waitForDone();
-
     // A conversion that finished before the cancel reached it wrote a file
     // no tab will show: the cancel wins, and the file goes.
-    if ( watcher_ && watcher_->future().resultCount() > 0 ) {
-        applyCancelRequest( watcher_->result(), cancelRunning_.get() );
-    }
+    conversion_.cancelAndWait();
 
     // An export stops between two packets and leaves nothing behind; one
-    // that was done keeps its file.  Its progress dialog goes first, as
-    // closing it would cancel through this half-destroyed widget.
-    if ( cancelExport_ ) {
-        cancelExport_->store( true );
-    }
+    // that was done when the cancel came loses its file, as on Cancel.  Its
+    // progress dialog goes first, as closing it would cancel through this
+    // half-destroyed widget.
     if ( exportProgress_ ) {
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
-    exportPool_.waitForDone();
+    export_.cancelAndWait();
 }
 
 bool SidebarWidget::refuseWhileBusy()
 {
-    if ( converting_ ) {
+    if ( isConverting() ) {
         hostNotify( "A capture is still being read: wait for it, or cancel it first." );
         return true;
     }
@@ -601,56 +587,42 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 {
     // One conversion at a time (Open is disabled meanwhile), so the outcome
     // that arrives is always that of the running one.
-    if ( converting_ || isCapturing() ) {
+    if ( isConverting() || isCapturing() ) {
         return;
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
-
-    auto cancelled = std::make_shared<std::atomic_bool>( false );
-    cancelRunning_ = cancelled;
-    setConverting( true );
-    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
-                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
-
-    // The watcher lives on this thread, so its signals are delivered here.
-    watcher_ = new QFutureWatcher<ConversionResult>( this );
-    connect( watcher_, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
-             &QProgressBar::setValue );
-    connect( watcher_, &QFutureWatcher<ConversionResult>::finished, this,
-             [ this, cancelled, filePath ] {
-                 ConversionResult result;
-                 if ( watcher_->future().resultCount() > 0 ) {
-                     result = watcher_->result();
-                 }
-                 else {
-                     result.error = "The conversion ended without a result";
-                 }
-                 finishConversion( filePath,
-                                   applyCancelRequest( std::move( result ), cancelled.get() ) );
-             } );
 
     // The Converter writes into a new private directory below the temporary
     // root, kept for its tab until LogSquirl quits, and reports every
     // failure as a result: nothing is caught here.  It converts with the
     // options saved when it starts: a change of them in the configuration
     // dialog applies to the next capture, the tab of this one keeps its own.
+    // A cancel wins over a conversion that was done when it came: its
+    // directory goes.
     const auto tempRoot = tempRoot_;
     const auto options = loadConversionOptions( hostConfigDir() );
-    watcher_->setFuture( QtConcurrent::run(
-        &pool_, [ filePath, tempRoot, cancelled, options ]( QPromise<ConversionResult>& promise ) {
-            promise.setProgressRange( 0, 1000 );
-            promise.addResult( convertPcap(
-                filePath, tempRoot, cancelled.get(),
-                [ &promise ]( int permille ) { promise.setProgressValue( permille ); }, options ) );
-        } ) );
+    conversion_.start(
+        [ filePath, tempRoot,
+          options ]( const std::atomic_bool* cancel,
+                     const BackgroundJob<ConversionResult>::Progress& progress ) {
+            return convertPcap( filePath, tempRoot, cancel, progress, options );
+        },
+        removeOutput,
+        [ this, filePath ]( ConversionResult result ) {
+            finishConversion( filePath, std::move( result ) );
+        },
+        [ this ]( int permille ) { progressBar_->setValue( permille ); } );
+    setConverting( true );
+    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
+                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
 }
 
 void SidebarWidget::cancel()
 {
-    if ( !converting_ || !cancelRunning_ ) {
+    if ( !isConverting() ) {
         return;
     }
-    cancelRunning_->store( true );
+    conversion_.cancel();
     cancelButton_->setEnabled( false );
     summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
 }
@@ -658,7 +630,7 @@ void SidebarWidget::cancel()
 void SidebarWidget::exportSelectedPackets()
 {
     // The menu entry stays enabled while an export runs.
-    if ( exportWatcher_ ) {
+    if ( isExporting() ) {
         hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
         return;
     }
@@ -703,7 +675,7 @@ void SidebarWidget::exportSelectedPackets()
     if ( !self || !confirmed || request.numbers.empty() || request.outputPath.isEmpty() ) {
         return;
     }
-    if ( exportWatcher_ ) {
+    if ( isExporting() ) {
         hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
         return;
     }
@@ -713,8 +685,6 @@ void SidebarWidget::exportSelectedPackets()
                                      .arg( request.numbers.count() )
                                      .arg( request.captureName, request.outputPath ) );
 
-    auto cancelled = std::make_shared<std::atomic_bool>( false );
-    cancelExport_ = cancelled;
     exportProgress_ = new QProgressDialog(
         QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.count() ), "Cancel", 0,
         1000, this );
@@ -725,45 +695,35 @@ void SidebarWidget::exportSelectedPackets()
     exportProgress_->setMinimumDuration( 500 );
     connect( exportProgress_, &QProgressDialog::canceled, this, &SidebarWidget::cancelExport );
 
-    // The watcher lives on this thread, so its signals are delivered here.
-    exportWatcher_ = new QFutureWatcher<ExportResult>( this );
-    connect( exportWatcher_, &QFutureWatcher<ExportResult>::progressValueChanged,
-             exportProgress_.data(), &QProgressDialog::setValue );
-    connect( exportWatcher_, &QFutureWatcher<ExportResult>::finished, this,
-             [ this, cancelled, request ] {
-                 ExportResult result;
-                 if ( exportWatcher_->future().resultCount() > 0 ) {
-                     result = exportWatcher_->result();
-                 }
-                 else {
-                     result.error = "The export ended without a result";
-                 }
-                 // An export that was done before the cancel reached it: the
-                 // cancel wins, as it does for a conversion.
-                 if ( cancelled->load() && result.status == ExportResult::Status::Exported ) {
-                     QFile::remove( request.outputPath );
-                     result.status = ExportResult::Status::Cancelled;
-                 }
-                 finishExport( request, std::move( result ) );
-             } );
+    // An export that was done when the cancel came loses its file, as a
+    // conversion does; one that failed wrote none, and a file it would
+    // have replaced stays.
     const auto numbers = request.numbers;
     const auto path = request.outputPath;
-    exportWatcher_->setFuture( QtConcurrent::run(
-        &exportPool_, [ index, numbers, path, cancelled ]( QPromise<ExportResult>& promise ) {
-            promise.setProgressRange( 0, 1000 );
-            promise.addResult(
-                exportPackets( index, numbers, path, cancelled.get(), [ &promise ]( int permille ) {
-                    promise.setProgressValue( permille );
-                } ) );
-        } ) );
+    export_.start(
+        [ index, numbers, path ]( const std::atomic_bool* cancel,
+                                  const BackgroundJob<ExportResult>::Progress& progress ) {
+            return exportPackets( index, numbers, path, cancel, progress );
+        },
+        [ path ]( const ExportResult& result ) {
+            if ( result.status == ExportResult::Status::Exported ) {
+                QFile::remove( path );
+            }
+        },
+        [ this, request ]( ExportResult result ) { finishExport( request, std::move( result ) ); },
+        [ progress = exportProgress_ ]( int permille ) {
+            if ( progress ) {
+                progress->setValue( permille );
+            }
+        } );
 }
 
 void SidebarWidget::cancelExport()
 {
-    if ( !cancelExport_ ) {
+    if ( !isExporting() ) {
         return;
     }
-    cancelExport_->store( true );
+    export_.cancel();
     if ( exportProgress_ ) {
         exportProgress_->setLabelText( "Cancelling\xe2\x80\xa6" );
     }
@@ -771,9 +731,6 @@ void SidebarWidget::cancelExport()
 
 void SidebarWidget::finishExport( const ExportRequest& request, ExportResult result )
 {
-    cancelExport_.reset();
-    exportWatcher_->deleteLater();
-    exportWatcher_ = nullptr;
     if ( exportProgress_ ) {
         // Closing it would cancel the export that is over.
         exportProgress_->disconnect( this );
@@ -887,7 +844,6 @@ void SidebarWidget::openLink( const QString& link )
 
 void SidebarWidget::setConverting( bool converting )
 {
-    converting_ = converting;
     openButton_->setEnabled( !converting );
     cancelButton_->setEnabled( converting );
     cancelButton_->setHidden( !converting );
@@ -898,9 +854,6 @@ void SidebarWidget::setConverting( bool converting )
 
 void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
 {
-    cancelRunning_.reset();
-    watcher_->deleteLater();
-    watcher_ = nullptr;
     setConverting( false );
 
     switch ( result.status ) {
@@ -940,7 +893,7 @@ void SidebarWidget::showSummaryFor( const QString& filePath )
     packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
 
     // The capture being read is shown in a tab of its own when it is done.
-    if ( converting_ ) {
+    if ( isConverting() ) {
         return;
     }
     saveButton_->setHidden( catalog_.partsToSave().empty() );
@@ -1000,7 +953,7 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
 
 void SidebarWidget::chooseAndStartLiveCapture()
 {
-    if ( converting_ ) {
+    if ( isConverting() ) {
         refuseWhileBusy();
         return;
     }
@@ -1061,7 +1014,7 @@ void SidebarWidget::updateStartButton()
     if ( !startButton_ ) {
         return;
     }
-    const QString why = converting_ ? "A capture is being read." : QString();
+    const QString why = isConverting() ? "A capture is being read." : QString();
     startButton_->setEnabled( why.isEmpty() );
     startButton_->setToolTip( why.isEmpty() ? "Choose what to capture, and start capturing" : why );
 }
@@ -1094,7 +1047,7 @@ void SidebarWidget::showLiveStart()
 void SidebarWidget::showLiveState()
 {
     const bool capturing = isCapturing();
-    openButton_->setEnabled( !capturing && !converting_ );
+    openButton_->setEnabled( !capturing && !isConverting() );
     stopButton_->setEnabled( capturing && live_->state() != LiveCaptureSession::State::Stopping );
     stopButton_->setHidden( !capturing );
     liveLabel_->setHidden( !capturing );
@@ -1147,7 +1100,7 @@ void SidebarWidget::notify( const QString& message )
 
 QString SidebarWidget::busyElsewhere() const
 {
-    return converting_
+    return isConverting()
                ? QStringLiteral( "A capture is still being read: wait for it, or cancel it first." )
                : QString();
 }

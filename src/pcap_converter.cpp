@@ -635,12 +635,17 @@ ConversionResult applyCancelRequest( ConversionResult result, const std::atomic_
     if ( !cancel || !cancel->load() ) {
         return result;
     }
-    if ( !result.outputPath.isEmpty() ) {
-        QDir( QFileInfo( result.outputPath ).absolutePath() ).removeRecursively();
-    }
+    removeOutput( result );
     ConversionResult cancelled;
     cancelled.status = ConversionResult::Status::Cancelled;
     return cancelled;
+}
+
+void removeOutput( const ConversionResult& result )
+{
+    if ( !result.outputPath.isEmpty() ) {
+        QDir( QFileInfo( result.outputPath ).absolutePath() ).removeRecursively();
+    }
 }
 
 } // namespace tcpdump

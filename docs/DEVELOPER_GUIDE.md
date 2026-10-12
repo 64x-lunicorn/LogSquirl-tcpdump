@@ -1644,9 +1644,11 @@ capture header came (`StreamSource::stopped()`), so nothing was captured and
 nothing is left, which is not a failure. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
 failure or any other exception ends as Failed, and nothing is left behind.
-`applyCancelRequest()` decides, for the Converter and its caller alike,
+`applyCancelRequest()` decides, for the Converter when its loop ends,
 that a cancel request wins even over a conversion that had just finished:
-the result becomes Cancelled and the output is removed.
+the result becomes Cancelled and the output is removed (`removeOutput()`).
+The sidebar's Background Job applies the same rule to the result it is
+delivered (see *The Background Job*).
 
 #### The Packet Pipeline (`packet_pipeline.h/cpp`)
 The steps every packet goes through between the reader and its line that
@@ -2414,7 +2416,8 @@ its tooltip. While a capture runs, the section shows its counters and
 failure's error, with its Guidance (`explainFailure()`), a label below
 Stop. **Stop live capture** calls `stopLiveCapture()`.
 
-It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
+It runs `convertPcap()` as its `conversion_` Background Job (see *The
+Background Job* below), on a worker thread of its own, with
 the system's temporary directory as the output root, and shows the outcome
 on the GUI thread: it prints the summary it is given and catches nothing
 itself. A failed or cancelled conversion leaves no directory behind; a
@@ -2427,7 +2430,40 @@ run (checked with `kill(pid, 0)` on Unix and `OpenProcess()` on Windows).
 Directories of running processes, links and, on Unix, other users'
 directories are left alone. Only regular files are read, so the worker
 cannot block on a FIFO or device; destroying the widget cancels a running
-conversion and waits for the worker.
+conversion and export and waits for their workers.
+
+#### The Background Job (`background_job.h`)
+The kind of job the sidebar converts a capture file and exports packets
+with: `BackgroundJob<Result>`, for a result with a `Status` (`Failed`,
+the default, and `Cancelled`) and an `error`, as `ConversionResult` and
+`ExportResult` have. Each job has a `QThreadPool` of one thread, which it
+can wait for, and runs one work at a time.
+
+- `start( work, discard, done, shown )` runs `work( cancel, progress )` on
+  the worker; its progress, in permille, goes to `shown` and its result to
+  `done` on the thread that started it, once. A work that throws ends as
+  Failed, "The `<name>` ended without a result".
+- `isRunning()`: started, and the result not delivered yet; false by the
+  time `done` is called, so that the sidebar's `isConverting()` and
+  `isExporting()` are the jobs'.
+- `cancel()` sets the flag the work checks as it goes.
+- `cancelAndWait()`, also what its destructor does: cancels and waits for
+  the worker, so that no code of the plugin runs on it afterwards; a result
+  not delivered yet is settled and delivered to no one.
+
+The rule that a cancel wins is applied here, once, for both: a work may
+be done before it sees the cancel the user asked for, and its result is
+then Cancelled, whatever it was, and `discard` removes what it wrote. For a
+conversion that is its private directory (`removeOutput()`); for an export
+the file, if it was Exported (one that failed wrote none, and a file it
+would have replaced stays). The same holds when the sidebar is destroyed
+with a job whose result has not been delivered.
+
+`tests/background_job_test.cpp` tests it without a sidebar, with a work
+that is done after the test lets it go and never looks at its flag: a
+cancel before that wins and its output is discarded, a job not cancelled
+delivers its result and progress, `cancelAndWait()` discards and delivers
+nothing, a work that throws fails, and a cancel after the result stands.
 
 #### The Capture Catalog (`capture_catalog.h/cpp`)
 What the tab of each text file the plugin wrote shows, with no widget in
@@ -2690,10 +2726,11 @@ export, conversation statistics):
   user may change the numbers or paste lines copied in LogSquirl, then a
   save dialog. The host offers no call for the lines of a Filtered View
   or a search, so selecting them there (or pasting them) is the way to
-  export a filtered view. The export runs on `exportPool_`, a thread of
-  its own, with a `QProgressDialog` whose Cancel sets the flag the export
-  checks between packets; as for a conversion, a cancel wins over an
-  export that was done when it came. The notification after the export
+  export a filtered view. The export runs as the sidebar's `export_`
+  Background Job, on a thread of its own, with a `QProgressDialog` whose
+  Cancel sets the flag the export checks between packets; as for a
+  conversion, a cancel wins over an export that was done when it came,
+  and its file is removed. The notification after the export
   repeats a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet

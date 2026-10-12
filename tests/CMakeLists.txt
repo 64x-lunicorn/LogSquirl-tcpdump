@@ -25,6 +25,7 @@ add_executable(logsquirl_tcpdump_tests
     packet_layers_test.cpp
     capture_index_test.cpp
     capture_catalog_test.cpp
+    background_job_test.cpp
     gzip_source_test.cpp
     packet_export_test.cpp
     link_layers_test.cpp
