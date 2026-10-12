@@ -2484,18 +2484,23 @@ can wait for, and runs one work at a time.
   not delivered yet is settled and delivered to no one.
 
 The rule that a cancel wins is applied here, once, for both: a work may
-be done before it sees the cancel the user asked for, and its result is
-then Cancelled, whatever it was, and `discard` removes what it wrote. For a
-conversion that is its private directory (`removeOutput()`); for an export
-the file, if it was Exported (one that failed wrote none, and a file it
-would have replaced stays). The same holds when the sidebar is destroyed
+be done before it sees the cancel the user asked for, and `discard` then
+takes back what it wrote, and the result is Cancelled, whatever it was. A
+`discard` that cannot take it back returns false, and the result stands:
+the cancel came too late. A conversion's private directory always goes
+(`removeOutput()`). An export's file never does: `exportPackets()` stops
+at a cancel before its `QSaveFile` replaces the file chosen, and once it
+has, the file that was there is gone, so removing the export would lose
+both (#166); it is reported as exported. An export that failed wrote
+nothing, and ends Cancelled. The same holds when the sidebar is destroyed
 with a job whose result has not been delivered.
 
 `tests/background_job_test.cpp` tests it without a sidebar, with a work
 that is done after the test lets it go and never looks at its flag: a
 cancel before that wins and its output is discarded, a job not cancelled
 delivers its result and progress, `cancelAndWait()` discards and delivers
-nothing, a work that throws fails, and a cancel after the result stands.
+nothing, a work that throws fails, a cancel after the result stands, and
+so does a result that cannot be taken back.
 
 #### The Capture Catalog (`capture_catalog.h/cpp`)
 What the tab of each text file the plugin wrote shows, with no widget in
@@ -2760,9 +2765,9 @@ export, conversation statistics):
   or a search, so selecting them there (or pasting them) is the way to
   export a filtered view. The export runs as the sidebar's `export_`
   Background Job, on a thread of its own, with a `QProgressDialog` whose
-  Cancel sets the flag the export checks between packets; as for a
-  conversion, a cancel wins over an export that was done when it came,
-  and its file is removed. The notification after the export
+  Cancel sets the flag the export checks between packets and before its
+  file replaces the one chosen; a cancel that comes after that is too
+  late, and the export is kept and reported (#166). The notification after the export
   repeats a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet

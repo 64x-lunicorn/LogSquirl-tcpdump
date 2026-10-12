@@ -524,7 +524,7 @@ SidebarWidget::~SidebarWidget()
     conversion_.cancelAndWait();
 
     // An export stops between two packets and leaves nothing behind; one
-    // that was done when the cancel came loses its file, as on Cancel.  Its
+    // that was done when the cancel came keeps its file, as on Cancel.  Its
     // progress dialog goes first, as closing it would cancel through this
     // half-destroyed widget.
     if ( exportProgress_ ) {
@@ -607,7 +607,10 @@ void SidebarWidget::openPcapFile( const QString& filePath )
                      const BackgroundJob<ConversionResult>::Progress& progress ) {
             return convertPcap( filePath, tempRoot, cancel, progress, options );
         },
-        removeOutput,
+        []( const ConversionResult& result ) {
+            removeOutput( result );
+            return true;
+        },
         [ this, filePath ]( ConversionResult result ) {
             finishConversion( filePath, std::move( result ) );
         },
@@ -695,9 +698,10 @@ void SidebarWidget::exportSelectedPackets()
     exportProgress_->setMinimumDuration( 500 );
     connect( exportProgress_, &QProgressDialog::canceled, this, &SidebarWidget::cancelExport );
 
-    // An export that was done when the cancel came loses its file, as a
-    // conversion does; one that failed wrote none, and a file it would
-    // have replaced stays.
+    // An export stops at a cancel, before its file replaces the one chosen
+    // (exportPackets()).  Once it has, a cancel comes too late: the file
+    // that was there is gone, and removing the export would lose both.
+    // The export stands, and is reported.
     const auto numbers = request.numbers;
     const auto path = request.outputPath;
     export_.start(
@@ -705,10 +709,8 @@ void SidebarWidget::exportSelectedPackets()
                                   const BackgroundJob<ExportResult>::Progress& progress ) {
             return exportPackets( index, numbers, path, cancel, progress );
         },
-        [ path ]( const ExportResult& result ) {
-            if ( result.status == ExportResult::Status::Exported ) {
-                QFile::remove( path );
-            }
+        []( const ExportResult& result ) {
+            return result.status != ExportResult::Status::Exported;
         },
         [ this, request ]( ExportResult result ) { finishExport( request, std::move( result ) ); },
         [ progress = exportProgress_ ]( int permille ) {

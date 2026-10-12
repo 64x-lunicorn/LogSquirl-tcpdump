@@ -70,10 +70,18 @@ struct Recorder {
     std::vector<QString> discarded;
     std::optional<Outcome> delivered;
     std::vector<int> progress;
+    bool takesBack = true; ///< Whether what the job wrote can be taken back.
+    int asked = 0;         ///< How often it was asked to take it back.
 
     Job::Discard discard()
     {
-        return [ this ]( const Outcome& outcome ) { discarded.push_back( outcome.written ); };
+        return [ this ]( const Outcome& outcome ) {
+            ++asked;
+            if ( takesBack ) {
+                discarded.push_back( outcome.written );
+            }
+            return takesBack;
+        };
     }
     Job::Done done()
     {
@@ -176,6 +184,46 @@ SCENARIO( "A cancel requested while a background job finishes wins over its resu
         {
             REQUIRE( recorder.delivered->status == Outcome::Status::Done );
             REQUIRE( recorder.discarded.empty() );
+        }
+    }
+}
+
+SCENARIO( "A cancel cannot take back what a background job wrote for good", "[background_job]" )
+{
+    GIVEN( "a job whose output cannot be taken back once it is done, as a file it replaced" )
+    {
+        QSemaphore go;
+        Recorder recorder;
+        recorder.takesBack = false;
+        Job job( "test" );
+        job.start( doneAfter( go ), recorder.discard(), recorder.done() );
+
+        WHEN( "the user cancels it while it finishes" )
+        {
+            job.cancel();
+            go.release();
+            REQUIRE( waitFor( [ & ] { return recorder.delivered.has_value(); } ) );
+
+            THEN( "the cancel came too late: its result stands" )
+            {
+                REQUIRE( recorder.asked == 1 );
+                REQUIRE( recorder.delivered->status == Outcome::Status::Done );
+                REQUIRE( recorder.delivered->written == "output" );
+            }
+        }
+
+        WHEN( "it is cancelled and waited for, as when the sidebar is destroyed" )
+        {
+            go.release();
+            job.cancelAndWait();
+            QCoreApplication::processEvents();
+
+            THEN( "what it wrote stays" )
+            {
+                REQUIRE( recorder.asked == 1 );
+                REQUIRE( recorder.discarded.empty() );
+                REQUIRE_FALSE( job.isRunning() );
+            }
         }
     }
 }

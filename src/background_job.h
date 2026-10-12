@@ -25,11 +25,13 @@
  *
  * The sidebar converts a capture file and exports packets as one.  A job
  * checks its cancel flag as it goes, but may be done before it sees a
- * cancel the user asked for: the cancel wins all the same.  The result
- * delivered is then Cancelled, and what the job wrote is removed.  That
- * rule is applied here, once, for every kind of job, when the result is
- * delivered and when the job is cancelled and waited for (cancelAndWait(),
- * as the sidebar does when it is destroyed), when nothing is delivered.
+ * cancel the user asked for: the cancel wins all the same, if what the job
+ * wrote can be taken back.  The result delivered is then Cancelled, and
+ * what the job wrote is removed; a file that replaced the user's cannot be
+ * taken back, and its result stands.  That rule is applied here, once, for
+ * every kind of job, when the result is delivered and when the job is
+ * cancelled and waited for (cancelAndWait(), as the sidebar does when it
+ * is destroyed), when nothing is delivered.
  */
 
 #pragma once
@@ -62,9 +64,10 @@ public:
     /// The work, run on the worker thread: checks @p cancel as it goes and
     /// reports to @p progress.
     using Work = std::function<Result( const std::atomic_bool* cancel, const Progress& progress )>;
-    /// Removes what the work left behind for @p result, when a cancel came
-    /// while it finished.
-    using Discard = std::function<void( const Result& result )>;
+    /// Takes back what the work wrote for @p result, when a cancel came
+    /// while it finished: true if it did, false if it cannot be taken back
+    /// (the cancel came too late).
+    using Discard = std::function<bool( const Result& result )>;
     /// Takes the result, on the thread that started the job.
     using Done = std::function<void( Result result )>;
 
@@ -93,8 +96,8 @@ public:
     /**
      * Run @p work on the worker thread; its progress goes to @p shown, its
      * result to @p done, here, once.  A job cancelled before its result is
-     * delivered comes to Cancelled, whatever the work returned, and
-     * @p discard removes what it wrote.  One job at a time: does nothing
+     * delivered comes to Cancelled, whatever the work returned, if
+     * @p discard takes back what it wrote.  One job at a time: does nothing
      * while one runs.
      */
     void start( Work work, Discard discard, Done done, Progress shown = {} )
@@ -138,8 +141,8 @@ public:
     /**
      * Cancel the running job and wait for its worker: no code of the job
      * runs afterwards, and the host may unload the library.  A job that was
-     * done when the cancel came loses what it wrote, as on cancel(), but its
-     * result is delivered to no one.
+     * done when the cancel came loses what can be taken back, as on
+     * cancel(), but its result is delivered to no one.
      */
     void cancelAndWait()
     {
@@ -172,14 +175,15 @@ private:
     }
 
     /// The rule that a cancel wins, even over a job that was done when it
-    /// came: @p result becomes Cancelled, and what it wrote is removed.
+    /// came: what it wrote is taken back and @p result becomes Cancelled,
+    /// unless it cannot be taken back.
     Result settle( Result result ) const
     {
         if ( !cancel_ || !cancel_->load() ) {
             return result;
         }
-        if ( discard_ ) {
-            discard_( result );
+        if ( discard_ && !discard_( result ) ) {
+            return result;
         }
         Result cancelled;
         cancelled.status = Result::Status::Cancelled;

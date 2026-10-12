@@ -619,6 +619,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with "Cannot write the output file:" and the text file's error, often
   none. It now says "Cannot write the raw capture:" with the raw file's
   error (#165).
+- **Cancelling an export as it finishes no longer deletes it.** A Cancel
+  that reached an export just after it had written its file removed the
+  file; when the export had replaced an existing file, neither was left.
+  An export that has written its file now stays and is reported, however
+  late the Cancel comes; one cancelled before leaves the file it would have
+  replaced as it was (#166).
 
 ## [0.3.0] — 2026-10-09
 
