@@ -227,10 +227,13 @@ PacketPanel::PacketPanel( QWidget* parent )
     streamView_ = new StreamContentView;
     streamView_->setObjectName( "streamView" );
     tabs_->addTab( streamView_, "Stream" );
+    // Neither can be dragged away: the Conversations keep a few rows.
     auto* outer = new QSplitter( Qt::Vertical );
+    outer->setChildrenCollapsible( false );
     outer->addWidget( tabs_ );
     conversations_ = new ConversationTable;
     conversations_->setObjectName( "conversationTable" );
+    conversations_->setMinimumHeight( 5 * fontMetrics().lineSpacing() );
     outer->addWidget( conversations_ );
     layout->addWidget( outer, 1 );
 

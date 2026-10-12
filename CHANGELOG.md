@@ -604,6 +604,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The options dialog's notes are no longer cut off.** On a laptop's
   screen the dialog opened lower than it needs, and the last lines of the
   SOME/IP and Advanced notes were missing; it now opens at its full height.
+- **The sidebar's summary is no longer cut off.** In a sidebar not tall
+  enough for it, the summary was squeezed: its last lines were cut off,
+  overlapped the Packet heading and could not be reached. The summary now
+  scrolls; it takes the room it needs, up to 24 lines, and in a short
+  sidebar gives in down to three, while the Packet panel keeps room for
+  its tabs and the Conversations, which can no longer be dragged away
+  (#149).
 
 ## [0.3.0] — 2026-10-09
 

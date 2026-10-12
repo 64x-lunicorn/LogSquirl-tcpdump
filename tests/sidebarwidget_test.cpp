@@ -31,6 +31,7 @@
 #include "settings.h"
 #include "sidebarwidget.h"
 
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -43,6 +44,8 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -648,6 +651,65 @@ SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
         {
             REQUIRE( child<QLabel>( widget, "summary" )->text() == "No capture loaded." );
             REQUIRE( child<QLabel>( widget, "packetStatus" )->isHidden() );
+        }
+    }
+}
+
+SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[sidebar]" )
+{
+    GIVEN( "a sidebar of a given height showing a summary longer than it" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        const auto height = GENERATE( 300, 600, 900 );
+        widget.resize( 380, height );
+        widget.show();
+        QCoreApplication::processEvents();
+        auto* summary = child<QLabel>( widget, "summary" );
+        auto* area = child<QScrollArea>( widget, "summaryArea" );
+        auto* panel = child<QWidget>( widget, "packetPanel" );
+        auto* conversations = child<QWidget>( widget, "conversationTable" );
+        const auto line = widget.fontMetrics().lineSpacing();
+
+        // The summary comes after the sidebar is shown, as a capture's does,
+        // and takes the room the Packet panel leaves, up to 24 lines.
+        QStringList lines;
+        for ( int i = 1; i < 80; ++i ) {
+            lines << QString( "Endpoint line %1" ).arg( i );
+        }
+        lines << "The last line";
+        summary->setText( lines.join( "<br>" ) );
+        REQUIRE( waitFor( [ & ] {
+            const auto fitted
+                = area->height() == 24 * line || panel->height() == panel->minimumHeight();
+            return area->verticalScrollBar()->maximum() > 0 && fitted;
+        } ) );
+
+        THEN( "the summary ends above the Packet panel, and both keep a usable height" )
+        {
+            const auto areaBottom = area->mapTo( &widget, QPoint( 0, area->height() ) ).y();
+            const auto panelTop = panel->mapTo( &widget, QPoint( 0, 0 ) ).y();
+            REQUIRE( areaBottom <= panelTop );
+            REQUIRE( area->height() >= 3 * line );
+            REQUIRE( panel->height() >= 16 * line );
+            REQUIRE( conversations->height() >= 5 * line );
+        }
+
+        WHEN( "the summary is scrolled to its end" )
+        {
+            REQUIRE( area->verticalScrollBar()->maximum() > 0 );
+            area->verticalScrollBar()->setValue( area->verticalScrollBar()->maximum() );
+            QCoreApplication::processEvents();
+
+            THEN( "its last line is in view, whole" )
+            {
+                // The label is as tall as its text: none of it is cut off.
+                REQUIRE( summary->height() >= summary->heightForWidth( summary->width() ) );
+                const auto bottom
+                    = summary->mapTo( area->viewport(), QPoint( 0, summary->height() ) ).y();
+                REQUIRE( bottom <= area->viewport()->height() );
+                REQUIRE( bottom >= line );
+            }
         }
     }
 }

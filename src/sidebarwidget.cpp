@@ -85,6 +85,8 @@
 #include <QPointer>
 #include <QPromise>
 #include <QRegularExpression>
+#include <QResizeEvent>
+#include <QScrollArea>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QUrl>
@@ -164,6 +166,54 @@ QString separatorHtml( const QPalette& palette )
                        mix( window.blue(), text.blue() ) );
     return QString( "<hr style=\"background-color:%1\">" ).arg( line.name() );
 }
+
+/// The summary, scrolled when the sidebar is too short for all of it.  It
+/// asks for the height of its text at its width, up to 24 lines (as a
+/// QScrollArea does), so that a long summary leaves the Packet panel room
+/// in a tall sidebar; in a short one it gives in down to three lines.
+class SummaryArea : public QScrollArea {
+public:
+    explicit SummaryArea( QLabel* summary )
+    {
+        setFrameShape( QFrame::NoFrame );
+        setHorizontalScrollBarPolicy( Qt::ScrollBarAlwaysOff );
+        setWidgetResizable( true );
+        setWidget( summary );
+    }
+
+    QSize sizeHint() const override
+    {
+        const auto width = viewport()->width();
+        const auto text
+            = widget()->heightForWidth( width > 0 ? width : widget()->sizeHint().width() );
+        return { QScrollArea::sizeHint().width(),
+                 std::min( text, 24 * fontMetrics().lineSpacing() ) };
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        return { QScrollArea::minimumSizeHint().width(), 3 * fontMetrics().lineSpacing() };
+    }
+
+protected:
+    bool event( QEvent* event ) override
+    {
+        // A new text in the summary asks for another height.
+        if ( event->type() == QEvent::LayoutRequest ) {
+            updateGeometry();
+        }
+        return QScrollArea::event( event );
+    }
+
+    void resizeEvent( QResizeEvent* event ) override
+    {
+        QScrollArea::resizeEvent( event );
+        // So does a new width.
+        if ( event->size().width() != event->oldSize().width() ) {
+            updateGeometry();
+        }
+    }
+};
 
 } // namespace
 
@@ -326,10 +376,13 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
+    summaryLabel_->setAlignment( Qt::AlignLeft | Qt::AlignTop );
     // Its links are opened here: filters in the Regex Lab, pages outside.
     summaryLabel_->setTextInteractionFlags( Qt::LinksAccessibleByMouse );
     connect( summaryLabel_, &QLabel::linkActivated, this, &SidebarWidget::openLink );
-    layout->addWidget( summaryLabel_ );
+    auto* summaryArea = new SummaryArea( summaryLabel_ );
+    summaryArea->setObjectName( "summaryArea" );
+    layout->addWidget( summaryArea );
 
     // A live capture's raw file is in the temporary directory, which goes
     // when LogSquirl quits: this keeps it.
@@ -341,9 +394,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     layout->addWidget( saveButton_ );
     connect( saveButton_, &QPushButton::clicked, this, &SidebarWidget::saveCapture );
 
-    // The packet of the selected line, below; it takes the room left.
+    // The packet of the selected line, below; it takes the room left, and
+    // keeps room for its tabs and the Conversations however long the summary.
     packetPanel_ = new PacketPanel;
     packetPanel_->setObjectName( "packetPanel" );
+    packetPanel_->setMinimumHeight( 16 * fontMetrics().lineSpacing() );
     layout->addWidget( packetPanel_, 1 );
     if ( streamLinesButton_ ) {
         connect( packetPanel_, &PacketPanel::streamActionsChanged, this,
