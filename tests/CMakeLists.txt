@@ -24,6 +24,7 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     packet_layers_test.cpp
     capture_index_test.cpp
+    capture_catalog_test.cpp
     gzip_source_test.cpp
     packet_export_test.cpp
     link_layers_test.cpp
@@ -158,6 +159,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/gzip_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_catalog.cpp"
         "${CMAKE_SOURCE_DIR}/src/raw_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_pipeline.cpp"

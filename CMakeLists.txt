@@ -162,6 +162,7 @@ add_library(logsquirl_tcpdump SHARED
     src/capture_file.cpp
     src/gzip_source.cpp
     src/capture_index.cpp
+    src/capture_catalog.cpp
     src/raw_capture.cpp
     src/packet_export.cpp
     src/packet_pipeline.cpp
