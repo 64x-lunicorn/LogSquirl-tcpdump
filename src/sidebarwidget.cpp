@@ -346,9 +346,9 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         streamLinesButton_ = new QPushButton( "Stream lines in Regex Lab" );
         streamLinesButton_->setObjectName( "streamLinesButton" );
         layout->addWidget( streamLinesButton_ );
-        connect( streamLinesButton_, &QPushButton::clicked, this, [] {
+        connect( streamLinesButton_, &QPushButton::clicked, this, [ this ] {
             try {
-                followSelectedStream();
+                openStreamLines();
             } catch ( const std::exception& e ) {
                 // An exception must not escape into Qt or the host.
                 hostLog( LOGSQUIRL_LOG_ERROR,
@@ -863,6 +863,17 @@ void SidebarWidget::followStreamContent()
                              "tcpdump sidebar tab." )
                         .arg( packetPanel_->selectedPacket() ) );
     }
+}
+
+void SidebarWidget::openStreamLines()
+{
+    // The panel reads the selection now, not at its next poll.
+    packetPanel_->refresh();
+    if ( const auto problem = packetPanel_->streamLinesProblem(); !problem.isEmpty() ) {
+        hostNotify( "Stream lines in Regex Lab: " + problem );
+        return;
+    }
+    followSelectedStream();
 }
 
 void SidebarWidget::updateStreamLinesButton()

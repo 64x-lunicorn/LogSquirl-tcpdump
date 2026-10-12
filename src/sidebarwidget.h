@@ -190,6 +190,13 @@ public:
     /// where it is.
     void followStreamContent();
 
+    /// Plugins > tcpdump > Stream lines in Regex Lab: open the Regex Lab on
+    /// the lines of the selected line's stream (followSelectedStream()), or
+    /// notify the user why not, as the sidebar's button says in its tooltip
+    /// (PacketPanel::streamLinesProblem()): a line that only looks like a
+    /// packet line, in a tab that shows no capture, opens nothing.
+    void openStreamLines();
+
     /// Plugins > tcpdump > Export packets…: the packets of the lines selected
     /// in the tab in front, confirmed by the user, written to a new capture
     /// file in the background.  While an export runs, only a notification

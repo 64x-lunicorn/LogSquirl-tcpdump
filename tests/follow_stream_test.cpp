@@ -44,6 +44,7 @@
 
 using tcpdump::followStreamPattern;
 using tcpdump_test::FakeHost;
+using tcpdump_test::waitFor;
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
@@ -296,12 +297,20 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
 {
     const auto lines = corpusLines( "mixed.txt" );
 
-    GIVEN( "a plugin loaded by a host with the Regex Lab and the selected lines" )
+    GIVEN( "a plugin loaded by a host with the Regex Lab and the selected lines, the capture "
+           "in front" )
     {
+        QTemporaryDir tempRoot;
+        REQUIRE( tempRoot.isValid() );
+        tcpdump::g_state.tempRoot = tempRoot.path();
         FakeHost host;
         REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
         auto* sidebar = tcpdump::g_state.sidebarWidget;
         auto* button = sidebar->findChild<QPushButton*>( "streamLinesButton" );
+        sidebar->openPcapFile( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) );
+        REQUIRE( waitFor( [ sidebar ] { return !sidebar->isConverting(); } ) );
+        REQUIRE( host.openedFiles.size() == 1 );
+        host.activateFile( host.openedFiles.first() );
 
         THEN( "Plugins > tcpdump > Stream lines in Regex Lab and the sidebar button are offered" )
         {
@@ -364,7 +373,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
             {
                 REQUIRE( host.regexLabs.isEmpty() );
                 REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "select a packet line" ) );
+                REQUIRE( host.notifications.first().contains( "Select a packet line" ) );
             }
         }
 
@@ -377,7 +386,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
             {
                 REQUIRE( host.regexLabs.isEmpty() );
                 REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "packet 20 belongs to no stream" ) );
+                REQUIRE( host.notifications.first().contains( "Packet 20 belongs to no stream" ) );
             }
         }
 
@@ -404,6 +413,23 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
                 REQUIRE( host.regexLabs.isEmpty() );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "shows no capture" ) );
+            }
+        }
+
+        WHEN( "a plain log in front has a line that looks like a packet line selected" )
+        {
+            host.activateFile( "/some/plain.log" );
+            host.selectedLines = { packet( lines, 1 ) };
+            host.menuActions.last().trigger();
+
+            THEN( "no Lab opens, and the notification says why, as the button's tooltip does" )
+            {
+                REQUIRE( host.regexLabs.isEmpty() );
+                REQUIRE( button );
+                REQUIRE_FALSE( button->isEnabled() );
+                REQUIRE( host.notifications
+                         == QStringList{ "Stream lines in Regex Lab: " + button->toolTip() } );
+                REQUIRE( button->toolTip() == "No capture in this tab." );
             }
         }
 

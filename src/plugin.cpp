@@ -57,7 +57,6 @@
 #include "plugin.h"
 #include "configdialog.h"
 #include "display_filter_dialog.h"
-#include "follow_stream.h"
 #include "process_source.h"
 #include "settings.h"
 #include "sidebarwidget.h"
@@ -190,7 +189,11 @@ static void stopLiveCaptureFromMenu( void* /* user_data */ )
 /// Plugins > tcpdump > Stream lines in Regex Lab: the same as the sidebar's button.
 static void followStreamFromMenu( void* /* user_data */ )
 {
-    guarded( "following a stream from the menu", [] { tcpdump::followSelectedStream(); } );
+    guarded( "following a stream from the menu", [] {
+        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
+            sidebar->openStreamLines();
+        }
+    } );
 }
 
 /// Plugins > tcpdump > Display filter…: a filter typed, opened in the Regex Lab.
