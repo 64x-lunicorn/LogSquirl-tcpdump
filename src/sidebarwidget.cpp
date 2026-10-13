@@ -709,6 +709,8 @@ void SidebarWidget::exportSelectedPackets()
                                   const BackgroundJob<ExportResult>::Progress& progress ) {
             return exportPackets( index, numbers, path, cancel, progress );
         },
+        // A cancelled or failed export left nothing behind to take back;
+        // one that wrote its file cannot be taken back.
         []( const ExportResult& result ) {
             return result.status != ExportResult::Status::Exported;
         },

@@ -333,10 +333,7 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     QFile output;
     QIODevice* text = &output;
     LiveFiles* files = nullptr;
-    auto writeFailed = [ &text ] {
-        return failed(
-            QStringLiteral( "Cannot write the output file: %1" ).arg( text->errorString() ) );
-    };
+    auto writeFailed = [ &text ] { return failed( textWriteError( *text ) ); };
     auto liveFailed = [ &files ] { return failed( files->error() ); };
     auto writeLine = [ &text ]( const std::string& line ) {
         return text->write( line.data(), static_cast<qint64>( line.size() ) )

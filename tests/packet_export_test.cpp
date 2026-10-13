@@ -33,6 +33,7 @@
 #include "pcap_converter.h"
 #include "sidebarwidget.h"
 
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -428,6 +429,17 @@ SCENARIO( "The packets to export are read from packet lines, numbers and ranges"
         }
     }
 
+    GIVEN( "a packet line whose Stream column holds a number no stream has" )
+    {
+        const auto set = parsePacketSet( "7 99999999999 0.000000 10.0.0.1 10.0.0.2 UDP 60 x", 100 );
+
+        THEN( "its No. column counts, not each number on the line" )
+        {
+            REQUIRE( set.numbers == std::vector<uint32_t>{ 7 } );
+            REQUIRE( set.skipped == 0 );
+        }
+    }
+
     GIVEN( "a range of three billion packets, named twice and overlapped" )
     {
         const auto set = parsePacketSet( "1-3000000000, 2-3000000000 7 3000000000", 3000000000u );
@@ -571,6 +583,41 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
             REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
             REQUIRE( host.notifications.size() == 1 );
             REQUIRE( host.notifications.first().startsWith( "Exported 1 packet" ) );
+        }
+    }
+
+    GIVEN( "an export over an existing file, whose sidebar is destroyed once it has written the "
+           "file" )
+    {
+        {
+            QFile old( loaded.outputPath );
+            REQUIRE( old.open( QIODevice::WriteOnly ) );
+            REQUIRE( old.write( "the capture it replaces" ) > 0 );
+        }
+        host.selectedLines = { loaded.lines[ 1 ] };
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
+                  return a.label == "Export packets\xe2\x80\xa6";
+              } );
+        entry->trigger();
+        REQUIRE( loaded.sidebar->isExporting() );
+        // Its result waits for this thread's event loop, which does not run
+        // until the file has replaced the old one.
+        QElapsedTimer clock;
+        clock.start();
+        while ( readAll( loaded.outputPath ) == "the capture it replaces"
+                && clock.elapsed() < 5000 ) {
+            std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+        }
+        REQUIRE( loaded.sidebar->isExporting() );
+        // The sidebar is deleted, as when LogSquirl unloads the plugin.
+        logsquirl_plugin_shutdown();
+        QCoreApplication::processEvents();
+
+        THEN( "the cancel came too late: the export is kept, reported to no one" )
+        {
+            REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
+            REQUIRE( host.notifications.isEmpty() );
         }
     }
 

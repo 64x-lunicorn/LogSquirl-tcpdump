@@ -74,6 +74,8 @@ SCENARIO( "Selected Packet Line reads the first selected line as a packet, or sa
     const auto noStream = line( "7", "-", "Echo (ping) request id=0x0001, seq=1" );
     const auto unnumbered = line( "9", "?", "50000" + kArrow + "80 [SYN] Seq=0 Win=65535" );
     const auto noNumber = line( "99999999999", "0", "50000" + kArrow + "80 [SYN] Seq=0" );
+    const auto noStreamNumber
+        = line( "11", "99999999999", "50000" + kArrow + "80 [SYN] Seq=0 Win=65535" );
     const QString header( "No.    Stream  UTC Time                     Time           Source   "
                           "Destination   Protocol  Length Info" );
 
@@ -119,6 +121,16 @@ SCENARIO( "Selected Packet Line reads the first selected line as a packet, or sa
           {},
           {},
           "Packet 9 has no stream number: the capture has more conversations than the plugin "
+          "numbers." },
+        { "a packet line whose stream number no stream has",
+          LOGSQUIRL_LOG_LINES_OK,
+          { noStreamNumber },
+          11,
+          kUnnumbered,
+          {},
+          {},
+          {},
+          "Packet 11 has no stream number: the capture has more conversations than the plugin "
           "numbers." },
         { "a packet line whose number no packet has",
           LOGSQUIRL_LOG_LINES_OK,

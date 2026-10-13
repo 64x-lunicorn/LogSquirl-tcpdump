@@ -54,10 +54,12 @@ std::optional<PacketLine> readPacketLine( const QString& line )
         packet.stream = kUnnumbered;
     }
     else {
-        // The Packet Formatter writes no number a stream cannot have.
+        // A number no stream can have is past the numbered ones, as a
+        // packet number no packet can have is 0: the line is still a
+        // packet line.
         packet.stream = stream.toInt( &ok );
         if ( !ok ) {
-            return std::nullopt;
+            packet.stream = kUnnumbered;
         }
     }
 
