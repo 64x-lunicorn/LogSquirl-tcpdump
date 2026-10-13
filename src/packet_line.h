@@ -53,7 +53,7 @@ struct PacketLine {
     /// holds a number no packet has.
     uint32_t number = 0;
     /// Stream: its number from the Stream Tracker, or kNoStream ("-") or
-    /// kUnnumbered ("?").
+    /// kUnnumbered ("?", and when the column holds a number no stream has).
     int stream = kNoStream;
     /// Source and Destination, with the name host names put behind the
     /// address (LineLayout::hostNames), "-" for none.

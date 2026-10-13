@@ -428,6 +428,17 @@ SCENARIO( "The packets to export are read from packet lines, numbers and ranges"
         }
     }
 
+    GIVEN( "a packet line whose Stream column holds a number no stream has" )
+    {
+        const auto set = parsePacketSet( "7 99999999999 0.000000 10.0.0.1 10.0.0.2 UDP 60 x", 100 );
+
+        THEN( "its No. column counts, not each number on the line" )
+        {
+            REQUIRE( set.numbers == std::vector<uint32_t>{ 7 } );
+            REQUIRE( set.skipped == 0 );
+        }
+    }
+
     GIVEN( "a range of three billion packets, named twice and overlapped" )
     {
         const auto set = parsePacketSet( "1-3000000000, 2-3000000000 7 3000000000", 3000000000u );

@@ -181,11 +181,6 @@ SCENARIO( "A line that is no packet line reads back as none", "[packet_formatter
         REQUIRE_FALSE( readPacketLine( "" ) );
     }
 
-    THEN( "a stream number too big for a stream is none" )
-    {
-        REQUIRE_FALSE( readPacketLine( "1 99999999999 0.000000 10.0.0.1 10.0.0.2 UDP 60 x" ) );
-    }
-
     THEN( "a packet number no packet can have reads back as 0" )
     {
         for ( const auto* line : { "0 1 0.000000 10.0.0.1 10.0.0.2 UDP 60 x",
@@ -196,5 +191,13 @@ SCENARIO( "A line that is no packet line reads back as none", "[packet_formatter
             REQUIRE( read->number == 0 );
             REQUIRE( read->stream == 1 );
         }
+    }
+
+    THEN( "a stream number no stream can have reads back as past the numbered ones" )
+    {
+        const auto read = readPacketLine( "1 99999999999 0.000000 10.0.0.1 10.0.0.2 UDP 60 x" );
+        REQUIRE( read );
+        REQUIRE( read->number == 1 );
+        REQUIRE( read->stream == kUnnumbered );
     }
 }

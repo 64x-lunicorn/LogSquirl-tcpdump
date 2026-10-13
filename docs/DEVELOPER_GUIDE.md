@@ -1000,7 +1000,8 @@ A packet line is read back next to where it is written: `readPacketLine()`
 (`packet_line.h/cpp`) reads a line of any `LineLayout` with
 `packetLineRegex()`, the Log Format's regex, and answers with a
 `PacketLine`: the packet number (0 for a number no packet has), the stream
-(its number, `kNoStream` or `kUnnumbered`), Source, Destination, Protocol,
+(its number, `kNoStream` or `kUnnumbered`, `kUnnumbered` too for a number
+no stream has), Source, Destination, Protocol,
 the rest of the line from Info on, and the iRTT that Info shows on the ACK
 that completes a handshake (see *TCP analysis markers*), or none for a
 line that is no packet line. The Packet Panel and Stream lines in Regex
