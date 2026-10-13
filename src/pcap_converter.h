@@ -29,7 +29,9 @@
 #include "conversations.h"
 #include "gzip_source.h"
 #include "host_names.h"
+#include "live_output.h"
 #include "packet_formatter.h"
+#include "packet_recorder.h"
 #include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
@@ -41,95 +43,10 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <memory>
-#include <optional>
-#include <string>
-#include <utility>
 #include <vector>
 
 namespace tcpdump {
-
-/**
- * What the Converter knows about a converted capture, in the shape the
- * sidebar shows it: the counts and breakdowns, and what was cut.
- *
- * "What was cut" is four facts, each standing on its own with the number
- * that applies, so that the sidebar prints what it is told.
- */
-struct CaptureSummary {
-    uint64_t packets = 0;
-    uint64_t bytes = 0;           ///< Captured bytes of all packets.
-    double durationSeconds = 0.0; ///< Between the earliest and the latest packet.
-    /// The earliest and the latest packet time, as the UTC Time column
-    /// writes them at the capture's precision; empty without packets.
-    std::string firstTimeUtc;
-    std::string lastTimeUtc;
-    /// The capture's link-layer types by name, or number, in the order they
-    /// were first seen: one for a pcap, one per kind of interface otherwise.
-    std::vector<std::string> linkTypeNames;
-    std::map<std::string, uint64_t> protocolPackets;
-    std::map<std::string, uint64_t> protocolBytes;
-    /// Packets per IP address in the Source or Destination column, for
-    /// every address that was counted.
-    std::map<std::string, uint64_t> endpointPackets;
-    /// The names of those addresses at the end of the capture (or of what
-    /// was converted so far), with host names shown (LineLayout::hostNames):
-    /// the last a DNS answer gave each (HostNames); empty otherwise.
-    std::map<std::string, std::string> endpointNames;
-    /// Packets per address of a tunnel's endpoints, which no column shows
-    /// (CaptureStats::tunnelEndpointPackets); empty without tunnels.
-    std::map<std::string, uint64_t> tunnelEndpointPackets;
-    /// TCP segments per analysis marker ("TCP Retransmission", …), for the
-    /// kinds that occur, in the order of TcpMarker.
-    std::vector<std::pair<std::string, uint64_t>> tcpMarkers;
-    /// TCP handshakes captured whole, and the median of their initial
-    /// round-trip times (iRTT) in nanoseconds; unset without any.
-    uint64_t handshakes = 0;
-    std::optional<uint64_t> medianInitialRttNs;
-    /// The Conversations table: a row per numbered stream.  Shared, as it
-    /// may hold a million rows: a summary taken anew (a live capture's
-    /// next snapshot) holds a table of its own, never a changed one.
-    std::shared_ptr<const ConversationRows> conversations;
-    /// Packets of the streams past the stream cap (see streamCap), which
-    /// the table counts together as "other streams", and their bytes on the
-    /// wire.
-    uint64_t otherStreamPackets = 0;
-    uint64_t otherStreamBytes = 0;
-
-    /// Packets captured shorter than on the wire, cut at the snaplen; their
-    /// lines say "[cut to N bytes]".  0 when every packet was captured whole.
-    uint64_t cutPackets = 0;
-    /// The capture ends in the middle of a record, which is not shown; or
-    /// its gzip stream ends early (compressionProblem).
-    bool endsInsideRecord = false;
-    /// Why a gzip-compressed capture's stream ended before its end, cut off
-    /// or corrupt; empty otherwise.
-    std::string compressionProblem;
-    /// The conversion stopped with the packet of the last number
-    /// (ConversionOptions::lastPacketNumber): a capture file had more
-    /// packets, which were not converted, or a live capture got to it.
-    bool packetNumbersUsedUp = false;
-    /// Set when conversations past the stream cap went unnumbered and show
-    /// stream "?" in the log: the cap, i.e. how many were numbered.
-    std::optional<uint64_t> streamCap;
-    /// Set when addresses past the endpoint cap went uncounted: the packets
-    /// of all those addresses together.
-    std::optional<uint64_t> otherEndpointPackets;
-
-    /// Set when a TLS key log was given (ConversionOptions::keyLogPath):
-    /// the TLS sessions with records decrypted.
-    std::optional<uint64_t> tlsSessionsDecrypted;
-    /// Why the key log could not be read, when it could not: never any of
-    /// its contents.
-    std::string keyLogError;
-
-    bool operator==( const CaptureSummary& other ) const;
-    bool operator!=( const CaptureSummary& other ) const
-    {
-        return !( *this == other );
-    }
-};
 
 /**
  * Outcome of convertPcap().
@@ -140,17 +57,6 @@ struct CaptureSummary {
  * exception on the thread that runs it, ends as Failed with a message.
  * No exception leaves the Converter.
  */
-/// Which stop condition of a live capture (LiveLimits) ended it.
-enum class StopCondition : uint8_t {
-    None,     ///< None: Stop, or the stream ended.
-    Duration, ///< It ran for LiveLimits::duration.
-    Packets,  ///< It converted LiveLimits::packets packets.
-    Bytes,    ///< It read LiveLimits::bytes bytes.
-    /// It converted the packet of the last number the No. column has
-    /// (kMaxPacketNumber); not a LiveLimits setting.
-    PacketNumbers,
-};
-
 struct ConversionResult {
     enum class Status {
         Converted, ///< outputPath holds the capture's text.
@@ -179,11 +85,6 @@ struct ConversionResult {
     StopCondition stoppedBy = StopCondition::None;
 };
 
-/// How often at least a live conversion makes its lines readable.
-constexpr std::chrono::milliseconds kLiveFlushInterval{ 100 };
-/// How often at most a live conversion hands out a LiveSnapshot.
-constexpr std::chrono::milliseconds kLiveSnapshotInterval{ 1000 };
-
 /// What a live conversion has converted so far, while it runs.
 struct LiveSnapshot {
     CaptureSummary summary;              ///< As the final one, of the packets so far.
@@ -196,53 +97,6 @@ struct LiveSnapshot {
     /// goes up with each file it starts.
     uint32_t rawFile = 1;
 };
-
-/**
- * When a live capture stops by itself, and whether its raw capture is a ring
- * buffer, as dumpcap's -a and -b say it (raw_capture.h).  0 is "none"
- * throughout: the defaults capture until Stop, into one file.
- *
- * The stop conditions are checked after each packet, so the packet that
- * reaches a count or a size is the last one; the duration is also checked
- * while the stream has nothing to read.  The first one reached ends the
- * capture as Stop does: Converted, with what was captured.
- *
- * A ring buffer starts a new file after the packet that filled the current
- * one, by size or duration, and keeps the newest ringFiles files.  Each file
- * has a text file of its own, named after it, which LiveObserver::firstPacket
- * hands out to be opened; a text is never rewritten, also once its raw file
- * is deleted.
- */
-struct LiveLimits {
-    std::chrono::seconds duration{ 0 };     ///< Stop after this long.
-    uint64_t packets = 0;                   ///< Stop after this many packets.
-    uint64_t bytes = 0;                     ///< Stop once this many bytes were read.
-    uint32_t ringFiles = 0;                 ///< The ring buffer's files; 0: no ring buffer.
-    uint64_t fileBytes = 0;                 ///< A new file once one is this big.
-    std::chrono::seconds fileDuration{ 0 }; ///< A new file once one is this old.
-
-    /// Whether the raw capture is a ring buffer: files kept, and a size or
-    /// duration to start a new one at.
-    bool ringBuffer() const
-    {
-        return ringFiles > 0 && ( fileBytes > 0 || fileDuration.count() > 0 );
-    }
-
-    bool operator==( const LiveLimits& other ) const
-    {
-        return duration == other.duration && packets == other.packets && bytes == other.bytes
-               && ringFiles == other.ringFiles && fileBytes == other.fileBytes
-               && fileDuration == other.fileDuration;
-    }
-    bool operator!=( const LiveLimits& other ) const
-    {
-        return !( *this == other );
-    }
-};
-
-/// The clock a live conversion measures LiveLimits' durations with; a test
-/// hands it a fake one.  Empty: the steady clock.
-using LiveClock = std::function<std::chrono::steady_clock::time_point()>;
 
 /**
  * What a live conversion tells while it runs (convertStream()).  Both are
@@ -356,7 +210,8 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
  * @param cancel  If set, checked between packets; stops the conversion and
  *                removes what was written.  The source must be given it
  *                too, so that a wait for the next packet ends with it.
- * @param clock   What the limits' durations are measured with.
+ * @param clock   What the limits' durations and the flush and snapshot
+ *                cadence are measured with (LiveOutput).
  */
 ConversionResult convertStream( ByteSource& source, const QString& name, const QString& outputRoot,
                                 const std::atomic_bool* cancel = nullptr,
@@ -367,10 +222,15 @@ ConversionResult convertStream( ByteSource& source, const QString& name, const Q
 /**
  * The rule that a cancel request wins, even over a conversion that had
  * just finished when the request came: if @p cancel is set, @p result
- * becomes Cancelled, whatever it was, and its output is removed.  Decided
- * here for the Converter, which applies it when its loop ends, and for the
- * caller, which applies it to the result it receives from the worker.
+ * becomes Cancelled, whatever it was, and its output is removed
+ * (removeOutput()).  Applied by the Converter when its loop ends; the
+ * sidebar's Background Job applies the same rule to the result it
+ * receives from the worker (background_job.h).
  */
 ConversionResult applyCancelRequest( ConversionResult result, const std::atomic_bool* cancel );
+
+/// Remove the private directory of @p result's output, and all in it; none
+/// for a result without an output.
+void removeOutput( const ConversionResult& result );
 
 } // namespace tcpdump

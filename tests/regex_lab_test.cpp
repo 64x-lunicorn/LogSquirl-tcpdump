@@ -27,6 +27,7 @@
 
 #include "corpus_layouts.h"
 #include "fakehost.h"
+#include "packet_line.h"
 #include "pcap_converter.h"
 #include "regex_lab.h"
 

@@ -93,13 +93,21 @@ std::set<int> matched( const QString& pattern, const QStringList& lines )
     return numbers;
 }
 
+/// The pattern of the stream of @p line, a packet line; empty for a stream
+/// without a number.
+QString patternOf( const QString& line )
+{
+    const auto packet = tcpdump::readPacketLine( line );
+    REQUIRE( packet );
+    return followStreamPattern( *packet );
+}
+
 /// The packets the stream of packet @p number holds, by the pattern.
 std::set<int> followed( const QStringList& lines, int number )
 {
-    const auto follow = followStreamPattern( packet( lines, number ) );
-    INFO( follow.reason.toStdString() );
-    REQUIRE_FALSE( follow.pattern.isEmpty() );
-    return matched( follow.pattern, lines );
+    const auto pattern = patternOf( packet( lines, number ) );
+    REQUIRE_FALSE( pattern.isEmpty() );
+    return matched( pattern, lines );
 }
 
 const QString kArrow = QString::fromUtf8( "\xe2\x86\x92" );
@@ -167,17 +175,16 @@ SCENARIO( "Stream lines in Regex Lab matches exactly the lines of a packet's str
             for ( const auto& line : lines ) {
                 INFO( name.toStdString() << ": " << line.toStdString() );
                 const auto stream = line.section( ' ', 1, 1, QString::SectionSkipEmpty );
-                const auto follow = followStreamPattern( line );
+                const auto pattern = patternOf( line );
 
                 if ( stream == "-" || stream == "?" ) {
-                    // Each is a packet line, with a reason of its own.
-                    REQUIRE( follow.pattern.isEmpty() );
-                    REQUIRE( follow.reason.startsWith( "packet " ) );
+                    // A packet line, of no stream to follow.
+                    REQUIRE( pattern.isEmpty() );
                     continue;
                 }
                 // The line itself, and only lines of its stream number.
-                REQUIRE( follow.reason.isEmpty() );
-                const auto numbers = matched( follow.pattern, lines );
+                REQUIRE_FALSE( pattern.isEmpty() );
+                const auto numbers = matched( pattern, lines );
                 REQUIRE( numbers.count( line.section( ' ', 0, 0 ).toInt() ) == 1 );
                 for ( const auto number : numbers ) {
                     REQUIRE( packet( lines, number ).section( ' ', 1, 1, QString::SectionSkipEmpty )
@@ -202,13 +209,12 @@ SCENARIO( "Stream lines in Regex Lab matches exactly the lines of a packet's str
                     INFO( QFileInfo( capture ).fileName().toStdString()
                           << ", " << tcpdump_test::describeLayout( layout ) << ": "
                           << lines[ i ].toStdString() );
-                    const auto follow = followStreamPattern( lines[ i ] );
-                    const auto expected = followStreamPattern( standard[ i ] );
-                    REQUIRE( follow.reason == expected.reason );
-                    if ( !follow.pattern.isEmpty() ) {
+                    const auto pattern = patternOf( lines[ i ] );
+                    const auto expected = patternOf( standard[ i ] );
+                    REQUIRE( pattern.isEmpty() == expected.isEmpty() );
+                    if ( !pattern.isEmpty() ) {
                         // The same packets as in the default layout
-                        REQUIRE( matched( follow.pattern, lines )
-                                 == matched( expected.pattern, standard ) );
+                        REQUIRE( matched( pattern, lines ) == matched( expected, standard ) );
                     }
                 }
             }
@@ -236,58 +242,14 @@ SCENARIO( "Stream lines in Regex Lab matches exactly the lines of a packet's str
         }
     }
 
-    GIVEN( "lines that are no packet lines" )
-    {
-        const auto header = QString::fromUtf8(
-            "No.    Stream  UTC Time                     Time           Source   Destination   "
-            "Protocol  Length Info" );
-
-        THEN( "they have no pattern, and the reason says so" )
-        {
-            for ( const auto& line :
-                  { header, QString( "2026-10-09 ERROR something broke" ), QString() } ) {
-                const auto follow = followStreamPattern( line );
-                REQUIRE( follow.pattern.isEmpty() );
-                REQUIRE( follow.reason.contains( "not a packet line" ) );
-            }
-        }
-    }
-
-    GIVEN( "a packet line without a stream" )
-    {
-        const auto line = packet( corpusLines( "mixed.txt" ), 7 );
-
-        THEN( "the reason names the packet and why" )
-        {
-            const auto follow = followStreamPattern( line );
-            REQUIRE( follow.pattern.isEmpty() );
-            REQUIRE( follow.reason.contains( "packet 7" ) );
-            REQUIRE( follow.reason.contains( "only TCP and UDP" ) );
-        }
-    }
-
     GIVEN( "a packet line past the stream cap" )
     {
         auto line = packet( corpusLines( "mixed.txt" ), 1 );
         line.replace( QRegularExpression( "^1      0  " ), "1      ?  " );
 
-        THEN( "the reason says the stream was not numbered" )
+        THEN( "it has no pattern: no number picks its lines" )
         {
-            const auto follow = followStreamPattern( line );
-            REQUIRE( follow.pattern.isEmpty() );
-            REQUIRE( follow.reason.contains( "no stream number" ) );
-        }
-    }
-
-    GIVEN( "several selected lines" )
-    {
-        const auto lines = corpusLines( "mixed.txt" );
-
-        THEN( "the first one is followed" )
-        {
-            const auto follow
-                = followStreamPattern( packet( lines, 5 ) + '\n' + packet( lines, 1 ) );
-            REQUIRE( matched( follow.pattern, lines ) == std::set<int>{ 5 } );
+            REQUIRE( patternOf( line ).isEmpty() );
         }
     }
 }
@@ -330,16 +292,22 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
         WHEN( "a TCP packet line is selected and the entry chosen" )
         {
             host.selectedLines = { packet( lines, 1 ) };
+            const auto callsBefore = host.selectionCalls;
             host.menuActions.last().trigger();
 
             THEN( "the Regex Lab opens with the pattern of that stream, matching case" )
             {
                 REQUIRE( host.regexLabs.size() == 1 );
                 const auto& lab = host.regexLabs.first();
-                REQUIRE( lab.pattern == followStreamPattern( packet( lines, 1 ) ).pattern );
+                REQUIRE( lab.pattern == patternOf( packet( lines, 1 ) ) );
                 REQUIRE( lab.flags == LOGSQUIRL_REGEX_LAB_MATCH_CASE );
                 REQUIRE( matched( lab.pattern, lines ) == std::set<int>{ 1, 2 } );
                 REQUIRE( host.notifications.isEmpty() );
+            }
+
+            THEN( "the selection is read once, for whether it works and what it opens" )
+            {
+                REQUIRE( host.selectionCalls == callsBefore + 1 );
             }
 
             AND_WHEN( "the user applies the pattern" )
@@ -365,54 +333,17 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
             }
         }
 
-        WHEN( "nothing is selected" )
-        {
-            host.menuActions.last().trigger();
-
-            THEN( "no Lab opens, and a notification says to select a packet line" )
-            {
-                REQUIRE( host.regexLabs.isEmpty() );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "Select a packet line" ) );
-            }
-        }
-
         WHEN( "a packet line without a stream is selected" )
         {
             host.selectedLines = { packet( lines, 20 ) };
             host.menuActions.last().trigger();
 
-            THEN( "no Lab opens, and a notification says the packet has no stream" )
+            THEN( "no Lab opens, and a notification says why, as the button's tooltip does" )
             {
                 REQUIRE( host.regexLabs.isEmpty() );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "Packet 20 belongs to no stream" ) );
-            }
-        }
-
-        WHEN( "a line of another log is selected" )
-        {
-            host.selectedLines = { "2026-10-09 12:00:00 INFO server started" };
-            host.menuActions.last().trigger();
-
-            THEN( "no Lab opens, and a notification says it is no packet line" )
-            {
-                REQUIRE( host.regexLabs.isEmpty() );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "not a packet line" ) );
-            }
-        }
-
-        WHEN( "the tab in front shows no Log File" )
-        {
-            host.selectionResult = LOGSQUIRL_LOG_LINES_NO_LOG_FILE;
-            host.menuActions.last().trigger();
-
-            THEN( "no Lab opens, and a notification says the tab shows no capture" )
-            {
-                REQUIRE( host.regexLabs.isEmpty() );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "shows no capture" ) );
+                REQUIRE( host.notifications
+                         == QStringList{ "Stream lines in Regex Lab: " + button->toolTip() } );
+                REQUIRE( button->toolTip().contains( "Packet 20 belongs to no stream" ) );
             }
         }
 

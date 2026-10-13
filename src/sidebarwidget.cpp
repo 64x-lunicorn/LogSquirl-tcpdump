@@ -39,19 +39,20 @@
  * packets that carried a tunnelled one show in no column, so no pattern
  * could pick their lines.
  *
- * It keeps each converted capture's summary and CaptureIndex under the path
- * of its .log file and shows the one of the tab in front, as the host
- * reports tab switches; its Packet Panel shows the packets of that capture.
+ * Its CaptureCatalog keeps each converted capture's summary and CaptureIndex
+ * under the path of its .log file, opens its tab and says which is in the
+ * tab in front, as the host reports tab switches; the sidebar shows that
+ * one's summary, and its Packet Panel the packets of that capture.  The
+ * sidebar is the catalog's tab host: it opens a tab on the UI thread.
  *
  * A live capture (startLiveCapture()) is its LiveCaptureSession's, which
- * decides what it does: the sidebar is the session's host (a tab, opened
- * on the UI thread once the first packet line is there; a notification)
- * and keeps the summaries of its text files, which follow the snapshots
- * until the capture ends; it shows the session's state, progress, stderr
- * lines and outcome.  The Live capture section, and the Start live
- * capture… dialog, choose what to capture from the Live Source Kinds
- * (live_source.h): the kind chosen makes the stream, and explains a
- * failure.
+ * decides what it does: the sidebar is the session's host (a notification),
+ * and the session keeps the summaries of its text files in the catalog,
+ * which opens each one's tab once the first packet line is there; the
+ * summaries follow the snapshots until the capture ends.  The sidebar shows the
+ * session's state, progress, stderr lines and outcome.  The Live capture section, and the Start
+ * live capture… dialog, choose what to capture from the Live Source Kinds (live_source.h): the kind
+ * chosen makes the stream, and explains a failure.
  *
  * Export packets… reads the selected lines, lets the user confirm or change
  * their packets in the ExportDialog, asks where to write them, and writes
@@ -72,6 +73,7 @@
 #include "plugin.h"
 #include "raw_capture.h"
 #include "regex_lab.h"
+#include "selected_packet_line.h"
 #include "settings.h"
 #include "tempdirs.h"
 
@@ -83,13 +85,11 @@
 #include <QLocale>
 #include <QMessageBox>
 #include <QPointer>
-#include <QPromise>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QUrl>
-#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
 #include <exception>
@@ -131,19 +131,6 @@ QString filterPattern( const QString& link )
         return protocolPattern( nameOf( filter, kProtocolFilter ) );
     }
     return {};
-}
-
-/// One spelling of @p filePath, so that the path the host reports for a tab
-/// finds the file the plugin wrote: e.g. on macOS the temporary directory
-/// /var/folders/... is a link to /private/var/folders/....
-QString fileKey( const QString& filePath )
-{
-    if ( filePath.isEmpty() ) {
-        return {};
-    }
-    const QFileInfo info( filePath );
-    const auto canonical = info.canonicalFilePath();
-    return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
 /// What setDefaultLiveSources() set; null: builtInLiveSources().
@@ -317,9 +304,6 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         return !request.outputPath.isEmpty();
     } )
 {
-    pool_.setMaxThreadCount( 1 );
-    exportPool_.setMaxThreadCount( 1 );
-
     // All of it scrolls when the sidebar is shorter than its minimum.
     auto* content = new QWidget;
     auto* layout = new QVBoxLayout( content );
@@ -492,14 +476,18 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                == QMessageBox::Yes;
     };
 
-    // This widget is the session's host and keeps its captures' summaries.
+    // This widget is the session's host; the session keeps its captures'
+    // summaries in the catalog, and the sidebar shows the one in front.
     LiveCaptureHost& host = *this;
-    LiveCaptureCatalog& catalog = *this;
-    live_ = std::make_unique<LiveCaptureSession>( host, catalog );
+    live_ = std::make_unique<LiveCaptureSession>( host, catalog_ );
     live_->setOutputRoot( tempRoot_ );
     connect( live_.get(), &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
     connect( live_.get(), &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
-    connect( live_.get(), &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
+    connect( live_.get(), &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
+    connect( live_.get(), &LiveCaptureSession::progressed, this, [ this ] {
+        showLiveProgress();
+        showLiveSummary();
+    } );
     connect( live_.get(), &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
         liveStderr_->appendPlainText( line );
         liveStderr_->setHidden( false );
@@ -531,33 +519,24 @@ SidebarWidget::~SidebarWidget()
     // between packets, and convertPcap() reads regular files only, so it
     // cannot block on a FIFO or device; a regular file on a network share
     // that stalls can still hold it up until the system gives up on it.
-    if ( cancelRunning_ ) {
-        cancelRunning_->store( true );
-    }
-    pool_.waitForDone();
-
     // A conversion that finished before the cancel reached it wrote a file
     // no tab will show: the cancel wins, and the file goes.
-    if ( watcher_ && watcher_->future().resultCount() > 0 ) {
-        applyCancelRequest( watcher_->result(), cancelRunning_.get() );
-    }
+    conversion_.cancelAndWait();
 
     // An export stops between two packets and leaves nothing behind; one
-    // that was done keeps its file.  Its progress dialog goes first, as
-    // closing it would cancel through this half-destroyed widget.
-    if ( cancelExport_ ) {
-        cancelExport_->store( true );
-    }
+    // that was done when the cancel came keeps its file, as on Cancel.  Its
+    // progress dialog goes first, as closing it would cancel through this
+    // half-destroyed widget.
     if ( exportProgress_ ) {
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
-    exportPool_.waitForDone();
+    export_.cancelAndWait();
 }
 
 bool SidebarWidget::refuseWhileBusy()
 {
-    if ( converting_ ) {
+    if ( isConverting() ) {
         hostNotify( "A capture is still being read: wait for it, or cancel it first." );
         return true;
     }
@@ -608,56 +587,45 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 {
     // One conversion at a time (Open is disabled meanwhile), so the outcome
     // that arrives is always that of the running one.
-    if ( converting_ || isCapturing() ) {
+    if ( isConverting() || isCapturing() ) {
         return;
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
-
-    auto cancelled = std::make_shared<std::atomic_bool>( false );
-    cancelRunning_ = cancelled;
-    setConverting( true );
-    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
-                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
-
-    // The watcher lives on this thread, so its signals are delivered here.
-    watcher_ = new QFutureWatcher<ConversionResult>( this );
-    connect( watcher_, &QFutureWatcher<ConversionResult>::progressValueChanged, progressBar_,
-             &QProgressBar::setValue );
-    connect( watcher_, &QFutureWatcher<ConversionResult>::finished, this,
-             [ this, cancelled, filePath ] {
-                 ConversionResult result;
-                 if ( watcher_->future().resultCount() > 0 ) {
-                     result = watcher_->result();
-                 }
-                 else {
-                     result.error = "The conversion ended without a result";
-                 }
-                 finishConversion( filePath,
-                                   applyCancelRequest( std::move( result ), cancelled.get() ) );
-             } );
 
     // The Converter writes into a new private directory below the temporary
     // root, kept for its tab until LogSquirl quits, and reports every
     // failure as a result: nothing is caught here.  It converts with the
     // options saved when it starts: a change of them in the configuration
     // dialog applies to the next capture, the tab of this one keeps its own.
+    // A cancel wins over a conversion that was done when it came: its
+    // directory goes.
     const auto tempRoot = tempRoot_;
     const auto options = loadConversionOptions( hostConfigDir() );
-    watcher_->setFuture( QtConcurrent::run(
-        &pool_, [ filePath, tempRoot, cancelled, options ]( QPromise<ConversionResult>& promise ) {
-            promise.setProgressRange( 0, 1000 );
-            promise.addResult( convertPcap(
-                filePath, tempRoot, cancelled.get(),
-                [ &promise ]( int permille ) { promise.setProgressValue( permille ); }, options ) );
-        } ) );
+    conversion_.start(
+        [ filePath, tempRoot,
+          options ]( const std::atomic_bool* cancel,
+                     const BackgroundJob<ConversionResult>::Progress& progress ) {
+            return convertPcap( filePath, tempRoot, cancel, progress, options );
+        },
+        []( const ConversionResult& result ) {
+            removeOutput( result );
+            return true;
+        },
+        [ this, filePath ]( ConversionResult result ) {
+            finishConversion( filePath, std::move( result ) );
+        },
+        [ this ]( int permille ) { progressBar_->setValue( permille ); } );
+    setConverting( true );
+    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
+                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
 }
 
 void SidebarWidget::cancel()
 {
-    if ( !converting_ || !cancelRunning_ ) {
+    if ( !isConverting() ) {
         return;
     }
-    cancelRunning_->store( true );
+    conversion_.cancel();
     cancelButton_->setEnabled( false );
     summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
 }
@@ -665,12 +633,12 @@ void SidebarWidget::cancel()
 void SidebarWidget::exportSelectedPackets()
 {
     // The menu entry stays enabled while an export runs.
-    if ( exportWatcher_ ) {
+    if ( isExporting() ) {
         hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
         return;
     }
-    const auto found = converted_.find( frontKey_ );
-    if ( found == converted_.end() ) {
+    const auto* front = catalog_.front();
+    if ( !front ) {
         hostNotify( "Export packets: the tab in front shows no capture opened by the tcpdump "
                     "plugin." );
         return;
@@ -681,30 +649,21 @@ void SidebarWidget::exportSelectedPackets()
                     "lines." );
         return;
     }
-    const auto index = found->second.index;
+    const auto index = front->index;
     ExportRequest request;
-    request.captureName = found->second.fileName;
+    request.captureName = front->fileName;
     request.packets = index->packets();
     request.format = captureFormatOf( index->capturePath() );
 
     // Without a selection, the user may still name or paste the packets.
-    const char* text = nullptr;
-    size_t length = 0;
-    size_t lineCount = 0;
-    const int selected = st.api->get_selected_log_lines( st.handle, &text, &length, &lineCount );
-    if ( selected >= 0 && text ) {
-        request.numbers
-            = packetLinesOf( QString::fromUtf8( text, static_cast<qsizetype>( length ) ),
-                             request.packets )
-                  .numbers;
-        request.selectedLines = lineCount;
-        request.truncated = selected == LOGSQUIRL_LOG_LINES_TRUNCATED;
-    }
-    else if ( selected != LOGSQUIRL_LOG_LINES_NO_SELECTION ) {
-        hostNotify( QString( "Export packets: LogSquirl did not tell the selected lines (%1)." )
-                        .arg( selected ) );
+    const auto selected = selectedPackets( readSelectedLines(), request.packets );
+    if ( !selected.reason.isEmpty() ) {
+        hostNotify( "Export packets: " + selected.reason );
         return;
     }
+    request.numbers = selected.set.numbers;
+    request.selectedLines = selected.lineCount;
+    request.truncated = selected.truncated;
     if ( request.truncated ) {
         hostLog( LOGSQUIRL_LOG_INFO,
                  QString( "Export packets: LogSquirl told only the first %1 selected lines" )
@@ -719,7 +678,7 @@ void SidebarWidget::exportSelectedPackets()
     if ( !self || !confirmed || request.numbers.empty() || request.outputPath.isEmpty() ) {
         return;
     }
-    if ( exportWatcher_ ) {
+    if ( isExporting() ) {
         hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
         return;
     }
@@ -729,8 +688,6 @@ void SidebarWidget::exportSelectedPackets()
                                      .arg( request.numbers.count() )
                                      .arg( request.captureName, request.outputPath ) );
 
-    auto cancelled = std::make_shared<std::atomic_bool>( false );
-    cancelExport_ = cancelled;
     exportProgress_ = new QProgressDialog(
         QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.count() ), "Cancel", 0,
         1000, this );
@@ -741,45 +698,34 @@ void SidebarWidget::exportSelectedPackets()
     exportProgress_->setMinimumDuration( 500 );
     connect( exportProgress_, &QProgressDialog::canceled, this, &SidebarWidget::cancelExport );
 
-    // The watcher lives on this thread, so its signals are delivered here.
-    exportWatcher_ = new QFutureWatcher<ExportResult>( this );
-    connect( exportWatcher_, &QFutureWatcher<ExportResult>::progressValueChanged,
-             exportProgress_.data(), &QProgressDialog::setValue );
-    connect( exportWatcher_, &QFutureWatcher<ExportResult>::finished, this,
-             [ this, cancelled, request ] {
-                 ExportResult result;
-                 if ( exportWatcher_->future().resultCount() > 0 ) {
-                     result = exportWatcher_->result();
-                 }
-                 else {
-                     result.error = "The export ended without a result";
-                 }
-                 // An export that was done before the cancel reached it: the
-                 // cancel wins, as it does for a conversion.
-                 if ( cancelled->load() && result.status == ExportResult::Status::Exported ) {
-                     QFile::remove( request.outputPath );
-                     result.status = ExportResult::Status::Cancelled;
-                 }
-                 finishExport( request, std::move( result ) );
-             } );
+    // An export stops at a cancel, before its file replaces the one chosen
+    // (exportPackets()).  Once it has, a cancel comes too late: the file
+    // that was there is gone, and removing the export would lose both.
+    // The export stands, and is reported.
     const auto numbers = request.numbers;
     const auto path = request.outputPath;
-    exportWatcher_->setFuture( QtConcurrent::run(
-        &exportPool_, [ index, numbers, path, cancelled ]( QPromise<ExportResult>& promise ) {
-            promise.setProgressRange( 0, 1000 );
-            promise.addResult(
-                exportPackets( index, numbers, path, cancelled.get(), [ &promise ]( int permille ) {
-                    promise.setProgressValue( permille );
-                } ) );
-        } ) );
+    export_.start(
+        [ index, numbers, path ]( const std::atomic_bool* cancel,
+                                  const BackgroundJob<ExportResult>::Progress& progress ) {
+            return exportPackets( index, numbers, path, cancel, progress );
+        },
+        []( const ExportResult& result ) {
+            return result.status != ExportResult::Status::Exported;
+        },
+        [ this, request ]( ExportResult result ) { finishExport( request, std::move( result ) ); },
+        [ progress = exportProgress_ ]( int permille ) {
+            if ( progress ) {
+                progress->setValue( permille );
+            }
+        } );
 }
 
 void SidebarWidget::cancelExport()
 {
-    if ( !cancelExport_ ) {
+    if ( !isExporting() ) {
         return;
     }
-    cancelExport_->store( true );
+    export_.cancel();
     if ( exportProgress_ ) {
         exportProgress_->setLabelText( "Cancelling\xe2\x80\xa6" );
     }
@@ -787,9 +733,6 @@ void SidebarWidget::cancelExport()
 
 void SidebarWidget::finishExport( const ExportRequest& request, ExportResult result )
 {
-    cancelExport_.reset();
-    exportWatcher_->deleteLater();
-    exportWatcher_ = nullptr;
     if ( exportProgress_ ) {
         // Closing it would cancel the export that is over.
         exportProgress_->disconnect( this );
@@ -866,13 +809,16 @@ void SidebarWidget::followStreamContent()
 
 void SidebarWidget::openStreamLines()
 {
-    // The panel reads the selection now, not at its next poll.
+    // The panel reads the selection now, not at its next poll; the stream
+    // followed is that of the line it read, which its problem is about.
     packetPanel_->refresh();
     if ( const auto problem = packetPanel_->streamLinesProblem(); !problem.isEmpty() ) {
         hostNotify( "Stream lines in Regex Lab: " + problem );
         return;
     }
-    followSelectedStream();
+    if ( const auto line = packetPanel_->selectedLine() ) {
+        followStream( *line );
+    }
 }
 
 void SidebarWidget::updateStreamLinesButton()
@@ -900,7 +846,6 @@ void SidebarWidget::openLink( const QString& link )
 
 void SidebarWidget::setConverting( bool converting )
 {
-    converting_ = converting;
     openButton_->setEnabled( !converting );
     cancelButton_->setEnabled( converting );
     cancelButton_->setHidden( !converting );
@@ -911,9 +856,6 @@ void SidebarWidget::setConverting( bool converting )
 
 void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
 {
-    cancelRunning_.reset();
-    watcher_->deleteLater();
-    watcher_ = nullptr;
     setConverting( false );
 
     switch ( result.status ) {
@@ -935,27 +877,11 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
         break;
     }
 
-    // Whether LogSquirl has the Log Format installed is not known to the
-    // plugin, so the hint is shown regardless, but only with the first
-    // capture of a load.
-    ConvertedCapture capture;
-    capture.fileName = QFileInfo( filePath ).fileName();
-    capture.fileSize = QFileInfo( filePath ).size();
-    capture.summary = std::move( result.summary );
-    capture.index = std::move( result.index );
-    capture.withFormatHint = !formatHintShown_;
-    formatHintShown_ = true;
-    const auto packets = capture.summary.packets;
-
-    // Kept before the tab is opened: the host may report it in front at once.
-    const auto key = fileKey( result.outputPath );
-    converted_.insert_or_assign( key, std::move( capture ) );
-    showSummaryFor( key );
-
-    // Open in LogSquirl viewer; the file stays until LogSquirl quits
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, result.outputPath.toUtf8().constData(), 0 );
-    }
+    // Its tab opens in the LogSquirl viewer; the file stays until LogSquirl quits.
+    const auto packets = result.summary.packets;
+    catalog_.openConverted( result.outputPath, filePath, std::move( result.summary ),
+                            std::move( result.index ) );
+    showSummaryFor( result.outputPath );
 
     hostLog( LOGSQUIRL_LOG_INFO,
              QString( "Opened %1 packets from %2" ).arg( packets ).arg( filePath ) );
@@ -963,30 +889,29 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
 
 void SidebarWidget::showSummaryFor( const QString& filePath )
 {
-    frontKey_ = fileKey( filePath );
-    const auto found = converted_.find( frontKey_ );
-    packetPanel_->setCapture( found == converted_.end() ? nullptr : found->second.index );
-    packetPanel_->conversationTable()->setSummary(
-        found == converted_.end() ? nullptr : &found->second.summary );
+    catalog_.setFront( filePath );
+    const auto* front = catalog_.front();
+    packetPanel_->setCapture( front ? front->index : nullptr );
+    packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
 
     // The capture being read is shown in a tab of its own when it is done.
-    if ( converting_ ) {
+    if ( isConverting() ) {
         return;
     }
-    saveButton_->setHidden( found == converted_.end() || found->second.rawPath.isEmpty() );
+    saveButton_->setHidden( catalog_.partsToSave().empty() );
     shownSummary_ = frontSummaryHtml();
     summaryLabel_->setText( shownSummary_ );
 }
 
 QString SidebarWidget::frontSummaryHtml() const
 {
-    const auto found = converted_.find( frontKey_ );
-    if ( found == converted_.end() ) {
+    const auto* front = catalog_.front();
+    if ( !front ) {
         return kNoCaptureText;
     }
-    const auto& capture = found->second;
+    const auto& capture = *front;
     QString html;
-    if ( isCapturing() && isLiveKey( frontKey_ ) ) {
+    if ( catalog_.isCapturing( catalog_.frontFile() ) ) {
         html += "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br>";
     }
     if ( !capture.error.isEmpty() ) {
@@ -1030,7 +955,7 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
 
 void SidebarWidget::chooseAndStartLiveCapture()
 {
-    if ( converting_ ) {
+    if ( isConverting() ) {
         refuseWhileBusy();
         return;
     }
@@ -1091,7 +1016,7 @@ void SidebarWidget::updateStartButton()
     if ( !startButton_ ) {
         return;
     }
-    const QString why = converting_ ? "A capture is being read." : QString();
+    const QString why = isConverting() ? "A capture is being read." : QString();
     startButton_->setEnabled( why.isEmpty() );
     startButton_->setToolTip( why.isEmpty() ? "Choose what to capture, and start capturing" : why );
 }
@@ -1124,7 +1049,7 @@ void SidebarWidget::showLiveStart()
 void SidebarWidget::showLiveState()
 {
     const bool capturing = isCapturing();
-    openButton_->setEnabled( !capturing && !converting_ );
+    openButton_->setEnabled( !capturing && !isConverting() );
     stopButton_->setEnabled( capturing && live_->state() != LiveCaptureSession::State::Stopping );
     stopButton_->setHidden( !capturing );
     liveLabel_->setHidden( !capturing );
@@ -1161,12 +1086,12 @@ void SidebarWidget::showLiveProgress()
     }
 }
 
-void SidebarWidget::openTab( const QString& logPath )
+void SidebarWidget::openTab( const QString& logPath, bool follow )
 {
-    // On this, the UI thread; following the file, which grows.  The header
-    // and a packet line are in it, so the host recognises the Log Format.
+    // On this, the UI thread.  The header and a packet line are in it, so
+    // the host recognises the Log Format; a live capture's grows.
     if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, logPath.toUtf8().constData(), 1 );
+        g_state.api->open_file( g_state.handle, logPath.toUtf8().constData(), follow ? 1 : 0 );
     }
 }
 
@@ -1177,67 +1102,34 @@ void SidebarWidget::notify( const QString& message )
 
 QString SidebarWidget::busyElsewhere() const
 {
-    return converting_
+    return isConverting()
                ? QStringLiteral( "A capture is still being read: wait for it, or cancel it first." )
                : QString();
 }
 
-void SidebarWidget::addFile( const QString& logPath, const QString& rawPath, const QString& name )
+void SidebarWidget::showLiveFile( const QString& logPath )
 {
-    ConvertedCapture capture;
-    capture.fileName = QFileInfo( rawPath ).fileName();
-    capture.fileSize = QFileInfo( rawPath ).size();
-    capture.rawPath = rawPath;
-    capture.captureName = name;
-    capture.withFormatHint = !formatHintShown_;
-    formatHintShown_ = true;
-    const auto key = fileKey( logPath );
-    converted_.insert_or_assign( key, std::move( capture ) );
-    summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6" ).arg( name.toHtmlEscaped() ) );
-}
-
-void SidebarWidget::updateFile( const QString& logPath, const CaptureSummary& summary,
-                                std::shared_ptr<const CaptureIndex> index, qint64 fileSize )
-{
-    const auto key = fileKey( logPath );
-    const auto found = converted_.find( key );
-    if ( found == converted_.end() ) {
-        return;
-    }
-    found->second.fileSize = fileSize;
-    if ( index ) {
-        found->second.index = std::move( index );
-    }
-    updateSummary( key, summary );
-}
-
-void SidebarWidget::setFileError( const QString& logPath, const QString& error )
-{
-    if ( const auto found = converted_.find( fileKey( logPath ) ); found != converted_.end() ) {
-        found->second.error = error;
+    // The host may have brought its tab to the front at once, showing its
+    // summary; otherwise the label says the capture goes on.
+    if ( !catalog_.isFront( logPath ) ) {
+        summaryLabel_->setText(
+            QString( "Capturing %1\xe2\x80\xa6" ).arg( live_->name().toHtmlEscaped() ) );
     }
 }
 
-bool SidebarWidget::isLiveKey( const QString& key ) const
+void SidebarWidget::showLiveSummary()
 {
-    // The session's files, spelled as converted_ keys them.
-    const auto& files = live_->files();
-    return !key.isEmpty()
-           && std::any_of( files.begin(), files.end(),
-                           [ &key ]( const QString& file ) { return fileKey( file ) == key; } );
+    // showSummaryFor() redraws the summary and the Conversations table.
+    if ( catalog_.isLive( catalog_.frontFile() ) ) {
+        showSummaryFor( catalog_.frontFile() );
+    }
 }
 
 void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
 {
-    const auto key = fileKey( textPath );
-    const auto found = converted_.find( key );
-    if ( found == converted_.end() ) {
-        return;
-    }
-    // showSummaryFor() redraws the summary and the Conversations table.
-    found->second.summary = std::move( summary );
-    if ( frontKey_ == key ) {
-        showSummaryFor( key );
+    if ( catalog_.updateSummary( textPath, std::move( summary ) )
+         && catalog_.isFront( textPath ) ) {
+        showSummaryFor( textPath );
     }
 }
 
@@ -1259,7 +1151,10 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
         break;
     }
     // Its tabs show the final summary.
-    if ( !isLiveKey( frontKey_ ) ) {
+    if ( catalog_.isLive( catalog_.frontFile() ) ) {
+        showSummaryFor( catalog_.frontFile() );
+    }
+    else {
         summaryLabel_->setText( QString( "The capture %1 has ended: its tab shows its summary." )
                                     .arg( outcome.name.toHtmlEscaped() ) );
     }
@@ -1267,30 +1162,14 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
 
 void SidebarWidget::saveCapture()
 {
-    const auto found = converted_.find( frontKey_ );
-    if ( found == converted_.end() || found->second.rawPath.isEmpty() ) {
-        return;
-    }
-    // The files of the capture, those a ring buffer keeps, as the latest
-    // index has them; before the first one, the raw file.
-    std::vector<CapturePart> parts;
-    if ( found->second.index ) {
-        parts = found->second.index->parts();
-    }
+    const auto parts = catalog_.partsToSave();
     if ( parts.empty() ) {
-        CapturePart part;
-        part.path = found->second.rawPath;
-        parts.push_back( part );
+        return;
     }
     if ( lastDir_.isEmpty() ) {
         lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
     }
-
-    // Named after the capture, <name>.pcap: a ring buffer's files are numbered.
-    const auto name = found->second.captureName.isEmpty()
-                          ? QFileInfo( frontKey_ ).completeBaseName()
-                          : found->second.captureName;
-    const auto suggested = name + "." + QFileInfo( found->second.rawPath ).suffix();
+    const auto suggested = catalog_.saveName();
     // The dialog runs its own event loop, as in chooseAndOpen().
     const QPointer<SidebarWidget> self( this );
     const auto target = chooseSaveFile_( this, QDir( lastDir_ ).filePath( suggested ) );

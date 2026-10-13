@@ -30,9 +30,9 @@
 #include "corpus_layouts.h"
 #include "packet_formatter.h"
 #include "packet_layers.h"
+#include "packet_line.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
-#include "regex_lab.h"
 
 #include <QFile>
 #include <QFileInfo>

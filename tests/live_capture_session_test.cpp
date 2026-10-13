@@ -21,8 +21,8 @@
  * @file live_capture_session_test.cpp
  * @brief BDD tests for the Live Capture Session: what a live capture's
  *        start, events and outcome do to the host, the capture catalog and
- *        the output directory, with scripted runs and fake adapters, and
- *        no event loop.
+ *        the output directory, with scripted runs, a fake host and a real
+ *        Capture Catalog, and no event loop.
  */
 
 #include <catch2/catch.hpp>
@@ -87,16 +87,25 @@ ConversionResult resultOf( ConversionResult::Status status, const QString& outpu
 /// A session with the fake kind's registry, its runs scripted.
 struct Session {
     FakeHost host; // its config directory, for the saved choice
-    FakeLiveHost adapters;
+    FakeLiveHost liveHost;
+    CaptureCatalog catalog{ liveHost };
     ScriptedRuns runs;
     std::shared_ptr<FakeSourceKind> kind = std::make_shared<FakeSourceKind>();
-    LiveCaptureSession session{ adapters, adapters };
+    LiveCaptureSession session{ liveHost, catalog };
 
     Session()
     {
         kind->hint = "Ask for capture permissions.";
         session.setSources( registryOf( kind ) );
         session.setRunFactory( runs.factory() );
+    }
+
+    /// What the catalog keeps of the text file @p logPath, which it must keep.
+    const CaptureCatalog::Entry& entry( const QString& logPath ) const
+    {
+        const auto* found = catalog.find( logPath );
+        REQUIRE( found );
+        return *found;
     }
 };
 
@@ -136,15 +145,16 @@ SCENARIO( "A live capture's text file opens in a tab and its summary follows the
 
         THEN( "the file is in the catalog before its tab opens, with the summary so far" )
         {
-            REQUIRE( s.adapters.openedTabs == QStringList{ log } );
-            const auto& entry = s.adapters.catalog.at( log );
+            REQUIRE( s.liveHost.openedTabs == QStringList{ log } );
+            const auto& entry = s.entry( log );
             REQUIRE( entry.rawPath == raw );
-            REQUIRE( entry.name == "fake0" );
+            REQUIRE( entry.captureName == "fake0" );
             REQUIRE( entry.summary.packets == 3 );
             REQUIRE( entry.index == snapshot.index );
             REQUIRE( entry.fileSize == 300 );
             REQUIRE( s.session.progress().summary.packets == 3 );
             REQUIRE( s.session.files() == QStringList{ log } );
+            REQUIRE( s.catalog.isCapturing( log ) );
         }
 
         AND_WHEN( "it ends, stopped" )
@@ -160,12 +170,29 @@ SCENARIO( "A live capture's text file opens in a tab and its summary follows the
                 REQUIRE_FALSE( s.session.isBusy() );
                 REQUIRE( s.session.outcome()->status == LiveOutcome::Status::Captured );
                 REQUIRE( s.session.outcome()->files == QStringList{ log } );
-                const auto& entry = s.adapters.catalog.at( log );
+                const auto& entry = s.entry( log );
                 REQUIRE( entry.summary.packets == 4 );
                 REQUIRE( entry.index == result.index );
                 REQUIRE( entry.fileSize == 64 );
                 REQUIRE( entry.error.isEmpty() );
-                REQUIRE( s.adapters.notifications.isEmpty() );
+                REQUIRE( s.liveHost.notifications.isEmpty() );
+            }
+
+            THEN( "its tab is the last capture's, no longer capturing" )
+            {
+                REQUIRE( s.catalog.isLive( log ) );
+                REQUIRE_FALSE( s.catalog.isCapturing( log ) );
+            }
+
+            AND_WHEN( "the next capture starts" )
+            {
+                REQUIRE( s.session.start( kChoice ) );
+
+                THEN( "the tab before is no longer the live capture's" )
+                {
+                    REQUIRE_FALSE( s.catalog.isLive( log ) );
+                    REQUIRE( s.entry( log ).summary.packets == 4 );
+                }
             }
         }
     }
@@ -190,10 +217,10 @@ SCENARIO( "A live capture that fails after packets keeps them, with the error an
         REQUIRE( outcome.error == "tcpdump: permission denied" );
         REQUIRE( outcome.guidance == "Ask for capture permissions." );
         REQUIRE( outcome.files == QStringList{ log } );
-        const auto& entry = s.adapters.catalog.at( log );
+        const auto& entry = s.entry( log );
         REQUIRE( entry.error == "tcpdump: permission denied" );
         REQUIRE( entry.summary.packets == 2 );
-        REQUIRE( s.adapters.notifications
+        REQUIRE( s.liveHost.notifications
                  == QStringList{ "Capture fake0 failed: tcpdump: permission denied" } );
         REQUIRE( QFileInfo::exists( log ) );
     }
@@ -272,10 +299,10 @@ SCENARIO( "A live capture that ends without packets leaves nothing behind", "[li
     THEN( "no tab opened, its directory is removed, and the user is told" )
     {
         REQUIRE( s.session.outcome()->status == LiveOutcome::Status::Empty );
-        REQUIRE( s.adapters.openedTabs.isEmpty() );
-        REQUIRE( s.adapters.catalog.empty() );
+        REQUIRE( s.liveHost.openedTabs.isEmpty() );
+        REQUIRE( s.catalog.isEmpty() );
         REQUIRE_FALSE( QFileInfo::exists( root.filePath( "capture-1" ) ) );
-        REQUIRE( s.adapters.notifications
+        REQUIRE( s.liveHost.notifications
                  == QStringList{ "The capture fake0 ended without packets." } );
     }
 }
@@ -291,8 +318,8 @@ SCENARIO( "A live capture stopped before its header came is not a failure", "[li
     {
         REQUIRE( s.session.outcome()->status == LiveOutcome::Status::Stopped );
         REQUIRE( s.session.outcome()->error.isEmpty() );
-        REQUIRE( s.adapters.openedTabs.isEmpty() );
-        REQUIRE( s.adapters.notifications.isEmpty() );
+        REQUIRE( s.liveHost.openedTabs.isEmpty() );
+        REQUIRE( s.liveHost.notifications.isEmpty() );
         REQUIRE_FALSE( s.session.isBusy() );
     }
 }
@@ -315,10 +342,10 @@ SCENARIO( "A live capture that a stop condition ended tells the user which", "[l
     {
         REQUIRE( s.session.outcome()->status == LiveOutcome::Status::Captured );
         REQUIRE( s.session.outcome()->stoppedBy == StopCondition::Packets );
-        REQUIRE( s.adapters.notifications
+        REQUIRE( s.liveHost.notifications
                  == QStringList{ liveStopText( "fake0", StopCondition::Packets, choice.limits ) } );
-        REQUIRE( s.adapters.notifications.first().contains( "stopped after 2 packets" ) );
-        REQUIRE( s.adapters.catalog.at( log ).summary.packets == 2 );
+        REQUIRE( s.liveHost.notifications.first().contains( "stopped after 2 packets" ) );
+        REQUIRE( s.entry( log ).summary.packets == 2 );
     }
 }
 
@@ -346,11 +373,11 @@ SCENARIO( "A ring buffer's live capture has a text, index and summary per file",
 
     THEN( "each file opened a tab of its own, in order, and each shows the summary so far" )
     {
-        REQUIRE( s.adapters.openedTabs == QStringList{ log1, log2 } );
+        REQUIRE( s.liveHost.openedTabs == QStringList{ log1, log2 } );
         REQUIRE( s.session.progress().rawFile == 2 );
         for ( const auto& log : { log1, log2 } ) {
-            REQUIRE( s.adapters.catalog.at( log ).summary.packets == 5 );
-            REQUIRE( s.adapters.catalog.at( log ).index == snapshot.index );
+            REQUIRE( s.entry( log ).summary.packets == 5 );
+            REQUIRE( s.entry( log ).index == snapshot.index );
         }
     }
 
@@ -362,8 +389,8 @@ SCENARIO( "A ring buffer's live capture has a text, index and summary per file",
         THEN( "each file's tab shows the final summary and index, and its own raw file's size" )
         {
             REQUIRE( s.session.outcome()->files == QStringList{ log1, log2 } );
-            const auto& first = s.adapters.catalog.at( log1 );
-            const auto& second = s.adapters.catalog.at( log2 );
+            const auto& first = s.entry( log1 );
+            const auto& second = s.entry( log2 );
             REQUIRE( first.summary.packets == 6 );
             REQUIRE( second.summary.packets == 6 );
             REQUIRE( first.index == result.index );
@@ -390,7 +417,7 @@ SCENARIO( "A start asked for while a capture runs waits until its program has en
         THEN( "starting another is refused, and says so" )
         {
             REQUIRE_FALSE( s.session.start( next ) );
-            REQUIRE( s.adapters.notifications
+            REQUIRE( s.liveHost.notifications
                      == QStringList{ "A live capture is still running: stop it first." } );
             REQUIRE( s.runs.runs.size() == 1 );
         }
@@ -468,7 +495,7 @@ SCENARIO( "A live capture is refused with why it cannot start", "[live_session]"
         THEN( "it is refused with the message liveChoiceProblem() gives" )
         {
             REQUIRE_FALSE( s.session.start( choice ) );
-            REQUIRE( s.adapters.notifications
+            REQUIRE( s.liveHost.notifications
                      == QStringList{ "Cannot start the live capture: The note is bad." } );
             REQUIRE( s.runs.runs.empty() );
             REQUIRE_FALSE( s.session.isBusy() );
@@ -477,13 +504,13 @@ SCENARIO( "A live capture is refused with why it cannot start", "[live_session]"
 
     WHEN( "something else is busy" )
     {
-        s.adapters.busy = "A capture is still being read.";
+        s.liveHost.busy = "A capture is still being read.";
 
         THEN( "neither a choice nor a capture by name starts" )
         {
             REQUIRE_FALSE( s.session.start( kChoice ) );
             REQUIRE_FALSE( s.session.start( "usb0", s.kind->makeSource( kChoice ) ) );
-            REQUIRE( s.adapters.notifications
+            REQUIRE( s.liveHost.notifications
                      == QStringList{ "A capture is still being read.",
                                      "A capture is still being read." } );
             REQUIRE( s.runs.runs.empty() );

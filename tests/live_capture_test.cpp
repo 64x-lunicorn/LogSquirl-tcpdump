@@ -431,6 +431,16 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
                     }
                 }
 
+                THEN( "every tab shows the capture's final summary" )
+                {
+                    auto* summary = sidebar.findChild<QLabel*>( "summary" );
+                    for ( const auto& opened : host.openedFiles ) {
+                        CAPTURE( opened );
+                        sidebar.showSummaryFor( opened );
+                        REQUIRE( summary->text().contains( "Packets: <b>6</b>" ) );
+                    }
+                }
+
                 THEN( "the first tab stays as it was; its Packet Panel says rotated away" )
                 {
                     REQUIRE( readLines( logPath ).at( 1 ) == firstLine );

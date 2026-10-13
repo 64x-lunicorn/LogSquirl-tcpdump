@@ -937,7 +937,7 @@ name what nothing dissects; a detector that recognises a protocol by its
 port or content (DNS, NTP, DHCP, DHCPv6) runs before the port hint and decides
 alone, and may take its name from the table to keep the two in step.
 
-### 3. Packet Formatter (`packet_formatter.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
+### 3. Packet Formatter (`packet_formatter.h/cpp`, `packet_line.h/cpp`), Stream Tracker (`stream_tracker.h/cpp`), TCP Analysis (`tcp_analysis.h/cpp`) and statistics (`capture_stats.h/cpp`)
 `PacketFormatter` converts `PacketRecord` structs, one at a time, into
 Wireshark-style text lines with fixed-width columns: No., Stream, UTC Time,
 Time, Source, Destination, Protocol, Length, Info. Both times have 6
@@ -995,6 +995,23 @@ reader knows why its description stops short.
 The Formatter keeps no conversations: the Stream column shows the stream
 number it is handed by the Stream Tracker, `-` for `kNoStream` and `?` for
 `kUnnumbered`.
+
+A packet line is read back next to where it is written: `readPacketLine()`
+(`packet_line.h/cpp`) reads a line of any `LineLayout` with
+`packetLineRegex()`, the Log Format's regex, and answers with a
+`PacketLine`: the packet number (0 for a number no packet has), the stream
+(its number, `kNoStream` or `kUnnumbered`), Source, Destination, Protocol,
+the rest of the line from Info on, and the iRTT that Info shows on the ACK
+that completes a handshake (see *TCP analysis markers*), or none for a
+line that is no packet line. The Packet Panel and Stream lines in Regex
+Lab read the selected line with it through Selected Packet Line (see
+*Packet Panel*), Export packets the selected lines through it too, and
+the Export dialog pasted lines; none has a regex of
+its own for the columns. `packet_line_test.cpp` formats TCP packets with
+and without an iRTT, UDP, a packet in no stream and one in an unnumbered
+stream in every `LineLayout` and reads back the same packet number, stream
+and iRTT, so that a change of the line that the reader does not follow
+fails there.
 
 `StreamTracker` (`stream_tracker.h/cpp`, pure C++), owned by the Packet Pipeline,
 follows the conversations of a capture. Only TCP and UDP packets have a
@@ -1340,13 +1357,13 @@ mutated records, and over HTTP/2 frames cut and mutated.
 #### Host Names (`host_names.h/cpp`)
 Passive name resolution, as Wireshark's from the capture (#54). With
 `LineLayout::hostNames` (the option *Show names from the capture's DNS
-answers with the addresses*, off by default) the Converter keeps a
+answers with the addresses*, off by default) the Packet Recorder keeps a
 `HostNames` (pure C++) and hands it to the Packet Formatter, which writes a
 named address as `93.184.216.34(www.example.com)` in Source and
 Destination. Without the option no `HostNames` exists and the text is byte
 for byte the same as before.
 
-- **Learning**: after a packet's line is written, `HostNames::learn()`
+- **Learning**: after a packet's line is made, `HostNames::learn()`
   reads the DNS responses it carries: a UDP datagram from port 53 or 5353
   (mDNS), its payload one message (`CaptureReader::payloadOf()`), and a TCP
   segment from port 53, the whole messages the TCP Reassembly completed in
@@ -1457,7 +1474,7 @@ in seconds with 6 decimals, or 9 at nanosecond precision, and
 pure ACK in either direction even without a SYN-ACK; here it is in Info,
 and a stream whose handshake was not captured whole has none. The Packet
 Panel, which reads a packet back alone, without its stream, takes it from
-the selected line's `[iRTT=…]` into the TCP layer (`iRTT: 0.012345
+the selected line's `[iRTT=…]`, as `readPacketLine()` reads it, into the TCP layer (`iRTT: 0.012345
 seconds`). Each stream
 shows it once: a SYN sent after the handshake does not arm it again, a new
 connection on the same ports does. The Converter collects the times in
@@ -1607,12 +1624,11 @@ share a base name), and `cmake --install` puts them there too.
 ### 4. Converter (`pcap_converter.h/cpp`)
 `convertPcap()` reads a capture through the `CaptureReader` that
 `makeCaptureReader()` picks for it and takes each packet through the same
-steps: the Packet Pipeline (below) describes it in its stream, the
-`ConversationStats` and the `CaptureStats` count it, the Packet Formatter
-writes its line to a new output file, the `HostNames` learn from its DNS
-answers (with host names shown), and its place is noted in a `CaptureIndex`
-(see *Packet Panel*); progress is reported and a cancel flag checked
-between packets. `convertStream()` does the same for a
+steps: the Packet Pipeline (below) describes it in its stream, the Packet
+Recorder (below) counts it, makes its line, learns the names of its DNS
+answers and notes its place in a `CaptureIndex` (see *Packet Panel*), and
+the Converter writes the line to a new output file; progress is reported
+and a cancel flag checked between packets. `convertStream()` does the same for a
 capture read from a stream (*The Capture Source seam*), without progress
 but live (see *Live conversion* below): both run one loop
 (`convertOrThrow()`), so every packet of a file and of a stream goes
@@ -1620,17 +1636,19 @@ through the same steps. The file, `<name>.log`, is created with
 `NewOnly` and owner-only permissions in a new
 `logsquirl-tcpdump-<pid>-XXXXXX` directory (`tempdirs.h/cpp`) below the
 output root that only the user can enter. The result is one of three
-outcomes and a `CaptureSummary`, whose link-layer types are those of the
-packets followed by any the capture declares without a packet of it (so a
-pcap with no packets still names its one): Converted (with the output path), Failed
+outcomes and a `CaptureSummary` (the Packet Recorder's), whose link-layer
+types are those of the packets followed by any the capture declares without
+a packet of it (so a pcap with no packets still names its one): Converted (with the output path), Failed
 (with a message) or Cancelled, and for a stream Stopped: stopped before its
 capture header came (`StreamSource::stopped()`), so nothing was captured and
 nothing is left, which is not a failure. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
 failure or any other exception ends as Failed, and nothing is left behind.
-`applyCancelRequest()` decides, for the Converter and its caller alike,
+`applyCancelRequest()` decides, for the Converter when its loop ends,
 that a cancel request wins even over a conversion that had just finished:
-the result becomes Cancelled and the output is removed.
+the result becomes Cancelled and the output is removed (`removeOutput()`).
+The sidebar's Background Job applies the same rule to the result it is
+delivered (see *The Background Job*).
 
 #### The Packet Pipeline (`packet_pipeline.h/cpp`)
 The steps every packet goes through between the reader and its line that
@@ -1646,7 +1664,7 @@ packet's protocol and Info and returns a `PacketOutcome`: the packet's
 stream, what the TCP Analysis found (its markers and iRTT, for the
 `CaptureStats`) and the messages the TCP Reassembly completed (for the
 `HostNames`, valid until the next packet). For the Capture Summary the
-Converter asks it for the Stream Tracker and the Stream Labels (the
+Packet Recorder asks it for the Stream Tracker and the Stream Labels (the
 Conversations table, the stream cap) and `tlsSessionsDecrypted()`.
 
 The order, and why each step comes where it does, is stated once, in
@@ -1674,18 +1692,21 @@ The order, and why each step comes where it does, is stated once, in
 10. the Stream Labels name it by its stream's protocol
     (`StreamLabels::apply()`).
 
-What the Converter does with the packet after that (the counts, the line,
-the names, the index, the live output) stays the Converter's. Tests go in
-`tests/packet_pipeline_test.cpp`, through `run()` over a capture built with
-the frame builders or a corpus capture.
+What becomes of the packet after that (the counts, the line, the names,
+the index) is the Packet Recorder's (below); when a live capture flushes,
+sends a snapshot or stops is the Live Output's (below). Tests go in
+`tests/packet_pipeline_test.cpp`, through `run()` over a capture built with the frame builders or a corpus capture.
 
 The tests of the steps it runs take their captures through it too, so that
 they test what a conversion does rather than a loop of their own with some
 of the steps: `piped()` in `tests/pipeline_harness.h` reads a capture built
 in the test, runs each packet through a `PacketPipeline` with its payload
-(`withKeyLog()` gives it the secrets of a key log) and hands back each
-packet as the pipeline left it, with its stream, its TCP Analysis and the
-messages it completed; `tcpConversation()` builds the capture of a TCP
+(`withKeyLog()` gives it the secrets of a key log), records it with a
+Packet Recorder and hands back each packet as the pipeline left it, with
+its stream, its TCP Analysis, the messages it completed and its line;
+`recorded()` hands back the header and the summary with them, and takes
+the recorder's options (the layout, host names);
+`tcpConversation()` builds the capture of a TCP
 connection from what each end sends, its sequence numbers going on as a
 real one's do. The TCP Reassembly, TLS Decryption, SSH, WebSocket, HTTP,
 MQTT, QUIC and Stream Labels tests use it, and read what the reassembly or
@@ -1706,32 +1727,65 @@ fed to it), never several of them in an order of their own. The order is
 stated in `packet_pipeline.h` and in the list above; a step's own header
 says that the Packet Pipeline runs it, not where.
 
-`formatAllPackets()` (`packet_formatter.h`), which tests use for the lines
+#### The Packet Recorder (`packet_recorder.h/cpp`)
+What becomes of a packet once the Packet Pipeline has run it has one home
+too: a `PacketRecorder`, which owns the state that keeps for the whole
+capture (the `CaptureStats`, the `ConversationStats`, the Packet
+Formatter, the `HostNames` with host names shown, and the `CaptureIndex`)
+and the order it is kept in. A file conversion and a live capture both make
+one per conversion, from the open reader, the Packet Pipeline and
+`RecorderOptions` (the layout, the endpoint and host name caps, the
+checkpoint interval and the key log, for its error), and call
+`record(pkt, payload, outcome)` once per packet, right after `run()`. It
+returns the packet's line, which the Converter writes to the text file
+(`header()` starts each one). The order, stated once in
+`packet_recorder.h`:
+
+1. the TCP Analysis's markers and iRTT into the `CaptureStats`;
+2. the packet into the `ConversationStats`, by its stream;
+3. the packet into the `CaptureStats`;
+4. its line, by the Packet Formatter, with the names known so far;
+5. with host names shown, the names its DNS answers give, after its line:
+   a name labels the packets after its answer, not the answer's own line;
+6. its stream's extent, then its place, in the `CaptureIndex`.
+
+It makes the `CaptureSummary` too, with what the TLS Decryption, the key
+log and the `HostNames` add to it: `summary()` from a copy of the
+statistics, for a live capture's snapshots, the recording going on
+unchanged, and `finalSummary()` once after the last packet, which takes
+them. `packets()` counts the packets recorded (a live capture's packet
+limit) and `index()` is the `CaptureIndex`, whose files the Converter sets.
+Tests go in `tests/packet_recorder_test.cpp`, through `recorded()` over a
+corpus capture: the order that matters (an mDNS announcement's own line
+shows its address alone, the next packet its name) and the summary, which
+equals a conversion's.
+
+`formatAllPackets()` (`packet_recorder.h`), which tests use for the lines
 of a capture, reads a capture held in memory the same way: its reader, each
 packet with its payload through a Packet Pipeline made from the
-`PipelineOptions` it is handed, the Packet Formatter at the reader's
-precision and, with host names in the layout, the `HostNames`. It takes the
-capture's bytes rather than parsed `PacketRecord`s because the TCP
-Reassembly needs the payloads, which only the reader hands out. With
-options to match a conversion's, its lines are the ones the conversion
-writes (`tests/streaming_test.cpp` checks this for every corpus capture).
+`PipelineOptions` it is handed and a Packet Recorder with the layout it is
+handed. It takes the capture's bytes rather than parsed `PacketRecord`s
+because the TCP Reassembly needs the payloads, which only the reader hands
+out. With options to match a conversion's, its lines are the ones the
+conversion writes (`tests/streaming_test.cpp` checks this for every corpus
+capture).
 
 #### Live conversion
 `convertStream()` converts live: a `LiveInput` between the stream and the
 reader writes every byte read, unchanged, to the raw capture next to the
-text (`<name>.pcap`, or `<name>.pcapng` when the reader is a
+text, both the Live Output's files (below) (`<name>.pcap`, or `<name>.pcapng` when the reader is a
 `PcapngReader`; `ConversionResult::rawPath`); the bytes read before the
 output directory exists, the header the format is told by, are kept until
 it does. Before every read that would wait (`ByteSource::ready()` is
 false), it flushes the text and the raw file, so a line is readable as soon
 as the stream pauses; a stream that never pauses is flushed at least every
-`kLiveFlushInterval` (100 ms). A `LiveObserver` is told on the converting
-thread: `firstPacket( logPath, rawPath )` once, after the header and the
+`kLiveFlushInterval` (100 ms), as the Live Output (below) decides. A
+`LiveObserver` is told on the converting thread: `firstPacket( logPath, rawPath )` once, after the header and the
 first packet line are flushed (LogSquirl recognises a Log Format once, at
 the first load with lines, LogSquirl#794, so the tab must not open on the
 header alone), and `snapshot( LiveSnapshot )` with the first packet and
 then at most every `kLiveSnapshotInterval` (1 s): the summary so far
-(`summariseSoFar()`, from a copy of the statistics, its conversation rows
+(`PacketRecorder::summary()`, from a copy of the statistics, its conversation rows
 shared with the last snapshot's where they did not change), the time since
 the start, the bytes read and a copy of the `CaptureIndex` so far (its
 stream extents shared), pointing into the raw file (flushed first) as
@@ -1746,10 +1800,77 @@ breaks off with an error after its first packet ends Failed with the
 message *and* `outputPath`, `rawPath` and the summary of what was captured;
 before a packet, it leaves nothing behind, as before.
 
+#### The Live Output (`live_output.h/cpp`)
+When a live capture flushes, opens a text, sends a snapshot, starts a ring
+buffer's next file and stops is decided in one place, a `LiveOutput`, on
+one clock: the `LiveClock` measures the limits' durations, the ring
+buffer's file durations and the flush and snapshot cadence alike. The
+Converter makes one per live conversion, from the `LiveLimits`, the clock
+and `ConversionOptions::lastPacketNumber`, and a file conversion none, so a
+file's loop does none of this work. Once the capture's format is known it
+hands it the capture's files and the reader (`open( files, reader )`):
+the Live Output owns the files from then on (`LiveFiles`, below). It asks
+it `beforePacket()` when a packet was read, before its line is written,
+`packet( packets, bytesRead )` after the line is written and
+`beforeWait()` before each read that would wait; each hands back a
+`LiveStep`, which the Converter does in its order and which counts as done
+once handed out:
+
+1. `flush`: the text and the raw file are made readable up to here;
+2. `firstOfText`: this line is the first of its text, which
+   `LiveObserver::firstPacket` hands out once flushed;
+3. `snapshot`: a `LiveSnapshot` goes out (always with a flush, as its index
+   points into the raw file);
+4. `stop`: the capture ends with this packet, by this `StopCondition`.
+
+The first packet of a text flushes it, opens it and sends a snapshot; after
+that a line is flushed at least every `kLiveFlushInterval` and before every
+wait, and a snapshot goes out at most every `kLiveSnapshotInterval` while
+packets come; `snapshotWaits()` says that one is due but its turn has not
+come, which the Converter waits for while the stream is idle, then asks
+`beforeWait()` again. `elapsed()` is the snapshot's time since the start.
+The stop conditions are checked in this order, so the first reached wins
+and a packet that reaches several stops by the first of them:
+`LiveLimits::packets`, `bytes`, `duration`, then the last packet number
+(`StopCondition::PacketNumbers`); `durationOver()` ends a wait for the
+stream at the deadline.
+
+The ring buffer's rotation (see *Stop conditions and the ring buffer*
+below) is the Live Output's too: `packet()` notes whether the packet
+filled its raw file (`LiveFiles::rawFileSize()` against
+`LiveLimits::fileBytes`) and, from the reader, where its record ends, the
+packets so far and the headers a file after it needs; `beforePacket()`
+then starts the next raw file and its text (`LiveFiles::startNext()`) if
+the file is full or its `fileDuration` is over, and hands back a step with
+a snapshot, after which the next packet opens the new text. A file
+without a packet is never left behind, and a file's duration counts from
+when it started. `beforePacket()` hands back nothing if the next file
+cannot be started; `LiveFiles::error()` says why, and the Converter fails
+with it.
+
+`LiveFiles` is the seam for the files: the text the Converter appends the
+lines to (`text()`, a `QIODevice`), the raw file `LiveInput` writes every
+byte read to (`writeRaw()`), `flush()`, `startNext()`, `close()`, the
+`parts()` and `fileNumber()` a snapshot carries, the paths
+`LiveObserver::firstPacket` hands out and an `error()` worded for the user
+(*Cannot write the output file: …*, *Cannot write the raw capture: …*).
+`DiskLiveFiles` is the one on disk: a `RawCapture` and a text per raw
+file, named after it, each starting with the column header, created
+`NewOnly` and owner-only. The Converter keeps the output directory alive
+longer than the Live Output, so that no file is open in it as it is
+removed. Tests go in `tests/live_output_test.cpp`: a fake clock, packet
+counts and sizes, a capture read from memory and fake `LiveFiles` that
+note each file started, no thread, sleep or file, for each stop
+condition, the order they win in, the cadence, and when a ring buffer's
+next file starts, by size or by duration; `tests/live_limits_test.cpp`,
+`tests/live_conversion_test.cpp` and `tests/live_capture_test.cpp` check
+the files on disk and the tabs end to end.
+
 #### Stop conditions and the ring buffer (`LiveLimits`, `raw_capture.h/cpp`)
 `convertStream()` takes `LiveLimits` (dumpcap's `-a` and `-b`; 0 is "none"
-throughout) and a `LiveClock`, the clock their durations are measured with
-(a test's fake one; empty: the steady clock). The stop conditions, a
+throughout) and a `LiveClock`, the clock their durations and the flush and
+snapshot cadence are measured with (a test's fake one; empty: the steady
+clock); the Live Output (above) decides by them. The stop conditions, a
 duration, a packet count and a size (bytes read from the stream), are
 checked after each packet, so the packet that reaches a count or a size is
 the last one; the duration is also checked while the stream has nothing to
@@ -1768,7 +1889,8 @@ With a ring buffer (`LiveLimits::ringBuffer()`: files kept, and a file size
 or duration) the raw capture is a `RawCapture` of numbered files,
 `<name>_00001_<yyyyMMddHHmmss>.pcap` and on. A file that a packet filled
 (by size, the copied headers included), or whose duration is over, ends
-when the next packet comes, after the record of the last one before it:
+when the next packet comes, after the record of the last one before it, as
+the Live Output decides (above):
 `RawCapture::rotate( cut, packetsBefore, headers )` moves what was written
 past the cut into the new file, behind a copy of the headers the reader
 held after that packet (`CaptureReader::headers()`: a pcap's global
@@ -1780,19 +1902,20 @@ a file covers, not the most. Each file is a `CapturePart`
 start in the stream, the header bytes ahead of them, and where each copied
 header record lay in the stream. Each raw file has a text of its own,
 named after it (`<name>_00001_<time>.log`; without a ring buffer
-`<name>.log`): at a rotation the Converter closes the text, starts the
-next with the header, and calls `LiveObserver::firstPacket` again once its
-first packet line is flushed, so the sidebar opens it in a new followed
-tab (on the UI thread). A text is never rewritten (the maintainer's
+`<name>.log`): at a rotation `DiskLiveFiles` closes the text and starts
+the next with the header, and the Converter calls
+`LiveObserver::firstPacket` again once its first packet line is flushed,
+so the sidebar opens it in a new followed tab (on the UI thread). A text is never rewritten (the maintainer's
 choice, over cutting the deleted file's lines out of one `.log` in place):
 the tabs of deleted files stay as they are until the user closes them,
 and every tab of the capture reads packets through the latest index, so
 their Packet Panel says *Rotated away*. The sidebar keeps the text files
 of the live capture (`liveKeys_`) and hands each the snapshots' summary
 and index. A snapshot goes out right after each rotation, so the Packet
-Panel's index follows the files at once; the Converter's own index drops
-the checkpoints of the deleted files then (`setCaptureParts()`), so a
-capture that runs for days keeps those of its files only.
+Panel's index follows the files at once; the Converter sets the files kept
+on its own index before each snapshot is copied from it
+(`setCaptureParts()`), which drops the checkpoints of the deleted files,
+so a capture that runs for days keeps those of its files only.
 
 The `CaptureIndex` keeps the parts (`setCaptureParts()`, `parts()`,
 `partOf( number )`, `rotatedAway()`): its checkpoints stay in stream
@@ -1837,12 +1960,13 @@ worker, before the library is unloaded.
 A live capture's lifecycle and outcome are decided in one place, a
 `LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
 drives and listens to; the sidebar only shows what it is told. The session
-reaches LogSquirl through a `LiveCaptureHost` (`openTab( logPath )`,
-`notify( message )`, and `busyElsewhere()`: a capture file being read) and
-the summaries the sidebar keeps per text file through a
-`LiveCaptureCatalog` (`addFile( logPath, rawPath, name )`, `updateFile(
-logPath, summary, index, fileSize )`, `setFileError( logPath, error )`);
-the sidebar is both. A capture runs through a `LiveRun` (`start( Listener
+reaches LogSquirl through a `LiveCaptureHost` (`notify( message )`, and
+`busyElsewhere()`: a capture file being read), which the sidebar is, and
+keeps what each text file's tab shows in the sidebar's `CaptureCatalog`
+(see *The Capture Catalog*), which opens the tabs: `startLive()` as a run
+starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
+summary, index, fileSize )`, `setFileError( logPath, error )`, and
+`endLive()` as it finishes. A capture runs through a `LiveRun` (`start( Listener
 )`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
 stderrLine, finished and done, as `LiveCapture`'s signals) made by a
 `LiveRunFactory` from a `LiveRunRequest` (name, output root, options,
@@ -1859,8 +1983,8 @@ retired when the run is let go of, in the app; `setRunFactory()` in tests.
   `kind->makeSource( choice )` named `liveCaptureName( choice )`.
   `start( name, SourceFactory, limits, kind )` starts a stream by name; the
   kind, if given, explains its failure as for a choice.
-- Each text file (a ring buffer's, one per raw file) goes into the catalog
-  before its tab is opened; each snapshot replaces the summary, index and
+- Each text file (a ring buffer's, one per raw file) is opened through the
+  catalog, which keeps it before its tab opens; each snapshot replaces the summary, index and
   size of every text file of the capture, and so does the outcome, each
   file then with its own raw file's size.
 - `stop()` stops the capture (`Stopping`), or drops a check that runs.
@@ -1880,11 +2004,12 @@ The session's signals (`stateChanged`, `started`, `fileOpened`,
 `progressed`, `stderrLine`, `finished`) are what the sidebar renders:
 the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
 the error and Guidance, the summary label. `tests/fake_live_session.h`
-has `FakeLiveHost` (both adapters, recording) and `ScriptedRuns` (runs the
+has `FakeLiveHost` (the host, recording) and `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
-`tests/live_capture_session_test.cpp` tests the session without a widget
-or an event loop. Its `WorkerSession` is a session whose captures run on a
-worker as in the app, on a `FakeLiveHost`: the tests of each source kind
+`tests/live_capture_session_test.cpp` tests the session, with a real
+`CaptureCatalog`, without a widget or an event loop. Its `WorkerSession`
+is a session whose captures run on a worker as in the app, on a
+`FakeLiveHost` and a `CaptureCatalog`: the tests of each source kind
 (local, adb, ssh, extcap, command) start their captures with it, run by the
 kind's fake programs, and assert on the outcome (status, error, Guidance,
 files opened) and the stderr lines, waiting in the event loop for what the
@@ -2216,7 +2341,9 @@ Qt UI that provides:
   button shares); `PacketPanel::streamActionsChanged()` updates it as the
   selection changes. A click and the menu entry both go through
   `SidebarWidget::openStreamLines()`, which refreshes the panel and
-  notifies that same reason instead of opening the Lab
+  notifies that same reason instead of opening the Lab, or opens it on the
+  line the panel read (`PacketPanel::selectedLine()`): the selection is
+  read once for both
 - Detailed capture summary: protocol breakdown (count + percentage + bytes),
   top endpoints (on a host with `regexLab`, each protocol and endpoint is a
   link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
@@ -2225,9 +2352,10 @@ Qt UI that provides:
   at the snaplen when there are any, and under *Analysis* the median
   initial round-trip time of the handshakes and how many there were, and
   the TCP segments per analysis marker kind, when there are any
-- On the first converted capture after the plugin is loaded, a link to
-  README's *Log Format* section. The plugin cannot know whether LogSquirl
-  has the format, so the hint is static and shown once per load
+- On the first capture after the plugin is loaded, converted or live, a
+  link to README's *Log Format* section. The plugin cannot know whether
+  LogSquirl has the format, so the hint is static and shown once per load;
+  the catalog decides which entry carries it (`Entry::withFormatHint`)
 - The summary scrolls in a `SummaryArea`, a `QScrollArea` that asks for
   the height of its text at its width, up to `kSummaryMaxLines` (24), so
   that a long summary leaves the Packet Panel room in a tall sidebar, and
@@ -2258,30 +2386,35 @@ Qt UI that provides:
   sidebar in a `QTabWidget` of fixed heights below and above the minimum
   and scrolls to the summary's last line and the Conversations' bottom
 - The summary of the capture in the tab in front. Every converted capture's
-  summary, and its `CaptureIndex`, is kept for the session, under the path of the text file written
-  for it (canonical, so that the host's spelling of the path finds it); the
-  plugin's active-file callback calls `showSummaryFor()` on every tab
-  switch, which shows the kept summary or "No capture in this tab." for a
-  file the plugin did not write or a tab without a Log File. While a capture
+  summary, and its `CaptureIndex`, is kept in the sidebar's
+  `CaptureCatalog` (see *The Capture Catalog* below), under the path of
+  the text file written for it, and the catalog opens its tab
+  (`openConverted()`); the plugin's active-file callback calls
+  `showSummaryFor()` on every tab switch, which tells the catalog the tab
+  in front and renders its `front()`: the summary, the Packet Panel's
+  index and whether **Save capture…** shows, or "No capture in this tab."
+  for a file the plugin did not write or a tab without a Log File. While a capture
   is being read the label keeps saying so. The summaries are lost when the
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
 
 A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
 `startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
-(`liveSession()`; see *The Live Capture Session*), whose host and capture
-catalog the sidebar is: `addFile()` keeps the capture's entry under its
-text file, `openTab()` calls `open_file( path, follow = 1 )` on the UI
-thread (LogSquirl#796), `updateFile()` replaces the entry's summary, index
-and size through `updateSummary( textPath, summary )`, which redraws it if
-its tab is in front, so the Packet Panel shows the packets captured so far,
-and `setFileError()` keeps a failure's error, shown above the summary. A
-label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
+(`liveSession()`; see *The Live Capture Session*), whose host the sidebar
+is. The session keeps the capture's entries in the sidebar's catalog,
+which opens their tabs; the sidebar redraws the summary in front when it belongs to the
+live capture, on the session's `progressed` and `finished`, so the Packet
+Panel shows the packets captured so far, and a failure's error is shown
+above the summary. On `fileOpened` the label says the capture goes on,
+unless the host brought the new tab to the front at once.
+`updateSummary( textPath, summary )` replaces a kept summary and redraws
+it if its tab is in front. A label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
 time (ticked by a 1 s timer) in place of the progress bar. **Stop** calls
 `stopLiveCapture()`. The outcome's summary label is the sidebar's: stopped
 before anything was captured, without packets, the error, or that the
 capture's tab shows its summary. **Save capture…**, shown for a tab whose
-capture has a raw file, copies it where `setSaveChooser()`'s dialog says.
+capture has a raw file, copies the catalog's `partsToSave()` where
+`setSaveChooser()`'s dialog says, suggesting its `saveName()`.
 stderr lines go to the host's log. Opening a file and a live capture
 exclude each other (`busyElsewhere()`, `isCapturing()`).
 
@@ -2315,7 +2448,8 @@ its tooltip. While a capture runs, the section shows its counters and
 failure's error, with its Guidance (`explainFailure()`), a label below
 Stop. **Stop live capture** calls `stopLiveCapture()`.
 
-It runs `convertPcap()` on a worker thread of its own `QThreadPool`, with
+It runs `convertPcap()` as its `conversion_` Background Job (see *The
+Background Job* below), on a worker thread of its own, with
 the system's temporary directory as the output root, and shows the outcome
 on the GUI thread: it prints the summary it is given and catches nothing
 itself. A failed or cancelled conversion leaves no directory behind; a
@@ -2328,11 +2462,91 @@ run (checked with `kill(pid, 0)` on Unix and `OpenProcess()` on Windows).
 Directories of running processes, links and, on Unix, other users'
 directories are left alone. Only regular files are read, so the worker
 cannot block on a FIFO or device; destroying the widget cancels a running
-conversion and waits for the worker.
+conversion and export and waits for their workers.
 
-### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`)
+#### The Background Job (`background_job.h`)
+The kind of job the sidebar converts a capture file and exports packets
+with: `BackgroundJob<Result>`, for a result with a `Status` (`Failed`,
+the default, and `Cancelled`) and an `error`, as `ConversionResult` and
+`ExportResult` have. Each job has a `QThreadPool` of one thread, which it
+can wait for, and runs one work at a time.
+
+- `start( work, discard, done, shown )` runs `work( cancel, progress )` on
+  the worker; its progress, in permille, goes to `shown` and its result to
+  `done` on the thread that started it, once. A work that throws ends as
+  Failed, "The `<name>` ended without a result".
+- `isRunning()`: started, and the result not delivered yet; false by the
+  time `done` is called, so that the sidebar's `isConverting()` and
+  `isExporting()` are the jobs'.
+- `cancel()` sets the flag the work checks as it goes.
+- `cancelAndWait()`, also what its destructor does: cancels and waits for
+  the worker, so that no code of the plugin runs on it afterwards; a result
+  not delivered yet is settled and delivered to no one.
+
+The rule that a cancel wins is applied here, once, for both: a work may
+be done before it sees the cancel the user asked for, and `discard` then
+takes back what it wrote, and the result is Cancelled, whatever it was. A
+`discard` that cannot take it back returns false, and the result stands:
+the cancel came too late. A conversion's private directory always goes
+(`removeOutput()`). An export's file never does: `exportPackets()` stops
+at a cancel before its `QSaveFile` replaces the file chosen, and once it
+has, the file that was there is gone, so removing the export would lose
+both (#166); it is reported as exported. An export that failed wrote
+nothing, and ends Cancelled. The same holds when the sidebar is destroyed
+with a job whose result has not been delivered.
+
+`tests/background_job_test.cpp` tests it without a sidebar, with a work
+that is done after the test lets it go and never looks at its flag: a
+cancel before that wins and its output is discarded, a job not cancelled
+delivers its result and progress, `cancelAndWait()` discards and delivers
+nothing, a work that throws fails, a cancel after the result stands, and
+so does a result that cannot be taken back.
+
+#### The Capture Catalog (`capture_catalog.h/cpp`)
+What the tab of each text file the plugin wrote shows, with no widget in
+it: the sidebar owns one, and it is its Live Capture Session's catalog.
+Entries (`CaptureCatalog::Entry`: file name and size, summary, index, the
+Log Format hint, a live capture's raw file, capture name and error) are
+keyed by `fileKey()`, the canonical path (absolute when the file is gone),
+so that the host's spelling of a tab's path (on macOS `/var/folders/…` for
+`/private/var/folders/…`) finds the file the plugin wrote.
+
+The catalog opens each capture's tab, through the `CaptureTabHost` it is
+constructed with (`openTab( logPath, follow )`): the sidebar, which calls
+the host's `open_file()` on the UI thread (LogSquirl#796); a recording fake
+in tests. It keeps the entry first, as the host may report the tab in front
+at once. Both kinds of capture come in this way, so the Log Format hint is
+decided in one place: the first entry of a load, converted or live, gets
+it, and no other.
+
+- `openConverted( logPath, capturePath, summary, index )` keeps a capture
+  file converted and opens its tab, not following the file, which is
+  written in full.
+- `startLive()`, `openLiveFile( logPath, rawPath, name )` (keeps the file,
+  live, and opens its tab following it), `updateFile()` (a null index keeps
+  the one the entry has), `setFileError()` and `endLive()` are what the
+  Live Capture Session tells. A file not kept is ignored.
+- `setFront( filePath )` on every tab switch; `front()` is the entry in
+  front or null, `frontFile()` its key, `isFront( path )`.
+- `isLive( path )`: a text file of the running or the last live capture;
+  `isCapturing( path )`: of the one that runs. `startLive()` drops the
+  tabs before from it, `endLive()` leaves them the last capture's.
+- `partsToSave()`: what **Save capture…** saves for the tab in front, the
+  latest index's `parts()` (a ring buffer's files that are kept) or, before
+  an index has any, the raw file; none for a converted file or no capture.
+  `saveName()` is `<capture name>.<raw suffix>`, the text file's base name
+  for a capture without a name.
+
+`tests/capture_catalog_test.cpp` tests it with plain Catch2: adding and
+updating, the tabs it opens and that each entry is kept first, the Log
+Format hint once whichever kind of capture comes first, the tab in front, a
+capture ending, a failed file's error, and the parts of a ring buffer and
+of a capture without an index. The sidebar's tests check only that it
+renders what the catalog says.
+
+### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`, `selected_packet_line.h/cpp`)
 The sidebar's companion to the packet list: the layer tree and hex dump of
-the packet of the selected line, as Wireshark's lower panes. Three parts,
+the packet of the selected line, as Wireshark's lower panes. Four parts,
 each usable on its own by later features (follow-stream content, packet
 export, conversation statistics):
 
@@ -2370,17 +2584,39 @@ export, conversation statistics):
   its header with `layer()` and `field()` behind `if ( auto* layers =
   pkt.layers )`, using `hexField()`, `etherTypeField()` and
   `ipProtocolField()` for values.
+- **Selected Packet Line** (`selected_packet_line.h/cpp`). The one reader
+  of the selection. `readSelectedLines()` asks the host's
+  `get_selected_log_lines` and keeps its result, text and line count
+  (`SelectedLines`, which compares equal for the same answer);
+  `selectedPacketLine()` reads its first line with `readPacketLine()` and
+  answers with the `PacketLine` (number, stream, endpoints, iRTT) or one
+  reason for the user: no selection, a tab without a Log File, another
+  failure of the host, a line that is no packet line, a packet number no
+  packet has. `streamContentProblem()` adds a packet of no stream,
+  `streamLinesProblem()` also an unnumbered one. Each reason text is
+  written there once; the Packet Panel shows them, Show stream content
+  and Stream lines in Regex Lab notify them. For Export packets,
+  `selectedPackets()` reads every selected line and answers with the
+  packets of the packet lines as a `PacketSet` (every other line, and a
+  number the capture has no packet of, skipped and counted), the line
+  count and whether the host told only the first lines
+  (`LOGSQUIRL_LOG_LINES_TRUNCATED`), or with the reason when the host told
+  no line; no line selected is no failure there, as the user may still
+  name the packets.
+  `selected_packet_line_test.cpp` is a table over the `FakeHost`: each
+  result of `get_selected_log_lines` and each kind of line, with the packet
+  or the reason it gives; and the packets of selections mixing packet
+  lines with other lines, of none, of a truncated one and of a refused one.
 - **The widget.** `PacketPanel` gets the tab in front's index from
   `SidebarWidget::showSummaryFor()` (null for a foreign tab) and reads the
-  selection through `get_selected_log_lines`. LogSquirl has no
+  selection through Selected Packet Line. LogSquirl has no
   selection-changed callback, so it asks every `kPollIntervalMs` (250 ms)
   while it is visible: the timer starts in `showEvent()` and stops in
-  `hideEvent()`, and a selection whose text and result did not change
+  `hideEvent()`, and a selection whose `SelectedLines` did not change
   leaves the panel as it is. `refresh()` asks at once; Plugins → tcpdump →
   Packet details calls it through `SidebarWidget::showPacketDetails()`,
-  which notifies the packet's layers when the panel is out of view. The
-  first selected line is read with `packetLineRegex()`; a line that is not a
-  packet line, no selection, a foreign tab or a cursor error show the
+  which notifies the packet's layers when the panel is out of view. No
+  packet line, no capture in the tab in front or a cursor error show the
   reason in the status line. With a capture, the empty tree (`LayerTree`,
   which paints its placeholder) and dump say to select a packet line. The
   status line is hidden where it would say the same again: for a foreign
@@ -2409,12 +2645,13 @@ export, conversation statistics):
   `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Show
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
-  panel keeps the number and Stream column of the line selected
-  (`selectedPacket_`, `shownStream_`), so that a stream can be followed
+  panel keeps the line selected as Selected Packet Line read it
+  (`selected_`, `selectedLine()`), so that a stream can be followed
   while its packet is still read. `streamContentProblem()` and
   `streamLinesProblem()` say why Show stream content and Stream lines in
-  Regex Lab cannot work for the line selected now (no capture, no packet
-  line, no stream, for the Lab also an unnumbered one); the panel enables
+  Regex Lab cannot work for the line selected now (no capture or a read
+  that failed, else what the `SelectedPacketLine` says: no packet line,
+  no stream, for the Lab also an unnumbered one); the panel enables
   its button by the first, and `streamActionsChanged()` has the sidebar
   enable its Stream lines in Regex Lab button by the second, each tooltip
   saying the reason.
@@ -2481,7 +2718,7 @@ export, conversation statistics):
   `SidebarWidget::updateSummary()` replaces a capture's summary and shows
   it if in front, the table keeping its sort and selected conversation; a
   live capture's snapshots come through it, each taken by
-  `summariseSoFar()` from a copy of the `CaptureStats` and the table as it
+  `PacketRecorder::summary()` from a copy of the `CaptureStats` and the table as it
   stands, so the conversion goes on with them unchanged. The rows are a
   `ConversationRows`, chunks of 4,096 a summary shares with the one before
   where their streams had no packet in between; the model orders pointers
@@ -2509,26 +2746,28 @@ export, conversation statistics):
   A pcapng is thus exported as a pcapng, never converted to a pcap; other
   blocks (name resolution, interface statistics, custom) are not exported.
   Nothing is written from what was dissected. Writing over the capture
-  itself is refused. `parsePacketSet()` reads packet lines (their No.) and
+  itself is refused. `parsePacketSet()` reads packet lines (their No., with
+  `readPacketLine()`) and
   numbers and ranges ("1-5, 9") and counts what names no packet;
-  `packetLinesOf()` reads packet lines only, as the selection holds them;
   `formatPacketRanges()` writes numbers back as ranges. The numbers are a
   `PacketNumbers`, ascending ranges apart from each other, never one entry
   per packet: "1-3000000000" takes a few bytes and is counted at once. The
   `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
   change, not on every key.
   `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
-  packets…) reads the selection with `get_selected_log_lines`, whose
-  `LOGSQUIRL_LOG_LINES_TRUNCATED` (more than 1,000 lines or 1 MiB
-  selected) is carried in the `ExportRequest`; the `ExportConfirmer`
+  packets…) takes the packets of the selection from Selected Packet Line's
+  `selectedPackets()` and notifies its reason when the host told no line;
+  a truncated selection (more than 1,000 lines or 1 MiB selected) is
+  carried in the `ExportRequest`; the `ExportConfirmer`
   (`setExportConfirmer()` for tests) shows the `ExportDialog`, where the
   user may change the numbers or paste lines copied in LogSquirl, then a
   save dialog. The host offers no call for the lines of a Filtered View
   or a search, so selecting them there (or pasting them) is the way to
-  export a filtered view. The export runs on `exportPool_`, a thread of
-  its own, with a `QProgressDialog` whose Cancel sets the flag the export
-  checks between packets; as for a conversion, a cancel wins over an
-  export that was done when it came. The notification after the export
+  export a filtered view. The export runs as the sidebar's `export_`
+  Background Job, on a thread of its own, with a `QProgressDialog` whose
+  Cancel sets the flag the export checks between packets and before its
+  file replaces the one chosen; a cancel that comes after that is too
+  late, and the export is kept and reported (#166). The notification after the export
   repeats a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
@@ -2583,14 +2822,16 @@ ends before it. Keep the pointer the host passed: never copy `*api`.
 #### Stream lines in Regex Lab (`follow_stream.h/cpp`)
 `Plugins → tcpdump → Stream lines in Regex Lab` and the sidebar button call
 `SidebarWidget::openStreamLines()`, offered only on a host with `regexLab`
-and `selectedLogLines`. It first asks the Packet Panel's
-`streamLinesProblem()`, so that a line that only looks like a packet line,
-in a tab that shows no capture, opens nothing, with the reason the
-button's tooltip gives; then `followSelectedStream()` reads the first selected Log Line through
-`get_selected_log_lines`, and `followStreamPattern()` turns it into a
-pattern for `open_regex_lab` (with Match case); the Lab's answer, the
-applied pattern or a cancel, is logged. The line is read with the Log
-Format's regex, which `packetLineRegex()` in `regex_lab.cpp` repeats;
+and `selectedLogLines`. It has the Packet Panel read the selection
+through Selected Packet Line and asks its `streamLinesProblem()`, so that
+a line that only looks like a packet line, in a tab that shows no
+capture, opens nothing, with the reason the button's tooltip gives; then
+`followStream()` takes the `PacketLine` the panel read
+(`PacketPanel::selectedLine()`), not a second reading of the selection,
+and `followStreamPattern()` turns it into a pattern for `open_regex_lab`
+(with Match case); the Lab's answer, the applied pattern or a cancel, is
+logged. The line is read with `readPacketLine()`, through the Log
+Format's regex, which `packetLineRegex()` in `packet_line.cpp` repeats;
 `logformat_test.cpp` fails when the two differ.
 The pattern requires the line's stream number, its two addresses and the
 two ports at the start of a TCP or UDP Info (markers in brackets may come
@@ -2603,11 +2844,13 @@ may put at its start and the tunnels a tunnelled packet names first (its
 ports are the inner packet's, as its stream is); the rest of Info is not read, so a change there does
 not break the pattern. A
 line that is no packet line, one with stream `-` or `?`, no selection or a
-tab without a Log File give a notification with the reason instead.
-`follow_stream_test.cpp` checks the pattern against every corpus line,
-checks that it finds the same packets in the corpus converted in every
-`LineLayout`, and drives the menu entry and the button through the
-`FakeHost`.
+tab without a Log File give a notification with Selected Packet Line's
+reason instead (`followStreamPattern()` has no pattern for a stream
+without a number). `follow_stream_test.cpp` checks the pattern against
+every corpus line, checks that it finds the same packets in the corpus
+converted in every `LineLayout`, and drives the menu entry and the button
+through the `FakeHost`, which counts that the selection is read once; the
+reasons themselves are `selected_packet_line_test.cpp`'s.
 
 #### Summary filters (`regex_lab.h/cpp`)
 `summaryHtml()` with `filterLinks`, which `showSummaryFor()` passes as

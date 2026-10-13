@@ -25,7 +25,7 @@
 #include "packet_export.h"
 
 #include "capture_file.h"
-#include "regex_lab.h"
+#include "packet_line.h"
 
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -203,11 +203,7 @@ std::vector<uint32_t> PacketNumbers::list() const
     return numbers;
 }
 
-namespace {
-
-/// The packets of the packet lines in @p text and, if @p numbersToo, of the
-/// numbers and ranges in its other lines.
-PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
+PacketSet parsePacketSet( const QString& text, uint32_t packets )
 {
     PacketSet set;
     std::vector<PacketNumbers::Range> ranges;
@@ -226,16 +222,9 @@ PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
         if ( trimmed.isEmpty() ) {
             continue;
         }
-        const auto packetLine = packetLineRegex().match( line );
-        if ( packetLine.hasMatch() ) {
-            bool ok = false;
-            const auto number
-                = packetLine.captured( QStringLiteral( "number" ) ).toULongLong( &ok );
-            ok ? add( number, number ) : void( ++set.skipped );
-            continue;
-        }
-        if ( !numbersToo ) {
-            ++set.skipped;
+        if ( const auto packet = readPacketLine( line ) ) {
+            // A number no packet has is 0, which add() skips.
+            add( packet->number, packet->number );
             continue;
         }
         auto pieces = trimmed;
@@ -256,18 +245,6 @@ PacketSet parse( const QString& text, uint32_t packets, bool numbersToo )
     }
     set.numbers = PacketNumbers::ofRanges( std::move( ranges ) );
     return set;
-}
-
-} // namespace
-
-PacketSet parsePacketSet( const QString& text, uint32_t packets )
-{
-    return parse( text, packets, true );
-}
-
-PacketSet packetLinesOf( const QString& text, uint32_t packets )
-{
-    return parse( text, packets, false );
 }
 
 QString formatPacketRanges( const PacketNumbers& numbers )

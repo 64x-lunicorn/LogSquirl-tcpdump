@@ -100,8 +100,8 @@ struct PacketOutcome {
  *    bodies, and before the Stream Labels, so that an RTP label sticks;
  * 10. the Stream Labels, last, from the label the packet ends with.
  *
- * What a caller does with the packet then (its line, the counts, the names
- * and the index of a conversion) is its own.
+ * What becomes of the packet then (its line, the counts, the names and the
+ * index of a conversion) is the Packet Recorder's (packet_recorder.h).
  */
 class PacketPipeline {
 public:

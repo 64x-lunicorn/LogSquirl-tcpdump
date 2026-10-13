@@ -31,21 +31,18 @@
 
 #pragma once
 
+#include "packet_line.h"
+
 #include <QString>
 
 #include <cstdint>
 
 namespace tcpdump {
 
-/// The pattern that follows a packet line's stream, or why there is none.
-struct FollowStream {
-    QString pattern; ///< Matches the lines of the stream; empty: see reason.
-    QString reason;  ///< Why the line has no stream to follow, for the user.
-};
-
 /// The Regex Lab pattern that matches exactly the lines of the stream of
-/// @p packetLine, a line of the packet list.
-FollowStream followStreamPattern( const QString& packetLine );
+/// @p packet, a line of the packet list; empty when its stream has no
+/// number (SelectedPacketLine::streamLinesProblem() says why).
+QString followStreamPattern( const PacketLine& packet );
 
 /// The Regex Lab pattern that matches exactly the lines of stream @p stream
 /// between @p addressA port @p portA and @p addressB port @p portB, as the
@@ -54,14 +51,12 @@ FollowStream followStreamPattern( const QString& packetLine );
 QString conversationPattern( int stream, const QString& addressA, uint16_t portA,
                              const QString& addressB, uint16_t portB );
 
-/// Open the Regex Lab with the pattern for the first Log Line selected in
-/// the tab in front, or notify the user why not.  The pattern the user
-/// applies or the cancel is logged.  It tells a packet line by its text
-/// alone: Plugins > tcpdump > Stream lines in Regex Lab and the sidebar's
-/// button call it through SidebarWidget::openStreamLines(), which first
-/// asks the Packet Panel whether the tab in front shows a capture.  Call
-/// only when g_state.hostCapabilities has the Regex Lab and the selected
-/// lines, on the UI thread.
-void followSelectedStream();
+/// Open the Regex Lab with the pattern of the lines of @p packet's stream.
+/// The pattern the user applies or the cancel is logged.  Plugins > tcpdump
+/// > Stream lines in Regex Lab and the sidebar's button call it through
+/// SidebarWidget::openStreamLines() with the packet line the Packet Panel
+/// read from the selection, once its streamLinesProblem() is empty.  Call
+/// only when g_state.hostCapabilities has the Regex Lab, on the UI thread.
+void followStream( const PacketLine& packet );
 
 } // namespace tcpdump

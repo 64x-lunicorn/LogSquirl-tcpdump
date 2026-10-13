@@ -25,8 +25,10 @@
 #include <catch2/catch.hpp>
 
 #include "capture_stats.h"
+#include "live_output.h"
 #include "packet_formatter.h"
 #include "packet_pipeline.h"
+#include "packet_recorder.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "tls_key_log.h"
@@ -918,6 +920,37 @@ SCENARIO( "A write that fails in the middle of the capture fails the conversion"
                 REQUIRE( result.status == ConversionResult::Status::Failed );
                 REQUIRE( result.error.startsWith( "Cannot write the output file: " ) );
                 REQUIRE( nothingBelow( out ) );
+            }
+        }
+    }
+}
+
+SCENARIO( "A live capture whose raw file cannot be flushed says so", "[converter]" )
+{
+    QTemporaryDir out;
+    REQUIRE( out.isValid() );
+
+    GIVEN( "a live capture's files, with more bytes of its raw capture than a file may hold" )
+    {
+        DiskLiveFiles files( QDir( out.path() ), "eth0", CaptureFormat::Pcap, 0, "No. Time" );
+        REQUIRE( files.open() );
+        const std::vector<uint8_t> bytes( 8192, 0 );
+        REQUIRE( files.writeRaw( bytes.data(), bytes.size() ) ); // still buffered
+
+        WHEN( "they are flushed, the text in the limit and the raw capture past it" )
+        {
+            bool flushed = true;
+            {
+                const FileSizeLimit limit( 4096 );
+                flushed = files.flush();
+            }
+
+            THEN( "the raw capture is named, with its own error" )
+            {
+                REQUIRE_FALSE( flushed );
+                REQUIRE( files.error().startsWith( "Cannot write the raw capture: " ) );
+                REQUIRE( files.error().size()
+                         > QString( "Cannot write the raw capture: " ).size() );
             }
         }
     }

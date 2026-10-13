@@ -147,6 +147,7 @@ add_library(logsquirl_tcpdump SHARED
     src/hpack.cpp
     src/protocol_names.cpp
     src/packet_formatter.cpp
+    src/packet_line.cpp
     src/stream_tracker.cpp
     src/stream_labels.cpp
     src/tcp_analysis.cpp
@@ -161,15 +162,19 @@ add_library(logsquirl_tcpdump SHARED
     src/capture_file.cpp
     src/gzip_source.cpp
     src/capture_index.cpp
+    src/capture_catalog.cpp
     src/raw_capture.cpp
     src/packet_export.cpp
     src/packet_pipeline.cpp
+    src/packet_recorder.cpp
+    src/live_output.cpp
     src/pcap_converter.cpp
     src/tempdirs.cpp
     src/settings.cpp
     src/configdialog.cpp
     src/export_dialog.cpp
     src/conversation_table.cpp
+    src/selected_packet_line.cpp
     src/packet_panel.cpp
     src/live_capture.cpp
     src/live_capture_session.cpp

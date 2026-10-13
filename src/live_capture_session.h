@@ -38,17 +38,20 @@
  *     packets has its files removed; a failure is told with what the kind
  *     says to do about it (its Guidance), keeping what was captured.
  *
- * It reaches LogSquirl (a tab, a notification) through a LiveCaptureHost
- * and the summaries the sidebar keeps through a LiveCaptureCatalog, and
- * runs a capture through a LiveRun: in the app a LiveCapture on a worker
- * thread, in a test a run the test scripts, so that what the session does
- * with each event is tested without a widget or an event loop.
+ * It reaches LogSquirl (a notification) through a LiveCaptureHost and keeps
+ * what each tab shows in a CaptureCatalog (capture_catalog.h), which opens
+ * the tabs and which it tells when a capture starts and ends, so that the
+ * catalog knows the tabs of the running or the last capture.  It runs a
+ * capture through a LiveRun: in the app a LiveCapture on a worker thread,
+ * in a test a run the test scripts, so that what the session does with each
+ * event is tested without a widget or an event loop.
  *
  * Nothing cancels a live capture: its outcome is never Cancelled.
  */
 
 #pragma once
 
+#include "capture_catalog.h"
 #include "live_capture.h"
 #include "live_source.h"
 #include "pcap_converter.h"
@@ -77,14 +80,13 @@ QString clockTime( qint64 seconds );
 /// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
 QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
 
-/// Where a Live Capture Session opens tabs and tells the user: LogSquirl,
-/// through the sidebar, in the app; a fake in tests.
+/// Where a Live Capture Session tells the user: LogSquirl, through the
+/// sidebar, in the app; a fake in tests.  Its tabs open through its
+/// CaptureCatalog.
 class LiveCaptureHost {
 public:
     virtual ~LiveCaptureHost() = default;
 
-    /// Open the text file @p logPath in a tab, following it; on the UI thread.
-    virtual void openTab( const QString& logPath ) = 0;
     /// Tell the user @p message in a notification.
     virtual void notify( const QString& message ) = 0;
     /// Why no capture can start now for something outside the session, e.g.
@@ -93,26 +95,6 @@ public:
     {
         return {};
     }
-};
-
-/// Where a Live Capture Session keeps what the tab of each text file of a
-/// capture shows: the sidebar's summaries and indices, by text file, in the
-/// app; a fake in tests.
-class LiveCaptureCatalog {
-public:
-    virtual ~LiveCaptureCatalog() = default;
-
-    /// The text file @p logPath of the capture @p name, written from the raw
-    /// file @p rawPath, is about to open in a tab: keep it.
-    virtual void addFile( const QString& logPath, const QString& rawPath, const QString& name ) = 0;
-    /// What the text file @p logPath shows from now on: @p summary, the
-    /// capture's @p index (null: the one it has) and the size of its raw
-    /// capture, @p fileSize; so far, or final.
-    virtual void updateFile( const QString& logPath, const CaptureSummary& summary,
-                             std::shared_ptr<const CaptureIndex> index, qint64 fileSize ) = 0;
-    /// The capture of the text file @p logPath failed with @p error; what it
-    /// captured is kept.
-    virtual void setFileError( const QString& logPath, const QString& error ) = 0;
 };
 
 /// What a capture is run with.
@@ -203,10 +185,9 @@ public:
         Stopping,  ///< A capture was told to stop, and has not ended yet.
     };
 
-    /// A session opening tabs on @p host and keeping summaries in @p
-    /// catalog, both outliving it.
-    LiveCaptureSession( LiveCaptureHost& host, LiveCaptureCatalog& catalog,
-                        QObject* parent = nullptr );
+    /// A session telling the user on @p host and keeping summaries in, and
+    /// opening tabs through, @p catalog, both outliving it.
+    LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
     /// Lets go of a capture that may still run (its run is retired, not
     /// waited for), and cancels and waits for a check that runs.
     ~LiveCaptureSession() override;
@@ -349,7 +330,7 @@ private:
     void runDone( unsigned run );
 
     LiveCaptureHost& host_;
-    LiveCaptureCatalog& catalog_;
+    CaptureCatalog& catalog_;
     std::shared_ptr<const LiveSourceRegistry> sources_;
     QString outputRoot_;
     LiveRunFactory makeRun_;

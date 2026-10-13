@@ -502,7 +502,7 @@ SCENARIO( "The SSH source lists and captures on a server through a fake ssh", "[
         REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
         REQUIRE( live.outcome().error.isEmpty() );
         REQUIRE( live.outcome().files.size() == 1 );
-        REQUIRE( live.outcome().files == live.adapters.openedTabs );
+        REQUIRE( live.outcome().files == live.host.openedTabs );
         REQUIRE( QFileInfo( live.outcome().files.first() ).fileName() == "admin_srv-eth0.log" );
         const auto stderrText = live.stderrText();
         REQUIRE( stderrText.contains( "[eth0]" ) );
@@ -536,7 +536,7 @@ SCENARIO( "Stop ends tcpdump on the server, not only the local ssh", "[ssh_sourc
         INFO( live.outcome().error.toStdString() );
         REQUIRE( live.outcome().status == LiveOutcome::Status::Captured );
         REQUIRE( live.outcome().stoppedBy == StopCondition::None );
-        REQUIRE( live.outcome().files == live.adapters.openedTabs );
+        REQUIRE( live.outcome().files == live.host.openedTabs );
     }
 }
 
@@ -640,7 +640,7 @@ SCENARIO( "What ssh, sudo and tcpdump fail with is reported with what to do", "[
         {
             REQUIRE( live.outcome().status == LiveOutcome::Status::Failed );
             REQUIRE( live.outcome().files.isEmpty() );
-            REQUIRE( live.adapters.openedTabs.isEmpty() );
+            REQUIRE( live.host.openedTabs.isEmpty() );
             REQUIRE( live.outcome().error.contains( "sudo: a password is required" ) );
             REQUIRE( live.outcome().guidance.contains( "NOPASSWD" ) );
             REQUIRE( live.outcome().guidance.contains( "never gives" ) );

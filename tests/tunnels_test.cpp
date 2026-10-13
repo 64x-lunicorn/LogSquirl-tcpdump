@@ -26,6 +26,7 @@
 
 #include "capture_stats.h"
 #include "packet_formatter.h"
+#include "packet_recorder.h"
 #include "pcapbuilder.h"
 #include "stream_tracker.h"
 

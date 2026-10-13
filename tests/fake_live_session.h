@@ -19,23 +19,25 @@
 
 /**
  * @file fake_live_session.h
- * @brief Fakes around a Live Capture Session: its host and capture catalog,
- *        captures the test scripts, and captures run for real.
+ * @brief Fakes around a Live Capture Session: its host, captures the test
+ *        scripts, and captures run for real.
  *
- * FakeLiveHost is both adapters of a LiveCaptureSession: it records the
- * tabs opened, the notifications, and what the catalog keeps per text file
- * (its raw file, summary, index, size and error), and can say something
- * else is busy.  ScriptedRuns makes the session's runs (setRunFactory()):
- * each a ScriptedRun that records what it was asked to run and whether it
- * was told to stop, and tells the session what the test says, when the
- * test says it, on the test's thread, so that no event loop is needed.
- * WorkerSession is a session whose captures run on a worker, as in the
- * app (runOnWorker()), for a source kind's tests with its fake programs:
- * it runs the event loop until the session told what the test waits for.
+ * FakeLiveHost is the host of a LiveCaptureSession and of its catalog: it
+ * records the tabs opened and the notifications, and can say something else
+ * is busy.  The session keeps what each tab shows in a real CaptureCatalog,
+ * which opens the tabs and which the tests read.  ScriptedRuns makes the
+ * session's runs (setRunFactory()): each a ScriptedRun that records what it
+ * was asked to run and whether it was told to stop, and tells the session
+ * what the test says, when the test says it, on the test's thread, so that
+ * no event loop is needed.  WorkerSession is a session whose captures run on
+ * a worker, as in the app (runOnWorker()), for a source kind's tests with
+ * its fake programs: it runs the event loop until the session told what the
+ * test waits for.
  */
 
 #pragma once
 
+#include "capture_catalog.h"
 #include "live_capture_session.h"
 
 #include <QEventLoop>
@@ -45,27 +47,15 @@
 #include <QTimer>
 
 #include <functional>
-#include <map>
 #include <memory>
 #include <vector>
 
 namespace tcpdump_test {
 
-/// A Live Capture Session's host and capture catalog, recording.
-class FakeLiveHost : public tcpdump::LiveCaptureHost, public tcpdump::LiveCaptureCatalog {
+/// A Live Capture Session's host, and its catalog's tab host, recording.
+class FakeLiveHost : public tcpdump::LiveCaptureHost, public tcpdump::CaptureTabHost {
 public:
-    /// What the catalog keeps of a text file.
-    struct Entry {
-        QString rawPath;
-        QString name;
-        tcpdump::CaptureSummary summary;
-        std::shared_ptr<const tcpdump::CaptureIndex> index;
-        qint64 fileSize = 0;
-        QString error;
-        int updates = 0; ///< How often its summary was replaced.
-    };
-
-    void openTab( const QString& logPath ) override
+    void openTab( const QString& logPath, bool /*follow*/ ) override
     {
         openedTabs << logPath;
     }
@@ -77,30 +67,10 @@ public:
     {
         return busy;
     }
-    void addFile( const QString& logPath, const QString& rawPath, const QString& name ) override
-    {
-        catalog[ logPath ] = Entry{ rawPath, name, {}, {}, 0, {}, 0 };
-    }
-    void updateFile( const QString& logPath, const tcpdump::CaptureSummary& summary,
-                     std::shared_ptr<const tcpdump::CaptureIndex> index, qint64 fileSize ) override
-    {
-        auto& entry = catalog.at( logPath );
-        entry.summary = summary;
-        if ( index ) {
-            entry.index = std::move( index );
-        }
-        entry.fileSize = fileSize;
-        ++entry.updates;
-    }
-    void setFileError( const QString& logPath, const QString& error ) override
-    {
-        catalog.at( logPath ).error = error;
-    }
 
     QStringList openedTabs;    ///< The text files opened in tabs, in order.
     QStringList notifications; ///< What the user was told, in order.
     QString busy;              ///< Set: something else is busy, and this says so.
-    std::map<QString, Entry> catalog;
 };
 
 /// A capture the test scripts: what the session asked for, and what it is told.
@@ -211,7 +181,7 @@ private:
 /**
  * A Live Capture Session that runs its captures on a worker, as in the app,
  * with the kinds of a registry, writing below a temporary directory of its
- * own, on a FakeLiveHost; it records the lines its programs wrote to
+ * own, on a FakeLiveHost and a CaptureCatalog; it records the lines its programs wrote to
  * stderr.  What a run tells comes through the event loop, which the waits
  * run until the session told it: the deadline only guards against a hang.
  */
@@ -236,7 +206,7 @@ public:
     /// Run the event loop until the capture opened its first text file in a tab.
     bool waitForFile( int hangGuardMs = kHangGuardMs )
     {
-        return waitUntil( [ this ] { return !adapters.openedTabs.isEmpty(); }, hangGuardMs );
+        return waitUntil( [ this ] { return !host.openedTabs.isEmpty(); }, hangGuardMs );
     }
 
     /// Run the event loop until @p met holds, checked each time the session
@@ -272,9 +242,10 @@ public:
         return stderrLines.join( '\n' );
     }
 
-    FakeLiveHost adapters;
+    FakeLiveHost host;
+    tcpdump::CaptureCatalog catalog{ host };
     QTemporaryDir outputRoot; ///< Outlives the session, which writes below it.
-    tcpdump::LiveCaptureSession session{ adapters, adapters };
+    tcpdump::LiveCaptureSession session{ host, catalog };
     QStringList stderrLines; ///< What its capture programs wrote to stderr, in order.
 };
 

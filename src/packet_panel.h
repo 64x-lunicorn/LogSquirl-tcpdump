@@ -25,15 +25,16 @@
  * The packet list stays LogSquirl's view of the converted text; the panel
  * is its companion in the sidebar.  It follows the tab in front (the
  * sidebar hands it the capture's CaptureIndex) and the line selected there,
- * which it reads through the host's get_selected_log_lines (LogSquirl
- * 26.11).  The host has no selection-changed callback, so the panel asks
- * for the selection while it is visible, every kPollIntervalMs, and does
- * nothing when it did not change; Plugins > tcpdump > Packet details reads
- * it at once.  The packet is found by the No. column of the first selected
- * line and read back from the capture file by a CaptureCursor, on a worker
- * thread of the panel's own (up to a checkpoint interval of records): the
- * panel says "Reading packet N…" meanwhile, and a read the selection has
- * moved on from is dropped, not started if it has not begun.
+ * which it reads through Selected Packet Line (selected_packet_line.h),
+ * from the host's get_selected_log_lines (LogSquirl 26.11).  The host has
+ * no selection-changed callback, so the panel asks for the selection while
+ * it is visible, every kPollIntervalMs, and does nothing when it did not
+ * change; Plugins > tcpdump > Packet details reads it at once.  The packet
+ * is found by the No. column of the first selected line and read back from
+ * the capture file by a CaptureCursor, on a worker thread of the panel's
+ * own (up to a checkpoint interval of records): the panel says "Reading
+ * packet N…" meanwhile, and a read the selection has moved on from is
+ * dropped, not started if it has not begun.
  *
  * Its Stream tab shows the content of the shown packet's conversation
  * (Show stream content, StreamContentView) once the user asks for it: by
@@ -50,8 +51,8 @@
 
 #include "capture_index.h"
 #include "packet_layers.h"
+#include "selected_packet_line.h"
 
-#include <QByteArray>
 #include <QString>
 #include <QThreadPool>
 #include <QTimer>
@@ -63,6 +64,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -151,6 +153,12 @@ public:
         return selectedPacket_;
     }
 
+    /// The packet line selected, as the panel read it when it last asked,
+    /// also while its packet is read; none while selectedPacket() is 0.
+    /// Stream lines in Regex Lab follows its stream, so that the button
+    /// and the action decide on the same reading of the selection.
+    std::optional<PacketLine> selectedLine() const;
+
     /// The number of the packet shown; 0 while none is.
     uint32_t shownPacket() const
     {
@@ -176,14 +184,13 @@ public:
     bool followStreamContent( QString* why = nullptr );
 
     /// Why Show stream content cannot show a stream now, for the user: no
-    /// capture in the tab in front, no packet line selected, a packet of no
-    /// stream; empty when it can.
+    /// capture in the tab in front, a read that failed, or what
+    /// SelectedPacketLine::streamContentProblem() says; empty when it can.
     QString streamContentProblem() const;
 
     /// Why Stream lines in Regex Lab cannot filter a stream's lines now, as
-    /// streamContentProblem(), or because the stream has no number (the
-    /// capture has more conversations than the plugin numbers); empty when
-    /// it can.
+    /// streamContentProblem(), with SelectedPacketLine::streamLinesProblem();
+    /// empty when it can.
     QString streamLinesProblem() const;
 
     /// The Stream tab.
@@ -210,8 +217,8 @@ protected:
 private:
     /// Ask for the selection; show its packet if it changed (or @p force).
     void poll( bool force = false );
-    /// Show the packet of @p selection, the selected lines' text.
-    void showSelection( const QString& selection );
+    /// Show the packet of the line @p selected, or why there is none.
+    void showSelection( const SelectedPacketLine& selected );
     /// Read packet @p number on the worker, then show it.
     void showPacket( uint32_t number );
     /// What a read on the worker found.
@@ -246,19 +253,15 @@ private:
     std::shared_ptr<std::atomic<uint64_t>> latest_;
     bool reading_ = false;
     std::vector<std::function<void()>> whenSettled_;
-    /// What the selection was when last asked: the host's result and text.
-    int lastResult_ = 0;
-    QByteArray lastSelection_;
-    bool haveLast_ = false;
+    /// What the host told of the selection when last asked; none since a
+    /// capture came to the front.
+    std::optional<SelectedLines> last_;
+    /// The line selected when last asked, read: its packet's number,
+    /// stream and iRTT, or why it has none.
+    SelectedPacketLine selected_;
 
     uint32_t selectedPacket_ = 0; ///< The packet of the selected line, read or not.
-    /// The iRTT the selected line tells, "0.012345" (the TCP Analysis's
-    /// [iRTT=…]); empty without one.
-    std::string selectedIrtt_;
     uint32_t shownPacket_ = 0;
-    /// The Stream column of the shown packet's line: its number, or
-    /// kNoStream ("-") or kUnnumbered ("?").
-    int shownStream_ = -1;
     size_t shownBytes_ = 0;
     std::vector<PacketLayer> layers_;
 };

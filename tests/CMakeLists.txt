@@ -24,6 +24,8 @@ add_executable(logsquirl_tcpdump_tests
     pcap_layers_test.cpp
     packet_layers_test.cpp
     capture_index_test.cpp
+    capture_catalog_test.cpp
+    background_job_test.cpp
     gzip_source_test.cpp
     packet_export_test.cpp
     link_layers_test.cpp
@@ -71,6 +73,8 @@ add_executable(logsquirl_tcpdump_tests
     logformat_test.cpp
     presets_test.cpp
     packet_formatter_test.cpp
+    packet_line_test.cpp
+    selected_packet_line_test.cpp
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
@@ -81,6 +85,8 @@ add_executable(logsquirl_tcpdump_tests
     byte_stream_orderer_test.cpp
     tcp_reassembly_test.cpp
     packet_pipeline_test.cpp
+    packet_recorder_test.cpp
+    live_output_test.cpp
     hpack_test.cpp
     tls_crypto_test.cpp
     tls_key_log_test.cpp
@@ -142,6 +148,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/hpack.cpp"
         "${CMAKE_SOURCE_DIR}/src/protocol_names.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_formatter.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_line.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_tracker.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_labels.cpp"
         "${CMAKE_SOURCE_DIR}/src/tcp_analysis.cpp"
@@ -156,15 +163,19 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/capture_file.cpp"
         "${CMAKE_SOURCE_DIR}/src/gzip_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/capture_index.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_catalog.cpp"
         "${CMAKE_SOURCE_DIR}/src/raw_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_export.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_pipeline.cpp"
+        "${CMAKE_SOURCE_DIR}/src/packet_recorder.cpp"
+        "${CMAKE_SOURCE_DIR}/src/live_output.cpp"
         "${CMAKE_SOURCE_DIR}/src/pcap_converter.cpp"
         "${CMAKE_SOURCE_DIR}/src/tempdirs.cpp"
         "${CMAKE_SOURCE_DIR}/src/settings.cpp"
         "${CMAKE_SOURCE_DIR}/src/configdialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/export_dialog.cpp"
         "${CMAKE_SOURCE_DIR}/src/conversation_table.cpp"
+        "${CMAKE_SOURCE_DIR}/src/selected_packet_line.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_session.cpp"

@@ -33,6 +33,7 @@
 #include "pcap_converter.h"
 #include "sidebarwidget.h"
 
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
@@ -40,7 +41,9 @@
 #include <QTemporaryDir>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
+#include <thread>
 
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
                                          size_t api_size );
@@ -509,6 +512,21 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
         }
     }
 
+    GIVEN( "a host that refuses to tell the selection" )
+    {
+        host.selectedLines = { loaded.lines[ 1 ] };
+        host.selectionResult = LOGSQUIRL_LOG_LINES_NOT_ON_UI_THREAD;
+        loaded.exportSelected();
+
+        THEN( "nothing is asked and the user is told why" )
+        {
+            REQUIRE( loaded.requests.empty() );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first()
+                     == "Export packets: LogSquirl did not tell the selected lines (-1)." );
+        }
+    }
+
     GIVEN( "a tab in front that shows no capture" )
     {
         host.activateFile( QString() );
@@ -519,6 +537,40 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
             REQUIRE( loaded.requests.empty() );
             REQUIRE( host.notifications.size() == 1 );
             REQUIRE( host.notifications.first().contains( "shows no capture" ) );
+        }
+    }
+
+    GIVEN( "an export over an existing file, cancelled once it has written the file" )
+    {
+        {
+            QFile old( loaded.outputPath );
+            REQUIRE( old.open( QIODevice::WriteOnly ) );
+            REQUIRE( old.write( "the capture it replaces" ) > 0 );
+        }
+        host.selectedLines = { loaded.lines[ 1 ] };
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
+                  return a.label == "Export packets\xe2\x80\xa6";
+              } );
+        entry->trigger();
+        REQUIRE( loaded.sidebar->isExporting() );
+        // Its result waits for this thread's event loop, which does not run
+        // until the file has replaced the old one.
+        QElapsedTimer clock;
+        clock.start();
+        while ( readAll( loaded.outputPath ) == "the capture it replaces"
+                && clock.elapsed() < 5000 ) {
+            std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+        }
+        REQUIRE( loaded.sidebar->isExporting() );
+        loaded.sidebar->cancelExport();
+        REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+
+        THEN( "the cancel came too late: the export is kept and reported" )
+        {
+            REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
+            REQUIRE( host.notifications.size() == 1 );
+            REQUIRE( host.notifications.first().startsWith( "Exported 1 packet" ) );
         }
     }
 
