@@ -590,6 +590,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch between light and dark mode. The Stream tab's header shows each
   direction on a line of its own, below *TCP stream 1*, instead of all on
   one line (#146).
+- **An export that fails while it is cancelled ends as cancelled.** An
+  export that failed after the user had pressed Cancel was reported as
+  failed, with a notification; it now ends as a cancelled one does,
+  without a notification and with nothing left behind, as a conversion
+  already did. Only the log says why it failed. An export that has
+  written its file still stays and is reported (#158).
+- **"Capturing…" only while a capture runs.** The sidebar's summary of
+  the last live capture said *Capturing… the summary so far:* again while
+  the source of the next one was being checked before it started; it now
+  says so only while its capture runs (#156).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
