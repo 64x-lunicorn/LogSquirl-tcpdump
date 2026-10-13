@@ -109,6 +109,13 @@ struct LiveLimits {
 /// steady clock.
 using LiveClock = std::function<std::chrono::steady_clock::time_point()>;
 
+/// The user's message for a capture's text that could not be written,
+/// with @p text's error: a file's <name>.log or a live capture's text.
+inline QString textWriteError( const QIODevice& text )
+{
+    return QStringLiteral( "Cannot write the output file: %1" ).arg( text.errorString() );
+}
+
 /**
  * The files a live capture writes, which its Live Output owns: a text, and
  * the raw capture it was read from (raw_capture.h), one file each, or with

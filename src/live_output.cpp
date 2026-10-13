@@ -101,7 +101,7 @@ bool DiskLiveFiles::close()
 
 bool DiskLiveFiles::textFailed()
 {
-    error_ = QStringLiteral( "Cannot write the output file: %1" ).arg( text_.errorString() );
+    error_ = textWriteError( text_ );
     return false;
 }
 

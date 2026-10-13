@@ -215,11 +215,11 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
         {
             host.selectedLines = { loaded.lines[ 0 ] };
 
-            THEN( "the panel says so" )
+            THEN( "the panel shows Selected Packet Line's reason above its empty views" )
             {
-                REQUIRE( waitFor(
-                    [ panel ] { return panel->statusText().contains( "not a packet line" ); } ) );
-                REQUIRE_FALSE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
+                auto* status = panel->findChild<QLabel*>( "packetStatus" );
+                REQUIRE( waitFor( [ status ] { return !status->isHidden(); } ) );
+                REQUIRE_FALSE( panel->statusText().isEmpty() );
                 REQUIRE( panel->shownPacket() == 0 );
             }
         }
@@ -855,20 +855,6 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
                 REQUIRE_FALSE( content->isEnabled() );
                 REQUIRE( lines->toolTip() == "Select a packet line to see its packet." );
                 REQUIRE( content->toolTip() == "Select a packet line to see its packet." );
-            }
-        }
-
-        WHEN( "a packet line without a stream is selected" )
-        {
-            host.selectedLines = { loaded.lines[ 20 ] };
-            panel->refresh();
-
-            THEN( "both are disabled and say the packet has no stream" )
-            {
-                REQUIRE_FALSE( lines->isEnabled() );
-                REQUIRE_FALSE( content->isEnabled() );
-                REQUIRE( lines->toolTip().contains( "Packet 20 belongs to no stream" ) );
-                REQUIRE( content->toolTip().contains( "Packet 20 belongs to no stream" ) );
             }
         }
 

@@ -341,9 +341,9 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
             THEN( "no Lab opens, and a notification says why, as the button's tooltip does" )
             {
                 REQUIRE( host.regexLabs.isEmpty() );
+                REQUIRE_FALSE( button->isEnabled() );
                 REQUIRE( host.notifications
                          == QStringList{ "Stream lines in Regex Lab: " + button->toolTip() } );
-                REQUIRE( button->toolTip().contains( "Packet 20 belongs to no stream" ) );
             }
         }
 

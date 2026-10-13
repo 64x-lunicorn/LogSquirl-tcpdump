@@ -33,6 +33,7 @@
 #include "pcap_converter.h"
 #include "sidebarwidget.h"
 
+#include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -582,6 +583,41 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
             REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
             REQUIRE( host.notifications.size() == 1 );
             REQUIRE( host.notifications.first().startsWith( "Exported 1 packet" ) );
+        }
+    }
+
+    GIVEN( "an export over an existing file, whose sidebar is destroyed once it has written the "
+           "file" )
+    {
+        {
+            QFile old( loaded.outputPath );
+            REQUIRE( old.open( QIODevice::WriteOnly ) );
+            REQUIRE( old.write( "the capture it replaces" ) > 0 );
+        }
+        host.selectedLines = { loaded.lines[ 1 ] };
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
+                  return a.label == "Export packets\xe2\x80\xa6";
+              } );
+        entry->trigger();
+        REQUIRE( loaded.sidebar->isExporting() );
+        // Its result waits for this thread's event loop, which does not run
+        // until the file has replaced the old one.
+        QElapsedTimer clock;
+        clock.start();
+        while ( readAll( loaded.outputPath ) == "the capture it replaces"
+                && clock.elapsed() < 5000 ) {
+            std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+        }
+        REQUIRE( loaded.sidebar->isExporting() );
+        // The sidebar is deleted, as when LogSquirl unloads the plugin.
+        logsquirl_plugin_shutdown();
+        QCoreApplication::processEvents();
+
+        THEN( "the cancel came too late: the export is kept, reported to no one" )
+        {
+            REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
+            REQUIRE( host.notifications.isEmpty() );
         }
     }
 

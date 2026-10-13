@@ -945,9 +945,14 @@ SCENARIO( "A live capture whose raw file cannot be flushed says so", "[converter
                 flushed = files.flush();
             }
 
-            THEN( "the raw capture is named, with its own error" )
+            THEN( "the raw capture is named, with its own error, and the text is flushed" )
             {
                 REQUIRE_FALSE( flushed );
+                const auto texts = QDir( out.path() ).entryList( { "*.log" }, QDir::Files );
+                REQUIRE( texts.size() == 1 );
+                QFile text( QDir( out.path() ).filePath( texts.first() ) );
+                REQUIRE( text.open( QIODevice::ReadOnly ) );
+                REQUIRE( text.readAll() == "No. Time\n" );
                 REQUIRE( files.error().startsWith( "Cannot write the raw capture: " ) );
                 REQUIRE( files.error().size()
                          > QString( "Cannot write the raw capture: " ).size() );
