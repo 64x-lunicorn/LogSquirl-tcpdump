@@ -607,6 +607,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   you see: the tooltip of the disabled **Start live capture…** while a
   capture file is read now says what the notification says, *A capture is
   still being read: wait for it, or cancel it first.* (#174).
+- **Opening a capture file is decided in one place.** Opening, cancelling
+  and failing to open a capture file behave as before, from the sidebar
+  and the tcpdump menu alike. The only change you see: a file chosen in
+  the Open dialog while a live capture started meanwhile (one waiting for
+  the last to end) is no longer dropped without a word; a notification
+  says why it was not opened (#170).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

@@ -1961,10 +1961,11 @@ worker, before the library is unloaded.
 A live capture's lifecycle and outcome are decided in one place, a
 `LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
 drives and listens to; the sidebar only shows what it is told. The session
-reaches LogSquirl through a `LiveCaptureHost` (`notify( message )`, and
-`runningElsewhere()`: a capture file being read or an export, which the
-session weighs with its own capture in the Activity rule, see *Sidebar
-Widget*), which the sidebar is, and
+reaches LogSquirl through a `SessionHost` (`session_host.h`, also
+`LiveCaptureHost`; `notify( message )`, and `runningElsewhere()`: a
+capture file being read or an export, which the session weighs with its
+own capture in the Activity rule, see *Sidebar Widget*; its `capturing` is
+not read), which the sidebar is, and
 keeps what each text file's tab shows in the sidebar's `CaptureCatalog`
 (see *The Capture Catalog*), which opens the tabs: `startLive()` as a run
 starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
@@ -2007,7 +2008,8 @@ The session's signals (`stateChanged`, `started`, `fileOpened`,
 `progressed`, `stderrLine`, `finished`) are what the sidebar renders:
 the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
 the error and Guidance, the summary label. `tests/fake_live_session.h`
-has `FakeLiveHost` (the host, recording) and `ScriptedRuns` (runs the
+has `FakeLiveHost` (the host, recording: `FakeSessionHost` of
+`tests/fake_session_host.h`) and `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
 `tests/live_capture_session_test.cpp` tests the session, with a real
 `CaptureCatalog`, without a widget or an event loop. Its `WorkerSession`
@@ -2019,6 +2021,57 @@ files opened) and the stderr lines, waiting in the event loop for what the
 session tells (`waitForOutcome()`, `waitForFile()`). How the sidebar shows
 an outcome is tested on the sidebar itself (`live_capture_ui_test.cpp`,
 `live_capture_test.cpp`).
+
+#### The File Conversion session (`file_conversion_session.h/cpp`)
+Opening a capture file is decided in one place too, a
+`FileConversionSession` (a `QObject` on the UI thread), shaped like the
+Live Capture Session: the sidebar's **Open pcap…**, the menu's *Open
+pcap…* (both through `chooseAndOpen()`, whose file dialog is the
+sidebar's) and **Cancel** forward to it, and the sidebar renders what it
+tells. It reaches LogSquirl through the same `SessionHost` (its
+`converting` is not read) and keeps what it converts in the sidebar's
+`CaptureCatalog`.
+
+- `refusal()`: why no file can be opened now, the Activity rule's message
+  for `OpenFile` with the host's `runningElsewhere()` and its own
+  `isBusy()`; empty if one can. `start( filePath )` refuses with it, as a
+  notification, and returns false; otherwise it reads the conversion
+  options from settings.ini (`loadConversionOptions()`), so that a change
+  applies to the next file, logs *Opening pcap file:*, and runs the
+  conversion as its Background Job (see *The Background Job*), into a
+  private directory below `setOutputRoot()`'s root (`Converting`).
+- `cancel()` cancels the job (`Cancelling`); the job's discard,
+  `removeOutput()`, takes back what a conversion that was done when the
+  cancel came wrote, and it ends Cancelled.
+- `progress()` (permille, signal `progressed`) and `label()`, the summary
+  label's text as rich text: *Reading <file>…*, *Cancelling…*, then the
+  outcome's.
+- The outcome (`FileConversionOutcome`, also `outcome()`, and the signal
+  `finished`, after the catalog kept it and the user was told): `Opened`
+  (the catalog's `openConverted()`, which opens its tab, and `setFront()`;
+  `textPath` is its text file; logged *Opened N packets from …*; its label
+  is empty, as its tab shows its summary), `Cancelled` (label
+  *Cancelled.*, logged *Cancelled opening …*, nobody told) or `Failed`
+  (label *Error: …*, logged *pcap parse error: …*, notified *Failed to
+  open pcap: …*). The outcome carries each of these texts: `label`, `log`,
+  `notification`. The state is `Idle` before the catalog announces the
+  capture in front, so that the sidebar draws it as opened.
+- Destroying the session cancels a running conversion and waits for its
+  worker (`cancelAndWait()`), telling nothing.
+
+`setConverter()` replaces `convertPcap()`, run on the worker as it is, for
+tests. `tests/file_conversion_session_test.cpp` tests the session with a
+`FakeSessionHost`, a real `CaptureCatalog` and no widget: a conversion
+opened, kept, in front and logged; a failure's texts, and an output root
+that cannot be made; a cancel that wins over a conversion done when it
+came (a held converter, which converts, then waits until the test lets it
+go or the session cancels it), its texts and the directory taken back; a
+session destroyed while it converts; a private file per run; the options
+of its start; its progress; and a start refused while a live capture or
+another conversion runs, but not while packets are exported. It waits in
+the event loop for what the session tells, as the Background Job delivers
+through it. How the sidebar shows it is tested on the sidebar
+(`sidebarwidget_test.cpp`).
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
@@ -2431,13 +2484,16 @@ exclude each other and both wait for a conversion (named first);
 `Exporting` for an export, which waits only for another export.
 `refusalMessage()` is the one message each reason is told with, and
 `activityRefusalMessage()` the two together. The sidebar asks it with
-`runningActivities()` before Open (`chooseAndOpen()`, `openPcapFile()`),
-Start live capture… (`chooseAndStartLiveCapture()`, which offers to stop
-a running capture instead of refusing for `Capturing`) and Export
-packets (`exportSelectedPackets()`), and to enable Open pcap… and Start
-live capture… (whose tooltip is the reason); the Live Capture Session
-asks it for every start, with the sidebar's `runningElsewhere()` and its
-own `isBusy()`. The menu entries call these, so they refuse alike.
+`runningActivities()` before Start live capture…
+(`chooseAndStartLiveCapture()`, which offers to stop a running capture
+instead of refusing for `Capturing`) and Export packets
+(`exportSelectedPackets()`), and to enable Open pcap… and Start live
+capture… (whose tooltip is the reason); before Open's file dialog
+(`chooseAndOpen()`) it asks the File Conversion session's `refusal()`.
+The Live Capture Session and the File Conversion session ask it for
+every start, with the sidebar's `runningElsewhere()` (all that runs; each
+session puts in its own) and their own `isBusy()`. The menu entries call
+these, so they refuse alike.
 `activity_test.cpp` tests the rule for every combination of what runs,
 without a widget.
 
@@ -2471,11 +2527,17 @@ its tooltip. While a capture runs, the section shows its counters and
 failure's error, with its Guidance (`explainFailure()`), a label below
 Stop. **Stop live capture** calls `stopLiveCapture()`.
 
-It runs `convertPcap()` as its `conversion_` Background Job (see *The
-Background Job* below), on a worker thread of its own, with
-the system's temporary directory as the output root, and shows the outcome
-on the GUI thread: it prints the summary it is given and catches nothing
-itself. A failed or cancelled conversion leaves no directory behind; a
+Opening a capture file is the sidebar's `FileConversionSession`'s
+(`conversionSession()`; see *The File Conversion session*), which runs
+`convertPcap()` as its Background Job (see *The Background Job* below), on
+a worker thread of its own, with the system's temporary directory as the
+output root (`setTempRoot()` in tests). `openPcapFile()` and `cancel()`
+forward to it; the sidebar shows its state (`stateChanged`: the Open,
+Cancel and progress bar controls, and its `label()` while it runs), its
+`progressed` on the progress bar, and the outcome's `label` when it has
+one: it prints the summary the catalog gives it and catches nothing
+itself. `isConverting()` is the session's `isBusy()`. A failed or
+cancelled conversion leaves no directory behind; a
 converted one's is kept for its tab. The process ID in the name is the only
 record of the directories of
 files opened in tabs, so that it survives a runtime disable, update and
@@ -2485,11 +2547,12 @@ run (checked with `kill(pid, 0)` on Unix and `OpenProcess()` on Windows).
 Directories of running processes, links and, on Unix, other users'
 directories are left alone. Only regular files are read, so the worker
 cannot block on a FIFO or device; destroying the widget cancels a running
-conversion and export and waits for their workers.
+conversion (destroying its session) and export and waits for their
+workers.
 
 #### The Background Job (`background_job.h`)
-The kind of job the sidebar converts a capture file and exports packets
-with: `BackgroundJob<Result>`, for a result with a `Status` (`Failed`,
+The kind of job the File Conversion session converts a capture file and
+the sidebar exports packets with: `BackgroundJob<Result>`, for a result with a `Status` (`Failed`,
 the default, and `Cancelled`) and an `error`, as `ConversionResult` and
 `ExportResult` have. Each job has a `QThreadPool` of one thread, which it
 can wait for, and runs one work at a time.
@@ -2499,8 +2562,8 @@ can wait for, and runs one work at a time.
   `done` on the thread that started it, once. A work that throws ends as
   Failed, "The `<name>` ended without a result".
 - `isRunning()`: started, and the result not delivered yet; false by the
-  time `done` is called, so that the sidebar's `isConverting()` and
-  `isExporting()` are the jobs'.
+  time `done` is called, so that the File Conversion session is idle and
+  the sidebar's `isExporting()` false when they handle the result.
 - `cancel()` sets the flag the work checks as it goes.
 - `cancelAndWait()`, also what its destructor does: cancels and waits for
   the worker, so that no code of the plugin runs on it afterwards; a result
@@ -2515,8 +2578,8 @@ the cancel came too late. A conversion's private directory always goes
 at a cancel before its `QSaveFile` replaces the file chosen, and once it
 has, the file that was there is gone, so removing the export would lose
 both (#166); it is reported as exported. An export that failed wrote
-nothing, and ends Cancelled. The same holds when the sidebar is destroyed
-with a job whose result has not been delivered.
+nothing, and ends Cancelled. The same holds when the session or the
+sidebar is destroyed with a job whose result has not been delivered.
 
 `tests/background_job_test.cpp` tests it without a sidebar, with a work
 that is done after the test lets it go and never looks at its flag: a
@@ -2527,7 +2590,8 @@ so does a result that cannot be taken back.
 
 #### The Capture Catalog (`capture_catalog.h/cpp`)
 What the tab of each text file the plugin wrote shows, with no widget in
-it: the sidebar owns one, and it is its Live Capture Session's catalog.
+it: the sidebar owns one, and it is its Live Capture Session's and File
+Conversion session's catalog.
 Entries (`CaptureCatalog::Entry`: file name and size, summary, index, the
 Log Format hint, a live capture's raw file, capture name and error) are
 keyed by `fileKey()`, the canonical path (absolute when the file is gone),
