@@ -30,6 +30,7 @@
 #include <QFileInfo>
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace tcpdump {
 
@@ -158,6 +159,18 @@ const CapturePart* CaptureIndex::partOf( uint32_t number ) const
 {
     const auto* file = fileOf( number );
     return file ? &file->part : nullptr;
+}
+
+size_t CaptureIndex::checkpointBytes() const
+{
+    std::unordered_set<const void*> counted;
+    size_t bytes = checkpoints_.capacity() * sizeof( ReaderCheckpoint );
+    for ( const auto& checkpoint : checkpoints_ ) {
+        if ( checkpoint.state ) {
+            bytes += checkpoint.state->bytes( counted );
+        }
+    }
+    return bytes;
 }
 
 const ReaderCheckpoint* CaptureIndex::nearest( uint32_t number ) const

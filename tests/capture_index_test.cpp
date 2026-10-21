@@ -449,3 +449,68 @@ SCENARIO( "A copy of the index shares the extents of its streams", "[capture_ind
         }
     }
 }
+
+SCENARIO( "pcapng checkpoints share the interfaces declared before them", "[capture_index]" )
+{
+    using namespace tcpdump_test;
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a pcapng that declares an interface before every two packets, a checkpoint after "
+           "each packet" )
+    {
+        // Each pair of packets is on the interface declared just before
+        // them, of a link type that alternates.
+        constexpr uint32_t kDeclarations = 1000;
+        Pcapng le;
+        Bytes whole = le.shb();
+        std::vector<Bytes> packets;
+        for ( uint32_t i = 0; i < kDeclarations; ++i ) {
+            const bool raw = i % 2 == 1;
+            whole = whole + le.idb( raw ? DltRaw : DltEthernet );
+            for ( uint32_t j = 0; j < 2; ++j ) {
+                const auto port = static_cast<uint16_t>( 2 * i + j );
+                auto ip = ipv4( IpProtoUdp, udp( 5000, port, Bytes( 4, 'a' ) ) );
+                packets.push_back( raw ? ip : eth( EthertypeIpv4, ip ) );
+                whole = whole + le.epb( i, 1000 + port, packets.back() );
+            }
+        }
+        const auto path = dir.filePath( "interfaces.pcapng" );
+        QFile file( path );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        file.write( reinterpret_cast<const char*>( whole.data() ),
+                    static_cast<qint64>( whole.size() ) );
+        file.close();
+
+        WHEN( "it is converted" )
+        {
+            const auto result = convertWithInterval( path, dir.path(), 1 );
+            const auto& index = *result.index;
+            REQUIRE( index.checkpoints().size() == packets.size() );
+
+            THEN( "the index's memory grows with the declarations, not with the checkpoints "
+                  "times them" )
+            {
+                // A copy of the table per checkpoint after a declaration
+                // would hold some 500 times as many interfaces.
+                const size_t perInterface = 256;
+                const size_t perCheckpoint = 128;
+                REQUIRE( index.checkpointBytes()
+                         < kDeclarations * perInterface + packets.size() * perCheckpoint );
+            }
+
+            THEN( "every packet reads back with its own interface, across later declarations" )
+            {
+                CaptureCursor cursor( result.index );
+                CapturedPacket packet;
+                for ( const uint32_t number : { 1u, 2u, 3u, 1001u, 2000u, 4u, 1999u, 2u } ) {
+                    CAPTURE( number );
+                    REQUIRE( cursor.read( number, packet ) );
+                    REQUIRE( packet.bytes == packets[ number - 1 ] );
+                    REQUIRE( packet.record.linkType
+                             == ( ( number - 1 ) / 2 % 2 == 1 ? DltRaw : DltEthernet ) );
+                }
+            }
+        }
+    }
+}

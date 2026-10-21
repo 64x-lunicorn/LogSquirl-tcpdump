@@ -237,7 +237,16 @@ gives a `ReaderCheckpoint`: the packets before it, where the next record
 starts in the source, and a `ReaderState` the reader needs to go on there
 (none for a pcap, whose global header `open()` reads again; the section's
 byte order and interfaces for a pcapng, shared between checkpoints until an
-interface is declared). `resume()`, called on a newly opened reader of the
+interface is declared). The pcapng interfaces are an `InterfaceTable` of
+segments that never move (8, 8, 16, 32, … interfaces): every checkpoint of
+a section shares the one table and the number of interfaces it sees,
+while the reader that made it sets the ones declared after; a reader
+resumed at a checkpoint, or moving the headers (`relocateHeaders()`),
+copies the table once before it changes it. So a checkpoint costs a
+pointer and a count, and the interfaces' memory grows with the
+declarations, not with the checkpoints after them
+(`CaptureIndex::checkpointBytes()` measures it for the tests).
+`resume()`, called on a newly opened reader of the
 same file, skips to the checkpoint and goes on numbering from it. After
 each packet the reader also tells where its record lies (`recordOffset()`,
 `recordLength()`: the pcap record header or the pcapng block, header and
