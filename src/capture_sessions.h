@@ -218,7 +218,7 @@ private:
     void openTab( const QString& logPath, bool follow ) override;
     // The sessions' host.
     void notify( const QString& message ) override;
-    RunningActivities runningElsewhere() const override;
+    RunningActivities running() const override;
 
     /// The directory the dialogs start in: the one browsed last, or home.
     QString browseDir();

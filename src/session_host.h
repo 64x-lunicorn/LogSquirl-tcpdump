@@ -20,13 +20,12 @@
 /**
  * @file session_host.h
  * @brief Where a session (the Live Capture Session, the File Conversion
- *        session, the Export session) tells the user, and learns what runs
- *        besides it.
+ *        session, the Export session) tells the user, and learns what runs.
  *
- * In the app the sidebar is the host of every session; in tests a fake
+ * In the app the Capture Sessions are the host of every session; in tests a fake
  * that records.  A session asks the Activity rule (activity.h) with what
- * runs elsewhere and what it runs itself, so that the host need not know
- * which session asks.
+ * runs, its own activity replaced by what it runs itself, so that the host
+ * need not know which session asks.
  */
 
 #pragma once
@@ -37,19 +36,19 @@
 
 namespace tcpdump {
 
-/// Where a session tells the user: LogSquirl, through the sidebar, in the
-/// app; a fake in tests.
+/// Where a session tells the user: LogSquirl, through the Capture Sessions,
+/// in the app; a fake in tests.
 class SessionHost {
 public:
     virtual ~SessionHost() = default;
 
     /// Tell the user @p message in a notification.
     virtual void notify( const QString& message ) = 0;
-    /// What runs, which the Activity rule weighs with the session's own
-    /// activity; the session's own field (a conversion's @c converting, a
-    /// live capture's @c capturing, an export's @c exporting) is not read:
-    /// the session knows it.
-    virtual RunningActivities runningElsewhere() const
+    /// What runs, the asking session's own activity among it, which the
+    /// Activity rule weighs; the session's own field (a conversion's
+    /// @c converting, a live capture's @c capturing, an export's
+    /// @c exporting) is not read: the session puts in its own.
+    virtual RunningActivities running() const
     {
         return {};
     }

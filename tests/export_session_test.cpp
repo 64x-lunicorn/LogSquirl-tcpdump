@@ -457,8 +457,8 @@ SCENARIO( "An export that cannot start says why, and asks nothing", "[export_ses
     {
         Session s;
         s.host.selectedLines = { s.lines[ 1 ] };
-        s.sessionHost.running.converting = true;
-        s.sessionHost.running.capturing = true;
+        s.sessionHost.activities.converting = true;
+        s.sessionHost.activities.capturing = true;
 
         THEN( "packets may be exported all the same" )
         {

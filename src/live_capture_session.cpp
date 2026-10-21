@@ -175,7 +175,7 @@ LiveCaptureSession::~LiveCaptureSession()
 
 bool LiveCaptureSession::refuseWhileBusy()
 {
-    auto running = host_.runningElsewhere();
+    auto running = host_.running();
     running.capturing = isBusy();
     const auto why = activityRefusalMessage( Activity::LiveCapture, running );
     if ( why.isEmpty() ) {

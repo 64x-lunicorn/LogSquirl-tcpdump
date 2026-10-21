@@ -547,7 +547,7 @@ SCENARIO( "Opening a file is refused while the Activity rule refuses it", "[file
 
     WHEN( "a live capture runs" )
     {
-        s.sessionHost.running.capturing = true;
+        s.sessionHost.activities.capturing = true;
 
         THEN( "no conversion starts, and the user is told why, as the rule says it" )
         {
@@ -562,7 +562,7 @@ SCENARIO( "Opening a file is refused while the Activity rule refuses it", "[file
 
     WHEN( "packets are exported" )
     {
-        s.sessionHost.running.exporting = true;
+        s.sessionHost.activities.exporting = true;
 
         THEN( "a file may be opened all the same" )
         {

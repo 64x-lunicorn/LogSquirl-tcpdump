@@ -50,15 +50,15 @@ public:
     {
         notifications << message;
     }
-    tcpdump::RunningActivities runningElsewhere() const override
+    tcpdump::RunningActivities running() const override
     {
-        return running;
+        return activities;
     }
 
-    QStringList openedTabs;             ///< The text files opened in tabs, in order.
-    QList<bool> openedFollowing;        ///< Whether each tab follows its file.
-    QStringList notifications;          ///< What the user was told, in order.
-    tcpdump::RunningActivities running; ///< What runs outside the session.
+    QStringList openedTabs;                ///< The text files opened in tabs, in order.
+    QList<bool> openedFollowing;           ///< Whether each tab follows its file.
+    QStringList notifications;             ///< What the user was told, in order.
+    tcpdump::RunningActivities activities; ///< What running() says runs.
 };
 
 } // namespace tcpdump_test

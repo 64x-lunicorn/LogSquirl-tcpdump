@@ -504,7 +504,7 @@ SCENARIO( "A live capture is refused with why it cannot start", "[live_session]"
 
     WHEN( "a capture file is being read" )
     {
-        s.liveHost.running.converting = true;
+        s.liveHost.activities.converting = true;
 
         THEN( "neither a choice nor a capture by name starts, as the Activity rule says" )
         {
@@ -518,7 +518,7 @@ SCENARIO( "A live capture is refused with why it cannot start", "[live_session]"
 
     WHEN( "packets are being exported" )
     {
-        s.liveHost.running.exporting = true;
+        s.liveHost.activities.exporting = true;
 
         THEN( "a capture starts all the same" )
         {

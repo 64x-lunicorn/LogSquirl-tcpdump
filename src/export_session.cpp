@@ -55,7 +55,7 @@ ExportSession::~ExportSession()
 
 QString ExportSession::refusal() const
 {
-    auto running = host_.runningElsewhere();
+    auto running = host_.running();
     running.exporting = isBusy();
     return activityRefusalMessage( Activity::Export, running );
 }

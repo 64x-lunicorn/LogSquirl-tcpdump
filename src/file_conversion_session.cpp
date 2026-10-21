@@ -58,7 +58,7 @@ FileConversionSession::~FileConversionSession()
 
 QString FileConversionSession::refusal() const
 {
-    auto running = host_.runningElsewhere();
+    auto running = host_.running();
     running.converting = isBusy();
     return activityRefusalMessage( Activity::OpenFile, running );
 }

@@ -1963,10 +1963,10 @@ A live capture's lifecycle and outcome are decided in one place, a
 Capture Sessions (see *The Capture Sessions*), which the plugin menu and
 the sidebar drive; the sidebar only shows what it is told. The session
 reaches LogSquirl through a `SessionHost` (`session_host.h`, also
-`LiveCaptureHost`; `notify( message )`, and `runningElsewhere()`: a
-capture file being read or an export, which the session weighs with its
-own capture in the Activity rule, see *Sidebar Widget*; its `capturing` is
-not read), which the Capture Sessions are, and
+`LiveCaptureHost`; `notify( message )`, and `running()`: what runs, a
+capture file being read or an export, which the session weighs in the
+Activity rule with its own capture put in, see *Sidebar Widget*; its
+`capturing` is not read), which the Capture Sessions are, and
 keeps what each text file's tab shows in their `CaptureCatalog`
 (see *The Capture Catalog*), which opens the tabs: `startLive()` as a run
 starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
@@ -2036,7 +2036,7 @@ what it tells. It reaches LogSquirl through the same `SessionHost` (its
 Sessions' `CaptureCatalog`.
 
 - `refusal()`: why no file can be opened now, the Activity rule's message
-  for `OpenFile` with the host's `runningElsewhere()` and its own
+  for `OpenFile` with the host's `running()` and its own
   `isBusy()`; empty if one can. `start( filePath )` refuses with it, as a
   notification, and returns false; otherwise it reads the conversion
   options from settings.ini (`loadConversionOptions()`), so that a change
@@ -2088,7 +2088,7 @@ the same `SessionHost` (its `exporting` is not read) and reads the capture
 in front from the Capture Sessions' `CaptureCatalog`.
 
 - `refusal()`: why no export can start now, the Activity rule's message
-  for `Export` with the host's `runningElsewhere()` and its own
+  for `Export` with the host's `running()` and its own
   `isBusy()`; empty if one can. `start()` refuses with it, as a
   notification, and returns false; so it does when the catalog has no
   capture in front, on a host without `selectedLogLines` (*Export packets
@@ -2148,7 +2148,7 @@ The plugin's three sessions and their `CaptureCatalog` live in one
 from `init()` to `shutdown()` (`g_state.sessions`) and creates before the
 sidebar, which is a view of it (see *Sidebar Widget*). It is the host of
 every session (`SessionHost`: `notify()` is `hostNotify()`,
-`runningElsewhere()` is `runningActivities()`, what all three run) and the
+`running()` is `runningActivities()`, what all three run) and the
 catalog's tab host (`openTab()`, the host's `open_file()`), so that the
 sessions run and the menu reaches them whether the sidebar is shown or
 not. `conversionSession()`, `liveSession()`, `exportSession()` and
@@ -2618,7 +2618,7 @@ wait for a conversion (named first); `Exporting` for an export, which
 waits only for another export. `refusalMessage()` is the one message each
 reason is told with, and `activityRefusalMessage()` the two together. The
 Live Capture Session, the File Conversion session and the Export session
-ask it for every start, with the Capture Sessions' `runningElsewhere()`
+ask it for every start, with the Capture Sessions' `running()`
 (all that runs; each session puts in its own) and their own `isBusy()`;
 the Export session before its dialogs and again after them; the Capture
 Sessions before Start live capture… (`chooseAndStartLiveCapture()`, which

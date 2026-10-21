@@ -330,7 +330,7 @@ void CaptureSessions::notify( const QString& message )
     hostNotify( message );
 }
 
-RunningActivities CaptureSessions::runningElsewhere() const
+RunningActivities CaptureSessions::running() const
 {
     // Each session puts in its own, converting, capturing or exporting.
     return runningActivities();
