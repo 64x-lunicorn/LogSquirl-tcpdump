@@ -1343,6 +1343,87 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
     }
 }
 
+/// @p message cut into segments of one byte each after its first @p first
+/// bytes, from the client to @p port.
+std::vector<Segment> byteByByte( const Bytes& message, size_t first, uint16_t port )
+{
+    std::vector<size_t> cuts;
+    for ( size_t at = first; at < message.size(); ++at ) {
+        cuts.push_back( at );
+    }
+    return cut( message, cuts, kClientIsn + 1, port );
+}
+
+SCENARIO( "A header section in many small segments is scanned once", "[tcp_reassembly]" )
+{
+    // Each byte is looked at a few times at most: on the segment it comes
+    // in, and once more when the line it is in ends.
+    constexpr uint64_t kLooksPerByte = 4;
+
+    GIVEN( "an HTTP request line that never ends, in 1-byte segments up to the hold limit" )
+    {
+        const auto request = text( "GET /" + std::string( TcpReassembly::kStreamLimit, 'a' ) );
+        const auto before = headerBytesLooked();
+        const auto lines = converted( handshake( 80 ) + byteByByte( request, 5, 80 ) );
+
+        THEN( "the framer looks at each byte a bounded number of times" )
+        {
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines.back().info.find( kSegmentOfMessage ) == std::string::npos );
+            REQUIRE( headerBytesLooked() - before <= kLooksPerByte * request.size() );
+        }
+    }
+
+    GIVEN( "a SIP header section that never ends, in 1-byte segments up to the hold limit" )
+    {
+        const auto invite = text( "INVITE sip:bob@example.com SIP/2.0\r\n"
+                                  "Call-ID: a84b4c76e66710@pc33.example.com\r\n"
+                                  "CSeq: 314159 INVITE\r\nSubject: "
+                                  + std::string( TcpReassembly::kStreamLimit, 'a' ) );
+        const auto before = headerBytesLooked();
+        const auto lines = converted( handshake( 5060 ) + byteByByte( invite, 36, 5060 ) );
+
+        THEN( "the framer looks at each byte a bounded number of times" )
+        {
+            REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+            REQUIRE( lines.back().info.find( kSegmentOfMessage ) == std::string::npos );
+            REQUIRE( headerBytesLooked() - before <= kLooksPerByte * invite.size() );
+        }
+    }
+
+    GIVEN( "an HTTP request whose header section ends, in 1-byte segments" )
+    {
+        const auto request
+            = text( "GET /index.html HTTP/1.1\r\nHost: example.com\r\nAccept: */*\r\n\r\n" );
+        const auto lines = converted( handshake( 80 ) + byteByByte( request, 5, 80 ) );
+
+        THEN( "it is described once, on its last byte, from all of them" )
+        {
+            const auto segments = static_cast<uint32_t>( request.size() - 4 );
+            REQUIRE( lines.back().description
+                     == "GET example.com/index.html HTTP/1.1" + reassembledFrom( segments ) );
+            REQUIRE( lines.back().completed == request );
+            REQUIRE( lines[ lines.size() - 2 ].description == kSegmentOfMessage );
+        }
+    }
+
+    GIVEN( "a SIP INVITE with its body, in 1-byte segments" )
+    {
+        const auto invite = sipInvite();
+        const auto lines = converted( handshake( 5060 ) + byteByByte( invite, 36, 5060 ) );
+
+        THEN( "it is described once, on its last byte, from all of them" )
+        {
+            const auto segments = static_cast<uint32_t>( invite.size() - 35 );
+            REQUIRE( lines.back().description
+                     == describedWhole( invite, 5060 ) + reassembledFrom( segments ) );
+            REQUIRE( lines.back().completed == invite );
+            REQUIRE( lines.back().sipCalls == 1 );
+            REQUIRE( lines[ lines.size() - 2 ].description == kSegmentOfMessage );
+        }
+    }
+}
+
 SCENARIO( "Mangled streams never break the reassembly", "[tcp_reassembly][fuzz]" )
 {
     const auto hello = clientHello( "fuzz.example" );

@@ -1179,6 +1179,12 @@ later segments are not read as frames from their first byte. A framer answers mo
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
+The HTTP and SIP framers, which read a header section line by line, keep
+what they found in a held message's first bytes (`FramerLook`, in the held
+direction's entry) and read on from there when a segment adds to them, so
+that a header section in many small segments is read once, not again from
+its start on each (`headerBytesLooked()` counts the bytes they look at, for
+the tests to bound).
 
 Per direction, a segment of whole messages, or of none a framer knows, keeps
 its own description and costs nothing. A segment that ends in the first

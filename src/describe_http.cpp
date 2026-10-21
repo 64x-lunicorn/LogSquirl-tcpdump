@@ -204,12 +204,15 @@ bool isWebSocketUpgrade( const uint8_t* payload, size_t len )
 /// starts there.  Its body, if any, is not part of it: the description
 /// reads the header section only.  While the empty line has not come, one
 /// byte more than there is.
-std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len )
+std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len, FramerLook* look )
 {
     if ( detectHttp( payload, std::min<size_t>( len, 8 ) ).empty() ) {
         return std::nullopt;
     }
-    for ( size_t i = 0; i + 1 < len; ++i ) {
+    // The empty line begins nowhere before where the last call stopped.
+    const size_t from = look ? std::min( look->searched, len ) : 0;
+    lookedAt( len - from );
+    for ( size_t i = from; i + 1 < len; ++i ) {
         if ( payload[ i ] != '\n' ) {
             continue;
         }
@@ -219,6 +222,10 @@ std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len )
         if ( payload[ i + 1 ] == '\r' && i + 2 < len && payload[ i + 2 ] == '\n' ) {
             return i + 3;
         }
+    }
+    if ( look ) {
+        // The empty line may begin in the last two bytes and end in the next.
+        look->searched = len < 2 ? 0 : len - 2;
     }
     return len + 1;
 }
