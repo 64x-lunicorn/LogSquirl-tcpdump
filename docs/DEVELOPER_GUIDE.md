@@ -2175,6 +2175,11 @@ buttons alike:
 - `saveCapture()` (**Save capture…**): the catalog's `partsToSave()` where
   the save dialog says (`setSaveChooser()`), suggesting its `saveName()`.
 
+The sidebar's **Stop** shows only while a capture runs, so it never says
+none does. A Cancel has no menu entry and asks nothing: the sidebar's
+**Cancel** and that of the export's progress dialog call their session's
+`cancel()` themselves.
+
 Every dialog is shown over the dialog parent, the sidebar, which sets
 itself (`setDialogParent()`, a `QPointer`: over no window once it is
 gone); the directory browsed last is shared by the Open, save and export
@@ -2632,7 +2637,7 @@ file is read and hidden while a capture runs; while one runs, a label of
 its packets, bytes, packets/s (as of the snapshot) and the elapsed time
 (ticked by a 1 s timer) in place of the progress bar, *stopping…* once it
 stops, and the check of a choice before it starts (`liveStateText()`);
-**Stop**, which stops the session; the capture program's stderr lines in a
+**Stop**, which stops the session (`CaptureSessions::stopLiveCapture()`); the capture program's stderr lines in a
 small read-only view (they go to the host's log too); and a failure's
 error, with its Guidance (`liveErrorHtml()`, `explainFailure()`), a label
 below Stop, cleared when the next capture starts. The summary in front is

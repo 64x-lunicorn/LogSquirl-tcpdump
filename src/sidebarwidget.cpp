@@ -276,8 +276,11 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     stopButton_->setObjectName( "stopButton" );
     stopButton_->setToolTip( "End the capture and keep what was captured" );
     liveLayout->addWidget( stopButton_ );
-    connect( stopButton_, &QPushButton::clicked, this,
-             [ this ] { sessions_.liveSession().stop(); } );
+    // Shown only while a capture runs, so Stop live capture never says none
+    // does.
+    connect( stopButton_, &QPushButton::clicked, this, [ this ] {
+        forward( "Stopping a live capture", &CaptureSessions::stopLiveCapture );
+    } );
 
     liveError_ = new QLabel;
     liveError_->setObjectName( "liveError" );

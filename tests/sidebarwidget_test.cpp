@@ -361,9 +361,10 @@ SCENARIO( "the sidebar shows the Live Capture Session, and its Stop reaches it",
         {
             stop->click();
 
-            THEN( "the session stops it, and Stop is disabled" )
+            THEN( "the session stops it, telling nothing, and Stop is disabled" )
             {
                 REQUIRE( runs.last().stopped );
+                REQUIRE( host.notifications.isEmpty() );
                 REQUIRE( live.state() == tcpdump::LiveCaptureSession::State::Stopping );
                 REQUIRE_FALSE( stop->isEnabled() );
                 REQUIRE( progress->text() == tcpdump::liveStateText( live ) );
