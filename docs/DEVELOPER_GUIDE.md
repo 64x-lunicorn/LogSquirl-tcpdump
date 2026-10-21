@@ -1307,7 +1307,8 @@ it runs, and the text is the same as before.
   log had no secrets for again only once `KeyLogFile::bytesRead()` grew,
   not on each of its records. The
   secrets live in `tls::SecretBytes`, which wipe themselves
-  (`mbedtls_platform_zeroize`); the bytes read are wiped too. Nothing logs
+  (`mbedtls_platform_zeroize`); the file is opened unbuffered, so the
+  bytes read are the only copy of it, and they are wiped too. Nothing logs
   or shows a secret; `error()` says only why the file could not be read.
 - **Sessions**: per TCP stream, from its plaintext ClientHello (client
   random, the client's direction) and ServerHello (server random, cipher
