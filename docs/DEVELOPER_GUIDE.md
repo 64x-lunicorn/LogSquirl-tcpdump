@@ -1648,7 +1648,7 @@ failure or any other exception ends as Failed, and nothing is left behind.
 `applyCancelRequest()` decides, for the Converter when its loop ends,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed (`removeOutput()`).
-The sidebar's Background Job applies the same rule to the result it is
+The File Conversion session's Background Job applies the same rule to the result it is
 delivered (see *The Background Job*).
 
 #### The Packet Pipeline (`packet_pipeline.h/cpp`)
@@ -1959,14 +1959,15 @@ worker, before the library is unloaded.
 
 #### The Live Capture Session (`live_capture_session.h/cpp`)
 A live capture's lifecycle and outcome are decided in one place, a
-`LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
-drives and listens to; the sidebar only shows what it is told. The session
+`LiveCaptureSession` (a `QObject` on the UI thread), one of the plugin's
+Capture Sessions (see *The Capture Sessions*), which the plugin menu and
+the sidebar drive; the sidebar only shows what it is told. The session
 reaches LogSquirl through a `SessionHost` (`session_host.h`, also
 `LiveCaptureHost`; `notify( message )`, and `runningElsewhere()`: a
 capture file being read or an export, which the session weighs with its
 own capture in the Activity rule, see *Sidebar Widget*; its `capturing` is
-not read), which the sidebar is, and
-keeps what each text file's tab shows in the sidebar's `CaptureCatalog`
+not read), which the Capture Sessions are, and
+keeps what each text file's tab shows in their `CaptureCatalog`
 (see *The Capture Catalog*), which opens the tabs: `startLive()` as a run
 starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
 summary, index, fileSize )`, `setFileError( logPath, error )`, and
@@ -2018,19 +2019,21 @@ is a session whose captures run on a worker as in the app, on a
 (local, adb, ssh, extcap, command) start their captures with it, run by the
 kind's fake programs, and assert on the outcome (status, error, Guidance,
 files opened) and the stderr lines, waiting in the event loop for what the
-session tells (`waitForOutcome()`, `waitForFile()`). How the sidebar shows
-an outcome is tested on the sidebar itself (`live_capture_ui_test.cpp`,
-`live_capture_test.cpp`).
+session tells (`waitForOutcome()`, `waitForFile()`). What the sidebar says
+of it is tested in `sidebar_text_test.cpp`, that it shows it in
+`sidebarwidget_test.cpp`, and a capture from the Start live capture dialog
+or a pipe to its tab, through the Capture Sessions and a sidebar, in
+`live_capture_ui_test.cpp` and `live_capture_test.cpp`.
 
 #### The File Conversion session (`file_conversion_session.h/cpp`)
 Opening a capture file is decided in one place too, a
 `FileConversionSession` (a `QObject` on the UI thread), shaped like the
-Live Capture Session: the sidebar's **Open pcap…**, the menu's *Open
-pcap…* (both through `chooseAndOpen()`, whose file dialog is the
-sidebar's) and **Cancel** forward to it, and the sidebar renders what it
-tells. It reaches LogSquirl through the same `SessionHost` (its
-`converting` is not read) and keeps what it converts in the sidebar's
-`CaptureCatalog`.
+Live Capture Session: the sidebar's **Open pcap…** and the menu's *Open
+pcap…* (both `CaptureSessions::chooseAndOpen()`, which asks in the file
+dialog) and the sidebar's **Cancel** forward to it, and the sidebar renders
+what it tells. It reaches LogSquirl through the same `SessionHost` (its
+`converting` is not read) and keeps what it converts in the Capture
+Sessions' `CaptureCatalog`.
 
 - `refusal()`: why no file can be opened now, the Activity rule's message
   for `OpenFile` with the host's `runningElsewhere()` and its own
@@ -2070,18 +2073,19 @@ session destroyed while it converts; a private file per run; the options
 of its start; its progress; and a start refused while a live capture or
 another conversion runs, but not while packets are exported. It waits in
 the event loop for what the session tells, as the Background Job delivers
-through it. How the sidebar shows it is tested on the sidebar
-(`sidebarwidget_test.cpp`).
+through it. What the sidebar says of it is tested in
+`sidebar_text_test.cpp`, that its Open and Cancel reach it and it shows it
+in `sidebarwidget_test.cpp`.
 
 #### The Export session (`export_session.h/cpp`)
 Exporting the selected packets (see *Export packets* under *Packet
 Panel*) is decided in one place too, an `ExportSession` (a `QObject` on
 the UI thread), shaped like the File Conversion session: the menu's
-*Export packets…* (`SidebarWidget::exportSelectedPackets()`) and the
-Cancel of the sidebar's progress dialog (`cancelExport()`) forward to it,
-and the sidebar shows the progress dialog while it exports. It reaches
-LogSquirl through the same `SessionHost` (its `exporting` is not read) and
-reads the capture in front from the sidebar's `CaptureCatalog`.
+*Export packets…* (`CaptureSessions::exportSelectedPackets()`) and the
+Cancel of the sidebar's progress dialog forward to it, and the sidebar
+shows the progress dialog while it exports. It reaches LogSquirl through
+the same `SessionHost` (its `exporting` is not read) and reads the capture
+in front from the Capture Sessions' `CaptureCatalog`.
 
 - `refusal()`: why no export can start now, the Activity rule's message
   for `Export` with the host's `runningElsewhere()` and its own
@@ -2093,9 +2097,10 @@ reads the capture in front from the sidebar's `CaptureCatalog`.
   `readSelectedLines()`). Otherwise it fills an `ExportRequest` (the
   capture's name, packets and format; the selection's numbers, line count
   and truncation, which it logs) and asks the `Confirmer`
-  (`setConfirmer()`; the sidebar's `ExportDialog`, where the user may
-  change the numbers), then, for packets confirmed, the `FileChooser`
-  (`setFileChooser()`; the sidebar's save dialog, suggesting
+  (`setConfirmer()`; the Capture Sessions' `ExportDialog`, over the
+  sidebar, where the user may change the numbers), then, for packets
+  confirmed, the `FileChooser` (`setFileChooser()`; their save dialog,
+  suggesting
   `<capture>-packets.pcap` or `.pcapng` in the last directory). Both may
   run an event loop: a session destroyed meanwhile starts nothing (a
   `QPointer` to itself), and the Activity rule is asked again after them.
@@ -2132,10 +2137,63 @@ guard, and that a conversion or live capture does not keep an export from
 starting; a failure; a cancel before the export writes (a held exporter,
 which holds before writing or after, until the test lets it go or the
 session cancels it), the file chosen left as it was; a cancel after it
-wrote its file, and the session destroyed then (as when the sidebar
-closes), both keeping the export; a failure while cancelled; its
+wrote its file, and the session destroyed then (as when the plugin is
+unloaded), both keeping the export; a failure while cancelled; its
 progress; and a session destroyed while the user confirms. How the
 sidebar shows it is tested in `packet_export_test.cpp`.
+
+#### The Capture Sessions (`capture_sessions.h/cpp`)
+The plugin's three sessions and their `CaptureCatalog` live in one
+`CaptureSessions` (a `QObject` on the UI thread), which the plugin owns
+from `init()` to `shutdown()` (`g_state.sessions`) and creates before the
+sidebar, which is a view of it (see *Sidebar Widget*). It is the host of
+every session (`SessionHost`: `notify()` is `hostNotify()`,
+`runningElsewhere()` is `runningActivities()`, what all three run) and the
+catalog's tab host (`openTab()`, the host's `open_file()`), so that the
+sessions run and the menu reaches them whether the sidebar is shown or
+not. `conversionSession()`, `liveSession()`, `exportSession()` and
+`catalog()` are the sessions and the catalog themselves.
+
+What the user starts goes here, from the plugin menu and the sidebar's
+buttons alike:
+
+- `chooseAndOpen()` (*Open pcap…*): with the File Conversion session's
+  `refusal()` only a notification, otherwise the file dialog
+  (`setFileChooser()` in tests), then `start()`.
+- `chooseAndStartLiveCapture()` (*Start live capture…*): the Activity
+  rule's reason as a notification, unless only a capture runs, which the
+  user is offered to stop (`setStopConfirmer()`); the Start live capture
+  dialog `makeLiveCaptureDialog()` makes (`setLiveChoiceAsker()`), on its
+  listing pool and the live sources (`setLiveSources()`, and
+  `setDefaultLiveSources()`, which the test runner sets empty); and the
+  Live Capture Session's `startWhenIdle()`.
+- `stopLiveCapture()` (*Stop live capture*, the sidebar's **Stop**): stops
+  the Live Capture Session, or says *No live capture is running.*
+- `exportSelectedPackets()` (*Export packets…*): the Export session's
+  `start()`, which asks with the `ExportDialog` and the save dialog the
+  Capture Sessions install.
+- `saveCapture()` (**Save capture…**): the catalog's `partsToSave()` where
+  the save dialog says (`setSaveChooser()`), suggesting its `saveName()`.
+
+Every dialog is shown over the dialog parent, the sidebar, which sets
+itself (`setDialogParent()`, a `QPointer`: over no window once it is
+gone); the directory browsed last is shared by the Open, save and export
+dialogs. A dialog runs its own event loop, in which the sessions may go
+with the plugin: nothing of theirs is used after it then.
+`setTempRoot()` sets the output root of the File Conversion and Live
+Capture sessions (tests). Destroying them, in `shutdown()` after the
+sidebar, cancels the listings of the Start live capture dialog, stops a
+live capture (its worker is joined by the plugin's shutdown) and cancels
+and waits for a conversion and an export.
+
+`tests/capture_sessions_test.cpp` tests each action without a sidebar, on
+the `FakeHost`: the file dialog over the dialog parent (none once it is
+gone), the directory remembered, nothing chosen, and a refusal while a
+live capture runs; Start live capture… asking, offering to stop a running
+capture (kept, or stopped and the dialog cancelled) and refused while a
+file is read; Stop live capture with and without a capture; Export
+packets… refused without a capture in front; Save capture… with nothing to
+save; and the sessions destroyed while a file is read.
 
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
@@ -2164,7 +2222,7 @@ device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
 returns its stdout, stderr and exit code. A listing can be cancelled, which
 kills its group within moments: `cancelListings()` cancels every running
-one (the sidebar's destructor, so that the plugin's shutdown does not wait
+one (the Capture Sessions' destructor, so that the plugin's shutdown does not wait
 for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
 worker thread cancels those run under it once the flag is set (the form
 cancels its own listings as it goes); the kinds need not know of either. `liveChoiceProblem( sources, choice )`
@@ -2201,9 +2259,9 @@ The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
 downloads; no code path runs them, sudo, or anything that prompts. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
 capture or a program, a failure with a hint, devices on request) through
-`SidebarWidget::setLiveSources()`. The test runner sets
-`SidebarWidget::setDefaultLiveSources()` to an empty registry, so that no
-sidebar a test constructs offers the built-in kinds and runs a real
+`CaptureSessions::setLiveSources()`. The test runner sets
+`CaptureSessions::setDefaultLiveSources()` to an empty registry, so that no
+sessions a test constructs offer the built-in kinds and run a real
 `tcpdump -D` or `adb`.
 
 The **Android** kind (`adb_source.h/cpp`, id `adb`) is `AdbSourceKind(
@@ -2447,11 +2505,19 @@ written (`isSecretLiveOption()`): it lives in the form's options for the
 session only.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
-Qt UI that provides:
-- "Open pcap…" button triggering a QFileDialog; `chooseAndOpen()` is also
-  what the `Plugins → tcpdump → Open pcap…` menu entry calls, which, unlike
-  the disabled button, can be chosen during a conversion and then only shows
-  a notification. Tests replace the dialog with `setFileChooser()`
+The sidebar is a view over the Capture Sessions (see *The Capture
+Sessions*), the Activity rule and the Capture Catalog: the plugin creates
+it over its `CaptureSessions` (`SidebarWidget( sessions )`), it builds its
+widgets, forwards its buttons to the sessions and shows what they report.
+It keeps no state of a conversion, live capture or export, and exposes
+none for others to query: the plugin menu reaches the sessions without
+it. What its labels say is decided without a widget in `sidebar_text.h`.
+While it lives, it is the sessions' dialog parent; when it goes, the
+sessions run on (the plugin destroys them after it). Qt UI that provides:
+- "Open pcap…" button, `CaptureSessions::chooseAndOpen()`, as the
+  `Plugins → tcpdump → Open pcap…` menu entry, which, unlike the disabled
+  button, can be chosen during a conversion and then only shows a
+  notification
 - A progress bar and Cancel button while a capture is converted
 - A "Stream lines in Regex Lab" button, created only when
   `g_state.hostCapabilities` has the Regex Lab and the selected lines (see
@@ -2463,19 +2529,23 @@ Qt UI that provides:
   `SidebarWidget::openStreamLines()`, which refreshes the panel and
   notifies that same reason instead of opening the Lab, or opens it on the
   line the panel read (`PacketPanel::selectedLine()`): the selection is
-  read once for both
-- Detailed capture summary: protocol breakdown (count + percentage + bytes),
-  top endpoints (on a host with `regexLab`, each protocol and endpoint is a
-  link that opens it as a filter; see *Summary filters* below), the first and last packet time in UTC, packets per
+  read once for both. Packet details and Show stream content are the
+  sidebar's too (`showPacketDetails()`, `followStreamContent()`): they are
+  the Packet Panel's
+- Detailed capture summary (`summaryHtml()`): protocol breakdown (count +
+  percentage + bytes), top endpoints (on a host with `regexLab`, each
+  protocol and endpoint is a link that opens it as a filter; see *Summary
+  filters* below), the first and last packet time in UTC, packets per
   second, file size, the link-layer type names
   (comma-separated when there are several), the number of packets cut
   at the snaplen when there are any, and under *Analysis* the median
   initial round-trip time of the handshakes and how many there were, and
   the TCP segments per analysis marker kind, when there are any
 - On the first capture after the plugin is loaded, converted or live, a
-  link to README's *Log Format* section. The plugin cannot know whether
-  LogSquirl has the format, so the hint is static and shown once per load;
-  the catalog decides which entry carries it (`Entry::withFormatHint`)
+  link to README's *Log Format* section (`kLogFormatHelpUrl`). The plugin
+  cannot know whether LogSquirl has the format, so the hint is static and
+  shown once per load; the catalog decides which entry carries it
+  (`Entry::withFormatHint`)
 - The summary scrolls in a `SummaryArea`, a `QScrollArea` that asks for
   the height of its text at its width, up to `kSummaryMaxLines` (24), so
   that a long summary leaves the Packet Panel room in a tall sidebar, and
@@ -2502,145 +2572,141 @@ Qt UI that provides:
   height they prefer (`heightForWidth()`), which would scroll a tall
   sidebar too; `fit()` sizes it to the viewport's height or
   `totalMinimumHeightForWidth()`, whichever is taller, on a viewport resize
-  and the content's `LayoutRequest`. `sidebarwidget_test.cpp` puts the
-  sidebar in a `QTabWidget` of fixed heights below and above the minimum
-  and scrolls to the summary's last line and the Conversations' bottom
-- The summary of the capture in the tab in front. Every converted capture's
-  summary, and its `CaptureIndex`, is kept in the sidebar's
-  `CaptureCatalog` (see *The Capture Catalog* below), under the path of
-  the text file written for it, and the catalog opens its tab
-  (`openConverted()`); the plugin's active-file callback calls
-  `showSummaryFor()` on every tab switch, which tells the catalog the tab
-  in front; the catalog announces it, as any change of what that tab
-  shows, and `showFront()` renders its `front()`: the summary, the Packet Panel's
-  index and whether **Save capture…** shows, or "No capture in this tab."
-  for a file the plugin did not write or a tab without a Log File. While a capture
-  is being read the label keeps saying so. The summaries are lost when the
-  plugin is unloaded, so after a runtime disable or update the tabs left
-  open show no capture
+  and the content's `LayoutRequest`
+- The summary of the capture in the tab in front. Every capture's summary,
+  and its `CaptureIndex`, is kept in the Capture Sessions' `CaptureCatalog`
+  (see *The Capture Catalog* below), under the path of the text file
+  written for it, and the catalog opens its tab; the plugin's active-file
+  callback tells the catalog the tab in front (`setFront()`) on every tab
+  switch; the catalog announces it, as any change of what that tab shows,
+  and the sidebar's `showFront()` renders its `front()`: the summary, the
+  Packet Panel's index and Conversations, and whether **Save capture…**
+  shows, or "No capture in this tab." for a file the plugin did not write
+  or a tab without a Log File. While a capture is being read the label
+  keeps saying so. The summaries are lost when the plugin is unloaded, so
+  after a runtime disable or update the tabs left open show no capture
 - One status for the summary label. Its text is decided in one place,
-  `summaryText()`, from a `SummaryStatus`, what last claimed the label, and
-  what the sessions and the catalog say now: `NothingLoaded` ("No capture
-  loaded." until anything happens), `Front` (`frontSummaryHtml()`, on every
-  announcement of the catalog), `Conversion` (the File Conversion session's
-  `label()`: reading, cancelling, its outcome's label), `LiveStarted`
-  ("Capturing <name>… waiting for the first packet."), `LiveFile`
-  ("Capturing <name>…", unless the new tab is in front) and `LiveOutcome`
-  (stopped before anything, without packets, the error, or "The capture
-  <name> has ended: its tab shows its summary.", unless its tab in front
-  shows its final summary). While a capture is being read the label says
-  so whatever claims it. An export claims nothing: its progress dialog
-  says how it goes. The handlers of the sessions' signals and `showFront()`
-  only call `showSummary( status )`; nothing else writes the label.
-  `sidebarwidget_test.cpp` tests what it says of each, a live capture's
-  with the runs `ScriptedRuns` scripts (`liveSession()->setRunFactory()`),
-  and that a palette change keeps it; `packet_export_test.cpp` that an
-  export leaves it as it was
+  `summaryLabelText( status, sessions, filterLinks, palette )`
+  (`sidebar_text.h`), from a `SummaryStatus`, what last claimed the label,
+  and what the sessions and the catalog say now: `NothingLoaded` ("No
+  capture loaded." until anything happens), `Front` (`frontSummaryHtml()`,
+  on every announcement of the catalog), `Conversion` (the File Conversion
+  session's `label()`: reading, cancelling, its outcome's label),
+  `LiveStarted` ("Capturing <name>… waiting for the first packet."),
+  `LiveFile` ("Capturing <name>…", unless the new tab is in front) and
+  `LiveOutcome` (stopped before anything, without packets, the error, or
+  "The capture <name> has ended: its tab shows its summary.", unless its
+  tab in front shows its final summary). While a capture is being read the
+  label says so whatever claims it. An export claims nothing: its progress
+  dialog says how it goes. The handlers of the sessions' signals and
+  `showFront()` only call `showSummary( status )`; nothing else writes the
+  label
 
-A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
-`startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
-(`liveSession()`; see *The Live Capture Session*), whose host the sidebar
-is. The session keeps the capture's entries in the sidebar's catalog,
-which opens their tabs; the sidebar redraws the summary in front when it belongs to the
-live capture, on the session's `progressed` and `finished`, so the Packet
-Panel shows the packets captured so far, and a failure's error is shown
-above the summary. On `fileOpened` the label says the capture goes on,
-unless the host brought the new tab to the front at once.
-`updateSummary( textPath, summary )` replaces a kept summary and redraws
-it if its tab is in front. A label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
-time (ticked by a 1 s timer) in place of the progress bar. **Stop** calls
-`stopLiveCapture()`. The outcome's summary label is the sidebar's
-`LiveOutcome` status: stopped before anything was captured, without
-packets, the error, or that the capture's tab shows its summary. **Save capture…**, shown for a tab whose
-capture has a raw file, copies the catalog's `partsToSave()` where
-`setSaveChooser()`'s dialog says, suggesting its `saveName()`.
-stderr lines go to the host's log.
-
-Whether an activity may start now is decided in one place, the
-**Activity rule** (`activity.h/cpp`): `activityRefusal( activity, running
-)` takes an `Activity` (`OpenFile`, `LiveCapture`, `Export`) and the
-`RunningActivities` (`converting`, `capturing`, `exporting`) and returns
-nothing, or the `ActivityRefusal` that keeps it from starting:
-`Converting` or `Capturing` for opening a file and a live capture, which
-exclude each other and both wait for a conversion (named first);
-`Exporting` for an export, which waits only for another export.
-`refusalMessage()` is the one message each reason is told with, and
-`activityRefusalMessage()` the two together. The sidebar asks it with
-`runningActivities()` before Start live capture…
-(`chooseAndStartLiveCapture()`, which offers to stop a running capture
-instead of refusing for `Capturing`), and to enable Open pcap… and Start live
-capture… (whose tooltip is the reason); before Open's file dialog
-(`chooseAndOpen()`) it asks the File Conversion session's `refusal()`.
-The Live Capture Session, the File Conversion session and the Export
-session ask it for every start, with the sidebar's `runningElsewhere()`
+The **Activity rule** (`activity.h/cpp`) decides whether an activity may
+start now: `activityRefusal( activity, running )` takes an `Activity`
+(`OpenFile`, `LiveCapture`, `Export`) and the `RunningActivities`
+(`converting`, `capturing`, `exporting`) and returns nothing, or the
+`ActivityRefusal` that keeps it from starting: `Converting` or `Capturing`
+for opening a file and a live capture, which exclude each other and both
+wait for a conversion (named first); `Exporting` for an export, which
+waits only for another export. `refusalMessage()` is the one message each
+reason is told with, and `activityRefusalMessage()` the two together. The
+Live Capture Session, the File Conversion session and the Export session
+ask it for every start, with the Capture Sessions' `runningElsewhere()`
 (all that runs; each session puts in its own) and their own `isBusy()`;
-the Export session before its dialogs and again after them. The menu
-entries call these, so they refuse alike.
-`activity_test.cpp` tests the rule for every combination of what runs,
-without a widget.
+the Export session before its dialogs and again after them; the Capture
+Sessions before Start live capture… (`chooseAndStartLiveCapture()`, which
+offers to stop a running capture instead of refusing for `Capturing`) and,
+through the File Conversion session's `refusal()`, before Open's file
+dialog. The sidebar asks it with the sessions' `runningActivities()` only
+to enable Open pcap… and Start live capture… (whose tooltip is the
+reason). The menu entries and the buttons call the same, so they refuse
+alike. `activity_test.cpp` tests the rule for every combination of what
+runs, without a widget.
 
-The **Live capture** section holds **Start live capture…**, which does what
+The **Live capture** section shows the Live Capture Session (see *The
+Live Capture Session*): **Start live capture…**, which does what
 **Plugins → tcpdump → Start live capture…** does
-(`chooseAndStartLiveCapture()`): it asks to stop a running capture
-(`setStopConfirmer()` in tests), shows the `LiveCaptureDialog` that
-`makeLiveCaptureDialog()` makes (`setLiveChoiceAsker()` in tests), and
-hands the choice to `LiveCaptureSession::startWhenIdle()`, which starts it
-once the running capture's program has ended. The button is disabled while
-a capture file is read and hidden while a capture runs. The sidebar lists
-nothing itself: no capture program runs until the dialog opens.
+(`CaptureSessions::chooseAndStartLiveCapture()`), disabled while a capture
+file is read and hidden while a capture runs; while one runs, a label of
+its packets, bytes, packets/s (as of the snapshot) and the elapsed time
+(ticked by a 1 s timer) in place of the progress bar, *stopping…* once it
+stops, and the check of a choice before it starts (`liveStateText()`);
+**Stop**, which stops the session; the capture program's stderr lines in a
+small read-only view (they go to the host's log too); and a failure's
+error, with its Guidance (`liveErrorHtml()`, `explainFailure()`), a label
+below Stop, cleared when the next capture starts. The summary in front is
+redrawn when the catalog announces a snapshot or the outcome of the tab in
+front, so the Packet Panel shows the packets captured so far; on
+`fileOpened` the label says the capture goes on, unless the host brought
+the new tab to the front at once. **Save capture…**, shown for a tab whose
+capture has a raw file, is `CaptureSessions::saveCapture()`. The sidebar
+lists nothing itself: no capture program runs until the Start live
+capture dialog opens.
 
 The dialog holds a `LiveCaptureForm` (`live_capture_form.h/cpp`): the
 source picker over a `LiveSourceRegistry` (`builtInLiveSources()`, or
-`setLiveSources()` in tests), the device and the interface (an editable
-list; a typed interface is taken as it is), Refresh, the capture filter
-with `captureFilterProblem()` below it, and the snaplen.
-`makeLiveCaptureDialog()` gives it the choice last started (settings.ini)
-and every other source's saved options. Choosing a source shows its
-`availability()` reason, or lists its devices and then the interfaces of
-the device chosen on the sidebar's listing pool, each listing bounded by
-the kind's timeout; a result for a source or device chosen since is
-dropped (a generation counter). The form remembers the choice it was given
-and selects it once listed. A kind's options widget is made anew whenever
-the kind is chosen, and its options are kept per source when another is
-chosen. `problem()` (`liveChoiceProblem()`, then an options widget that
-cannot tell yet) keeps the dialog's **Start** disabled, with the reason as
-its tooltip. While a capture runs, the section shows its counters and
-**Stop**; the capture program's stderr lines fill a small read-only view; a
-failure's error, with its Guidance (`explainFailure()`), a label below
-Stop. **Stop live capture** calls `stopLiveCapture()`.
+`CaptureSessions::setLiveSources()` in tests), the device and the
+interface (an editable list; a typed interface is taken as it is),
+Refresh, the capture filter with `captureFilterProblem()` below it, and
+the snaplen. `makeLiveCaptureDialog()` gives it the choice last started
+(settings.ini) and every other source's saved options. Choosing a source
+shows its `availability()` reason, or lists its devices and then the
+interfaces of the device chosen on the Capture Sessions' listing pool,
+each listing bounded by the kind's timeout; a result for a source or
+device chosen since is dropped (a generation counter). The form remembers
+the choice it was given and selects it once listed. A kind's options
+widget is made anew whenever the kind is chosen, and its options are kept
+per source when another is chosen. `problem()` (`liveChoiceProblem()`,
+then an options widget that cannot tell yet) keeps the dialog's **Start**
+disabled, with the reason as its tooltip.
 
-Opening a capture file is the sidebar's `FileConversionSession`'s
-(`conversionSession()`; see *The File Conversion session*), which runs
+The File Conversion session (see *The File Conversion session*) runs
 `convertPcap()` as its Background Job (see *The Background Job* below), on
 a worker thread of its own, with the system's temporary directory as the
-output root (`setTempRoot()` in tests). `openPcapFile()` and `cancel()`
-forward to it; the sidebar shows its state (`stateChanged`: the Open,
-Cancel and progress bar controls, and its `label()` while it runs), its
-`progressed` on the progress bar, and the outcome's `label` when it has
-one: it prints the summary the catalog gives it and catches nothing
-itself. `isConverting()` is the session's `isBusy()`. A failed or
-cancelled conversion leaves no directory behind; a
-converted one's is kept for its tab. The process ID in the name is the only
-record of the directories of
+output root (`CaptureSessions::setTempRoot()` in tests). The sidebar's
+**Cancel** forwards to it; the sidebar shows its state (`stateChanged`:
+the Open, Cancel and progress bar controls, and its `label()` while it
+runs), its `progressed` on the progress bar, and the outcome's `label`
+when it has one: it prints the summary the catalog gives it and catches
+nothing itself. A failed or cancelled conversion leaves no directory
+behind; a converted one's is kept for its tab. The process ID in the name
+is the only record of the directories of
 files opened in tabs, so that it survives a runtime disable, update and
 re-enable of the plugin: when LogSquirl quits, every directory with this
 process's ID is removed, and at `init()` those of processes that no longer
 run (checked with `kill(pid, 0)` on Unix and `OpenProcess()` on Windows).
 Directories of running processes, links and, on Unix, other users'
 directories are left alone. Only regular files are read, so the worker
-cannot block on a FIFO or device; destroying the widget cancels a running
-conversion and export (destroying their sessions) and waits for their
-workers.
+cannot block on a FIFO or device; destroying the Capture Sessions cancels
+a running conversion and export (destroying their sessions) and waits for
+their workers.
 
-Exporting packets is the sidebar's `ExportSession` (`exportSession()`;
-see *The Export session*), which asks with the sidebar's `ExportDialog`
-and save dialog. Export packets… and the progress dialog's Cancel forward
-to it (`exportSelectedPackets()`, `cancelExport()`); the sidebar shows a
-`QProgressDialog` ("exportProgress") while it exports, labelled with its
-`label()`, moved by its `progressed` and closed when it is idle again.
-`isExporting()` is the session's `isBusy()`. Destroying the widget
-destroys the session, which cancels the export and waits for it; the
-progress dialog goes first.
+While the Export session (see *The Export session*) exports, the sidebar
+shows a `QProgressDialog` ("exportProgress"), labelled with its `label()`,
+moved by its `progressed`, whose Cancel cancels the session, and closed
+when it is idle again. Destroying the widget closes the dialog, without
+cancelling the export: the Capture Sessions cancel it when they go.
+
+`sidebar_text_test.cpp` tests what the labels say, without a widget, with
+the Capture Sessions and the runs `ScriptedRuns` scripts
+(`liveSession().setRunFactory()`): each `SummaryStatus` of a file being
+read, cancelled, failed and opened, of the tab in front and of a live
+capture from its start to each outcome, the same in a dark palette; the
+Live capture section's progress and error; the summary's text, its
+filter links and the lines their patterns pick; and that the line under
+the capture's name takes the palette's colours. `sidebarwidget_test.cpp`
+is smoke tests of the sidebar itself, on the `FakeHost`: what it shows
+with nothing loaded, that its Open and Cancel reach the File Conversion
+session over it as the dialog parent and its controls follow the session,
+that it follows the tab in front through the plugin's active-file
+callback, that it shows the Live Capture Session and its Stop reaches it,
+that its links open the README and the Regex Lab, that it goes and leaves
+the sessions running, its layout and scrolling in a `QTabWidget` of fixed
+heights below and above the minimum (the summary's last line and the
+Conversations' bottom), and that a palette change redraws the summary;
+`packet_export_test.cpp` that an export's progress dialog shows and
+leaves the label as it was.
 
 #### The Background Job (`background_job.h`)
 The kind of job the File Conversion session converts a capture file and
@@ -2682,9 +2748,9 @@ so does a result that cannot be taken back.
 
 #### The Capture Catalog (`capture_catalog.h/cpp`)
 What the tab of each text file the plugin wrote shows, with no widget in
-it: the sidebar owns one, and it is its Live Capture Session's and File
-Conversion session's catalog; its Export session exports from the capture
-in front of it.
+it: the Capture Sessions own one, and it is their Live Capture Session's
+and File Conversion session's catalog; their Export session exports from
+the capture in front of it, and the sidebar shows that capture.
 Entries (`CaptureCatalog::Entry`: file name and size, summary, index, the
 Log Format hint, a live capture's raw file, capture name and error) are
 keyed by `fileKey()`, the canonical path (absolute when the file is gone),
@@ -2692,7 +2758,7 @@ so that the host's spelling of a tab's path (on macOS `/var/folders/…` for
 `/private/var/folders/…`) finds the file the plugin wrote.
 
 The catalog opens each capture's tab, through the `CaptureTabHost` it is
-constructed with (`openTab( logPath, follow )`): the sidebar, which calls
+constructed with (`openTab( logPath, follow )`): the Capture Sessions, which call
 the host's `open_file()` on the UI thread (LogSquirl#796); a recording fake
 in tests. It keeps the entry first, as the host may report the tab in front
 at once. Both kinds of capture come in this way, so the Log Format hint is
@@ -2706,7 +2772,8 @@ it, and no other.
   live, and opens its tab following it), `updateFile()` (a null index keeps
   the one the entry has), `setFileError()` and `endLive()` are what the
   Live Capture Session tells. A file not kept is ignored.
-- `setFront( filePath )` on every tab switch; `front()` is the entry in
+- `setFront( filePath )` on every tab switch (the plugin's active-file
+  callback); `front()` is the entry in
   front or null, `frontFile()` its key, `isFront( path )`.
 - `observeFront( observer )`: the observer is called, after the change,
   whenever what the tab in front shows changes: another tab comes to the
@@ -2732,8 +2799,9 @@ Format hint once whichever kind of capture comes first, the tab in front,
 what is announced of it (a tab switch, a capture kept for it, a snapshot,
 summary or error of it, its capture ending) and what is not (a change
 behind it, the tab reported again), a capture ending, a failed file's error, and the parts of a ring buffer and
-of a capture without an index. The sidebar's tests check only that it
-renders what the catalog says.
+of a capture without an index. `sidebar_text_test.cpp` checks what the
+sidebar says of what the catalog says, and the sidebar's tests only that it
+follows the tab in front.
 
 ### 6. Packet Panel (`packet_panel.h/cpp`, `packet_layers.h/cpp`, `capture_index.h/cpp`, `selected_packet_line.h/cpp`)
 The sidebar's companion to the packet list: the layer tree and hex dump of
@@ -2798,8 +2866,9 @@ export, conversation statistics):
   result of `get_selected_log_lines` and each kind of line, with the packet
   or the reason it gives; and the packets of selections mixing packet
   lines with other lines, of none, of a truncated one and of a refused one.
-- **The widget.** `PacketPanel` gets the tab in front's index from
-  `SidebarWidget::showSummaryFor()` (null for a foreign tab) and reads the
+- **The widget.** `PacketPanel` gets the tab in front's index from the
+  sidebar's `showFront()`, on every change the Capture Catalog announces
+  (null for a foreign tab), and reads the
   selection through Selected Packet Line. LogSquirl has no
   selection-changed callback, so it asks every `kPollIntervalMs` (250 ms)
   while it is visible: the timer starts in `showEvent()` and stops in
@@ -2905,9 +2974,10 @@ export, conversation statistics):
   `ConversationTable` (below the Packet Panel's tabs) shows it through
   `ConversationModel`, which sorts an index vector by any column (ties by
   transport and stream) and keeps the *Other streams* row last.
-  `SidebarWidget::showSummaryFor()` hands it the summary in front;
-  `SidebarWidget::updateSummary()` replaces a capture's summary and shows
-  it if in front, the table keeping its sort and selected conversation; a
+  the sidebar's `showFront()` hands it the summary in front;
+  `CaptureCatalog::updateSummary()` replaces a capture's summary, which the
+  sidebar shows if in front, the table keeping its sort and selected
+  conversation; a
   live capture's snapshots come through it, each taken by
   `PacketRecorder::summary()` from a copy of the `CaptureStats` and the table as it
   stands, so the conversion goes on with them unchanged. The rows are a
@@ -2945,7 +3015,7 @@ export, conversation statistics):
   per packet: "1-3000000000" takes a few bytes and is counted at once. The
   `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
   change, not on every key.
-  Plugins → tcpdump → Export packets… is the sidebar's Export session's
+  Plugins → tcpdump → Export packets… is the Capture Sessions' Export session's
   (see *The Export session*): it takes the packets of the selection from
   Selected Packet Line's `selectedPackets()` and notifies its reason when
   the host told no line; a truncated selection (more than 1,000 lines or
@@ -2979,8 +3049,8 @@ every corpus capture, read with a checkpoint every 3 packets, re-reads the
 export and compares each record byte for byte and each packet's fields
 with the capture's; it checks that a pcapng export of packets of two
 sections and interfaces keeps them, progress, cancel and failure, and
-drives Export packets… through the `FakeHost` to the sidebar's Export
-session (the packets exported, the progress dialog, its Cancel, the entry
+drives Export packets… through the `FakeHost` to the Capture Sessions'
+Export session (the packets exported, the progress dialog, its Cancel, the entry
 chosen again) and the `ExportDialog`; the export's flow is tested on the
 session (`export_session_test.cpp`).
 
@@ -2988,7 +3058,12 @@ session (`export_session_test.cpp`).
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
 the menu entries (Open pcap…, Start live capture…, Stop live capture, and Packet details, Export packets…, Display
 filter…, Show stream content and
-Stream lines in Regex Lab where the host can serve them) and the active-file callback with the host application. No exception may leave them: their work runs
+Stream lines in Regex Lab where the host can serve them) and the active-file callback with the host application. `init()` creates the
+Capture Sessions (`g_state.sessions`) and the sidebar over them;
+Open pcap…, Start and Stop live capture and Export packets… call the
+sessions, the active-file callback their catalog's `setFront()`, and only
+the Packet Panel's entries the sidebar; `shutdown()` deletes the sidebar,
+then the sessions. No exception may leave them: their work runs
 through `guarded()`. Strings go to the host as UTF-8 through `hostLog()`
 and `hostNotify()`. The host calls `shutdown()` both when LogSquirl quits
 and when the plugin is disabled or updated at runtime, with the tabs kept
@@ -3047,13 +3122,15 @@ through the `FakeHost`, which counts that the selection is read once; the
 reasons themselves are `selected_packet_line_test.cpp`'s.
 
 #### Summary filters (`regex_lab.h/cpp`)
-`summaryHtml()` with `filterLinks`, which `showSummaryFor()` passes as
-`g_state.hostCapabilities.regexLab`, makes each protocol and endpoint of the
-summary a `tcpdump-filter:protocol/<name>` or `tcpdump-filter:endpoint/<name>`
-link, the name percent-encoded. The label opens no link itself: its
-`linkActivated` goes to `SidebarWidget::openLink()`, which opens a filter
-link's pattern with `openRegexLab()` and any other link, such as the README
-link, with `QDesktopServices`. `endpointPattern()` and `protocolPattern()`
+`summaryHtml()` (`sidebar_text.h`) with `filterLinks`, which the sidebar
+passes as `g_state.hostCapabilities.regexLab`, makes each protocol and
+endpoint of the summary a `tcpdump-filter:protocol/<name>` or
+`tcpdump-filter:endpoint/<name>` link, the name percent-encoded, and
+`summaryLinkPattern()` is the pattern such a link opens. The label opens no
+link itself: its `linkActivated` goes to `SidebarWidget::openLink()`, which
+opens a filter link's pattern with `openRegexLab()` and any other link, such
+as the README link, with `QDesktopServices`. `endpointPattern()` and
+`protocolPattern()`
 require the columns before Info as `packetLineRegex()` reads them, through
 `upToSourcePattern()` and the Length after Protocol, so they match a whole
 Source, Destination or Protocol column and never Info in every
@@ -3064,8 +3141,9 @@ lines in Regex Lab uses too, opens the Lab with Match case and logs the pattern,
 the applied one or the cancel, under the feature's name ("Filter: …").
 `regex_lab_test.cpp` checks every endpoint and protocol of the summary of
 each corpus capture, converted in every `LineLayout`, against the columns of
-its lines;
-`sidebarwidget_test.cpp` clicks the links against the `FakeHost`.
+its lines; `sidebar_text_test.cpp` the links' patterns against the lines
+they pick; `sidebarwidget_test.cpp` clicks the links against the
+`FakeHost`.
 
 #### Display filters (`display_filter.h/cpp`, `display_filter_dialog.h/cpp`)
 `Plugins → tcpdump → Display filter…`, offered on a host with `regexLab`,
@@ -3270,7 +3348,7 @@ that the Log Format reads every line of every corpus text, so a new capture
 in the corpus is covered by it, too, in every `LineLayout`.
 `conversion_options_test.cpp` converts the corpus with each time mode and
 with the preview off or shorter, and checks each line against the default
-text. Plugin, sidebar and configuration dialog tests run against the `FakeHost` in
+text. Plugin, Capture Sessions, sidebar and configuration dialog tests run against the `FakeHost` in
 `tests/fakehost.h`.
 
 ### Real captures

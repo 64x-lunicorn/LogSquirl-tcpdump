@@ -621,6 +621,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a capture file being read, a live capture and the tab in front, is
   decided in one place. It says the same as before, at the same moments;
   a switch between light and dark mode redraws whatever it says (#172).
+- **The tcpdump menu talks to the sessions, the sidebar shows them.** Open
+  pcap…, Start and Stop live capture and Export packets… in the tcpdump
+  menu reach what opens, captures and exports directly, instead of going
+  through the sidebar; the sidebar only shows them. Nothing changes for
+  you: the same dialogs, over the sidebar, the same refusals and messages
+  (#173).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
