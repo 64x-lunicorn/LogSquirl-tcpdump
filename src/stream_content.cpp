@@ -444,26 +444,55 @@ void StreamContentReader::handOutGap( unsigned direction, uint32_t packet, uint6
 
 // ── Rendering ────────────────────────────────────────────────────────────
 
-QString streamText( const uint8_t* data, size_t len )
+QString streamText( const uint8_t* data, size_t len, qsizetype* column )
 {
+    qsizetype ownColumn = 0;
+    auto& at = column ? *column : ownColumn;
     QString out;
-    out.reserve( static_cast<qsizetype>( len ) );
+    out.reserve( static_cast<qsizetype>( len + len / kMaxStreamLineChars ) );
+    // Room for @p width characters on the line, or a new line.
+    const auto makeRoom = [ & ]( qsizetype width ) {
+        if ( at > 0 && at + width > kMaxStreamLineChars ) {
+            out += QLatin1Char( '\n' );
+            at = 0;
+        }
+        at += width;
+    };
     for ( size_t i = 0; i < len; ++i ) {
         const uint8_t byte = data[ i ];
         if ( byte == '\r' && i + 1 < len && data[ i + 1 ] == '\n' ) {
             continue; // CR LF: a line break
         }
-        if ( byte == '\n' || byte == '\t' || ( byte >= 0x20 && byte < 0x7F ) ) {
+        if ( byte == '\n' ) {
+            out += QLatin1Char( '\n' );
+            at = 0;
+            continue;
+        }
+        if ( byte == '\t' || ( byte >= 0x20 && byte < 0x7F ) ) {
+            makeRoom( 1 );
             out += QLatin1Char( static_cast<char>( byte ) );
             continue;
         }
         char32_t codePoint = 0;
         const auto length = utf8Sequence( data + i, len - i, codePoint );
         if ( length > 0 && codePoint >= 0xA0 ) { // not a C1 control
-            out += QString::fromUcs4( &codePoint, 1 );
+            const auto category = QChar::category( codePoint );
+            if ( category == QChar::Other_Format || category == QChar::Separator_Line
+                 || category == QChar::Separator_Paragraph ) {
+                // Invisible, and may reorder or break what follows: escaped.
+                makeRoom( static_cast<qsizetype>( 4 * length ) );
+                for ( size_t k = 0; k < length; ++k ) {
+                    appendEscaped( out, data[ i + k ] );
+                }
+            }
+            else {
+                makeRoom( QChar::requiresSurrogates( codePoint ) ? 2 : 1 );
+                out += QString::fromUcs4( &codePoint, 1 );
+            }
             i += length - 1;
             continue;
         }
+        makeRoom( 4 );
         appendEscaped( out, byte );
     }
     return out;
@@ -499,19 +528,15 @@ QString StreamRenderer::render( const StreamChunk& chunk )
     // Text: a new direction, a datagram and a gap each begin a line.
     const bool ownLine = lastDirection_ != static_cast<int>( direction )
                          || transport_ == Transport::Udp || chunk.missing > 0 || lastWasGap_;
-    if ( ownLine && !atLineStart_ ) {
+    if ( ownLine && column_ > 0 ) {
         out += QLatin1Char( '\n' );
+        column_ = 0;
     }
     if ( chunk.missing > 0 ) {
         out += missingText( chunk.missing ) + QLatin1Char( '\n' );
-        atLineStart_ = true;
     }
     else {
-        const auto text = streamText( chunk.bytes.data(), chunk.bytes.size() );
-        out += text;
-        if ( !text.isEmpty() ) {
-            atLineStart_ = text.endsWith( QLatin1Char( '\n' ) );
-        }
+        out += streamText( chunk.bytes.data(), chunk.bytes.size(), &column_ );
     }
     lastDirection_ = static_cast<int>( direction );
     lastWasGap_ = chunk.missing > 0;

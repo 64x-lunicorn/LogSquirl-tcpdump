@@ -168,7 +168,8 @@ After installing, restart LogSquirl or re-scan via *Plugins â†’ Manage Pluginsâ€
    the selected one belongs to no stream (`-`). The panel's **Stream** tab shows the payload of
    the whole TCP or UDP stream, the client's bytes (the side that sent the
    first packet) in red and the server's in blue, as **Text** (UTF-8 kept,
-   other control bytes as `\xNN`) or **Hex** (Wireshark's dump, the
+   other control bytes, bidi controls and other invisible characters as
+   `\xNN`, a line longer than 4,096 characters broken) or **Hex** (Wireshark's dump, the
    offset counted per direction, the server's lines indented), both
    directions or one. TCP bytes are put in sequence order as the
    reassembly orders them: a segment captured early waits for those before

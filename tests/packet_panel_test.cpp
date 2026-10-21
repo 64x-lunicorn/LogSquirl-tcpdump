@@ -724,7 +724,8 @@ SCENARIO( "A long stream is shown in part, read off the UI thread with Cancel",
             more->click();
             REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
             REQUIRE_FALSE( view->hasMore() );
-            REQUIRE( view->contentText().size() == 1500 * 1000 );
+            // Lines broken at a bounded length, nothing lost.
+            REQUIRE( view->contentText().remove( '\n' ).size() == 1500 * 1000 );
             REQUIRE( view->noteText().isEmpty() );
         }
 
@@ -752,6 +753,70 @@ SCENARIO( "A long stream is shown in part, read off the UI thread with Cancel",
             REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
             REQUIRE( view->statusText().contains( "Cancelled" ) );
             REQUIRE( view->hasMore() );
+        }
+    }
+}
+
+SCENARIO( "A stream of 16 MiB without a line feed is shown in lines of bounded length",
+          "[packet_panel][stream_content]" )
+{
+    using namespace tcpdump_test;
+    using tcpdump::EthertypeIpv4;
+    using tcpdump::IpProtoTcp;
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+    // 16,800 segments of 1,000 bytes, none a line feed: more than is shown.
+    std::vector<Bytes> packets;
+    for ( uint32_t i = 0; i < 16800; ++i ) {
+        packets.push_back(
+            eth( EthertypeIpv4, ipv4( IpProtoTcp, tcp( 40000, 80, Bytes( 1000, 'a' + i % 26 ), 5,
+                                                       0x18, 1 + i * 1000, 1 ) ) ) );
+    }
+    const auto bytes = pcapOf( packets );
+    const auto capture = dir.filePath( "one line.pcap" );
+    QFile file( capture );
+    REQUIRE( file.open( QIODevice::WriteOnly ) );
+    file.write( reinterpret_cast<const char*>( bytes.data() ),
+                static_cast<qint64>( bytes.size() ) );
+    file.close();
+
+    GIVEN( "the stream followed, and Show more chosen until all that is shown is read" )
+    {
+        LoadedCapture loaded( capture );
+        loaded.sidebar->resize( 600, 800 );
+        loaded.sidebar->show();
+        auto* view = followContent( loaded, loaded.lines[ 1 ] );
+        auto* more = view->findChild<QPushButton*>( "streamMore" );
+        while ( more->isEnabled() ) {
+            more->click();
+            REQUIRE( waitFor( [ view ] { return !view->isBusy(); } ) );
+        }
+
+        THEN( "16 MiB are shown, no line longer than the bound" )
+        {
+            const auto text = view->contentText();
+            // Read up to the end of the packet that reached it.
+            const auto shown = text.size() - text.count( '\n' );
+            constexpr auto kCap
+                = static_cast<qsizetype>( tcpdump::StreamContentView::kMaxShownBytes );
+            REQUIRE( shown >= kCap );
+            REQUIRE( shown < kCap + 1000 );
+            qsizetype longest = 0;
+            for ( const auto& line : QStringView( text ).split( '\n' ) ) {
+                longest = std::max( longest, line.size() );
+            }
+            REQUIRE( longest == tcpdump::kMaxStreamLineChars );
+        }
+
+        THEN( "the view is resized without a stall" )
+        {
+            QElapsedTimer timer;
+            timer.start();
+            for ( const int width : { 400, 900, 500, 700 } ) {
+                loaded.sidebar->resize( width, 800 );
+                QCoreApplication::processEvents();
+            }
+            REQUIRE( timer.elapsed() < 2000 );
         }
     }
 }

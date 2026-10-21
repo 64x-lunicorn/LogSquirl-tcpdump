@@ -202,15 +202,27 @@ enum StreamDirections : unsigned {
     kBothDirections = 3,
 };
 
-/// The bytes at @p data as text: UTF-8 kept, CR LF as a line break, other
-/// control bytes and bytes that are no UTF-8 escaped as \xNN.
-QString streamText( const uint8_t* data, size_t len );
+/// Characters of a line of stream text at most: a longer one is broken,
+/// so that a stream without a line feed is no paragraph of megabytes the
+/// view lays out anew on each resize.
+constexpr qsizetype kMaxStreamLineChars = 4096;
+
+/**
+ * The bytes at @p data as text: UTF-8 kept, CR LF as a line break, other
+ * control bytes and bytes that are no UTF-8 escaped as \xNN, and so are
+ * the bytes of an invisible format character (a bidi control, a zero-width
+ * one, a line or paragraph separator), which could reorder or hide what is
+ * shown.  A line is broken before kMaxStreamLineChars would be passed,
+ * never inside an escape or a character; @p column, if set, holds the
+ * characters of the line before @p data and is moved on.
+ */
+QString streamText( const uint8_t* data, size_t len, qsizetype* column = nullptr );
 
 /**
  * Turns StreamChunks into the text the content is shown as, one after the
  * other: as text, each direction's run starting on a line of its own (each
- * datagram of a UDP stream, too); as a hex dump, Wireshark's, the offset
- * counted per direction and the server's lines indented.  A gap shows as
+ * datagram of a UDP stream, too), a line broken at kMaxStreamLineChars; as a hex dump, Wireshark's,
+ * the offset counted per direction and the server's lines indented.  A gap shows as
  * "[n bytes missing]".  Chunks of a direction not shown give nothing.
  */
 class StreamRenderer {
@@ -226,7 +238,7 @@ private:
     Transport transport_;
     int lastDirection_ = -1;
     bool lastWasGap_ = false;
-    bool atLineStart_ = true;
+    qsizetype column_ = 0; ///< Characters of the text's last line.
     uint64_t offset_[ 2 ] = { 0, 0 };
 };
 

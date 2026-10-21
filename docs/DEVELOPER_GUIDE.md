@@ -2977,8 +2977,13 @@ export, conversation statistics):
   and reports progress; it goes on where it stopped. `StreamRenderer`
   turns chunks into text: `streamText()` keeps printable ASCII, tab, line
   breaks (CR LF as one) and valid UTF-8 beyond the C1 controls, and escapes
-  every other byte as `\xNN`; each direction's run, each datagram and
-  each gap begin a line; the hex dump is Wireshark's, 16 bytes a line,
+  every other byte as `\xNN`, and the bytes of an invisible format
+  character (category Cf, such as the bidi overrides and isolates, Zl, Zp)
+  too, so they cannot reorder or hide what is shown. It breaks a line at
+  `kMaxStreamLineChars` (4,096), never inside an escape or a character,
+  the renderer carrying the column across chunks: a stream without a line
+  feed is no single paragraph the plain text edit lays out anew on each
+  resize. Each direction's run, each datagram and each gap begin a line; the hex dump is Wireshark's, 16 bytes a line,
   the offset counted per direction (gaps included), the server's lines
   indented by 4. `exportStreamContent()` reads the whole stream with a
   fresh reader, a budget at a time, writing raw bytes of the directions
