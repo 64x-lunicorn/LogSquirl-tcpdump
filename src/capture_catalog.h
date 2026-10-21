@@ -44,8 +44,12 @@
  * or the raw file before the capture has an index with any.
  *
  * The sidebar renders the capture in front: its summary, the Packet Panel's
- * index and whether Save capture… shows.  No widget is in here.  The
- * entries live as long as the plugin is loaded.
+ * index and whether Save capture… shows.  It redraws them when the catalog
+ * announces that what the tab in front shows changed (observeFront()): a
+ * tab switch, a capture kept for the tab in front, its snapshot, summary or
+ * error, or the end of its live capture; a change behind it is not
+ * announced.  No widget is in here.  The entries live as long as the plugin
+ * is loaded.
  */
 
 #pragma once
@@ -55,6 +59,7 @@
 
 #include <QString>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
@@ -156,6 +161,13 @@ public:
     /// Whether the text file @p logPath is the one in the tab in front.
     bool isFront( const QString& logPath ) const;
 
+    /// Call @p observer, after the change, whenever what the tab in front
+    /// shows changes: another tab comes to the front, a capture is kept for
+    /// the one in front, its summary, index, size or error changes, or its
+    /// live capture ends.  Not for a change behind it, nor for the tab in
+    /// front reported again.  Observers are called in the order they came.
+    void observeFront( std::function<void()> observer );
+
     /// Whether @p logPath is a text file of the live capture, running or
     /// the last.
     bool isLive( const QString& logPath ) const;
@@ -177,8 +189,15 @@ private:
     void keepAndOpen( const QString& key, const QString& logPath, Entry entry, bool follow );
     /// The entry of @p key; null for one not kept.
     Entry* entryOf( const QString& key );
+    /// Tell the observers that what the tab in front shows changed, if
+    /// @p key is the text file in front.
+    void announceIfFront( const QString& key ) const;
+    /// Tell the observers that what the tab in front shows changed.
+    void announceFront() const;
 
     CaptureTabHost& tabs_; ///< Where the captures' tabs open.
+    /// Told when what the tab in front shows changes (observeFront()).
+    std::vector<std::function<void()>> frontObservers_;
     /// The text files kept, by fileKey().
     std::map<QString, Entry> entries_;
     /// The key of the text file in the tab in front, kept or not.

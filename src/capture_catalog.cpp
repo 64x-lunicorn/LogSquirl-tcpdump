@@ -76,7 +76,8 @@ void CaptureCatalog::openLiveFile( const QString& logPath, const QString& rawPat
 void CaptureCatalog::updateFile( const QString& logPath, const CaptureSummary& summary,
                                  std::shared_ptr<const CaptureIndex> index, qint64 fileSize )
 {
-    auto* entry = entryOf( fileKey( logPath ) );
+    const auto key = fileKey( logPath );
+    auto* entry = entryOf( key );
     if ( !entry ) {
         return;
     }
@@ -85,27 +86,37 @@ void CaptureCatalog::updateFile( const QString& logPath, const CaptureSummary& s
     if ( index ) {
         entry->index = std::move( index );
     }
+    announceIfFront( key );
 }
 
 void CaptureCatalog::setFileError( const QString& logPath, const QString& error )
 {
-    if ( auto* entry = entryOf( fileKey( logPath ) ) ) {
+    const auto key = fileKey( logPath );
+    if ( auto* entry = entryOf( key ) ) {
         entry->error = error;
+        announceIfFront( key );
     }
 }
 
 void CaptureCatalog::endLive()
 {
+    // The tab in front stops saying it is capturing, if it did.
+    const bool frontCapturing = capturing_ && liveKeys_.count( frontKey_ ) > 0;
     capturing_ = false;
+    if ( frontCapturing ) {
+        announceFront();
+    }
 }
 
 bool CaptureCatalog::updateSummary( const QString& logPath, CaptureSummary summary )
 {
-    auto* entry = entryOf( fileKey( logPath ) );
+    const auto key = fileKey( logPath );
+    auto* entry = entryOf( key );
     if ( !entry ) {
         return false;
     }
     entry->summary = std::move( summary );
+    announceIfFront( key );
     return true;
 }
 
@@ -117,7 +128,13 @@ const CaptureCatalog::Entry* CaptureCatalog::find( const QString& logPath ) cons
 
 void CaptureCatalog::setFront( const QString& filePath )
 {
-    frontKey_ = fileKey( filePath );
+    // The host may report the tab in front again: it shows what it did.
+    auto key = fileKey( filePath );
+    if ( key == frontKey_ ) {
+        return;
+    }
+    frontKey_ = std::move( key );
+    announceFront();
 }
 
 const CaptureCatalog::Entry* CaptureCatalog::front() const
@@ -182,7 +199,9 @@ void CaptureCatalog::keepAndOpen( const QString& key, const QString& logPath, En
     entry.withFormatHint = !formatHintShown_;
     formatHintShown_ = true;
     // Kept before the tab is opened: the host may report it in front at once.
+    // A tab in front already, of a file captured again, shows it now.
     entries_.insert_or_assign( key, std::move( entry ) );
+    announceIfFront( key );
     tabs_.openTab( logPath, follow );
 }
 
@@ -190,6 +209,25 @@ CaptureCatalog::Entry* CaptureCatalog::entryOf( const QString& key )
 {
     const auto found = entries_.find( key );
     return found == entries_.end() ? nullptr : &found->second;
+}
+
+void CaptureCatalog::observeFront( std::function<void()> observer )
+{
+    frontObservers_.push_back( std::move( observer ) );
+}
+
+void CaptureCatalog::announceIfFront( const QString& key ) const
+{
+    if ( !key.isEmpty() && key == frontKey_ ) {
+        announceFront();
+    }
+}
+
+void CaptureCatalog::announceFront() const
+{
+    for ( const auto& observer : frontObservers_ ) {
+        observer();
+    }
 }
 
 } // namespace tcpdump
