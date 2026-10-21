@@ -75,6 +75,7 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QStringList>
+#include <QStyle>
 #include <QUrl>
 
 #include <algorithm>
@@ -422,8 +423,19 @@ void SidebarWidget::showExportState()
     switch ( session.state() ) {
     case ExportSession::State::Exporting:
         if ( !exportProgress_ ) {
-            exportProgress_ = new QProgressDialog( session.label(), "Cancel", 0, 1000, this );
+            exportProgress_ = new QProgressDialog( this );
             exportProgress_->setObjectName( "exportProgress" );
+            // The session's label() is plain text, which a QLabel would
+            // take for markup if it looked like it: an error or a path with
+            // a '<' in it.  Aligned as the dialog's own label.
+            auto* label = new QLabel;
+            label->setTextFormat( Qt::PlainText );
+            label->setAlignment( Qt::Alignment( exportProgress_->style()->styleHint(
+                QStyle::SH_ProgressDialog_TextLabelAlignment, nullptr, exportProgress_ ) ) );
+            exportProgress_->setLabel( label );
+            exportProgress_->setLabelText( session.label() );
+            exportProgress_->setCancelButtonText( "Cancel" );
+            exportProgress_->setRange( 0, 1000 );
             exportProgress_->setWindowTitle( "Export Packets" );
             exportProgress_->setAutoClose( false );
             exportProgress_->setAutoReset( false );

@@ -544,11 +544,17 @@ SCENARIO( "Export packets… exports the selected lines' packets through the Exp
         loaded.chooseExport();
         REQUIRE( loaded.sessions->exportSession().isBusy() );
 
-        THEN( "its progress dialog says what is exported" )
+        THEN( "its progress dialog says what is exported, as plain text" )
         {
             auto* dialog = loaded.sidebar->findChild<QProgressDialog*>( "exportProgress" );
             REQUIRE( dialog );
             REQUIRE( dialog->labelText() == "Exporting 1 packets\xe2\x80\xa6" );
+            // The session's label() is plain text: an error or a path with a
+            // '<' in it must not be drawn as markup.
+            const auto labels = dialog->findChildren<QLabel*>();
+            REQUIRE( labels.size() == 1 );
+            REQUIRE( labels.front()->textFormat() == Qt::PlainText );
+            REQUIRE( labels.front()->text() == "Exporting 1 packets\xe2\x80\xa6" );
             loaded.sessions->exportSession().cancel();
             REQUIRE( waitFor( [ & ] { return !loaded.sessions->exportSession().isBusy(); } ) );
         }

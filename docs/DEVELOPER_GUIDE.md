@@ -2112,9 +2112,9 @@ in front from the Capture Sessions' `CaptureCatalog`.
   before its file replaces the one chosen, and ends Cancelled; one that
   failed while cancelled too. One that has written its file is kept: its
   discard returns false, and it ends Exported (#166).
-- `progress()` (permille, signal `progressed`) and `label()`: *Exporting
-  N packets…*, *Cancelling…*, then the outcome's; the progress dialog
-  shows it.
+- `progress()` (permille, signal `progressed`) and `label()`, as plain
+  text: *Exporting N packets…*, *Cancelling…*, then the outcome's; the
+  progress dialog shows it.
 - The outcome (`ExportOutcome`, also `outcome()`, and the signal
   `finished`, after the user was told): `Exported` (logged and notified
   *Exported N packets of … to ….*, with the note of a truncation that
@@ -2689,8 +2689,8 @@ a running conversion and export (destroying their sessions) and waits for
 their workers.
 
 While the Export session (see *The Export session*) exports, the sidebar
-shows a `QProgressDialog` ("exportProgress"), labelled with its `label()`,
-moved by its `progressed`, whose Cancel cancels the session, and closed
+shows a `QProgressDialog` ("exportProgress"), labelled with its `label()`
+as plain text (a `<` in an error or a path is not markup), moved by its `progressed`, whose Cancel cancels the session, and closed
 when it is idle again. Destroying the widget closes the dialog, without
 cancelling the export: the Capture Sessions cancel it when they go.
 
@@ -2711,8 +2711,8 @@ that its links open the README and the Regex Lab, that it goes and leaves
 the sessions running and no observer of the catalog behind, its layout and scrolling in a `QTabWidget` of fixed
 heights below and above the minimum (the summary's last line and the
 Conversations' bottom), and that a palette change redraws the summary;
-`packet_export_test.cpp` that an export's progress dialog shows and
-leaves the label as it was.
+`packet_export_test.cpp` that an export's progress dialog shows, as plain
+text, and leaves the label as it was.
 
 #### The Background Job (`background_job.h`)
 The kind of job the File Conversion session converts a capture file and
