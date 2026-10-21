@@ -35,6 +35,7 @@
 #include "sidebarwidget.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
@@ -386,6 +387,43 @@ SCENARIO( "An export reports its progress, can be cancelled and leaves nothing w
             REQUIRE( converted.index->fileProblem().isEmpty() );
         }
     }
+
+#ifndef Q_OS_WIN // QFile::link() makes a shortcut there, which no path goes through
+    GIVEN( "a capture converted by a path through a symbolic link to its directory" )
+    {
+        QTemporaryDir root;
+        REQUIRE( root.isValid() );
+        REQUIRE( QDir( root.path() ).mkdir( "real" ) );
+        const auto real = root.filePath( "real/linked & real.pcap" );
+        REQUIRE( QFile::copy( capture, real ) );
+        REQUIRE( QFile::link( root.filePath( "real" ), root.filePath( "link" ) ) );
+        const auto linked = root.filePath( "link/linked & real.pcap" );
+        const auto viaLink = convert( linked, root.path(), 3 );
+        const auto before = readAll( real );
+
+        THEN( "an export onto it is refused, by either path or a link to the file" )
+        {
+            REQUIRE( QFile::link( real, root.filePath( "file link.pcap" ) ) );
+            for ( const auto& target : { linked, real, root.filePath( "file link.pcap" ),
+                                         root.filePath( "link/../real/linked & real.pcap" ) } ) {
+                INFO( target.toStdString() );
+                const auto result = exportPackets( viaLink.index, { 1 }, target );
+                REQUIRE( result.status == ExportResult::Status::Failed );
+                REQUIRE( result.error.contains( "cannot replace the capture" ) );
+            }
+            REQUIRE( readAll( real ) == before );
+            REQUIRE( viaLink.index->fileProblem().isEmpty() );
+        }
+
+        THEN( "an export to another file through the link works as before" )
+        {
+            const auto other = root.filePath( "link/other.pcap" );
+            REQUIRE( exportPackets( viaLink.index, { 1 }, other ).status
+                     == ExportResult::Status::Exported );
+            REQUIRE( QFile::exists( root.filePath( "real/other.pcap" ) ) );
+        }
+    }
+#endif
 
     GIVEN( "no packet, or one the capture does not have" )
     {
