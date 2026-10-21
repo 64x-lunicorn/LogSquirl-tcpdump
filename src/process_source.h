@@ -211,7 +211,9 @@ private:
  * again, quotes or not: a '%', '!', '^', '&', '|', '<', '>', '(', ')', '"'
  * or a line break in one could run a command (BatBadBut).  Such arguments
  * are refused, not escaped: cmd.exe has no quoting that holds for all of
- * them.  A program that is no batch file passes, whatever its arguments.
+ * them.  The suffix is read as Win32 reads it, after trailing spaces and
+ * dots, which it strips.  A program that is no batch file passes, whatever
+ * its arguments.
  */
 QString batchArgumentProblem( const ProcessCommand& command );
 

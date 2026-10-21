@@ -89,18 +89,26 @@ SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[proc
 {
     GIVEN( "a batch file, as Windows runs it through cmd.exe" )
     {
-        for ( const auto* program : { "C:/extcap/dump.bat", "C:/extcap/DUMP.CMD" } ) {
-            CAPTURE( program );
+        // Win32 strips trailing spaces and dots from a program name and
+        // still runs the batch file they would hide the suffix of.
+        const auto programs
+            = { "C:/extcap/dump.bat",  "C:/extcap/DUMP.CMD",     "C:/extcap/dump.bat ",
+                "C:/extcap/dump.bat.", "C:/extcap/dump.cmd . .", "dump.Bat.. " };
 
-            THEN( "a plain argument passes" )
-            {
+        THEN( "a plain argument passes" )
+        {
+            for ( const auto* program : programs ) {
+                CAPTURE( program );
                 REQUIRE( batchArgumentProblem(
                              { program, { "--capture", "host 10.0.0.1 and port 443" } } )
                              .isEmpty() );
             }
+        }
 
-            THEN( "every character cmd.exe reads in an argument, quoted or not, is refused" )
-            {
+        THEN( "every character cmd.exe reads in an argument, quoted or not, is refused" )
+        {
+            for ( const auto* program : programs ) {
+                CAPTURE( program );
                 for ( const auto* hostile : { "x & calc", "x | calc", "x > out", "x < in", "%PATH%",
                                               "!x!", "a^b", "(x)", "\"x\" & calc", "x\r\ncalc" } ) {
                     CAPTURE( hostile );
@@ -115,6 +123,8 @@ SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[proc
     THEN( "a program that is no batch file, or a command for the shell, is not checked" )
     {
         REQUIRE( batchArgumentProblem( { "C:/extcap/dump.exe", { "x & calc" } } ).isEmpty() );
+        REQUIRE( batchArgumentProblem( { "C:/extcap/dump.exe. ", { "x & calc" } } ).isEmpty() );
+        REQUIRE( batchArgumentProblem( { "C:/extcap/dump.bat.exe", { "x & calc" } } ).isEmpty() );
         REQUIRE( batchArgumentProblem( ProcessCommand::shell( "dump.bat x & calc" ) ).isEmpty() );
     }
 }

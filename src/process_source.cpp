@@ -136,7 +136,13 @@ QString batchArgumentProblem( const ProcessCommand& command )
     if ( command.viaShell ) {
         return {}; // the user's own command line for the shell
     }
-    const auto suffix = QFileInfo( command.program ).suffix().toLower();
+    // Win32 strips trailing spaces and dots from the name before it looks
+    // for the file: "dump.bat. " runs dump.bat.
+    auto program = command.program;
+    while ( program.endsWith( QLatin1Char( ' ' ) ) || program.endsWith( QLatin1Char( '.' ) ) ) {
+        program.chop( 1 );
+    }
+    const auto suffix = QFileInfo( program ).suffix().toLower();
     if ( suffix != QLatin1String( "bat" ) && suffix != QLatin1String( "cmd" ) ) {
         return {};
     }
