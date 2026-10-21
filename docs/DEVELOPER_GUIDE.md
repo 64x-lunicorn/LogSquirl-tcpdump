@@ -1962,7 +1962,9 @@ A live capture's lifecycle and outcome are decided in one place, a
 `LiveCaptureSession` (a `QObject` on the UI thread), which the sidebar
 drives and listens to; the sidebar only shows what it is told. The session
 reaches LogSquirl through a `LiveCaptureHost` (`notify( message )`, and
-`busyElsewhere()`: a capture file being read), which the sidebar is, and
+`runningElsewhere()`: a capture file being read or an export, which the
+session weighs with its own capture in the Activity rule, see *Sidebar
+Widget*), which the sidebar is, and
 keeps what each text file's tab shows in the sidebar's `CaptureCatalog`
 (see *The Capture Catalog*), which opens the tabs: `startLive()` as a run
 starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
@@ -2416,8 +2418,27 @@ before anything was captured, without packets, the error, or that the
 capture's tab shows its summary. **Save capture…**, shown for a tab whose
 capture has a raw file, copies the catalog's `partsToSave()` where
 `setSaveChooser()`'s dialog says, suggesting its `saveName()`.
-stderr lines go to the host's log. Opening a file and a live capture
-exclude each other (`busyElsewhere()`, `isCapturing()`).
+stderr lines go to the host's log.
+
+Whether an activity may start now is decided in one place, the
+**Activity rule** (`activity.h/cpp`): `activityRefusal( activity, running
+)` takes an `Activity` (`OpenFile`, `LiveCapture`, `Export`) and the
+`RunningActivities` (`converting`, `capturing`, `exporting`) and returns
+nothing, or the `ActivityRefusal` that keeps it from starting:
+`Converting` or `Capturing` for opening a file and a live capture, which
+exclude each other and both wait for a conversion (named first);
+`Exporting` for an export, which waits only for another export.
+`refusalMessage()` is the one message each reason is told with, and
+`activityRefusalMessage()` the two together. The sidebar asks it with
+`runningActivities()` before Open (`chooseAndOpen()`, `openPcapFile()`),
+Start live capture… (`chooseAndStartLiveCapture()`, which offers to stop
+a running capture instead of refusing for `Capturing`) and Export
+packets (`exportSelectedPackets()`), and to enable Open pcap… and Start
+live capture… (whose tooltip is the reason); the Live Capture Session
+asks it for every start, with the sidebar's `runningElsewhere()` and its
+own `isBusy()`. The menu entries call these, so they refuse alike.
+`activity_test.cpp` tests the rule for every combination of what runs,
+without a widget.
 
 The **Live capture** section holds **Start live capture…**, which does what
 **Plugins → tcpdump → Start live capture…** does

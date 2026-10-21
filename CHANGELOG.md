@@ -600,6 +600,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the last live capture said *Capturing… the summary so far:* again while
   the source of the next one was being checked before it started; it now
   says so only while its capture runs (#156).
+- **One reason for each activity that cannot start.** Whether a capture
+  file may be opened, a live capture started or packets exported is
+  decided in one place, so the sidebar, the tcpdump menu and the live
+  capture refuse the same things with the same message. The only change
+  you see: the tooltip of the disabled **Start live capture…** while a
+  capture file is read now says what the notification says, *A capture is
+  still being read: wait for it, or cancel it first.* (#174).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
