@@ -540,7 +540,9 @@ when the next packet comes: so no file is empty, a file may be one packet
 bigger than the size given, and one may cover more than its duration when
 no packet came for a while. Every file is a capture of its own: a pcap's
 header, or a pcapng's section header and interfaces, are repeated at its
-start, so Wireshark opens any of them. When the N+1st file starts, the
+start, so Wireshark opens any of them. A capture whose headers come to
+more than 16 MiB, far more than any real one's, ends at the next file with
+a message instead of copying them. When the N+1st file starts, the
 oldest is deleted.
 
 Each file has a text of its own, `<name>_00001_<time>.log`, …: when a new

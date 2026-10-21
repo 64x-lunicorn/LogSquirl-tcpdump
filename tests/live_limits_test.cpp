@@ -615,3 +615,57 @@ SCENARIO( "A pcapng ring buffer repeats the section header and interfaces in eve
         }
     }
 }
+
+SCENARIO( "A ring buffer copies no headers longer than real ones into its next file",
+          "[live_limits]" )
+{
+    QTemporaryDir out;
+    RawCapture raw( QDir( out.path() ), "big", CaptureFormat::Pcapng, 2 );
+    REQUIRE( raw.open() );
+    // A section header, then interface blocks as long as the limit allows
+    // in all, then a packet's record: what a crafted stream can declare.
+    const uint64_t limit = RawCapture::kMaxHeaderBytes;
+    const Bytes section = Pcapng().shb();
+    const Bytes packet( 64, 0x5A );
+    CaptureHeaders headers;
+    headers.format = CaptureFormat::Pcapng;
+    headers.records.push_back( { 0, section.size() } );
+    REQUIRE( raw.write( section.data(), section.size() ) );
+    const Bytes interfaces( limit - section.size(), 0 );
+    headers.records.push_back( { section.size(), interfaces.size() } );
+    REQUIRE( raw.write( interfaces.data(), interfaces.size() ) );
+    const uint64_t cut = limit + packet.size();
+    REQUIRE( raw.write( packet.data(), packet.size() ) );
+
+    GIVEN( "headers one block beyond the limit" )
+    {
+        headers.records.push_back( { limit, packet.size() } );
+
+        WHEN( "the ring buffer starts its next file" )
+        {
+            const bool rotated = raw.rotate( cut, 1, headers );
+
+            THEN( "it refuses, naming the limit, and starts no file" )
+            {
+                REQUIRE_FALSE( rotated );
+                REQUIRE( raw.error().contains( "16 MiB" ) );
+                REQUIRE( raw.parts().size() == 1 );
+                REQUIRE( raw.fileNumber() == 1 );
+                REQUIRE( QDir( out.path() ).entryList( QDir::Files ).size() == 1 );
+            }
+        }
+    }
+
+    GIVEN( "headers of the limit's length" )
+    {
+        WHEN( "the ring buffer starts its next file" )
+        {
+            THEN( "it copies them ahead of the next file's records" )
+            {
+                REQUIRE( raw.rotate( cut, 1, headers ) );
+                REQUIRE( raw.parts().size() == 2 );
+                REQUIRE( raw.fileSize() == limit );
+            }
+        }
+    }
+}

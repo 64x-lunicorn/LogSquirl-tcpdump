@@ -135,6 +135,11 @@ bool PcapngReader::readBlockHeader( BlockHeader& block )
     if ( block.length % 4 != 0 || block.length < minimumLength( block.type ) ) {
         return fail( "bad block length" );
     }
+    // Headers are kept and copied ahead of each file of a ring buffer.
+    if ( ( block.type == kSectionHeaderBlock || block.type == kInterfaceBlock )
+         && block.length > kMaxHeaderBlock ) {
+        return fail( "header block too long" );
+    }
     return true;
 }
 

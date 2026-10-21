@@ -71,6 +71,10 @@ public:
     /// Interfaces a section may declare at most; a further one ends the
     /// capture as unreadable, so that the interface table stays small.
     static constexpr size_t kMaxInterfaces = 65536;
+    /// The longest section header or interface description block read;
+    /// a longer one ends the capture as unreadable.  A real one is a few
+    /// hundred bytes; a ring buffer copies them ahead of each file.
+    static constexpr uint32_t kMaxHeaderBlock = 256 * 1024;
 
     /// @param start  Where the first section header starts, as
     ///               findCaptureStart() found it for a pcapng.

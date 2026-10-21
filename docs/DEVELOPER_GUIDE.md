@@ -58,7 +58,8 @@ to the same dissection (`dissectPacket()`):
   sections, each with its own byte order and interfaces (major version 1)
 - Interface description blocks: link-layer type, snaplen and `if_tsresol`,
   in its power-of-ten and power-of-two forms (microseconds by default); at
-  most 65,536 interfaces per section
+  most 65,536 interfaces per section; a section header or interface block
+  longer than 256 KiB (`kMaxHeaderBlock`) ends the capture as unreadable
 - Enhanced packet blocks, and simple packet blocks, which belong to the
   section's first interface, are cut to its snaplen and have no timestamp
   (time 0)
@@ -1906,7 +1907,8 @@ past the cut into the new file, behind a copy of the headers the reader
 held after that packet (`CaptureReader::headers()`: a pcap's global
 header; a pcapng's section header, its section length set to -1, and the
 interfaces declared so far), and deletes the oldest files beyond
-`ringFiles`. A file is therefore never empty, and a duration is the least
+`ringFiles`. Headers longer than 16 MiB in all (`kMaxHeaderBytes`) are
+not copied: the rotation fails and ends the capture with that message. A file is therefore never empty, and a duration is the least
 a file covers, not the most. Each file is a `CapturePart`
 (`capture_index.h`): its path, the packets before it, where its records
 start in the stream, the header bytes ahead of them, and where each copied

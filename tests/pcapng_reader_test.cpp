@@ -533,6 +533,62 @@ SCENARIO( "Blocks that contradict themselves end the capture", "[pcapng]" )
     }
 }
 
+SCENARIO( "A section header or interface block longer than any real one ends the capture",
+          "[pcapng]" )
+{
+    // A block of @p type as @p block is, its body padded with zeros (an
+    // interface's end of options) to @p length in all.
+    const auto lengthened = []( uint32_t type, const Bytes& block, size_t length ) {
+        Bytes body( block.begin() + 8, block.end() - 4 );
+        body.resize( length - 12, 0 );
+        return le.block( type, body );
+    };
+    const auto limit = PcapngReader::kMaxHeaderBlock;
+
+    GIVEN( "a capture whose section header is longer than the limit" )
+    {
+        const auto file = lengthened( kShb, le.shb(), limit + 4 ) + le.idb( DltEthernet )
+                          + le.epb( 0, 1, udpFrame( 1 ) );
+
+        THEN( "it is not read, and the error says why" )
+        {
+            const auto result = parse( file );
+            REQUIRE_FALSE( result.ok );
+            REQUIRE( result.error.find( "header block too long" ) != std::string::npos );
+        }
+    }
+
+    GIVEN( "a packet, then an interface block longer than the limit, then a packet" )
+    {
+        const auto file = le.shb() + le.idb( DltEthernet ) + le.epb( 0, 1, udpFrame( 1 ) )
+                          + lengthened( kIdb, le.idb( DltRaw ), limit + 4 )
+                          + le.epb( 0, 2, udpFrame( 2 ) );
+
+        THEN( "the first packet is read and the capture ends inside a record" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.ok );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.truncated );
+        }
+    }
+
+    GIVEN( "a section header and an interface block of the limit's length" )
+    {
+        const auto file = lengthened( kShb, le.shb(), limit )
+                          + lengthened( kIdb, le.idb( DltEthernet ), limit )
+                          + le.epb( 0, 1, udpFrame( 1 ) ) + le.epb( 0, 2, udpFrame( 2 ) );
+
+        THEN( "both packets are read" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.ok );
+            REQUIRE( result.packets.size() == 2 );
+            REQUIRE_FALSE( result.truncated );
+        }
+    }
+}
+
 SCENARIO( "The capture format is detected from the first block", "[pcapng]" )
 {
     GIVEN( "a pcapng behind a text preamble from tcpdump" )
