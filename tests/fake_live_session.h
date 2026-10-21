@@ -22,9 +22,10 @@
  * @brief Fakes around a Live Capture Session: its host, captures the test
  *        scripts, and captures run for real.
  *
- * FakeLiveHost is the host of a LiveCaptureSession and of its catalog: it
- * records the tabs opened and the notifications, and can say what else
- * runs, which the Activity rule weighs.  The session keeps what each tab
+ * FakeLiveHost is the host of a LiveCaptureSession and of its catalog, a
+ * FakeSessionHost (fake_session_host.h): it records the tabs opened and the
+ * notifications, and can say what else runs, which the Activity rule
+ * weighs.  The session keeps what each tab
  * shows in a real CaptureCatalog, which opens the tabs and which the tests
  * read.  ScriptedRuns makes the session's runs (setRunFactory()): each a
  * ScriptedRun that records what it was asked to run and whether it was told
@@ -38,6 +39,7 @@
 #pragma once
 
 #include "capture_catalog.h"
+#include "fake_session_host.h"
 #include "live_capture_session.h"
 
 #include <QEventLoop>
@@ -53,25 +55,7 @@
 namespace tcpdump_test {
 
 /// A Live Capture Session's host, and its catalog's tab host, recording.
-class FakeLiveHost : public tcpdump::LiveCaptureHost, public tcpdump::CaptureTabHost {
-public:
-    void openTab( const QString& logPath, bool /*follow*/ ) override
-    {
-        openedTabs << logPath;
-    }
-    void notify( const QString& message ) override
-    {
-        notifications << message;
-    }
-    tcpdump::RunningActivities runningElsewhere() const override
-    {
-        return running;
-    }
-
-    QStringList openedTabs;             ///< The text files opened in tabs, in order.
-    QStringList notifications;          ///< What the user was told, in order.
-    tcpdump::RunningActivities running; ///< What runs outside the session.
-};
+using FakeLiveHost = FakeSessionHost;
 
 /// A capture the test scripts: what the session asked for, and what it is told.
 class ScriptedRun {

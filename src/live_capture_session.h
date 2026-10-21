@@ -56,6 +56,7 @@
 #include "live_capture.h"
 #include "live_source.h"
 #include "pcap_converter.h"
+#include "session_host.h"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -81,23 +82,9 @@ QString clockTime( qint64 seconds );
 /// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
 QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
 
-/// Where a Live Capture Session tells the user: LogSquirl, through the
-/// sidebar, in the app; a fake in tests.  Its tabs open through its
-/// CaptureCatalog.
-class LiveCaptureHost {
-public:
-    virtual ~LiveCaptureHost() = default;
-
-    /// Tell the user @p message in a notification.
-    virtual void notify( const QString& message ) = 0;
-    /// What runs outside the session, e.g. a capture file being read, which
-    /// the Activity rule weighs with the session's own capture; its
-    /// @c capturing is not read.
-    virtual RunningActivities runningElsewhere() const
-    {
-        return {};
-    }
-};
+/// Where a Live Capture Session tells the user (session_host.h); its
+/// @c capturing is not read.  Its tabs open through its CaptureCatalog.
+using LiveCaptureHost = SessionHost;
 
 /// What a capture is run with.
 struct LiveRunRequest {
