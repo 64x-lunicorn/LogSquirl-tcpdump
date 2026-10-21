@@ -257,12 +257,12 @@ SCENARIO( "A capture file is converted in the background, kept and opened in a t
 
     WHEN( "a file whose name holds markup is opened" )
     {
-        const auto marked = writeCapture( dir, "<b>.pcap", captureOf( 1 ) );
+        const auto marked = writeCapture( dir, "R&D.pcap", captureOf( 1 ) );
         REQUIRE( s.session.start( marked ) );
 
         THEN( "the label shows the name as text" )
         {
-            REQUIRE( s.session.label() == "Reading &lt;b&gt;.pcap\xe2\x80\xa6" );
+            REQUIRE( s.session.label() == "Reading R&amp;D.pcap\xe2\x80\xa6" );
             s.waitForOutcome();
         }
     }
