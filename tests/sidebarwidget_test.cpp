@@ -63,6 +63,7 @@
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
                                          size_t api_size );
 
+using tcpdump::CaptureSessions;
 using tcpdump::SidebarWidget;
 using tcpdump_test::FakeHost;
 using tcpdump_test::waitFor;
@@ -176,17 +177,18 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
     GIVEN( "a sidebar and a small capture" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( dir.path() );
         const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
 
         WHEN( "the capture is opened" )
         {
-            widget.openPcapFile( capture );
+            sessions.conversionSession().start( capture );
 
             THEN( "the sidebar shows the conversion running, with a Cancel button" )
             {
-                REQUIRE( widget.isConverting() );
+                REQUIRE( sessions.conversionSession().isBusy() );
                 REQUIRE_FALSE( child<QPushButton>( widget, "openButton" )->isEnabled() );
                 REQUIRE_FALSE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
                 REQUIRE( child<QPushButton>( widget, "cancelButton" )->isEnabled() );
@@ -210,7 +212,8 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
 
             THEN( "the sidebar returns to idle and shows the summary" )
             {
-                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+                REQUIRE(
+                    waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
                 REQUIRE( child<QPushButton>( widget, "openButton" )->isEnabled() );
                 REQUIRE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
                 REQUIRE( child<QProgressBar>( widget, "progress" )->isHidden() );
@@ -222,18 +225,19 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
     GIVEN( "a file that is not a capture" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( dir.path() );
         const auto junk = writeCapture( dir, "junk.pcap", Bytes( 64, 0xEE ) );
 
         WHEN( "it is opened" )
         {
-            widget.openPcapFile( junk );
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+            sessions.conversionSession().start( junk );
+            REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
 
             THEN( "the summary label shows the outcome's, and the user is told" )
             {
-                const auto& outcome = widget.conversionSession()->outcome();
+                const auto& outcome = sessions.conversionSession().outcome();
                 REQUIRE( outcome );
                 REQUIRE( child<QLabel>( widget, "summary" )->text() == outcome->label );
                 REQUIRE( outcome->label.contains( "magic" ) );
@@ -252,11 +256,12 @@ SCENARIO( "the Open button asks for a capture and opens it", "[sidebar]" )
     GIVEN( "a sidebar whose file dialog selects a capture" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( dir.path() );
         const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
         QWidget* dialogParent = nullptr;
-        widget.setFileChooser( [ &dialogParent, &capture ]( QWidget* parent, const QString& ) {
+        sessions.setFileChooser( [ &dialogParent, &capture ]( QWidget* parent, const QString& ) {
             dialogParent = parent;
             return capture;
         } );
@@ -284,11 +289,12 @@ SCENARIO( "the Cancel button cancels the running conversion", "[sidebar]" )
     GIVEN( "a sidebar converting a capture until it is cancelled" )
     {
         FakeHost host;
-        auto widget = std::make_unique<SidebarWidget>();
-        widget->setTempRoot( tempRoot.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( tempRoot.path() );
         // Converts, then holds its result until cancelled: a conversion that
         // was done when the cancel came.
-        widget->conversionSession()->setConverter(
+        sessions.conversionSession().setConverter(
             []( const QString& filePath, const QString& outputRoot, const std::atomic_bool* cancel,
                 const std::function<void( int )>&, const tcpdump::ConversionOptions& options ) {
                 auto result = tcpdump::convertPcap( filePath, outputRoot, nullptr, {}, options );
@@ -297,47 +303,35 @@ SCENARIO( "the Cancel button cancels the running conversion", "[sidebar]" )
                 }
                 return result;
             } );
-        widget->openPcapFile( writeCapture( dir, "small.pcap", captureOf( 3 ) ) );
-        REQUIRE( widget->isConverting() );
+        sessions.conversionSession().start( writeCapture( dir, "small.pcap", captureOf( 3 ) ) );
+        REQUIRE( sessions.conversionSession().isBusy() );
 
         WHEN( "the user clicks Cancel" )
         {
-            child<QPushButton>( *widget, "cancelButton" )->click();
+            child<QPushButton>( widget, "cancelButton" )->click();
 
             THEN( "Cancel is disabled and the label says it is cancelling" )
             {
-                REQUIRE_FALSE( child<QPushButton>( *widget, "cancelButton" )->isEnabled() );
-                REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelling\xe2\x80\xa6" );
-                REQUIRE( waitFor( [ &widget ] { return !widget->isConverting(); } ) );
+                REQUIRE_FALSE( child<QPushButton>( widget, "cancelButton" )->isEnabled() );
+                REQUIRE( child<QLabel>( widget, "summary" )->text() == "Cancelling\xe2\x80\xa6" );
+                REQUIRE( waitFor( [ & ] { return !sessions.conversionSession().isBusy(); } ) );
             }
 
             AND_WHEN( "the conversion has ended" )
             {
-                REQUIRE( waitFor( [ &widget ] { return !widget->isConverting(); } ) );
+                REQUIRE( waitFor( [ & ] { return !sessions.conversionSession().isBusy(); } ) );
 
                 THEN( "no tab is opened, the sidebar says it was cancelled, and is idle" )
                 {
                     REQUIRE( host.openedFiles.isEmpty() );
-                    REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelled." );
-                    widget->setPalette( QPalette( QColor( 0x20, 0x20, 0x20 ) ) );
-                    REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelled." );
-                    REQUIRE( child<QPushButton>( *widget, "openButton" )->isEnabled() );
-                    REQUIRE( child<QPushButton>( *widget, "cancelButton" )->isHidden() );
-                    REQUIRE( child<QProgressBar>( *widget, "progress" )->isHidden() );
+                    REQUIRE( child<QLabel>( widget, "summary" )->text() == "Cancelled." );
+                    widget.setPalette( QPalette( QColor( 0x20, 0x20, 0x20 ) ) );
+                    REQUIRE( child<QLabel>( widget, "summary" )->text() == "Cancelled." );
+                    REQUIRE( child<QPushButton>( widget, "openButton" )->isEnabled() );
+                    REQUIRE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
+                    REQUIRE( child<QProgressBar>( widget, "progress" )->isHidden() );
                     REQUIRE( QDir( tempRoot.path() ).isEmpty() );
                 }
-            }
-        }
-
-        WHEN( "the widget is destroyed, as when the plugin is unloaded" )
-        {
-            widget.reset();
-            QCoreApplication::processEvents();
-
-            THEN( "the conversion is stopped first, no tab is opened, and its directory goes" )
-            {
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE( QDir( tempRoot.path() ).isEmpty() );
             }
         }
     }
@@ -353,16 +347,17 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
     GIVEN( "a sidebar, as created when the plugin is loaded" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( dir.path() );
         auto* summary = child<QLabel>( widget, "summary" );
         const QString readmeSection
             = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
 
         WHEN( "a first capture is converted" )
         {
-            widget.openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+            sessions.conversionSession().start( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+            REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
 
             THEN( "the summary links to the README section on installing the Log Format" )
             {
@@ -387,14 +382,16 @@ SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]"
 
         WHEN( "a conversion fails first" )
         {
-            widget.openPcapFile( writeCapture( dir, "bad.pcap", Bytes( 64, 0 ) ) );
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+            sessions.conversionSession().start( writeCapture( dir, "bad.pcap", Bytes( 64, 0 ) ) );
+            REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
 
             THEN( "the hint waits for the first converted capture" )
             {
                 REQUIRE_FALSE( summary->text().contains( readmeSection ) );
-                widget.openPcapFile( writeCapture( dir, "good.pcap", captureOf( 1 ) ) );
-                REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+                sessions.conversionSession().start(
+                    writeCapture( dir, "good.pcap", captureOf( 1 ) ) );
+                REQUIRE(
+                    waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
                 REQUIRE( summary->text().contains( readmeSection ) );
             }
         }
@@ -419,12 +416,13 @@ SCENARIO( "the sidebar shows the summary of the capture in the tab in front", "[
         REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
         REQUIRE( host.hasActiveFileCallback() );
         auto* widget = tcpdump::g_state.sidebarWidget;
+        auto* sessions = tcpdump::g_state.sessions;
         auto* summary = child<QLabel>( *widget, "summary" );
 
-        widget->openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
-        REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
-        widget->openPcapFile( writeCapture( dir, "second.pcap", captureOf( 2 ) ) );
-        REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+        sessions->conversionSession().start( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+        REQUIRE( waitFor( [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
+        sessions->conversionSession().start( writeCapture( dir, "second.pcap", captureOf( 2 ) ) );
+        REQUIRE( waitFor( [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
         REQUIRE( host.openedFiles.size() == 2 );
         const auto first = host.openedFiles.at( 0 );
         const auto second = host.openedFiles.at( 1 );
@@ -473,14 +471,16 @@ SCENARIO( "the sidebar shows the summary of the capture in the tab in front", "[
 
         WHEN( "the tab in front changes while a capture is being read" )
         {
-            widget->openPcapFile( writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
+            sessions->conversionSession().start(
+                writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
             host.activateFile( first );
 
             THEN( "the sidebar keeps showing the reading, until it is done" )
             {
                 REQUIRE( summary->text().contains( "Reading big.pcap" ) );
-                widget->cancel();
-                REQUIRE( waitFor( [ widget ] { return !widget->isConverting(); } ) );
+                sessions->conversionSession().cancel();
+                REQUIRE(
+                    waitFor( [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
             }
         }
 
@@ -493,7 +493,8 @@ SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
     GIVEN( "a sidebar, as created when the plugin is loaded" )
     {
         FakeHost host;
-        SidebarWidget widget;
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
 
         THEN( "the summary says no capture is loaded, and the Packet section not again" )
         {
@@ -514,10 +515,11 @@ SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
     GIVEN( "a sidebar whose live captures the test scripts" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( dir.path() );
         ScriptedRuns runs;
-        widget.liveSession()->setRunFactory( runs.factory() );
+        sessions.liveSession().setRunFactory( runs.factory() );
         auto* summary = child<QLabel>( widget, "summary" );
         const auto logPath = dir.filePath( "eth0.log" );
         const auto rawPath = dir.filePath( "eth0.pcap" );
@@ -540,7 +542,7 @@ SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
 
         WHEN( "a capture starts" )
         {
-            REQUIRE( widget.startLiveCapture( "eth0", {} ) );
+            REQUIRE( sessions.liveSession().start( "eth0", {} ) );
 
             THEN( "the label says it waits for the first packet" )
             {
@@ -551,7 +553,7 @@ SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
 
             AND_WHEN( "its tab opens behind another" )
             {
-                widget.showSummaryFor( otherTab );
+                sessions.catalog().setFront( otherTab );
                 runs.last().open( logPath, rawPath );
 
                 THEN( "the label says the capture goes on" )
@@ -573,7 +575,7 @@ SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
 
                     AND_WHEN( "its tab comes to the front" )
                     {
-                        widget.showSummaryFor( logPath );
+                        sessions.catalog().setFront( logPath );
 
                         THEN( "the label shows its final summary" )
                         {
@@ -587,7 +589,7 @@ SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
             AND_WHEN( "its tab opens and comes to the front, and a snapshot comes" )
             {
                 runs.last().open( logPath, rawPath );
-                widget.showSummaryFor( logPath );
+                sessions.catalog().setFront( logPath );
                 runs.last().snapshot( snapshot );
 
                 THEN( "the label shows the summary so far" )
@@ -663,7 +665,8 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
         // As the host's sidebar holds it: a page of a QTabWidget, which a
         // splitter may make shorter than the sidebar's minimum.
         QTabWidget tabs;
-        auto* widget = new SidebarWidget;
+        CaptureSessions sessions;
+        auto* widget = new SidebarWidget( sessions );
         tabs.addTab( widget, "tcpdump" );
         const auto height = GENERATE( 250, 400, 600, 900 );
         tabs.setFixedSize( 380, height );
@@ -783,15 +786,16 @@ SCENARIO( "the summary's line follows a switch of the colour scheme", "[sidebar]
     GIVEN( "a sidebar showing a capture's summary in a light palette" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( dir.path() );
         QPalette light;
         light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
         light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
         widget.setPalette( light );
         auto* summary = child<QLabel>( widget, "summary" );
-        widget.openPcapFile( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
-        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+        sessions.conversionSession().start( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
+        REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
         const auto before = summary->text();
         REQUIRE( before.contains( "<hr style=\"background-color:#a6a6a6\">" ) );
 
@@ -1167,11 +1171,12 @@ SCENARIO( "endpoints and protocols in the summary open the Regex Lab as filters"
     GIVEN( "a capture converted on a host with the Regex Lab" )
     {
         FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( tempRoot.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( tempRoot.path() );
         auto* summary = child<QLabel>( widget, "summary" );
-        widget.openPcapFile( capture );
-        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+        sessions.conversionSession().start( capture );
+        REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
         REQUIRE( host.openedFiles.size() == 1 );
         const auto text = host.openedFiles.first();
 
@@ -1259,11 +1264,12 @@ SCENARIO( "endpoints and protocols in the summary open the Regex Lab as filters"
     GIVEN( "a capture converted on a host older than LogSquirl 26.11" )
     {
         FakeHost host( LOGSQUIRL_HOST_API_BASE_SIZE );
-        SidebarWidget widget;
-        widget.setTempRoot( tempRoot.path() );
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( tempRoot.path() );
         auto* summary = child<QLabel>( widget, "summary" );
-        widget.openPcapFile( capture );
-        REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
+        sessions.conversionSession().start( capture );
+        REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
 
         THEN( "the summary lists endpoints and protocols as plain text, as before" )
         {

@@ -112,6 +112,7 @@ SCENARIO( "the plugin registers its sidebar tab for its lifetime", "[plugin]" )
                 {
                     REQUIRE( host.sidebarTabs.isEmpty() );
                     REQUIRE( tcpdump::g_state.sidebarWidget == nullptr );
+                    REQUIRE( tcpdump::g_state.sessions == nullptr );
                     REQUIRE_FALSE( tcpdump::g_state.initialised );
                 }
             }
@@ -246,6 +247,7 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
             {
                 REQUIRE( rc != 0 );
                 REQUIRE( tcpdump::g_state.sidebarWidget == nullptr );
+                REQUIRE( tcpdump::g_state.sessions == nullptr );
                 REQUIRE_FALSE( host.logs.filter( "no room for another tab" ).isEmpty() );
             }
         }
@@ -269,6 +271,7 @@ SCENARIO( "no exception leaves an entry point", "[plugin]" )
                 REQUIRE( rc != 0 );
                 REQUIRE( host.sidebarTabs.isEmpty() );
                 REQUIRE( tcpdump::g_state.sidebarWidget == nullptr );
+                REQUIRE( tcpdump::g_state.sessions == nullptr );
             }
         }
 
@@ -296,15 +299,15 @@ QString writeCaptureFile( const QTemporaryDir& dir, int packets = 1,
     return path;
 }
 
-/** Initialise the plugin, open a capture through its sidebar, return the opened file. */
+/** Initialise the plugin, open a capture through its sessions, return the opened file. */
 QString openCapture( FakeHost& host, const QString& capture, const QString& tempRoot )
 {
     tcpdump::g_state.tempRoot = tempRoot;
     REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-    auto* sidebar = tcpdump::g_state.sidebarWidget;
-    REQUIRE( sidebar->tempRoot() == tempRoot );
+    auto* sessions = tcpdump::g_state.sessions;
+    REQUIRE( sessions->tempRoot() == tempRoot );
     const auto before = host.openedFiles.size();
-    sidebar->openPcapFile( capture );
+    sessions->conversionSession().start( capture );
     REQUIRE( tcpdump_test::waitFor(
         [ &host, before ] { return host.openedFiles.size() == before + 1; } ) );
     return host.openedFiles.last();
@@ -442,15 +445,18 @@ SCENARIO( "the capture dialog is also in the Plugins menu", "[plugin]" )
         FakeHost host;
         tcpdump::g_state.tempRoot = tempRoot.path();
         REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-        auto* sidebar = tcpdump::g_state.sidebarWidget;
+        auto* sessions = tcpdump::g_state.sessions;
 
         // Stands in for the file dialog the Open button shows.
         int dialogs = 0;
         QString chosen;
-        sidebar->setFileChooser( [ &dialogs, &chosen ]( QWidget*, const QString& ) {
-            ++dialogs;
-            return chosen;
-        } );
+        QWidget* shownOver = nullptr;
+        sessions->setFileChooser(
+            [ &dialogs, &chosen, &shownOver ]( QWidget* over, const QString& ) {
+                shownOver = over;
+                ++dialogs;
+                return chosen;
+            } );
 
         THEN( "Plugins > tcpdump > Open pcap\xe2\x80\xa6 is registered, and the live capture's "
               "entries" )
@@ -469,9 +475,10 @@ SCENARIO( "the capture dialog is also in the Plugins menu", "[plugin]" )
             chosen = writeCaptureFile( captures );
             host.menuActions.first().trigger();
 
-            THEN( "the sidebar's dialog is shown and the capture is opened in a tab" )
+            THEN( "the dialog is shown over the sidebar and the capture is opened in a tab" )
             {
                 REQUIRE( dialogs == 1 );
+                REQUIRE( shownOver == tcpdump::g_state.sidebarWidget );
                 REQUIRE(
                     tcpdump_test::waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
             }
@@ -484,15 +491,15 @@ SCENARIO( "the capture dialog is also in the Plugins menu", "[plugin]" )
             THEN( "nothing is converted" )
             {
                 REQUIRE( dialogs == 1 );
-                REQUIRE_FALSE( sidebar->isConverting() );
+                REQUIRE_FALSE( sessions->conversionSession().isBusy() );
                 REQUIRE( host.notifications.isEmpty() );
             }
         }
 
         WHEN( "the entry is chosen while a capture is being converted" )
         {
-            sidebar->openPcapFile( writeCaptureFile( captures, 20000, "big.pcap" ) );
-            REQUIRE( sidebar->isConverting() );
+            sessions->conversionSession().start( writeCaptureFile( captures, 20000, "big.pcap" ) );
+            REQUIRE( sessions->conversionSession().isBusy() );
             host.menuActions.first().trigger();
 
             THEN( "no dialog is shown, and a notification says why" )
@@ -501,8 +508,9 @@ SCENARIO( "the capture dialog is also in the Plugins menu", "[plugin]" )
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( host.notifications.first().contains( "being read" ) );
             }
-            sidebar->cancel();
-            REQUIRE( tcpdump_test::waitFor( [ sidebar ] { return !sidebar->isConverting(); } ) );
+            sessions->conversionSession().cancel();
+            REQUIRE( tcpdump_test::waitFor(
+                [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
         }
 
         WHEN( "the plugin is unloaded" )

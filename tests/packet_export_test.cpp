@@ -118,18 +118,19 @@ struct LoadedCapture {
         g_state.tempRoot = tempRoot.path();
         REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
         sidebar = g_state.sidebarWidget;
-        sidebar->openPcapFile( capture );
-        REQUIRE( waitFor( [ this ] { return !sidebar->isConverting(); } ) );
+        sessions = g_state.sessions;
+        sessions->conversionSession().start( capture );
+        REQUIRE( waitFor( [ this ] { return !sessions->conversionSession().isBusy(); } ) );
         REQUIRE( host.openedFiles.size() == 1 );
         QFile file( host.openedFiles.first() );
         REQUIRE( file.open( QIODevice::ReadOnly ) );
         lines = QString::fromUtf8( file.readAll() ).split( '\n', Qt::SkipEmptyParts );
         host.activateFile( host.openedFiles.first() );
-        sidebar->exportSession()->setConfirmer( [ this ]( ExportRequest& request ) {
+        sessions->exportSession().setConfirmer( [ this ]( ExportRequest& request ) {
             requests.push_back( request );
             return confirm;
         } );
-        sidebar->exportSession()->setFileChooser(
+        sessions->exportSession().setFileChooser(
             [ this ]( const ExportRequest& ) { return outputPath; } );
     }
 
@@ -153,12 +154,13 @@ struct LoadedCapture {
     void exportSelected()
     {
         chooseExport();
-        REQUIRE( waitFor( [ this ] { return !sidebar->isExporting(); } ) );
+        REQUIRE( waitFor( [ this ] { return !sessions->exportSession().isBusy(); } ) );
     }
 
     QTemporaryDir tempRoot;
     FakeHost host;
     SidebarWidget* sidebar = nullptr;
+    CaptureSessions* sessions = nullptr;
     QStringList lines; ///< The text's lines, the header first.
     QString outputPath = tempRoot.filePath( "export.pcap" );
     bool confirm = true;
@@ -470,7 +472,7 @@ SCENARIO( "The packets to export are read from packet lines, numbers and ranges"
     }
 }
 
-SCENARIO( "Export packets… exports the selected lines' packets through the sidebar's session",
+SCENARIO( "Export packets… exports the selected lines' packets through the Export session",
           "[packet_export]" )
 {
     const auto capture = QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" );
@@ -530,7 +532,7 @@ SCENARIO( "Export packets… exports the selected lines' packets through the sid
         REQUIRE( summary );
         const auto captureSummary = summary->text();
         REQUIRE( captureSummary.contains( "mixed.pcap" ) );
-        loaded.sidebar->exportSession()->setExporter(
+        loaded.sessions->exportSession().setExporter(
             []( std::shared_ptr<const CaptureIndex> index, const PacketNumbers& numbers,
                 const QString& outputPath, const std::atomic_bool* cancel,
                 const std::function<void( int )>& progress ) {
@@ -540,23 +542,23 @@ SCENARIO( "Export packets… exports the selected lines' packets through the sid
                 return exportPackets( std::move( index ), numbers, outputPath, cancel, progress );
             } );
         loaded.chooseExport();
-        REQUIRE( loaded.sidebar->isExporting() );
+        REQUIRE( loaded.sessions->exportSession().isBusy() );
 
         THEN( "its progress dialog says what is exported" )
         {
             auto* dialog = loaded.sidebar->findChild<QProgressDialog*>( "exportProgress" );
             REQUIRE( dialog );
             REQUIRE( dialog->labelText() == "Exporting 1 packets\xe2\x80\xa6" );
-            loaded.sidebar->cancelExport();
-            REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+            loaded.sessions->exportSession().cancel();
+            REQUIRE( waitFor( [ & ] { return !loaded.sessions->exportSession().isBusy(); } ) );
         }
 
         THEN( "the summary label keeps the capture's summary, while and after it exports" )
         {
             REQUIRE( summary->text() == captureSummary );
-            loaded.sidebar->cancelExport();
+            loaded.sessions->exportSession().cancel();
             REQUIRE( summary->text() == captureSummary );
-            REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+            REQUIRE( waitFor( [ & ] { return !loaded.sessions->exportSession().isBusy(); } ) );
             REQUIRE( summary->text() == captureSummary );
         }
 
@@ -571,10 +573,10 @@ SCENARIO( "Export packets… exports the selected lines' packets through the sid
 
             THEN( "the session cancels, the dialog says so, then goes, and nothing is left" )
             {
-                REQUIRE( loaded.sidebar->exportSession()->state()
+                REQUIRE( loaded.sessions->exportSession().state()
                          == ExportSession::State::Cancelling );
                 REQUIRE( dialog->labelText() == "Cancelling\xe2\x80\xa6" );
-                REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+                REQUIRE( waitFor( [ & ] { return !loaded.sessions->exportSession().isBusy(); } ) );
                 REQUIRE( waitFor( [ & ] { return !dialog; } ) );
                 REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
                 REQUIRE( host.notifications.isEmpty() );
@@ -591,8 +593,8 @@ SCENARIO( "Export packets… exports the selected lines' packets through the sid
                 REQUIRE( host.notifications
                          == QStringList{ refusalMessage( ActivityRefusal::Exporting ) } );
             }
-            loaded.sidebar->cancelExport();
-            REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+            loaded.sessions->exportSession().cancel();
+            REQUIRE( waitFor( [ & ] { return !loaded.sessions->exportSession().isBusy(); } ) );
         }
     }
 }

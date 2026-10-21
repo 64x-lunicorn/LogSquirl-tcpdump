@@ -27,7 +27,7 @@
  *   - logsquirl_plugin_init_ex()    → store host API and what it offers,
  *                                     create sidebar tab
  *   - logsquirl_plugin_init()       → init_ex() with the base table size
- *   - logsquirl_plugin_shutdown()   → tear down widget, clear state
+ *   - logsquirl_plugin_shutdown()   → tear down widget and sessions, clear state
  *   - logsquirl_plugin_configure()  → the configuration dialog
  *
  * PLUGIN LIFECYCLE
@@ -35,7 +35,8 @@
  *   1. Host calls get_info() to read metadata.
  *   2. Host calls init_ex(api, handle, api_size) — or init(api, handle)
  *      if it is older than LogSquirl 26.11 — we store the pointers and
- *      the host capabilities the size tells, create a SidebarWidget,
+ *      the host capabilities the size tells, create the CaptureSessions
+ *      (capture_sessions.h) and a SidebarWidget that is a view of them,
  *      register it as a sidebar tab, add Plugins > tcpdump >
  *      Open pcap…, Start live capture… and Stop live capture to the menu
  *      (and Stream lines in Regex Lab, on a host with the
@@ -43,18 +44,22 @@
  *      and Show stream content on a host with the selected lines; Display
  *      filter… on a host with the Regex Lab), and register for the host's
  *      active-file notifications, so the sidebar shows the summary and the
- *      Packet Panel the packets of the tab in front.
+ *      Packet Panel the packets of the tab in front.  Open pcap…, Start
+ *      and Stop live capture and Export packets… go to the sessions, the
+ *      Packet Panel's entries to the sidebar.
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
  *   Plugins > Plugin Management > Configure… calls configure(), which
  *   shows the options and saves them in the plugin's configuration
  *   directory; the next conversion reads them.
- *   4. Host calls shutdown() — we unregister + delete the widget; the
+ *   4. Host calls shutdown() — we unregister + delete the widget, then
+ *      the sessions; the
  *      host removes the menu entry when it unloads the plugin.
  */
 
 #include "plugin.h"
+#include "capture_sessions.h"
 #include "configdialog.h"
 #include "display_filter_dialog.h"
 #include "process_source.h"
@@ -154,20 +159,20 @@ static void openFromMenu( void* /* user_data */ )
 {
     guarded( "opening a capture from the menu", [] {
         // The host removes the entry only after shutdown(), and a failed
-        // init leaves no widget.
-        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
-            sidebar->chooseAndOpen();
+        // init leaves no sessions.
+        if ( auto* sessions = tcpdump::g_state.sessions ) {
+            sessions->chooseAndOpen();
         }
     } );
 }
 
-/// Plugins > tcpdump > Start live capture…: the Live capture section's form
-/// in a dialog.
+/// Plugins > tcpdump > Start live capture…: the same as the Live capture
+/// section's Start live capture….
 static void startLiveCaptureFromMenu( void* /* user_data */ )
 {
     guarded( "starting a live capture from the menu", [] {
-        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
-            sidebar->chooseAndStartLiveCapture();
+        if ( auto* sessions = tcpdump::g_state.sessions ) {
+            sessions->chooseAndStartLiveCapture();
         }
     } );
 }
@@ -176,12 +181,8 @@ static void startLiveCaptureFromMenu( void* /* user_data */ )
 static void stopLiveCaptureFromMenu( void* /* user_data */ )
 {
     guarded( "stopping a live capture from the menu", [] {
-        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
-            if ( !sidebar->isCapturing() ) {
-                tcpdump::hostNotify( "No live capture is running." );
-                return;
-            }
-            sidebar->stopLiveCapture();
+        if ( auto* sessions = tcpdump::g_state.sessions ) {
+            sessions->stopLiveCapture();
         }
     } );
 }
@@ -229,19 +230,20 @@ static void followStreamContentFromMenu( void* /* user_data */ )
 static void exportPacketsFromMenu( void* /* user_data */ )
 {
     guarded( "exporting packets", [] {
-        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
-            sidebar->exportSelectedPackets();
+        if ( auto* sessions = tcpdump::g_state.sessions ) {
+            sessions->exportSelectedPackets();
         }
     } );
 }
 
-/// The host brought another tab to the front: show its capture's summary.
+/// The host brought another tab to the front: the catalog notes it, and the
+/// sidebar shows its capture's summary.
 static void onActiveFileChanged( void* /* user_data */, const char* filePath )
 {
     guarded( "showing the summary of the tab in front", [ filePath ] {
-        // A failed init leaves no widget, and the host keeps the callback.
-        if ( auto* sidebar = tcpdump::g_state.sidebarWidget ) {
-            sidebar->showSummaryFor( QString::fromUtf8( filePath ? filePath : "" ) );
+        // A failed init leaves no sessions, and the host keeps the callback.
+        if ( auto* sessions = tcpdump::g_state.sessions ) {
+            sessions->catalog().setFront( QString::fromUtf8( filePath ? filePath : "" ) );
         }
     } );
 }
@@ -280,8 +282,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // e.g. after a crash: no tab can show them any more.
         tcpdump::removeStaleTempDirs( tcpdump::tempRoot() );
 
-        // Register a sidebar tab for pcap file management
-        tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget();
+        // The sessions, which the menu and the sidebar start, and a sidebar
+        // tab that shows them
+        tcpdump::g_state.sessions = new tcpdump::CaptureSessions();
+        tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget( *tcpdump::g_state.sessions );
         api->register_sidebar_tab( handle, "tcpdump",
                                    static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
         tcpdump::g_state.sidebarTabRegistered = true;
@@ -326,10 +330,10 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // The host shuts the plugin down both when LogSquirl quits (after
         // aboutToQuit) and when the plugin is disabled or updated at runtime,
         // with the tabs left open; only in the first case may the temporary
-        // files go.  The widget as context ends the connection with it,
+        // files go.  The sessions as context end the connection with them,
         // before the library is unloaded.
         if ( auto* app = QCoreApplication::instance() ) {
-            QObject::connect( app, &QCoreApplication::aboutToQuit, tcpdump::g_state.sidebarWidget,
+            QObject::connect( app, &QCoreApplication::aboutToQuit, tcpdump::g_state.sessions,
                               [] { tcpdump::g_state.quitting = true; } );
         }
 
@@ -372,9 +376,14 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         } );
     }
     if ( st.sidebarWidget ) {
-        // Deleting it stops a running conversion and waits for it.
         guarded( "shutdown", [] { delete tcpdump::g_state.sidebarWidget; } );
         st.sidebarWidget = nullptr;
+    }
+    if ( st.sessions ) {
+        // Deleting them stops a running conversion and export and waits for
+        // them, and stops a live capture.
+        guarded( "shutdown", [] { delete tcpdump::g_state.sessions; } );
+        st.sessions = nullptr;
     }
 
     // No capture program may outlive the plugin: whatever runs still, also

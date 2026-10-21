@@ -83,8 +83,9 @@ struct LoadedCapture {
         REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
         sidebar = tcpdump::g_state.sidebarWidget;
         panel = sidebar->packetPanel();
-        sidebar->openPcapFile( capture );
-        REQUIRE( waitFor( [ this ] { return !sidebar->isConverting(); } ) );
+        tcpdump::g_state.sessions->conversionSession().start( capture );
+        REQUIRE( waitFor(
+            [ this ] { return !tcpdump::g_state.sessions->conversionSession().isBusy(); } ) );
         REQUIRE( host.openedFiles.size() == 1 );
         text = host.openedFiles.first();
         lines = linesOf( text );

@@ -21,14 +21,17 @@
  * @file sidebarwidget.cpp
  * @brief Implementation of the tcpdump sidebar panel.
  *
- * When the user clicks "Open pcap…", the widget:
- *   1. Opens a file dialog for .pcap / .cap / .dmp files
- *   2. Hands it to its File Conversion session, which converts the pcap
+ * The sidebar is a view of the plugin's CaptureSessions: its buttons
+ * forward to them, and it shows what they tell.  When the user clicks
+ * "Open pcap…", the sessions:
+ *   1. Open a file dialog for .pcap / .cap / .dmp files, over the sidebar
+ *   2. Hand it to the File Conversion session, which converts the pcap
  *      packet by packet with pcap_converter: parses each packet, formats it
  *      into a human-readable line, and writes the line to a temporary .log
  *      file
  *   3. The session opens the .log file in LogSquirl's main viewer, through
  *      the capture catalog
+ * and the sidebar shows the session's progress, label and outcome.
  *
  * Its Stream lines in Regex Lab button, on a host that offers it, opens the
  * Regex Lab on the conversation of the selected packet line (see
@@ -41,36 +44,24 @@
  * packets that carried a tunnelled one show in no column, so no pattern
  * could pick their lines.
  *
- * Its CaptureCatalog keeps each converted capture's summary and CaptureIndex
- * under the path of its .log file, opens its tab and says which is in the
- * tab in front, as the host reports tab switches; the sidebar shows that
- * one's summary, and its Packet Panel the packets of that capture.  The
- * sidebar is the catalog's tab host: it opens a tab on the UI thread.
+ * The sessions' CaptureCatalog keeps each capture's summary and CaptureIndex
+ * under the path of its .log file and says which is in the tab in front, as
+ * the host reports tab switches; the sidebar shows that one's summary, and
+ * its Packet Panel the packets of that capture, whenever the catalog
+ * announces a change.
  *
- * A live capture (startLiveCapture()) is its LiveCaptureSession's, which
- * decides what it does: the sidebar is the session's host (a notification),
- * and the session keeps the summaries of its text files in the catalog,
- * which opens each one's tab once the first packet line is there; the
- * summaries follow the snapshots until the capture ends.  The sidebar shows the
- * session's state, progress, stderr lines and outcome.  The Live capture section, and the Start
- * live capture… dialog, choose what to capture from the Live Source Kinds (live_source.h): the kind
- * chosen makes the stream, and explains a failure.
+ * A live capture is the Live Capture Session's, which keeps the summaries
+ * of its text files in the catalog; the sidebar shows the session's state,
+ * progress, stderr lines and outcome.  Start live capture… asks, through
+ * the sessions, in the Start live capture dialog, which chooses what to
+ * capture from the Live Source Kinds (live_source.h).
  *
- * Opening a capture file is its FileConversionSession's, which converts it
- * and keeps it in the catalog: the sidebar forwards Open and Cancel to it,
- * and shows its progress, label and outcome.
- *
- * Export packets… is its ExportSession's, which reads the selected lines,
- * lets the user confirm or change their packets in the sidebar's
- * ExportDialog, asks where to write them in its save dialog, and writes them
- * with exportPackets() on a worker thread of its own, so that an export and
- * a conversion can run side by side.  The sidebar forwards Export packets…
- * and its progress dialog's Cancel to it, and shows that dialog.
+ * Export packets… is the Export session's; the sidebar shows its progress
+ * dialog, whose Cancel forwards to it.
  */
 
 #include "sidebarwidget.h"
 
-#include "capture_file.h"
 #include "conversation_table.h"
 #include "display_filter_dialog.h"
 #include "follow_stream.h"
@@ -78,22 +69,14 @@
 #include "packet_panel.h"
 #include "pcap_converter.h"
 #include "plugin.h"
-#include "raw_capture.h"
 #include "regex_lab.h"
-#include "settings.h"
-#include "tempdirs.h"
 
 #include <QDesktopServices>
-#include <QDir>
-#include <QFileDialog>
-#include <QFileInfo>
 #include <QGroupBox>
 #include <QLocale>
-#include <QMessageBox>
 #include <QPointer>
 #include <QResizeEvent>
 #include <QScrollArea>
-#include <QStandardPaths>
 #include <QStringList>
 #include <QUrl>
 
@@ -137,13 +120,6 @@ QString filterPattern( const QString& link )
         return protocolPattern( nameOf( filter, kProtocolFilter ) );
     }
     return {};
-}
-
-/// What setDefaultLiveSources() set; null: builtInLiveSources().
-std::shared_ptr<const LiveSourceRegistry>& defaultLiveSources()
-{
-    static std::shared_ptr<const LiveSourceRegistry> sources;
-    return sources;
 }
 
 /// How far the line under the capture's name is from the window's colour
@@ -270,24 +246,9 @@ private:
 
 } // namespace
 
-void SidebarWidget::setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
-{
-    defaultLiveSources() = std::move( sources );
-}
-
-SidebarWidget::SidebarWidget( QWidget* parent )
+SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     : QWidget( parent )
-    , chooseFile_( []( QWidget* parent, const QString& dir ) {
-        return QFileDialog::getOpenFileName(
-            parent, "Open pcap Capture File", dir,
-            "Capture files (*.pcap *.pcapng *.cap *.dmp *.pcap.gz *.pcapng.gz *.cap.gz);;"
-            "All files (*)" );
-    } )
-    , chooseSaveFile_( []( QWidget* parent, const QString& suggested ) {
-        return QFileDialog::getSaveFileName( parent, "Save Capture", suggested,
-                                             "Capture files (*.pcap *.pcapng);;All files (*)" );
-    } )
-    , tempRoot_( tcpdump::tempRoot() )
+    , sessions_( sessions )
 {
     // All of it scrolls when the sidebar is shorter than its minimum.
     auto* content = new QWidget;
@@ -305,7 +266,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
     layout->addWidget( openButton_ );
 
-    connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
+    connect( openButton_, &QPushButton::clicked, this,
+             [ this ] { forward( "Opening a capture", &CaptureSessions::chooseAndOpen ); } );
 
     // Stream lines in Regex Lab, as in the Plugins menu: only a host that
     // has the Regex Lab and tells the selected lines gets it.  It is enabled
@@ -342,7 +304,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     cancelButton_->setObjectName( "cancelButton" );
     cancelButton_->setToolTip( "Stop reading the capture" );
     layout->addWidget( cancelButton_ );
-    connect( cancelButton_, &QPushButton::clicked, this, &SidebarWidget::cancel );
+    connect( cancelButton_, &QPushButton::clicked, this,
+             [ this ] { sessions_.conversionSession().cancel(); } );
 
     // Live capture: Start live capture… asks what to capture in its dialog;
     // while one runs, its progress (no percentage, a stream has no size),
@@ -352,18 +315,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     auto* liveLayout = new QVBoxLayout( liveSection );
     liveLayout->setSpacing( 4 );
 
-    listingPool_.setMaxThreadCount( 4 );
-    startButton_ = new QPushButton( "Start live capture\u2026" );
+    startButton_ = new QPushButton( "Start live capture…" );
     startButton_->setObjectName( "liveCaptureButton" );
     liveLayout->addWidget( startButton_ );
     connect( startButton_, &QPushButton::clicked, this, [ this ] {
-        try {
-            chooseAndStartLiveCapture();
-        } catch ( const std::exception& e ) {
-            // An exception must not escape into Qt or the host.
-            hostLog( LOGSQUIRL_LOG_ERROR,
-                     "Starting a live capture failed: " + QString::fromUtf8( e.what() ) );
-        }
+        forward( "Starting a live capture", &CaptureSessions::chooseAndStartLiveCapture );
     } );
 
     liveLabel_ = new QLabel;
@@ -375,7 +331,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     stopButton_->setObjectName( "stopButton" );
     stopButton_->setToolTip( "End the capture and keep what was captured" );
     liveLayout->addWidget( stopButton_ );
-    connect( stopButton_, &QPushButton::clicked, this, &SidebarWidget::stopLiveCapture );
+    connect( stopButton_, &QPushButton::clicked, this,
+             [ this ] { sessions_.liveSession().stop(); } );
 
     liveError_ = new QLabel;
     liveError_->setObjectName( "liveError" );
@@ -423,7 +380,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                              "files kept as one" );
     saveButton_->setHidden( true );
     layout->addWidget( saveButton_ );
-    connect( saveButton_, &QPushButton::clicked, this, &SidebarWidget::saveCapture );
+    connect( saveButton_, &QPushButton::clicked, this,
+             [ this ] { forward( "Saving a capture", &CaptureSessions::saveCapture ); } );
 
     // The packet of the selected line, below; it takes the room left, and
     // keeps room for its tabs and the Conversations however long the summary.
@@ -442,80 +400,40 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         updateStreamLinesButton();
     }
 
-    askLiveChoice_ = [ this ]( QWidget* parent, LiveChoice& choice ) {
-        // Neither this widget nor its members are used after the dialog:
-        // it may be gone when it returns (its pool waits for the listings).
-        const auto dialog = makeLiveCaptureDialog( parent, choice );
-        if ( dialog->exec() != QDialog::Accepted ) {
-            return false;
+    // The sessions ask the user over this sidebar, and it shows what they
+    // tell: the capture in front anew whenever the catalog announces that it
+    // changed, each session's state, progress and outcome.
+    sessions_.setDialogParent( this );
+    sessions_.catalog().observeFront( [ self = QPointer<SidebarWidget>( this ) ] {
+        if ( self ) {
+            self->showFront();
         }
-        choice = dialog->choice();
-        return true;
-    };
-    confirmStop_ = []( QWidget* parent, const QString& running ) {
-        return QMessageBox::question(
-                   parent, "Start Live Capture",
-                   QString( "The live capture %1 is running: only one runs at a time. Stop it?" )
-                       .arg( running ),
-                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No )
-               == QMessageBox::Yes;
-    };
-
-    // This widget is the sessions' host; the sessions keep their captures'
-    // summaries in the catalog, and the sidebar shows the one in front,
-    // anew whenever the catalog announces that it changed.
-    catalog_.observeFront( [ this ] { showFront(); } );
-    SessionHost& host = *this;
-    conversion_ = std::make_unique<FileConversionSession>( host, catalog_ );
-    conversion_->setOutputRoot( tempRoot_ );
-    connect( conversion_.get(), &FileConversionSession::stateChanged, this,
+    } );
+    auto* conversion = &sessions_.conversionSession();
+    connect( conversion, &FileConversionSession::stateChanged, this,
              &SidebarWidget::showConversionState );
-    connect( conversion_.get(), &FileConversionSession::progressed, this,
+    connect( conversion, &FileConversionSession::progressed, this,
              [ this ]( int permille ) { progressBar_->setValue( permille ); } );
-    connect( conversion_.get(), &FileConversionSession::finished, this,
+    connect( conversion, &FileConversionSession::finished, this,
              &SidebarWidget::showConversionOutcome );
 
-    live_ = std::make_unique<LiveCaptureSession>( host, catalog_ );
-    live_->setOutputRoot( tempRoot_ );
-    connect( live_.get(), &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
-    connect( live_.get(), &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
-    connect( live_.get(), &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
+    auto* live = &sessions_.liveSession();
+    connect( live, &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
+    connect( live, &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
+    connect( live, &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
     // The catalog's snapshot of the tab in front redraws its summary.
-    connect( live_.get(), &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
-    connect( live_.get(), &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
+    connect( live, &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
+    connect( live, &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
         liveStderr_->appendPlainText( line );
         liveStderr_->setHidden( false );
     } );
-    connect( live_.get(), &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
+    connect( live, &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
 
-    // The Export session asks with the Export dialog and a save dialog, and
-    // tells the outcome itself; the sidebar shows its progress dialog.
-    export_ = std::make_unique<ExportSession>( host, catalog_ );
-    export_->setConfirmer( [ this ]( ExportRequest& request ) {
-        // Neither this widget nor its members are used after the dialog: it
-        // may be gone when it returns.
-        ExportDialog dialog( request, this );
-        if ( dialog.exec() != QDialog::Accepted ) {
-            return false;
-        }
-        request.numbers = dialog.packetSet().numbers;
-        return true;
-    } );
-    export_->setFileChooser( [ this ]( const ExportRequest& request ) {
-        const auto dir = lastDir_.isEmpty()
-                             ? QStandardPaths::writableLocation( QStandardPaths::HomeLocation )
-                             : lastDir_;
-        const bool pcapng = request.format == CaptureFormat::Pcapng;
-        const auto suggested
-            = QDir( dir ).filePath( tcpdump::captureBaseName( request.captureName ) + "-packets."
-                                    + ( pcapng ? "pcapng" : "pcap" ) );
-        // Neither this widget nor its members are used after the dialog.
-        return QFileDialog::getSaveFileName( this, "Export Packets", suggested,
-                                             pcapng ? "pcapng captures (*.pcapng);;All files (*)"
-                                                    : "pcap captures (*.pcap);;All files (*)" );
-    } );
-    connect( export_.get(), &ExportSession::stateChanged, this, &SidebarWidget::showExportState );
-    connect( export_.get(), &ExportSession::progressed, this, [ this ]( int permille ) {
+    // The Export session asks and tells the outcome itself; the sidebar
+    // shows its progress dialog.
+    auto* exporting = &sessions_.exportSession();
+    connect( exporting, &ExportSession::stateChanged, this, &SidebarWidget::showExportState );
+    connect( exporting, &ExportSession::progressed, this, [ this ]( int permille ) {
         if ( exportProgress_ ) {
             exportProgress_->setValue( permille );
         }
@@ -524,120 +442,53 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     showSummary( SummaryStatus::NothingLoaded );
     showConversionState();
     showLiveState();
-    setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
+    showExportState();
 }
 
 SidebarWidget::~SidebarWidget()
 {
-    // The listings of the form and the dialog are waited for by
-    // listingPool_, as the host unloads the library next: their programs
-    // are killed first, so that this takes moments, not a listing's timeout.
-    // First, as a live capture's worker may be listing too.
-    cancelListings();
-
-    // A live capture is stopped, not cancelled: its tab may stay open after
-    // a runtime disable.  Its worker is not waited for here: the plugin's
-    // shutdown joins it (joinLiveCaptures()), with its program ended.  The
-    // session tells this widget nothing more.
-    live_->disconnect( this );
-    live_.reset();
-
-    // The host unloads the library right after the plugin is shut down:
-    // the session cancels its conversion and waits for its worker, and
-    // tells this widget nothing more.
-    conversion_->disconnect( this );
-    conversion_.reset();
-
-    // The session cancels its export and waits for its worker, and tells
-    // this widget nothing more: an export stops between two packets and
-    // leaves nothing behind; one that was done when the cancel came keeps
-    // its file, as on Cancel.  Its progress dialog goes first, as closing it
-    // would cancel through this half-destroyed widget.
-    export_->disconnect( this );
+    // The sessions run on, and tell this widget nothing more.  The export's
+    // progress dialog goes first, as closing it would cancel the export
+    // through this half-destroyed widget.
+    sessions_.conversionSession().disconnect( this );
+    sessions_.liveSession().disconnect( this );
+    sessions_.exportSession().disconnect( this );
     if ( exportProgress_ ) {
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
-    export_.reset();
 }
 
-void SidebarWidget::chooseAndOpen()
+void SidebarWidget::forward( const char* what, void ( CaptureSessions::*action )() )
 {
-    // The Open button is disabled meanwhile, but the menu entry is not.
-    if ( const auto why = conversion_->refusal(); !why.isEmpty() ) {
-        hostNotify( why );
-        return;
-    }
-    if ( lastDir_.isEmpty() ) {
-        lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
-    }
-
-    // The dialog runs its own event loop, in which this widget may be
-    // deleted, e.g. with a parent that is closed meanwhile: then there is
-    // nothing left to open the file for.  This does not help if the plugin
-    // is unloaded while the dialog is open: the code this call returns into
-    // is gone then, and only the host can prevent that.
-    const QPointer<SidebarWidget> self( this );
-    const auto filePath = chooseFile_( this, lastDir_ );
-    if ( !self ) {
-        return;
-    }
-
-    if ( filePath.isEmpty() ) {
-        return;
-    }
-
-    lastDir_ = QFileInfo( filePath ).absolutePath();
     try {
-        openPcapFile( filePath );
+        ( sessions_.*action )();
     } catch ( const std::exception& e ) {
         // An exception must not escape into Qt or the host.
-        hostLog(
-            LOGSQUIRL_LOG_ERROR,
-            QString( "Opening %1 failed: %2" ).arg( filePath, QString::fromUtf8( e.what() ) ) );
+        hostLog( LOGSQUIRL_LOG_ERROR,
+                 QString( "%1 failed: %2" ).arg( what, QString::fromUtf8( e.what() ) ) );
     }
-}
-
-void SidebarWidget::openPcapFile( const QString& filePath )
-{
-    // The session refuses, converts, and tells its state and outcome.
-    conversion_->start( filePath );
-}
-
-void SidebarWidget::cancel()
-{
-    conversion_->cancel();
-}
-
-void SidebarWidget::exportSelectedPackets()
-{
-    // The session refuses, asks, exports, and tells its state and outcome.
-    export_->start();
-}
-
-void SidebarWidget::cancelExport()
-{
-    export_->cancel();
 }
 
 void SidebarWidget::showExportState()
 {
-    switch ( export_->state() ) {
+    auto& session = sessions_.exportSession();
+    switch ( session.state() ) {
     case ExportSession::State::Exporting:
         if ( !exportProgress_ ) {
-            exportProgress_ = new QProgressDialog( export_->label(), "Cancel", 0, 1000, this );
+            exportProgress_ = new QProgressDialog( session.label(), "Cancel", 0, 1000, this );
             exportProgress_->setObjectName( "exportProgress" );
             exportProgress_->setWindowTitle( "Export Packets" );
             exportProgress_->setAutoClose( false );
             exportProgress_->setAutoReset( false );
             exportProgress_->setMinimumDuration( 500 );
             connect( exportProgress_, &QProgressDialog::canceled, this,
-                     &SidebarWidget::cancelExport );
+                     [ this ] { sessions_.exportSession().cancel(); } );
         }
         return;
     case ExportSession::State::Cancelling:
         if ( exportProgress_ ) {
-            exportProgress_->setLabelText( export_->label() );
+            exportProgress_->setLabelText( session.label() );
         }
         return;
     case ExportSession::State::Idle:
@@ -730,15 +581,22 @@ void SidebarWidget::openLink( const QString& link )
     }
 }
 
+void SidebarWidget::updateOpenButton()
+{
+    openButton_->setEnabled(
+        !activityRefusal( Activity::OpenFile, sessions_.runningActivities() ) );
+}
+
 void SidebarWidget::showConversionState()
 {
-    const auto state = conversion_->state();
+    const auto& session = sessions_.conversionSession();
+    const auto state = session.state();
     const bool converting = state != FileConversionSession::State::Idle;
-    openButton_->setEnabled( !activityRefusal( Activity::OpenFile, runningActivities() ) );
+    updateOpenButton();
     cancelButton_->setEnabled( state == FileConversionSession::State::Converting );
     cancelButton_->setHidden( !converting );
     progressBar_->setHidden( !converting );
-    progressBar_->setValue( conversion_->progress() );
+    progressBar_->setValue( session.progress() );
     updateStartButton();
     // Once it is over, the outcome, or the tab it opened, says what it came to.
     if ( converting ) {
@@ -755,21 +613,16 @@ void SidebarWidget::showConversionOutcome( const FileConversionOutcome& outcome 
     }
 }
 
-void SidebarWidget::showSummaryFor( const QString& filePath )
-{
-    // Another tab in front is announced: showFront() draws it.
-    catalog_.setFront( filePath );
-}
-
 void SidebarWidget::showFront()
 {
-    const auto* front = catalog_.front();
+    const auto& catalog = sessions_.catalog();
+    const auto* front = catalog.front();
     packetPanel_->setCapture( front ? front->index : nullptr );
     packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
 
     // The capture being read is shown in a tab of its own when it is done.
-    if ( !isConverting() ) {
-        saveButton_->setHidden( catalog_.partsToSave().empty() );
+    if ( !sessions_.conversionSession().isBusy() ) {
+        saveButton_->setHidden( catalog.partsToSave().empty() );
     }
     showSummary( SummaryStatus::Front );
 }
@@ -782,10 +635,13 @@ void SidebarWidget::showSummary( SummaryStatus status )
 
 QString SidebarWidget::summaryText() const
 {
+    const auto& conversion = sessions_.conversionSession();
+    const auto& live = sessions_.liveSession();
+    const auto& catalog = sessions_.catalog();
     // The capture being read is shown in a tab of its own when it is done:
     // until then, whatever comes to the front, the label says it is read.
-    if ( isConverting() ) {
-        return conversion_->label();
+    if ( conversion.isBusy() ) {
+        return conversion.label();
     }
     switch ( summaryStatus_ ) {
     case SummaryStatus::NothingLoaded:
@@ -795,25 +651,24 @@ QString SidebarWidget::summaryText() const
     case SummaryStatus::Conversion:
         // Its outcome's label, "Cancelled." or the error; a capture opened
         // is in front.
-        if ( const auto label = conversion_->label(); !label.isEmpty() ) {
+        if ( const auto label = conversion.label(); !label.isEmpty() ) {
             return label;
         }
         break;
     case SummaryStatus::LiveStarted:
         return QString( "Capturing %1\xe2\x80\xa6 waiting for the first packet." )
-            .arg( live_->name().toHtmlEscaped() );
+            .arg( live.name().toHtmlEscaped() );
     case SummaryStatus::LiveFile:
         // The host may have brought its tab to the front at once, showing
         // its summary; otherwise the label says the capture goes on.
-        if ( !live_->files().isEmpty() && catalog_.isFront( live_->files().last() ) ) {
+        if ( !live.files().isEmpty() && catalog.isFront( live.files().last() ) ) {
             break;
         }
-        return QString( "Capturing %1\xe2\x80\xa6" ).arg( live_->name().toHtmlEscaped() );
+        return QString( "Capturing %1\xe2\x80\xa6" ).arg( live.name().toHtmlEscaped() );
     case SummaryStatus::LiveOutcome: {
         // Its tab in front shows its final summary: the catalog announced it.
-        const auto& outcome = live_->outcome();
-        if ( !outcome
-             || ( !outcome->files.isEmpty() && catalog_.isLive( catalog_.frontFile() ) ) ) {
+        const auto& outcome = live.outcome();
+        if ( !outcome || ( !outcome->files.isEmpty() && catalog.isLive( catalog.frontFile() ) ) ) {
             break;
         }
         switch ( outcome->status ) {
@@ -838,13 +693,14 @@ QString SidebarWidget::summaryText() const
 
 QString SidebarWidget::frontSummaryHtml() const
 {
-    const auto* front = catalog_.front();
+    const auto& catalog = sessions_.catalog();
+    const auto* front = catalog.front();
     if ( !front ) {
         return kNoCaptureText;
     }
     const auto& capture = *front;
     QString html;
-    if ( catalog_.isCapturing( catalog_.frontFile() ) ) {
+    if ( catalog.isCapturing( catalog.frontFile() ) ) {
         html += "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br>";
     }
     if ( !capture.error.isEmpty() ) {
@@ -871,86 +727,14 @@ void SidebarWidget::changeEvent( QEvent* event )
     }
 }
 
-bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource,
-                                      const LiveLimits& limits,
-                                      std::shared_ptr<const LiveSourceKind> kind )
-{
-    return live_->start( name, std::move( makeSource ), limits, std::move( kind ) );
-}
-
-bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
-{
-    return live_->start( choice );
-}
-
-void SidebarWidget::chooseAndStartLiveCapture()
-{
-    // A capture that runs is not refused: the user is offered to stop it.
-    const auto refusal = activityRefusal( Activity::LiveCapture, runningActivities() );
-    if ( refusal && *refusal != ActivityRefusal::Capturing ) {
-        hostNotify( refusalMessage( *refusal ) );
-        return;
-    }
-    if ( live_->hasPendingStart() ) {
-        hostNotify( "A live capture is still stopping: the next one starts when it has ended." );
-        return;
-    }
-    // The dialogs run their own event loops, in which this widget may be
-    // deleted, or the capture end by itself.
-    const QPointer<SidebarWidget> self( this );
-    if ( refusal ) {
-        const auto running
-            = live_->state() == LiveCaptureSession::State::Checking && live_->choice()
-                  ? liveCaptureName( *live_->choice() )
-                  : live_->name();
-        if ( !confirmStop_( this, running ) || !self ) {
-            return;
-        }
-    }
-    auto choice = loadLiveChoice( hostConfigDir() );
-    if ( !askLiveChoice_( this, choice ) || !self ) {
-        return;
-    }
-    // Once the running one, if any, has ended and its program too.
-    live_->startWhenIdle( choice );
-}
-
-void SidebarWidget::setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
-{
-    liveSources_ = std::move( sources );
-    live_->setSources( liveSources_ );
-}
-
-std::unique_ptr<LiveCaptureDialog> SidebarWidget::makeLiveCaptureDialog( QWidget* parent )
-{
-    return makeLiveCaptureDialog( parent, loadLiveChoice( hostConfigDir() ) );
-}
-
-std::unique_ptr<LiveCaptureDialog> SidebarWidget::makeLiveCaptureDialog( QWidget* parent,
-                                                                         const LiveChoice& choice )
-{
-    auto dialog
-        = std::make_unique<LiveCaptureDialog>( liveSources_, choice, parent, &listingPool_ );
-    // Another source chosen there starts with the options saved for it.
-    if ( liveSources_ ) {
-        for ( const auto& kind : liveSources_->kinds() ) {
-            if ( kind->id() != choice.source ) {
-                dialog->form()->setSourceOptions( kind->id(),
-                                                  loadLiveOptions( hostConfigDir(), kind->id() ) );
-            }
-        }
-    }
-    return dialog;
-}
-
 void SidebarWidget::updateStartButton()
 {
     if ( !startButton_ ) {
         return;
     }
-    // As in chooseAndStartLiveCapture(), a capture that runs is no reason:
-    // the button is hidden meanwhile.
-    const auto refusal = activityRefusal( Activity::LiveCapture, runningActivities() );
+    // As in CaptureSessions::chooseAndStartLiveCapture(), a capture that
+    // runs is no reason: the button is hidden meanwhile.
+    const auto refusal = activityRefusal( Activity::LiveCapture, sessions_.runningActivities() );
     const auto why = refusal && *refusal != ActivityRefusal::Capturing ? refusalMessage( *refusal )
                                                                        : QString();
     startButton_->setEnabled( why.isEmpty() );
@@ -967,11 +751,6 @@ void SidebarWidget::showLiveError( const LiveOutcome& outcome )
     liveError_->setHidden( false );
 }
 
-void SidebarWidget::stopLiveCapture()
-{
-    live_->stop();
-}
-
 void SidebarWidget::showLiveStart()
 {
     liveStderr_->clear();
@@ -983,9 +762,10 @@ void SidebarWidget::showLiveStart()
 
 void SidebarWidget::showLiveState()
 {
-    const bool capturing = isCapturing();
-    openButton_->setEnabled( !activityRefusal( Activity::OpenFile, runningActivities() ) );
-    stopButton_->setEnabled( capturing && live_->state() != LiveCaptureSession::State::Stopping );
+    const auto& live = sessions_.liveSession();
+    const bool capturing = live.isBusy();
+    updateOpenButton();
+    stopButton_->setEnabled( capturing && live.state() != LiveCaptureSession::State::Stopping );
     stopButton_->setHidden( !capturing );
     liveLabel_->setHidden( !capturing );
     startButton_->setHidden( capturing );
@@ -1003,53 +783,26 @@ void SidebarWidget::showLiveState()
 
 void SidebarWidget::showLiveProgress()
 {
-    switch ( live_->state() ) {
+    const auto& live = sessions_.liveSession();
+    switch ( live.state() ) {
     case LiveCaptureSession::State::Idle:
         return;
     case LiveCaptureSession::State::Checking:
         liveLabel_->setText( "Asking the source about the choice before it starts\xe2\x80\xa6" );
         return;
     case LiveCaptureSession::State::Capturing:
-        liveLabel_->setText(
-            liveProgressText( live_->progress(), live_->elapsedMs(), live_->limits() ) );
+        liveLabel_->setText( liveProgressText( live.progress(), live.elapsedMs(), live.limits() ) );
         return;
     case LiveCaptureSession::State::Stopping:
-        liveLabel_->setText(
-            liveProgressText( live_->progress(), live_->elapsedMs(), live_->limits() )
-            + " \xe2\x80\x94 stopping\xe2\x80\xa6" );
+        liveLabel_->setText( liveProgressText( live.progress(), live.elapsedMs(), live.limits() )
+                             + " \xe2\x80\x94 stopping\xe2\x80\xa6" );
         return;
     }
-}
-
-void SidebarWidget::openTab( const QString& logPath, bool follow )
-{
-    // On this, the UI thread.  The header and a packet line are in it, so
-    // the host recognises the Log Format; a live capture's grows.
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, logPath.toUtf8().constData(), follow ? 1 : 0 );
-    }
-}
-
-void SidebarWidget::notify( const QString& message )
-{
-    hostNotify( message );
-}
-
-RunningActivities SidebarWidget::runningElsewhere() const
-{
-    // Each session puts in its own, converting or capturing.
-    return runningActivities();
 }
 
 void SidebarWidget::showLiveFile()
 {
     showSummary( SummaryStatus::LiveFile );
-}
-
-void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
-{
-    // The catalog announces it if its tab is in front.
-    catalog_.updateSummary( textPath, std::move( summary ) );
 }
 
 void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
@@ -1058,41 +811,6 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
         showLiveError( outcome );
     }
     showSummary( SummaryStatus::LiveOutcome );
-}
-
-void SidebarWidget::saveCapture()
-{
-    const auto parts = catalog_.partsToSave();
-    if ( parts.empty() ) {
-        return;
-    }
-    if ( lastDir_.isEmpty() ) {
-        lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
-    }
-    const auto suggested = catalog_.saveName();
-    // The dialog runs its own event loop, as in chooseAndOpen().
-    const QPointer<SidebarWidget> self( this );
-    const auto target = chooseSaveFile_( this, QDir( lastDir_ ).filePath( suggested ) );
-    if ( !self || target.isEmpty() ) {
-        return;
-    }
-    lastDir_ = QFileInfo( target ).absolutePath();
-
-    // The dialog asked before replacing a file; it is replaced when the
-    // capture is complete.
-    QString error;
-    if ( !saveCaptureParts( parts, target, error ) ) {
-        const auto message = QString( "The capture could not be saved as %1: %2" )
-                                 .arg( QDir::toNativeSeparators( target ), error );
-        hostLog( LOGSQUIRL_LOG_ERROR, message );
-        hostNotify( message );
-        return;
-    }
-    hostLog( LOGSQUIRL_LOG_INFO, parts.size() > 1
-                                     ? QString( "Saved the %1 files of the ring buffer as %2" )
-                                           .arg( parts.size() )
-                                           .arg( target )
-                                     : "Saved the capture as " + target );
 }
 
 namespace {
