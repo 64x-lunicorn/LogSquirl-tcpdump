@@ -254,12 +254,19 @@ std::shared_ptr<ProcessGroup> newProcessGroup();
 /// SIGKILL at once); on Windows the job, or the process tree, is
 /// terminated.  Reaps @p leader, the program, if it is given (on the
 /// thread it belongs to).  Does nothing for a group whose program was not
-/// started.
+/// started, or, on Unix, has been reaped: its id may be another's by then.
 void endProcessGroup( ProcessGroup& group, QProcess* leader, std::chrono::milliseconds grace );
 
 /// End every capture program that is running (ProcessSource::terminate()),
 /// whichever thread reads it; returns when all are gone.  Called when the
 /// plugin is shut down, as LogSquirl quits or the plugin is disabled.
 void terminateCaptureProcesses();
+
+/// How many signals (or job and tree terminations) have been sent to
+/// process groups since the plugin was loaded; for tests.
+std::size_t processGroupSignalsSent();
+
+/// How many groups terminateCaptureProcesses() would end now; for tests.
+std::size_t registeredProcessGroups();
 
 } // namespace tcpdump

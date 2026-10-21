@@ -452,7 +452,10 @@ read through a `DeviceSource`:
   (2 s), and returns when the group is gone (a second more at most, for a
   process of another user, as behind sudo, that cannot be killed). A
   group is never signalled with a pid of 0 or less (`kill(-0)` would
-  signal LogSquirl's own group). On Windows the program is started
+  signal LogSquirl's own group), nor once the program has been reaped:
+  its pid is free then and may be another process's group (QProcess's
+  `finished`, emitted on the program's thread as it reaps it, marks the
+  group so). On Windows the program is started
   suspended (`CREATE_SUSPENDED`, through the CreateProcess modifier, which
   also hands over Qt's `PROCESS_INFORMATION`), put in a job object with
   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and only then resumed, so that
@@ -470,7 +473,8 @@ read through a `DeviceSource`:
   conversion finalises (Converted), then the caller terminates the source,
   or destroys it. A Stop, or a shutdown, before the capture header has come
   ends Stopped: nothing was captured, nothing went wrong.
-- **No orphans.** Every started source's group is enrolled in a registry;
+- **No orphans.** Every started source's group is enrolled in a registry,
+  and leaves it as its program is reaped (on Unix);
   `terminateCaptureProcesses()` ends them all, from any thread, and
   `logsquirl_plugin_shutdown()` calls it after deleting the sidebar
   widget, so no capture program outlives LogSquirl or a disabled plugin.
