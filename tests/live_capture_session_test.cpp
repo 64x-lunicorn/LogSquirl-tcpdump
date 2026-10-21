@@ -87,7 +87,7 @@ ConversionResult resultOf( ConversionResult::Status status, const QString& outpu
 /// A session with the fake kind's registry, its runs scripted.
 struct Session {
     FakeHost host; // its config directory, for the saved choice
-    FakeLiveHost liveHost;
+    FakeSessionHost liveHost;
     CaptureCatalog catalog{ liveHost };
     ScriptedRuns runs;
     std::shared_ptr<FakeSourceKind> kind = std::make_shared<FakeSourceKind>();

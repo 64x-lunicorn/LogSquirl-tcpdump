@@ -1962,8 +1962,8 @@ A live capture's lifecycle and outcome are decided in one place, a
 `LiveCaptureSession` (a `QObject` on the UI thread), one of the plugin's
 Capture Sessions (see *The Capture Sessions*), which the plugin menu and
 the sidebar drive; the sidebar only shows what it is told. The session
-reaches LogSquirl through a `SessionHost` (`session_host.h`, also
-`LiveCaptureHost`; `notify( message )`, and `running()`: what runs, a
+reaches LogSquirl through a `SessionHost` (`session_host.h`;
+`notify( message )`, and `running()`: what runs, a
 capture file being read or an export, which the session weighs in the
 Activity rule with its own capture put in, see *Sidebar Widget*; its
 `capturing` is not read), which the Capture Sessions are, and
@@ -2009,13 +2009,13 @@ The session's signals (`stateChanged`, `started`, `fileOpened`,
 `progressed`, `stderrLine`, `finished`) are what the sidebar renders:
 the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
 the error and Guidance, the summary label. `tests/fake_live_session.h`
-has `FakeLiveHost` (the host, recording: `FakeSessionHost` of
-`tests/fake_session_host.h`) and `ScriptedRuns` (runs the
+uses `FakeSessionHost` (the host, recording, of
+`tests/fake_session_host.h`) and has `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
 `tests/live_capture_session_test.cpp` tests the session, with a real
 `CaptureCatalog`, without a widget or an event loop. Its `WorkerSession`
 is a session whose captures run on a worker as in the app, on a
-`FakeLiveHost` and a `CaptureCatalog`: the tests of each source kind
+`FakeSessionHost` and a `CaptureCatalog`: the tests of each source kind
 (local, adb, ssh, extcap, command) start their captures with it, run by the
 kind's fake programs, and assert on the outcome (status, error, Guidance,
 files opened) and the stderr lines, waiting in the event loop for what the

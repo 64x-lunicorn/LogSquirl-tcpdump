@@ -150,7 +150,7 @@ std::unique_ptr<LiveRun> runOnWorker( LiveRunRequest request )
     return std::make_unique<WorkerRun>( std::move( request ) );
 }
 
-LiveCaptureSession::LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog,
+LiveCaptureSession::LiveCaptureSession( SessionHost& host, CaptureCatalog& catalog,
                                         QObject* parent )
     : QObject( parent )
     , host_( host )

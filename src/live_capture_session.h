@@ -38,7 +38,8 @@
  *     packets has its files removed; a failure is told with what the kind
  *     says to do about it (its Guidance), keeping what was captured.
  *
- * It reaches LogSquirl (a notification) through a LiveCaptureHost and keeps
+ * It reaches LogSquirl (a notification) through a SessionHost, whose
+ * @c capturing it does not read, and keeps
  * what each tab shows in a CaptureCatalog (capture_catalog.h), which opens
  * the tabs and which it tells when a capture starts and ends, so that the
  * catalog knows the tabs of the running or the last capture.  It runs a
@@ -81,10 +82,6 @@ QString clockTime( qint64 seconds );
 /// What the user is told of a live capture @p name that @p condition of
 /// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
 QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
-
-/// Where a Live Capture Session tells the user (session_host.h); its
-/// @c capturing is not read.  Its tabs open through its CaptureCatalog.
-using LiveCaptureHost = SessionHost;
 
 /// What a capture is run with.
 struct LiveRunRequest {
@@ -176,7 +173,7 @@ public:
 
     /// A session telling the user on @p host and keeping summaries in, and
     /// opening tabs through, @p catalog, both outliving it.
-    LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
+    LiveCaptureSession( SessionHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
     /// Lets go of a capture that may still run (its run is retired, not
     /// waited for), and cancels and waits for a check that runs.
     ~LiveCaptureSession() override;
@@ -319,7 +316,7 @@ private:
     void finish( unsigned run, const ConversionResult& result );
     void runDone( unsigned run );
 
-    LiveCaptureHost& host_;
+    SessionHost& host_;
     CaptureCatalog& catalog_;
     std::shared_ptr<const LiveSourceRegistry> sources_;
     QString outputRoot_;

@@ -22,7 +22,7 @@
  * @brief Fakes around a Live Capture Session: its host, captures the test
  *        scripts, and captures run for real.
  *
- * FakeLiveHost is the host of a LiveCaptureSession and of its catalog, a
+ * The host of a LiveCaptureSession and of its catalog is a
  * FakeSessionHost (fake_session_host.h): it records the tabs opened and the
  * notifications, and can say what else runs, which the Activity rule
  * weighs.  The session keeps what each tab
@@ -53,9 +53,6 @@
 #include <vector>
 
 namespace tcpdump_test {
-
-/// A Live Capture Session's host, and its catalog's tab host, recording.
-using FakeLiveHost = FakeSessionHost;
 
 /// A capture the test scripts: what the session asked for, and what it is told.
 class ScriptedRun {
@@ -165,7 +162,7 @@ private:
 /**
  * A Live Capture Session that runs its captures on a worker, as in the app,
  * with the kinds of a registry, writing below a temporary directory of its
- * own, on a FakeLiveHost and a CaptureCatalog; it records the lines its programs wrote to
+ * own, on a FakeSessionHost and a CaptureCatalog; it records the lines its programs wrote to
  * stderr.  What a run tells comes through the event loop, which the waits
  * run until the session told it: the deadline only guards against a hang.
  */
@@ -226,7 +223,7 @@ public:
         return stderrLines.join( '\n' );
     }
 
-    FakeLiveHost host;
+    FakeSessionHost host;
     tcpdump::CaptureCatalog catalog{ host };
     QTemporaryDir outputRoot; ///< Outlives the session, which writes below it.
     tcpdump::LiveCaptureSession session{ host, catalog };
