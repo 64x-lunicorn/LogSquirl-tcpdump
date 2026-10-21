@@ -2485,8 +2485,8 @@ Qt UI that provides:
   the text's colour, stark white on a dark window, but `separatorHtml()`:
   a colour one `kSeparatorShare`-th (a third) of the way from the window's
   colour to the text's. On a `PaletteChange` (a switch between light and
-  dark mode) `changeEvent()` makes the summary again with
-  `frontSummaryHtml()`, when the label still shows the one it made last
+  dark mode) `changeEvent()` says the label's status again (see below),
+  so a summary takes the new colours and any other text stays as it is
 - The Packet Panel (see *Packet Panel* below), which takes the room left
   and keeps at least `kPacketPanelMinLines` (16) for its tabs and the
   Conversations
@@ -2518,6 +2518,24 @@ Qt UI that provides:
   is being read the label keeps saying so. The summaries are lost when the
   plugin is unloaded, so after a runtime disable or update the tabs left
   open show no capture
+- One status for the summary label. Its text is decided in one place,
+  `summaryText()`, from a `SummaryStatus`, what last claimed the label, and
+  what the sessions and the catalog say now: `NothingLoaded` ("No capture
+  loaded." until anything happens), `Front` (`frontSummaryHtml()`, on every
+  announcement of the catalog), `Conversion` (the File Conversion session's
+  `label()`: reading, cancelling, its outcome's label), `LiveStarted`
+  ("Capturing <name>… waiting for the first packet."), `LiveFile`
+  ("Capturing <name>…", unless the new tab is in front) and `LiveOutcome`
+  (stopped before anything, without packets, the error, or "The capture
+  <name> has ended: its tab shows its summary.", unless its tab in front
+  shows its final summary). While a capture is being read the label says
+  so whatever claims it. An export claims nothing: its progress dialog
+  says how it goes. The handlers of the sessions' signals and `showFront()`
+  only call `showSummary( status )`; nothing else writes the label.
+  `sidebarwidget_test.cpp` tests what it says of each, a live capture's
+  with the runs `ScriptedRuns` scripts (`liveSession()->setRunFactory()`),
+  and that a palette change keeps it; `packet_export_test.cpp` that an
+  export leaves it as it was
 
 A live capture, `startLiveCapture( name, SourceFactory, limits, kind )` or
 `startLiveCapture( LiveChoice )`, is the sidebar's `LiveCaptureSession`'s
@@ -2531,9 +2549,9 @@ unless the host brought the new tab to the front at once.
 `updateSummary( textPath, summary )` replaces a kept summary and redraws
 it if its tab is in front. A label shows packets, bytes, packets/s (as of the snapshot) and the elapsed
 time (ticked by a 1 s timer) in place of the progress bar. **Stop** calls
-`stopLiveCapture()`. The outcome's summary label is the sidebar's: stopped
-before anything was captured, without packets, the error, or that the
-capture's tab shows its summary. **Save capture…**, shown for a tab whose
+`stopLiveCapture()`. The outcome's summary label is the sidebar's
+`LiveOutcome` status: stopped before anything was captured, without
+packets, the error, or that the capture's tab shows its summary. **Save capture…**, shown for a tab whose
 capture has a raw file, copies the catalog's `partsToSave()` where
 `setSaveChooser()`'s dialog says, suggesting its `saveName()`.
 stderr lines go to the host's log.

@@ -617,6 +617,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   progress dialog and Cancel behave as before: a Cancel that comes after
   the export wrote its file, or the sidebar closing then, still keeps the
   file (#171).
+- **The sidebar's summary says one status.** What the summary label says,
+  of a capture file being read, a live capture and the tab in front, is
+  decided in one place. It says the same as before, at the same moments;
+  a switch between light and dark mode redraws whatever it says (#172).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
