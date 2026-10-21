@@ -97,7 +97,9 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *     the plugin is loaded also links to the README section on installing
  *     the Log Format, which the plugin cannot tell is installed; on a host
  *     with the Regex Lab, a click on an endpoint or a protocol listed opens
- *     the Lab on its lines, as Wireshark's Apply as Filter
+ *     the Lab on its lines, as Wireshark's Apply as Filter; what the label
+ *     says is one status, decided in summaryText() from the sessions and
+ *     the tab in front, and said again on a palette change
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
  *     packet of the line selected in the tab in front, and the
  *     Conversations table of the capture in front
@@ -402,16 +404,16 @@ private:
     /// Show the live capture's state: the controls of a capture running,
     /// stopping, being checked, or none.
     void showLiveState();
-    /// The live capture's text file @p logPath was kept and opened in a tab:
+    /// The live capture's latest text file was kept and opened in a tab:
     /// say it is capturing, unless its tab came to the front at once.
-    void showLiveFile( const QString& logPath );
+    void showLiveFile();
     /// Show what the tab in front shows: its capture's summary, Packet Panel
     /// index and Conversations, and Save capture… if it saves anything; on
     /// every change the catalog announces.  While a capture is being read,
     /// the label keeps saying so.
     void showFront();
-    /// Show the outcome of a live capture; its tabs show their final summary
-    /// already.
+    /// Show the outcome of a live capture: its error, and what it came to,
+    /// unless its tab in front shows its final summary already.
     void showLiveOutcome( const LiveOutcome& outcome );
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();
@@ -426,6 +428,23 @@ private:
     /// Show the Export session's state: its progress dialog while it
     /// exports, with its label, and none once it is idle.
     void showExportState();
+    /// What the summary label says, of what last claimed it: a session's
+    /// start, file or outcome, or the tab in front.  An export claims
+    /// nothing: its progress dialog says how it goes.
+    enum class SummaryStatus {
+        NothingLoaded, ///< Nothing was opened or captured since the plugin was loaded.
+        Front,         ///< The capture in the tab in front, or that it holds none.
+        Conversion,    ///< The File Conversion session's label: reading, or its outcome.
+        LiveStarted,   ///< A live capture waits for its first packet.
+        LiveFile,      ///< A live capture's tab opened, behind another one or in front.
+        LiveOutcome,   ///< A live capture ended.
+    };
+    /// Say @p status in the summary label from now on.
+    void showSummary( SummaryStatus status );
+    /// The summary label's text: the status, as the sessions and the tab in
+    /// front say it now, in the palette's colours.  While a capture is being
+    /// read, the label keeps saying so.  The one place that decides it.
+    QString summaryText() const;
     /// The summary of the capture in the tab in front, in the palette's
     /// colours, or that the tab holds no capture of this plugin.
     QString frontSummaryHtml() const;
@@ -448,8 +467,8 @@ private:
     QString lastDir_;                          ///< Remembers the last browsed directory.
     FileChooser chooseFile_;                   ///< Shows the file dialog.
     SaveChooser chooseSaveFile_;               ///< Shows the save dialog.
-    /// The summary frontSummaryHtml() made last, as the label showed it.
-    QString shownSummary_;
+    /// What the summary label says, drawn by summaryText().
+    SummaryStatus summaryStatus_ = SummaryStatus::NothingLoaded;
     /// The captures converted and captured so far, by the text file written
     /// for each, and which is in front; the Live Capture Session's catalog.
     /// It opens their tabs through this sidebar.

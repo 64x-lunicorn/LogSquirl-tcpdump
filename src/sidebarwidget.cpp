@@ -402,8 +402,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     liveTicker_.setInterval( 1000 );
     connect( &liveTicker_, &QTimer::timeout, this, &SidebarWidget::showLiveProgress );
 
-    // Summary label
-    summaryLabel_ = new QLabel( "No capture loaded." );
+    // Summary label, which says what summaryText() decides
+    summaryLabel_ = new QLabel;
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
@@ -521,6 +521,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         }
     } );
 
+    showSummary( SummaryStatus::NothingLoaded );
     showConversionState();
     showLiveState();
     setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
@@ -741,7 +742,7 @@ void SidebarWidget::showConversionState()
     updateStartButton();
     // Once it is over, the outcome, or the tab it opened, says what it came to.
     if ( converting ) {
-        summaryLabel_->setText( conversion_->label() );
+        showSummary( SummaryStatus::Conversion );
     }
 }
 
@@ -750,7 +751,7 @@ void SidebarWidget::showConversionOutcome( const FileConversionOutcome& outcome 
     // A capture opened is in front: the catalog announced it, and its
     // summary is drawn already.
     if ( !outcome.label.isEmpty() ) {
-        summaryLabel_->setText( outcome.label );
+        showSummary( SummaryStatus::Conversion );
     }
 }
 
@@ -767,12 +768,72 @@ void SidebarWidget::showFront()
     packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
 
     // The capture being read is shown in a tab of its own when it is done.
-    if ( isConverting() ) {
-        return;
+    if ( !isConverting() ) {
+        saveButton_->setHidden( catalog_.partsToSave().empty() );
     }
-    saveButton_->setHidden( catalog_.partsToSave().empty() );
-    shownSummary_ = frontSummaryHtml();
-    summaryLabel_->setText( shownSummary_ );
+    showSummary( SummaryStatus::Front );
+}
+
+void SidebarWidget::showSummary( SummaryStatus status )
+{
+    summaryStatus_ = status;
+    summaryLabel_->setText( summaryText() );
+}
+
+QString SidebarWidget::summaryText() const
+{
+    // The capture being read is shown in a tab of its own when it is done:
+    // until then, whatever comes to the front, the label says it is read.
+    if ( isConverting() ) {
+        return conversion_->label();
+    }
+    switch ( summaryStatus_ ) {
+    case SummaryStatus::NothingLoaded:
+        return "No capture loaded.";
+    case SummaryStatus::Front:
+        break;
+    case SummaryStatus::Conversion:
+        // Its outcome's label, "Cancelled." or the error; a capture opened
+        // is in front.
+        if ( const auto label = conversion_->label(); !label.isEmpty() ) {
+            return label;
+        }
+        break;
+    case SummaryStatus::LiveStarted:
+        return QString( "Capturing %1\xe2\x80\xa6 waiting for the first packet." )
+            .arg( live_->name().toHtmlEscaped() );
+    case SummaryStatus::LiveFile:
+        // The host may have brought its tab to the front at once, showing
+        // its summary; otherwise the label says the capture goes on.
+        if ( !live_->files().isEmpty() && catalog_.isFront( live_->files().last() ) ) {
+            break;
+        }
+        return QString( "Capturing %1\xe2\x80\xa6" ).arg( live_->name().toHtmlEscaped() );
+    case SummaryStatus::LiveOutcome: {
+        // Its tab in front shows its final summary: the catalog announced it.
+        const auto& outcome = live_->outcome();
+        if ( !outcome
+             || ( !outcome->files.isEmpty() && catalog_.isLive( catalog_.frontFile() ) ) ) {
+            break;
+        }
+        switch ( outcome->status ) {
+        case LiveOutcome::Status::Stopped:
+        case LiveOutcome::Status::Empty:
+            return liveOutcomeText( *outcome ).toHtmlEscaped();
+        case LiveOutcome::Status::Failed:
+            if ( outcome->files.isEmpty() ) {
+                return "Error: " + outcome->error.toHtmlEscaped();
+            }
+            break;
+        case LiveOutcome::Status::Captured:
+            break;
+        }
+        // Its tabs show the final summary; another tab is in front, or none.
+        return QString( "The capture %1 has ended: its tab shows its summary." )
+            .arg( outcome->name.toHtmlEscaped() );
+    }
+    }
+    return frontSummaryHtml();
 }
 
 QString SidebarWidget::frontSummaryHtml() const
@@ -803,13 +864,10 @@ QString SidebarWidget::frontSummaryHtml() const
 void SidebarWidget::changeEvent( QEvent* event )
 {
     QWidget::changeEvent( event );
-    // A switch between light and dark mode: the summary is made again, so
-    // that the line under the capture's name takes the new colours.  Not
-    // while the label says something else, a conversion's progress or end.
-    if ( event->type() == QEvent::PaletteChange && summaryLabel_
-         && summaryLabel_->text() == shownSummary_ ) {
-        shownSummary_ = frontSummaryHtml();
-        summaryLabel_->setText( shownSummary_ );
+    // A switch between light and dark mode: the label says its status again,
+    // so that the line under a capture's name takes the new colours.
+    if ( event->type() == QEvent::PaletteChange && summaryLabel_ ) {
+        showSummary( summaryStatus_ );
     }
 }
 
@@ -920,8 +978,7 @@ void SidebarWidget::showLiveStart()
     liveStderr_->setHidden( true );
     liveError_->clear();
     liveError_->setHidden( true );
-    summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6 waiting for the first packet." )
-                                .arg( live_->name().toHtmlEscaped() ) );
+    showSummary( SummaryStatus::LiveStarted );
 }
 
 void SidebarWidget::showLiveState()
@@ -984,14 +1041,9 @@ RunningActivities SidebarWidget::runningElsewhere() const
     return runningActivities();
 }
 
-void SidebarWidget::showLiveFile( const QString& logPath )
+void SidebarWidget::showLiveFile()
 {
-    // The host may have brought its tab to the front at once, showing its
-    // summary; otherwise the label says the capture goes on.
-    if ( !catalog_.isFront( logPath ) ) {
-        summaryLabel_->setText(
-            QString( "Capturing %1\xe2\x80\xa6" ).arg( live_->name().toHtmlEscaped() ) );
-    }
+    showSummary( SummaryStatus::LiveFile );
 }
 
 void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
@@ -1002,27 +1054,10 @@ void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summa
 
 void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
 {
-    switch ( outcome.status ) {
-    case LiveOutcome::Status::Stopped:
-    case LiveOutcome::Status::Empty:
-        summaryLabel_->setText( liveOutcomeText( outcome ).toHtmlEscaped() );
-        return;
-    case LiveOutcome::Status::Failed:
+    if ( outcome.status == LiveOutcome::Status::Failed ) {
         showLiveError( outcome );
-        if ( outcome.files.isEmpty() ) {
-            summaryLabel_->setText( "Error: " + outcome.error.toHtmlEscaped() );
-            return;
-        }
-        break;
-    case LiveOutcome::Status::Captured:
-        break;
     }
-    // Its tabs show the final summary: the catalog announced it for the one
-    // in front.  With another tab in front, the label says where it is.
-    if ( !catalog_.isLive( catalog_.frontFile() ) ) {
-        summaryLabel_->setText( QString( "The capture %1 has ended: its tab shows its summary." )
-                                    .arg( outcome.name.toHtmlEscaped() ) );
-    }
+    showSummary( SummaryStatus::LiveOutcome );
 }
 
 void SidebarWidget::saveCapture()
