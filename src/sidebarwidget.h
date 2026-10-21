@@ -91,7 +91,9 @@ class PacketPanel;
  * squeeze its widgets over one another or cut off its bottom.
  *
  * The sidebar is the sessions' dialog parent while it lives.  Destroying it
- * leaves the sessions running; the plugin destroys them after it.
+ * leaves the sessions running; the plugin destroys them after it.  The
+ * sessions must outlive the sidebar, whoever deletes it: its destructor
+ * tells the sessions and the Capture Catalog to stop telling it.
  */
 class SidebarWidget : public QWidget {
     Q_OBJECT

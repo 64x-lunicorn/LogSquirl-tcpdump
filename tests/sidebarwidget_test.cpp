@@ -524,9 +524,10 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
     {
         FakeHost host;
         // As the host's sidebar holds it: a page of a QTabWidget, which a
-        // splitter may make shorter than the sidebar's minimum.
-        QTabWidget tabs;
+        // splitter may make shorter than the sidebar's minimum.  The sessions
+        // come first, so that they outlive the sidebar the tabs delete.
         CaptureSessions sessions;
+        QTabWidget tabs;
         auto* widget = new SidebarWidget( sessions );
         tabs.addTab( widget, "tcpdump" );
         const auto height = GENERATE( 250, 400, 600, 900 );
