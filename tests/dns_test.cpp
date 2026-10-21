@@ -402,6 +402,21 @@ SCENARIO( "DNS name compression is followed only backwards and within the messag
         }
     }
 
+    GIVEN( "a label followed by a pointer back to that label" )
+    {
+        // The pointer points before itself, yet the name loops: only the
+        // caps on pointers followed and on the name's length end it.  A short
+        // label meets the pointer cap first, a long one the length cap.
+        const auto label = GENERATE( std::string( 1, 'a' ), std::string( 63, 'x' ) );
+        const auto message
+            = header( 1, kQuery, 1, 0 ) + question( name( label, pointer( kQuestionAt ) ), kA );
+
+        THEN( "the cycle is rejected" )
+        {
+            REQUIRE( overUdp( message ).description == "Standard query 0x0001" );
+        }
+    }
+
     GIVEN( "a pointer to a valid name further on" )
     {
         auto message = header( 1, kQuery, 1, 0 ) + question( pointer( kQuestionAt + 6 ), kA );
