@@ -20,7 +20,8 @@
 /**
  * @file session_host.h
  * @brief Where a session (the Live Capture Session, the File Conversion
- *        session) tells the user, and learns what runs besides it.
+ *        session, the Export session) tells the user, and learns what runs
+ *        besides it.
  *
  * In the app the sidebar is the host of every session; in tests a fake
  * that records.  A session asks the Activity rule (activity.h) with what
@@ -46,7 +47,8 @@ public:
     virtual void notify( const QString& message ) = 0;
     /// What runs, which the Activity rule weighs with the session's own
     /// activity; the session's own field (a conversion's @c converting, a
-    /// live capture's @c capturing) is not read: the session knows it.
+    /// live capture's @c capturing, an export's @c exporting) is not read:
+    /// the session knows it.
     virtual RunningActivities runningElsewhere() const
     {
         return {};

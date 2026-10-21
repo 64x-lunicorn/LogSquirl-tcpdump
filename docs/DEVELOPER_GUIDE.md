@@ -2073,6 +2073,70 @@ the event loop for what the session tells, as the Background Job delivers
 through it. How the sidebar shows it is tested on the sidebar
 (`sidebarwidget_test.cpp`).
 
+#### The Export session (`export_session.h/cpp`)
+Exporting the selected packets (see *Export packets* under *Packet
+Panel*) is decided in one place too, an `ExportSession` (a `QObject` on
+the UI thread), shaped like the File Conversion session: the menu's
+*Export packets…* (`SidebarWidget::exportSelectedPackets()`) and the
+Cancel of the sidebar's progress dialog (`cancelExport()`) forward to it,
+and the sidebar shows the progress dialog while it exports. It reaches
+LogSquirl through the same `SessionHost` (its `exporting` is not read) and
+reads the capture in front from the sidebar's `CaptureCatalog`.
+
+- `refusal()`: why no export can start now, the Activity rule's message
+  for `Export` with the host's `runningElsewhere()` and its own
+  `isBusy()`; empty if one can. `start()` refuses with it, as a
+  notification, and returns false; so it does when the catalog has no
+  capture in front, on a host without `selectedLogLines` (*Export packets
+  needs LogSquirl 26.11 or later…*), and with Selected Packet Line's
+  reason when the host told no line (`selectedPackets()` of
+  `readSelectedLines()`). Otherwise it fills an `ExportRequest` (the
+  capture's name, packets and format; the selection's numbers, line count
+  and truncation, which it logs) and asks the `Confirmer`
+  (`setConfirmer()`; the sidebar's `ExportDialog`, where the user may
+  change the numbers), then, for packets confirmed, the `FileChooser`
+  (`setFileChooser()`; the sidebar's save dialog, suggesting
+  `<capture>-packets.pcap` or `.pcapng` in the last directory). Both may
+  run an event loop: a session destroyed meanwhile starts nothing (a
+  `QPointer` to itself), and the Activity rule is asked again after them.
+  A truncated selection stays truncated only when its own packets are
+  exported. It logs *Exporting N packets of …* and runs the `Exporter`
+  (`exportPackets()`; `setExporter()` in tests) as its Background Job
+  (`Exporting`).
+- `cancel()` cancels the job (`Cancelling`). An export stops at the cancel
+  before its file replaces the one chosen, and ends Cancelled; one that
+  failed while cancelled too. One that has written its file is kept: its
+  discard returns false, and it ends Exported (#166).
+- `progress()` (permille, signal `progressed`) and `label()`: *Exporting
+  N packets…*, *Cancelling…*, then the outcome's; the progress dialog
+  shows it.
+- The outcome (`ExportOutcome`, also `outcome()`, and the signal
+  `finished`, after the user was told): `Exported` (logged and notified
+  *Exported N packets of … to ….*, with the note of a truncation that
+  limited it), `Cancelled` (logged *Cancelled exporting packets to …*,
+  nobody told) or `Failed` (logged and notified *Exporting packets failed:
+  …*). It carries the request, the packets written, the error and each
+  text: `label`, `log`, `notification`. The state is `Idle` before
+  anything is told, so that the sidebar's progress dialog is gone.
+- Destroying the session cancels a running export and waits for its
+  worker (`cancelAndWait()`), telling nothing: an export that has written
+  its file keeps it, as on Cancel.
+
+`tests/export_session_test.cpp` tests the session with a
+`FakeSessionHost`, the `FakeHost` (the selected lines and the host's
+capabilities), a real `CaptureCatalog` with a corpus capture converted in
+front, and no widget: the packets of the selected lines confirmed,
+written and told; no line selected, the user naming the packets or not;
+no file chosen; a truncated selection, and one replaced by the user; each
+guard, and that a conversion or live capture does not keep an export from
+starting; a failure; a cancel before the export writes (a held exporter,
+which holds before writing or after, until the test lets it go or the
+session cancels it), the file chosen left as it was; a cancel after it
+wrote its file, and the session destroyed then (as when the sidebar
+closes), both keeping the export; a failure while cancelled; its
+progress; and a session destroyed while the user confirms. How the
+sidebar shows it is tested in `packet_export_test.cpp`.
+
 #### Live Source Kinds (`live_source.h/cpp`)
 Where a live capture comes from (Local tcpdump/dumpcap, Android over adb,
 SSH, a Wireshark extcap, a custom command) is a `LiveSourceKind`; the UI
@@ -2486,14 +2550,14 @@ exclude each other and both wait for a conversion (named first);
 `activityRefusalMessage()` the two together. The sidebar asks it with
 `runningActivities()` before Start live capture…
 (`chooseAndStartLiveCapture()`, which offers to stop a running capture
-instead of refusing for `Capturing`) and Export packets
-(`exportSelectedPackets()`), and to enable Open pcap… and Start live
+instead of refusing for `Capturing`), and to enable Open pcap… and Start live
 capture… (whose tooltip is the reason); before Open's file dialog
 (`chooseAndOpen()`) it asks the File Conversion session's `refusal()`.
-The Live Capture Session and the File Conversion session ask it for
-every start, with the sidebar's `runningElsewhere()` (all that runs; each
-session puts in its own) and their own `isBusy()`. The menu entries call
-these, so they refuse alike.
+The Live Capture Session, the File Conversion session and the Export
+session ask it for every start, with the sidebar's `runningElsewhere()`
+(all that runs; each session puts in its own) and their own `isBusy()`;
+the Export session before its dialogs and again after them. The menu
+entries call these, so they refuse alike.
 `activity_test.cpp` tests the rule for every combination of what runs,
 without a widget.
 
@@ -2547,12 +2611,22 @@ run (checked with `kill(pid, 0)` on Unix and `OpenProcess()` on Windows).
 Directories of running processes, links and, on Unix, other users'
 directories are left alone. Only regular files are read, so the worker
 cannot block on a FIFO or device; destroying the widget cancels a running
-conversion (destroying its session) and export and waits for their
+conversion and export (destroying their sessions) and waits for their
 workers.
+
+Exporting packets is the sidebar's `ExportSession` (`exportSession()`;
+see *The Export session*), which asks with the sidebar's `ExportDialog`
+and save dialog. Export packets… and the progress dialog's Cancel forward
+to it (`exportSelectedPackets()`, `cancelExport()`); the sidebar shows a
+`QProgressDialog` ("exportProgress") while it exports, labelled with its
+`label()`, moved by its `progressed` and closed when it is idle again.
+`isExporting()` is the session's `isBusy()`. Destroying the widget
+destroys the session, which cancels the export and waits for it; the
+progress dialog goes first.
 
 #### The Background Job (`background_job.h`)
 The kind of job the File Conversion session converts a capture file and
-the sidebar exports packets with: `BackgroundJob<Result>`, for a result with a `Status` (`Failed`,
+the Export session exports packets with: `BackgroundJob<Result>`, for a result with a `Status` (`Failed`,
 the default, and `Cancelled`) and an `error`, as `ConversionResult` and
 `ExportResult` have. Each job has a `QThreadPool` of one thread, which it
 can wait for, and runs one work at a time.
@@ -2562,8 +2636,8 @@ can wait for, and runs one work at a time.
   `done` on the thread that started it, once. A work that throws ends as
   Failed, "The `<name>` ended without a result".
 - `isRunning()`: started, and the result not delivered yet; false by the
-  time `done` is called, so that the File Conversion session is idle and
-  the sidebar's `isExporting()` false when they handle the result.
+  time `done` is called, so that the File Conversion session and the
+  Export session are idle when they handle the result.
 - `cancel()` sets the flag the work checks as it goes.
 - `cancelAndWait()`, also what its destructor does: cancels and waits for
   the worker, so that no code of the plugin runs on it afterwards; a result
@@ -2578,8 +2652,8 @@ the cancel came too late. A conversion's private directory always goes
 at a cancel before its `QSaveFile` replaces the file chosen, and once it
 has, the file that was there is gone, so removing the export would lose
 both (#166); it is reported as exported. An export that failed wrote
-nothing, and ends Cancelled. The same holds when the session or the
-sidebar is destroyed with a job whose result has not been delivered.
+nothing, and ends Cancelled. The same holds when a session is destroyed
+with a job whose result has not been delivered.
 
 `tests/background_job_test.cpp` tests it without a sidebar, with a work
 that is done after the test lets it go and never looks at its flag: a
@@ -2591,7 +2665,8 @@ so does a result that cannot be taken back.
 #### The Capture Catalog (`capture_catalog.h/cpp`)
 What the tab of each text file the plugin wrote shows, with no widget in
 it: the sidebar owns one, and it is its Live Capture Session's and File
-Conversion session's catalog.
+Conversion session's catalog; its Export session exports from the capture
+in front of it.
 Entries (`CaptureCatalog::Entry`: file name and size, summary, index, the
 Log Format hint, a live capture's raw file, capture name and error) are
 keyed by `fileKey()`, the canonical path (absolute when the file is gone),
@@ -2852,21 +2927,21 @@ export, conversation statistics):
   per packet: "1-3000000000" takes a few bytes and is counted at once. The
   `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
   change, not on every key.
-  `SidebarWidget::exportSelectedPackets()` (Plugins → tcpdump → Export
-  packets…) takes the packets of the selection from Selected Packet Line's
-  `selectedPackets()` and notifies its reason when the host told no line;
-  a truncated selection (more than 1,000 lines or 1 MiB selected) is
-  carried in the `ExportRequest`; the `ExportConfirmer`
-  (`setExportConfirmer()` for tests) shows the `ExportDialog`, where the
-  user may change the numbers or paste lines copied in LogSquirl, then a
-  save dialog. The host offers no call for the lines of a Filtered View
-  or a search, so selecting them there (or pasting them) is the way to
-  export a filtered view. The export runs as the sidebar's `export_`
-  Background Job, on a thread of its own, with a `QProgressDialog` whose
-  Cancel sets the flag the export checks between packets and before its
-  file replaces the one chosen; a cancel that comes after that is too
-  late, and the export is kept and reported (#166). The notification after the export
-  repeats a truncation that limited it.
+  Plugins → tcpdump → Export packets… is the sidebar's Export session's
+  (see *The Export session*): it takes the packets of the selection from
+  Selected Packet Line's `selectedPackets()` and notifies its reason when
+  the host told no line; a truncated selection (more than 1,000 lines or
+  1 MiB selected) is carried in the `ExportRequest`; its confirmer shows
+  the `ExportDialog`, where the user may change the numbers or paste lines
+  copied in LogSquirl, then its file chooser a save dialog. The host
+  offers no call for the lines of a Filtered View or a search, so
+  selecting them there (or pasting them) is the way to export a filtered
+  view. The export runs as the session's Background Job, on a thread of
+  its own, with the sidebar's `QProgressDialog`, whose Cancel sets the
+  flag the export checks between packets and before its file replaces the
+  one chosen; a cancel that comes after that is too late, and the export
+  is kept and reported (#166). The notification after the export repeats
+  a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
 details, Export packets or Show stream content entry and no polling; the
@@ -2886,7 +2961,10 @@ every corpus capture, read with a checkpoint every 3 packets, re-reads the
 export and compares each record byte for byte and each packet's fields
 with the capture's; it checks that a pcapng export of packets of two
 sections and interfaces keeps them, progress, cancel and failure, and
-drives Export packets… and the `ExportDialog` through the `FakeHost`.
+drives Export packets… through the `FakeHost` to the sidebar's Export
+session (the packets exported, the progress dialog, its Cancel, the entry
+chosen again) and the `ExportDialog`; the export's flow is tested on the
+session (`export_session_test.cpp`).
 
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,

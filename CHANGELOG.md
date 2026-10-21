@@ -613,6 +613,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Open dialog while a live capture started meanwhile (one waiting for
   the last to end) is no longer dropped without a word; a notification
   says why it was not opened (#170).
+- **Exporting packets is decided in one place.** Export packets…, its
+  progress dialog and Cancel behave as before: a Cancel that comes after
+  the export wrote its file, or the sidebar closing then, still keeps the
+  file (#171).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

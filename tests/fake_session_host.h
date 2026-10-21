@@ -21,8 +21,9 @@
  * @file fake_session_host.h
  * @brief The host of a session and of its catalog, recording, for tests.
  *
- * FakeSessionHost is the SessionHost of a Live Capture Session or a File
- * Conversion session, and the CaptureTabHost of their CaptureCatalog: it
+ * FakeSessionHost is the SessionHost of a Live Capture Session, a File
+ * Conversion session or an Export session, and the CaptureTabHost of their
+ * CaptureCatalog: it
  * records the tabs opened and the notifications, and can say what else
  * runs, which the Activity rule weighs.
  */
