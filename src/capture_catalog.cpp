@@ -27,6 +27,8 @@
 
 #include <QFileInfo>
 
+#include <algorithm>
+
 namespace tcpdump {
 
 QString fileKey( const QString& filePath )
@@ -211,9 +213,19 @@ CaptureCatalog::Entry* CaptureCatalog::entryOf( const QString& key )
     return found == entries_.end() ? nullptr : &found->second;
 }
 
-void CaptureCatalog::observeFront( std::function<void()> observer )
+CaptureCatalog::ObserverId CaptureCatalog::observeFront( std::function<void()> observer )
 {
-    frontObservers_.push_back( std::move( observer ) );
+    const auto id = nextObserverId_++;
+    frontObservers_.emplace_back( id, std::move( observer ) );
+    return id;
+}
+
+void CaptureCatalog::stopObserving( ObserverId id )
+{
+    frontObservers_.erase(
+        std::remove_if( frontObservers_.begin(), frontObservers_.end(),
+                        [ id ]( const auto& observer ) { return observer.first == id; } ),
+        frontObservers_.end() );
 }
 
 void CaptureCatalog::announceIfFront( const QString& key ) const
@@ -225,8 +237,22 @@ void CaptureCatalog::announceIfFront( const QString& key ) const
 
 void CaptureCatalog::announceFront() const
 {
+    // An observer may remove itself or another as it is told: those of now
+    // are told, but not one removed meanwhile.
+    std::vector<ObserverId> ids;
+    ids.reserve( frontObservers_.size() );
     for ( const auto& observer : frontObservers_ ) {
-        observer();
+        ids.push_back( observer.first );
+    }
+    for ( const auto id : ids ) {
+        const auto found
+            = std::find_if( frontObservers_.begin(), frontObservers_.end(),
+                            [ id ]( const auto& observer ) { return observer.first == id; } );
+        if ( found != frontObservers_.end() ) {
+            // A copy: the observer may remove itself.
+            const auto observer = found->second;
+            observer();
+        }
     }
 }
 

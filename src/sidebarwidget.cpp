@@ -352,11 +352,8 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     // tell: the capture in front anew whenever the catalog announces that it
     // changed, each session's state, progress and outcome.
     sessions_.setDialogParent( this );
-    sessions_.catalog().observeFront( [ self = QPointer<SidebarWidget>( this ) ] {
-        if ( self ) {
-            self->showFront();
-        }
-    } );
+    // The destructor stops observing.
+    frontObserver_ = sessions_.catalog().observeFront( [ this ] { showFront(); } );
     auto* conversion = &sessions_.conversionSession();
     connect( conversion, &FileConversionSession::stateChanged, this,
              &SidebarWidget::showConversionState );
@@ -398,6 +395,7 @@ SidebarWidget::~SidebarWidget()
     // The sessions run on, and tell this widget nothing more.  The export's
     // progress dialog goes first, as closing it would cancel the export
     // through this half-destroyed widget.
+    sessions_.catalog().stopObserving( frontObserver_ );
     sessions_.conversionSession().disconnect( this );
     sessions_.liveSession().disconnect( this );
     sessions_.exportSession().disconnect( this );

@@ -188,6 +188,9 @@ private:
 
     /// What this sidebar shows, and its buttons start.
     CaptureSessions& sessions_;
+    /// This sidebar as the catalog's observer of the tab in front, removed
+    /// when it goes.
+    CaptureCatalog::ObserverId frontObserver_ = 0;
 
     QPushButton* openButton_ = nullptr;
     QPushButton* cancelButton_ = nullptr;

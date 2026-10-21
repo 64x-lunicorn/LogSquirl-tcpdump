@@ -499,6 +499,23 @@ SCENARIO( "a sidebar that goes leaves the sessions running", "[sidebar]" )
             REQUIRE( host.openedFiles.size() == 1 );
         }
     }
+
+    WHEN( "it goes, and another sidebar is made over the sessions" )
+    {
+        const auto observers = sessions.catalog().frontObserverCount();
+        widget.reset();
+        const auto afterGone = sessions.catalog().frontObserverCount();
+        widget = std::make_unique<SidebarWidget>( sessions );
+
+        THEN( "the catalog no longer tells the one that went, only the new one" )
+        {
+            REQUIRE( afterGone == observers - 1 );
+            REQUIRE( sessions.catalog().frontObserverCount() == observers );
+            REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
+            REQUIRE(
+                child<QLabel>( *widget, "summary" )->text().startsWith( "<b>small.pcap</b>" ) );
+        }
+    }
 }
 
 SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[sidebar]" )

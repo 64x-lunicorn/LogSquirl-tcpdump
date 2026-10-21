@@ -2708,7 +2708,7 @@ session over it as the dialog parent and its controls follow the session,
 that it follows the tab in front through the plugin's active-file
 callback, that it shows the Live Capture Session and its Stop reaches it,
 that its links open the README and the Regex Lab, that it goes and leaves
-the sessions running, its layout and scrolling in a `QTabWidget` of fixed
+the sessions running and no observer of the catalog behind, its layout and scrolling in a `QTabWidget` of fixed
 heights below and above the minimum (the summary's last line and the
 Conversations' bottom), and that a palette change redraws the summary;
 `packet_export_test.cpp` that an export's progress dialog shows and
@@ -2787,9 +2787,12 @@ it, and no other.
   `openLiveFile()`), its `updateFile()`, `updateSummary()` or
   `setFileError()`, or `endLive()` while it was capturing. A change behind
   the tab in front, or the same tab reported again in any spelling, is not
-  announced. The sidebar redraws its summary, Packet Panel index,
+  announced. It returns the observer's id, which `stopObserving( id )`
+  takes, even while the observers are told (one removed then is not told
+  after). The sidebar redraws its summary, Packet Panel index,
   Conversations and **Save capture…** on it (`showFront()`), and asks
-  nothing else before redrawing.
+  nothing else before redrawing; it stops observing when it goes, so that a
+  sidebar made again leaves no observer behind.
 - `isLive( path )`: a text file of the running or the last live capture;
   `isCapturing( path )`: of the one that runs. `startLive()` drops the
   tabs before from it, `endLive()` leaves them the last capture's.
@@ -2804,7 +2807,8 @@ updating, the tabs it opens and that each entry is kept first, the Log
 Format hint once whichever kind of capture comes first, the tab in front,
 what is announced of it (a tab switch, a capture kept for it, a snapshot,
 summary or error of it, its capture ending) and what is not (a change
-behind it, the tab reported again), a capture ending, a failed file's error, and the parts of a ring buffer and
+behind it, the tab reported again), an observer removed, also while it is
+told, a capture ending, a failed file's error, and the parts of a ring buffer and
 of a capture without an index. `sidebar_text_test.cpp` checks what the
 sidebar says of what the catalog says, and the sidebar's tests only that it
 follows the tab in front.

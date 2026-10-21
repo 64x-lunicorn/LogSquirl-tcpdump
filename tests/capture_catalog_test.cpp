@@ -447,7 +447,7 @@ SCENARIO( "The catalog announces when what the tab in front shows changes", "[ca
         ++announced;
         shown << catalog.front();
     } );
-    catalog.observeFront( [ & ] { ++heard; } );
+    const auto secondObserver = catalog.observeFront( [ & ] { ++heard; } );
     const auto first = fileOf( dir, "first.log" );
     const auto second = fileOf( dir, "second.log" );
     catalog.openConverted( first, fileOf( dir, "first.pcap" ), summaryOf( 1 ), {} );
@@ -456,6 +456,49 @@ SCENARIO( "The catalog announces when what the tab in front shows changes", "[ca
     THEN( "captures added behind no tab in front are not announced" )
     {
         REQUIRE( announced == 0 );
+        REQUIRE( catalog.frontObserverCount() == 2 );
+    }
+
+    WHEN( "an observer is removed, and another tab comes to the front" )
+    {
+        catalog.stopObserving( secondObserver );
+        catalog.setFront( first );
+
+        THEN( "only the observers left hear it" )
+        {
+            REQUIRE( catalog.frontObserverCount() == 1 );
+            REQUIRE( announced == 1 );
+            REQUIRE( heard == 0 );
+        }
+
+        AND_WHEN( "it is removed again" )
+        {
+            catalog.stopObserving( secondObserver );
+
+            THEN( "nothing changes" )
+            {
+                REQUIRE( catalog.frontObserverCount() == 1 );
+            }
+        }
+    }
+
+    WHEN( "an observer removes itself while it is told" )
+    {
+        CaptureCatalog::ObserverId self = 0;
+        int told = 0;
+        self = catalog.observeFront( [ & ] {
+            ++told;
+            catalog.stopObserving( self );
+        } );
+        catalog.setFront( first );
+        catalog.setFront( second );
+
+        THEN( "it is told once, and the others every time" )
+        {
+            REQUIRE( told == 1 );
+            REQUIRE( announced == 2 );
+            REQUIRE( heard == 2 );
+        }
     }
 
     WHEN( "another tab comes to the front" )
