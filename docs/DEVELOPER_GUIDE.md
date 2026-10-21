@@ -2394,7 +2394,8 @@ Qt UI that provides:
   the text file written for it, and the catalog opens its tab
   (`openConverted()`); the plugin's active-file callback calls
   `showSummaryFor()` on every tab switch, which tells the catalog the tab
-  in front and renders its `front()`: the summary, the Packet Panel's
+  in front; the catalog announces it, as any change of what that tab
+  shows, and `showFront()` renders its `front()`: the summary, the Packet Panel's
   index and whether **Save capture…** shows, or "No capture in this tab."
   for a file the plugin did not write or a tab without a Log File. While a capture
   is being read the label keeps saying so. The summaries are lost when the
@@ -2550,6 +2551,15 @@ it, and no other.
   Live Capture Session tells. A file not kept is ignored.
 - `setFront( filePath )` on every tab switch; `front()` is the entry in
   front or null, `frontFile()` its key, `isFront( path )`.
+- `observeFront( observer )`: the observer is called, after the change,
+  whenever what the tab in front shows changes: another tab comes to the
+  front, an entry is kept for the tab in front (`openConverted()`,
+  `openLiveFile()`), its `updateFile()`, `updateSummary()` or
+  `setFileError()`, or `endLive()` while it was capturing. A change behind
+  the tab in front, or the same tab reported again in any spelling, is not
+  announced. The sidebar redraws its summary, Packet Panel index,
+  Conversations and **Save capture…** on it (`showFront()`), and asks
+  nothing else before redrawing.
 - `isLive( path )`: a text file of the running or the last live capture;
   `isCapturing( path )`: of the one that runs. `startLive()` drops the
   tabs before from it, `endLive()` leaves them the last capture's.
@@ -2561,8 +2571,10 @@ it, and no other.
 
 `tests/capture_catalog_test.cpp` tests it with plain Catch2: adding and
 updating, the tabs it opens and that each entry is kept first, the Log
-Format hint once whichever kind of capture comes first, the tab in front, a
-capture ending, a failed file's error, and the parts of a ring buffer and
+Format hint once whichever kind of capture comes first, the tab in front,
+what is announced of it (a tab switch, a capture kept for it, a snapshot,
+summary or error of it, its capture ending) and what is not (a change
+behind it, the tab reported again), a capture ending, a failed file's error, and the parts of a ring buffer and
 of a capture without an index. The sidebar's tests check only that it
 renders what the catalog says.
 

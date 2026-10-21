@@ -179,7 +179,8 @@ public:
     /// Show the summary of the capture whose text is @p filePath, the file
     /// in the tab now in front (empty: a tab without a Log File), or that the
     /// tab holds no capture of this plugin.  While a capture is being read,
-    /// the label keeps saying so.
+    /// the label keeps saying so.  The tab in front reported again shows
+    /// what it did.
     void showSummaryFor( const QString& filePath );
 
     /// Stop a running conversion; nothing is opened then.
@@ -390,9 +391,13 @@ private:
     /// The live capture's text file @p logPath was kept and opened in a tab:
     /// say it is capturing, unless its tab came to the front at once.
     void showLiveFile( const QString& logPath );
-    /// Show the summary of the tab in front again if it is the live capture's.
-    void showLiveSummary();
-    /// Show the outcome of a live capture.
+    /// Show what the tab in front shows: its capture's summary, Packet Panel
+    /// index and Conversations, and Save capture… if it saves anything; on
+    /// every change the catalog announces.  While a capture is being read,
+    /// the label keeps saying so.
+    void showFront();
+    /// Show the outcome of a live capture; its tabs show their final summary
+    /// already.
     void showLiveOutcome( const LiveOutcome& outcome );
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();

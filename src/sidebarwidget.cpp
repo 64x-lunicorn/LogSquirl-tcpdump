@@ -477,17 +477,17 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     };
 
     // This widget is the session's host; the session keeps its captures'
-    // summaries in the catalog, and the sidebar shows the one in front.
+    // summaries in the catalog, and the sidebar shows the one in front,
+    // anew whenever the catalog announces that it changed.
+    catalog_.observeFront( [ this ] { showFront(); } );
     LiveCaptureHost& host = *this;
     live_ = std::make_unique<LiveCaptureSession>( host, catalog_ );
     live_->setOutputRoot( tempRoot_ );
     connect( live_.get(), &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
     connect( live_.get(), &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
     connect( live_.get(), &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
-    connect( live_.get(), &LiveCaptureSession::progressed, this, [ this ] {
-        showLiveProgress();
-        showLiveSummary();
-    } );
+    // The catalog's snapshot of the tab in front redraws its summary.
+    connect( live_.get(), &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
     connect( live_.get(), &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
         liveStderr_->appendPlainText( line );
         liveStderr_->setHidden( false );
@@ -886,7 +886,12 @@ void SidebarWidget::finishConversion( const QString& filePath, ConversionResult 
 
 void SidebarWidget::showSummaryFor( const QString& filePath )
 {
+    // Another tab in front is announced: showFront() draws it.
     catalog_.setFront( filePath );
+}
+
+void SidebarWidget::showFront()
+{
     const auto* front = catalog_.front();
     packetPanel_->setCapture( front ? front->index : nullptr );
     packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
@@ -1120,20 +1125,10 @@ void SidebarWidget::showLiveFile( const QString& logPath )
     }
 }
 
-void SidebarWidget::showLiveSummary()
-{
-    // showSummaryFor() redraws the summary and the Conversations table.
-    if ( catalog_.isLive( catalog_.frontFile() ) ) {
-        showSummaryFor( catalog_.frontFile() );
-    }
-}
-
 void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
 {
-    if ( catalog_.updateSummary( textPath, std::move( summary ) )
-         && catalog_.isFront( textPath ) ) {
-        showSummaryFor( textPath );
-    }
+    // The catalog announces it if its tab is in front.
+    catalog_.updateSummary( textPath, std::move( summary ) );
 }
 
 void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
@@ -1153,11 +1148,9 @@ void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
     case LiveOutcome::Status::Captured:
         break;
     }
-    // Its tabs show the final summary.
-    if ( catalog_.isLive( catalog_.frontFile() ) ) {
-        showSummaryFor( catalog_.frontFile() );
-    }
-    else {
+    // Its tabs show the final summary: the catalog announced it for the one
+    // in front.  With another tab in front, the label says where it is.
+    if ( !catalog_.isLive( catalog_.frontFile() ) ) {
         summaryLabel_->setText( QString( "The capture %1 has ended: its tab shows its summary." )
                                     .arg( outcome.name.toHtmlEscaped() ) );
     }
