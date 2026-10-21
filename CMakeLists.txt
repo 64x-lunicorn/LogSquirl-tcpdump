@@ -177,6 +177,7 @@ add_library(logsquirl_tcpdump SHARED
     src/selected_packet_line.cpp
     src/packet_panel.cpp
     src/live_capture.cpp
+    src/activity.cpp
     src/live_capture_session.cpp
     src/live_source.cpp
     src/local_source.cpp

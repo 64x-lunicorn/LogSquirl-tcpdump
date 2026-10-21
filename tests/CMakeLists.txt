@@ -75,6 +75,7 @@ add_executable(logsquirl_tcpdump_tests
     packet_formatter_test.cpp
     packet_line_test.cpp
     selected_packet_line_test.cpp
+    activity_test.cpp
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
@@ -178,6 +179,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/selected_packet_line.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
+        "${CMAKE_SOURCE_DIR}/src/activity.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_session.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/local_source.cpp"
