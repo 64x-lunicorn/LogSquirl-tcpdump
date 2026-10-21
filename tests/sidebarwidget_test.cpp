@@ -24,6 +24,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "fake_live_session.h"
 #include "fakehost.h"
 #include "packet_panel.h"
 #include "pcap_converter.h"
@@ -192,6 +193,9 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
                 REQUIRE_FALSE( child<QProgressBar>( widget, "progress" )->isHidden() );
                 REQUIRE( child<QLabel>( widget, "summary" )->text()
                          == "Reading small.pcap\xe2\x80\xa6" );
+                widget.setPalette( QPalette( QColor( 0x20, 0x20, 0x20 ) ) );
+                REQUIRE( child<QLabel>( widget, "summary" )->text()
+                         == "Reading small.pcap\xe2\x80\xa6" );
             }
 
             THEN( "the text file is opened in a tab once it is written, not followed" )
@@ -314,6 +318,8 @@ SCENARIO( "the Cancel button cancels the running conversion", "[sidebar]" )
                 THEN( "no tab is opened, the sidebar says it was cancelled, and is idle" )
                 {
                     REQUIRE( host.openedFiles.isEmpty() );
+                    REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelled." );
+                    widget->setPalette( QPalette( QColor( 0x20, 0x20, 0x20 ) ) );
                     REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelled." );
                     REQUIRE( child<QPushButton>( *widget, "openButton" )->isEnabled() );
                     REQUIRE( child<QPushButton>( *widget, "cancelButton" )->isHidden() );
@@ -493,6 +499,158 @@ SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
         {
             REQUIRE( child<QLabel>( widget, "summary" )->text() == "No capture loaded." );
             REQUIRE( child<QLabel>( widget, "packetStatus" )->isHidden() );
+        }
+    }
+}
+
+// What a live capture does is the Live Capture Session's, tested in
+// live_capture_session_test.cpp; here, what the summary label says of it,
+// with captures the test scripts, and that a palette change keeps it.
+SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+
+    GIVEN( "a sidebar whose live captures the test scripts" )
+    {
+        FakeHost host;
+        SidebarWidget widget;
+        widget.setTempRoot( dir.path() );
+        ScriptedRuns runs;
+        widget.liveSession()->setRunFactory( runs.factory() );
+        auto* summary = child<QLabel>( widget, "summary" );
+        const auto logPath = dir.filePath( "eth0.log" );
+        const auto rawPath = dir.filePath( "eth0.pcap" );
+        const auto otherTab = dir.filePath( "server.log" );
+        tcpdump::LiveSnapshot snapshot;
+        snapshot.summary.packets = 1;
+        tcpdump::ConversionResult captured;
+        captured.status = tcpdump::ConversionResult::Status::Converted;
+        captured.outputPath = logPath;
+        captured.summary.packets = 2;
+        // A switch of the colour scheme redraws the label from what it says.
+        const auto paletteKeeps = [ & ] {
+            const auto before = summary->text();
+            QPalette dark;
+            dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
+            dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
+            widget.setPalette( dark );
+            return summary->text() == before;
+        };
+
+        WHEN( "a capture starts" )
+        {
+            REQUIRE( widget.startLiveCapture( "eth0", {} ) );
+
+            THEN( "the label says it waits for the first packet" )
+            {
+                REQUIRE( summary->text()
+                         == "Capturing eth0\xe2\x80\xa6 waiting for the first packet." );
+                REQUIRE( paletteKeeps() );
+            }
+
+            AND_WHEN( "its tab opens behind another" )
+            {
+                widget.showSummaryFor( otherTab );
+                runs.last().open( logPath, rawPath );
+
+                THEN( "the label says the capture goes on" )
+                {
+                    REQUIRE( summary->text() == "Capturing eth0\xe2\x80\xa6" );
+                    REQUIRE( paletteKeeps() );
+                }
+
+                AND_WHEN( "it ends with packets" )
+                {
+                    runs.last().finish( captured );
+
+                    THEN( "the label says its tab shows its summary" )
+                    {
+                        REQUIRE( summary->text()
+                                 == "The capture eth0 has ended: its tab shows its summary." );
+                        REQUIRE( paletteKeeps() );
+                    }
+
+                    AND_WHEN( "its tab comes to the front" )
+                    {
+                        widget.showSummaryFor( logPath );
+
+                        THEN( "the label shows its final summary" )
+                        {
+                            REQUIRE( summary->text().contains( "Packets: <b>2</b>" ) );
+                            REQUIRE_FALSE( summary->text().contains( "Capturing" ) );
+                        }
+                    }
+                }
+            }
+
+            AND_WHEN( "its tab opens and comes to the front, and a snapshot comes" )
+            {
+                runs.last().open( logPath, rawPath );
+                widget.showSummaryFor( logPath );
+                runs.last().snapshot( snapshot );
+
+                THEN( "the label shows the summary so far" )
+                {
+                    REQUIRE( summary->text().startsWith(
+                        "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br><b>eth0.pcap</b>" ) );
+                    REQUIRE( summary->text().contains( "Packets: <b>1</b>" ) );
+                }
+
+                AND_WHEN( "it ends with packets" )
+                {
+                    runs.last().finish( captured );
+
+                    THEN( "the label shows its final summary" )
+                    {
+                        REQUIRE( summary->text().startsWith( "<b>eth0.pcap</b>" ) );
+                        REQUIRE( summary->text().contains( "Packets: <b>2</b>" ) );
+                    }
+                }
+
+                AND_WHEN( "it fails" )
+                {
+                    auto failed = captured;
+                    failed.status = tcpdump::ConversionResult::Status::Failed;
+                    failed.error = "tcpdump exited with code 1";
+                    runs.last().finish( failed );
+
+                    THEN( "the label shows the error above the summary" )
+                    {
+                        REQUIRE( summary->text().startsWith(
+                            "<b>Error:</b> tcpdump exited with code 1<br>The capture so far is "
+                            "kept.<br><b>eth0.pcap</b>" ) );
+                    }
+                }
+            }
+
+            AND_WHEN( "it is stopped before anything came" )
+            {
+                tcpdump::ConversionResult stopped;
+                stopped.status = tcpdump::ConversionResult::Status::Stopped;
+                runs.last().finish( stopped );
+
+                THEN( "the label says so" )
+                {
+                    REQUIRE( summary->text()
+                             == "The capture eth0 was stopped before anything was captured." );
+                    REQUIRE( paletteKeeps() );
+                }
+            }
+
+            AND_WHEN( "it fails before a packet came" )
+            {
+                tcpdump::ConversionResult failed;
+                failed.status = tcpdump::ConversionResult::Status::Failed;
+                failed.error = "no <such> device";
+                runs.last().finish( failed );
+
+                THEN( "the label says why" )
+                {
+                    REQUIRE( summary->text() == "Error: no &lt;such&gt; device" );
+                    REQUIRE( paletteKeeps() );
+                }
+            }
         }
     }
 }

@@ -526,6 +526,10 @@ SCENARIO( "Export packets… exports the selected lines' packets through the sid
         // The guards, the cancel rules and the messages are the Export
         // session's (export_session_test.cpp); here the sidebar shows them.
         host.selectedLines = { loaded.lines[ 1 ] };
+        auto* summary = loaded.sidebar->findChild<QLabel*>( "summary" );
+        REQUIRE( summary );
+        const auto captureSummary = summary->text();
+        REQUIRE( captureSummary.contains( "mixed.pcap" ) );
         loaded.sidebar->exportSession()->setExporter(
             []( std::shared_ptr<const CaptureIndex> index, const PacketNumbers& numbers,
                 const QString& outputPath, const std::atomic_bool* cancel,
@@ -545,6 +549,15 @@ SCENARIO( "Export packets… exports the selected lines' packets through the sid
             REQUIRE( dialog->labelText() == "Exporting 1 packets\xe2\x80\xa6" );
             loaded.sidebar->cancelExport();
             REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+        }
+
+        THEN( "the summary label keeps the capture's summary, while and after it exports" )
+        {
+            REQUIRE( summary->text() == captureSummary );
+            loaded.sidebar->cancelExport();
+            REQUIRE( summary->text() == captureSummary );
+            REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+            REQUIRE( summary->text() == captureSummary );
         }
 
         WHEN( "the user cancels it in its progress dialog" )
