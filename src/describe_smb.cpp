@@ -53,7 +53,8 @@ constexpr size_t kSmb1FlagsEnd = 10;
 constexpr uint32_t kFlagResponse = 0x00000001;
 constexpr uint8_t kSmb1FlagReply = 0x80;
 
-/// Most commands named in a segment, compounded or not, then "…".
+/// Most commands and other messages named in a segment, compounded or not,
+/// then "…".
 constexpr size_t kMaxCommands = 8;
 /// Most dialects named in a Negotiate Protocol Request, then "…".
 constexpr size_t kMaxDialects = 8;
@@ -766,11 +767,14 @@ std::string smb1Text( const uint8_t* p, size_t captured )
     return text + ( ( p[ 9 ] & kSmb1FlagReply ) ? " Response" : " Request" );
 }
 
-/// The NBSS message at @p p, of which @p len bytes were captured.
+/// The NBSS message at @p p, of which @p len bytes were captured.  Naming
+/// it takes one of @p budget, which is not spent when it is called; an SMB2
+/// message takes one per command it names.
 Message readMessage( const uint8_t* p, size_t len, size_t& budget )
 {
     Message m;
     if ( len < kNbssHeaderBytes ) {
+        --budget;
         m.text = "Header " + kEllipsis;
         m.label = "NBSS";
         return m;
@@ -778,6 +782,7 @@ Message readMessage( const uint8_t* p, size_t len, size_t& budget )
     const uint8_t type = p[ 0 ];
     if ( type != kSessionMessage ) {
         const char* name = nbssTypeName( type );
+        --budget;
         if ( !name ) {
             m.text = "Unknown message type " + hexCode( type ) + kMalformed;
             return m;
@@ -798,6 +803,7 @@ Message readMessage( const uint8_t* p, size_t len, size_t& budget )
     const uint8_t* body = p + kNbssHeaderBytes;
     const size_t captured = whole ? length : len - kNbssHeaderBytes;
     if ( captured < 4 ) {
+        --budget;
         m.label = "NBSS";
         m.text = whole ? "Session message, " + std::to_string( length ) + " bytes"
                        : "Session message " + kEllipsis;
@@ -808,6 +814,7 @@ Message readMessage( const uint8_t* p, size_t len, size_t& budget )
         m.text = smb2Text( body, captured, length, budget, m.more );
         return m;
     }
+    --budget;
     if ( magicIs( body, 0xFF ) ) {
         m.label = "SMB";
         m.text = smb1Text( body, captured );
@@ -820,9 +827,6 @@ Message readMessage( const uint8_t* p, size_t len, size_t& budget )
         m.text = "Session message, " + std::to_string( length ) + " bytes";
         m.last = true;
         return m;
-    }
-    if ( budget > 0 ) {
-        --budget;
     }
     if ( !whole ) {
         m.text += " " + kEllipsis;
@@ -841,7 +845,9 @@ bool beginsWithSmb( const uint8_t* payload, size_t len )
 SmbDescription detectSmb( const uint8_t* payload, size_t len )
 {
     SmbDescription result;
-    // The commands named, not the messages, are capped.
+    // Every message named takes one of the budget, an SMB2 message one per
+    // command, so that neither compounded commands nor a run of 4-byte NBSS
+    // messages name more than kMaxCommands.
     size_t budget = kMaxCommands;
     bool none = false;
     result.text = nameMessages( len, SIZE_MAX, "; ", [ & ]( size_t at ) {

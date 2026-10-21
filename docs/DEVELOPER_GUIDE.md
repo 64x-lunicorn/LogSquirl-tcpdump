@@ -647,7 +647,8 @@ the declarations of the detectors and in-stream passes the tables use.
   and SMB 3, as Wireshark labels both), `SMB` (SMB1) or `NBSS` (`Session
   request`, `Positive session response`, … on port 139). An SMB2 message
   names every command, compounded ones by their NextCommand too, up to
-  eight in a segment, joined by `; `, then `…`: the command as Wireshark
+  eight commands and other messages in a segment, joined by `; `, then
+  `…`: the command as Wireshark
   names it (`Negotiate Protocol`, `Session Setup`, `Tree Connect`,
   `Create`, `Read`, `Write`, `Ioctl`, `Find`, `Notify`, `GetInfo`, …,
   `Unknown command 0xNNNN`), `Request` or `Response` by the header's
