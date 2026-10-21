@@ -52,6 +52,7 @@ add_executable(logsquirl_tcpdump_tests
     live_capture_session_test.cpp
     file_conversion_session_test.cpp
     export_session_test.cpp
+    capture_sessions_test.cpp
     live_source_test.cpp
     local_source_test.cpp
     adb_source_test.cpp
@@ -185,6 +186,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/live_capture_session.cpp"
         "${CMAKE_SOURCE_DIR}/src/file_conversion_session.cpp"
         "${CMAKE_SOURCE_DIR}/src/export_session.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_sessions.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/local_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/adb_source.cpp"
