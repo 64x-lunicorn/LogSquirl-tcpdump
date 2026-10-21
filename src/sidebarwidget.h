@@ -31,10 +31,12 @@
 #include "background_job.h"
 #include "capture_catalog.h"
 #include "export_dialog.h"
+#include "file_conversion_session.h"
 #include "live_capture.h"
 #include "live_capture_session.h"
 #include "live_source.h"
 #include "pcap_converter.h"
+#include "session_host.h"
 
 #include <QLabel>
 #include <QPalette>
@@ -136,13 +138,16 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  * session keeps its summaries in the sidebar's catalog, which opens their
  * tabs, and the sidebar shows what it is told.
  *
- * A capture is converted on a worker thread, so that a large one neither
+ * Opening a capture file is its FileConversionSession's
+ * (file_conversion_session.h) alike: Open, the menu's Open pcap… and Cancel
+ * forward to it, and the sidebar shows its progress, label and outcome.  A
+ * capture is converted on a worker thread, so that a large one neither
  * freezes LogSquirl nor can be interrupted only by killing it.  Destroying
- * the widget cancels a running conversion and waits for it: no code of the
- * plugin runs on the worker thread afterwards, and the host may unload the
- * library.
+ * the widget destroys the session, which cancels a running conversion and
+ * waits for it: no code of the plugin runs on the worker thread
+ * afterwards, and the host may unload the library.
  */
-class SidebarWidget : public QWidget, private LiveCaptureHost, private CaptureTabHost {
+class SidebarWidget : public QWidget, private SessionHost, private CaptureTabHost {
     Q_OBJECT
 
 public:
@@ -160,10 +165,12 @@ public:
     ~SidebarWidget() override;
 
     /// Ask for a capture in a file dialog, as the Open button does, and open
-    /// it.  While a conversion runs, only a notification says so.
+    /// it.  While the Activity rule refuses opening a file, only a
+    /// notification says why.
     void chooseAndOpen();
 
-    /// Convert a pcap file in the background, then open the text in LogSquirl.
+    /// Open a pcap file: its File Conversion session converts it in the
+    /// background, and its text opens in LogSquirl.
     void openPcapFile( const QString& filePath );
 
     /// Asks for a capture file: given the dialog's parent and the directory
@@ -341,6 +348,7 @@ public:
     void setTempRoot( const QString& dir )
     {
         tempRoot_ = dir;
+        conversion_->setOutputRoot( dir );
         live_->setOutputRoot( dir );
     }
 
@@ -353,7 +361,13 @@ public:
     /// Whether a conversion is running.
     bool isConverting() const
     {
-        return conversion_.isRunning();
+        return conversion_ && conversion_->isBusy();
+    }
+
+    /// The File Conversion session the Open button and Cancel forward to.
+    FileConversionSession* conversionSession() const
+    {
+        return conversion_.get();
     }
 
     /// What runs now, which the Activity rule weighs before Open, Start
@@ -373,13 +387,15 @@ protected:
 private:
     /// Open a link of the summary: a filter in the Regex Lab, or a web page.
     void openLink( const QString& link );
-    /// Show the outcome of a conversion and return to idle.
-    void finishConversion( const QString& filePath, ConversionResult result );
-    /// Show the idle or the converting controls.
-    void setConverting( bool converting );
+    /// Show the outcome of a conversion: its label, unless its tab shows
+    /// its summary.
+    void showConversionOutcome( const FileConversionOutcome& outcome );
+    /// Show the File Conversion session's state: the idle, converting or
+    /// cancelling controls, and its label while it runs.
+    void showConversionState();
     // The Capture Catalog's tab host.
     void openTab( const QString& logPath, bool follow ) override;
-    // The Live Capture Session's host.
+    // The sessions' host.
     void notify( const QString& message ) override;
     RunningActivities runningElsewhere() const override;
 
@@ -445,9 +461,9 @@ private:
 
     /// Where the private temporary directories are created.
     QString tempRoot_;
-    /// The conversion of a capture file, on a worker thread of its own;
-    /// cancelled and waited for when the widget goes.
-    BackgroundJob<ConversionResult> conversion_{ "conversion" };
+    /// Opening a capture file, running or the last, and what it comes to;
+    /// its conversion is cancelled and waited for when the widget goes.
+    std::unique_ptr<FileConversionSession> conversion_;
 
     /// The live capture, running or the last one, and what it comes to.
     std::unique_ptr<LiveCaptureSession> live_;

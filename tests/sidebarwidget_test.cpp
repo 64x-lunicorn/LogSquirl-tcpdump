@@ -51,9 +51,13 @@
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <set>
+#include <thread>
 
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
                                          size_t api_size );
@@ -159,6 +163,10 @@ bool scrollIntoView( QWidget* widget, const QRect& rect )
 
 } // namespace
 
+// What opening a capture file does, its refusal, cancel, failure, private
+// output and options, is the File Conversion session's, tested in
+// file_conversion_session_test.cpp; here, that the sidebar forwards to it
+// and renders what it says.
 SCENARIO( "a capture is converted in the background and opened in a tab", "[sidebar]" )
 {
     QTemporaryDir dir;
@@ -180,7 +188,10 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
                 REQUIRE( widget.isConverting() );
                 REQUIRE_FALSE( child<QPushButton>( widget, "openButton" )->isEnabled() );
                 REQUIRE_FALSE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
+                REQUIRE( child<QPushButton>( widget, "cancelButton" )->isEnabled() );
                 REQUIRE_FALSE( child<QProgressBar>( widget, "progress" )->isHidden() );
+                REQUIRE( child<QLabel>( widget, "summary" )->text()
+                         == "Reading small.pcap\xe2\x80\xa6" );
             }
 
             THEN( "the text file is opened in a tab once it is written, not followed" )
@@ -216,96 +227,14 @@ SCENARIO( "a capture is converted in the background and opened in a tab", "[side
             widget.openPcapFile( junk );
             REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
 
-            THEN( "the error is shown and notified, and no tab is opened" )
+            THEN( "the summary label shows the outcome's, and the user is told" )
             {
+                const auto& outcome = widget.conversionSession()->outcome();
+                REQUIRE( outcome );
+                REQUIRE( child<QLabel>( widget, "summary" )->text() == outcome->label );
+                REQUIRE( outcome->label.contains( "magic" ) );
+                REQUIRE( host.notifications == QStringList{ outcome->notification } );
                 REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE( host.notifications.first().contains( "magic" ) );
-                REQUIRE( child<QLabel>( widget, "summary" )->text().contains( "magic" ) );
-            }
-        }
-    }
-}
-
-SCENARIO( "each conversion reads the options saved when it starts", "[sidebar][settings]" )
-{
-    QTemporaryDir dir;
-    REQUIRE( dir.isValid() );
-
-    GIVEN( "a sidebar, a capture and options saved in the configuration directory" )
-    {
-        FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.path() );
-        const auto capture = writeCapture( dir, "small.pcap", captureOf( 2 ) );
-        tcpdump::ConversionOptions options;
-        options.layout.timeColumns = tcpdump::TimeColumns::RelativeOnly;
-        options.preview = false;
-        REQUIRE( tcpdump::saveConversionOptions( host.configDir(), options ) );
-
-        auto convertAndRead = [ & ] {
-            widget.openPcapFile( capture );
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
-            REQUIRE_FALSE( host.openedFiles.isEmpty() );
-            QFile out( host.openedFiles.last() );
-            REQUIRE( out.open( QIODevice::ReadOnly ) );
-            return QString::fromUtf8( out.readAll() );
-        };
-
-        WHEN( "the capture is opened" )
-        {
-            const auto text = convertAndRead();
-
-            THEN( "it is converted with them" )
-            {
-                REQUIRE_FALSE( text.contains( "UTC Time" ) );
-                REQUIRE_FALSE( text.contains( "payload" ) );
-            }
-
-            AND_WHEN( "the options change and it is opened again" )
-            {
-                REQUIRE( tcpdump::saveConversionOptions( host.configDir(), {} ) );
-                const auto again = convertAndRead();
-
-                THEN( "the new conversion has the new options, the first keeps its own" )
-                {
-                    REQUIRE( again.contains( "UTC Time" ) );
-                    REQUIRE( again.contains( "payload" ) );
-                    QFile first( host.openedFiles.first() );
-                    REQUIRE( first.open( QIODevice::ReadOnly ) );
-                    REQUIRE( QString::fromUtf8( first.readAll() ) == text );
-                }
-            }
-        }
-    }
-}
-
-SCENARIO( "the sidebar shows why the output could not be written", "[sidebar]" )
-{
-    QTemporaryDir dir;
-    REQUIRE( dir.isValid() );
-
-    GIVEN( "a sidebar whose temporary root does not exist" )
-    {
-        FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( dir.filePath( "no-such-root" ) );
-        const auto capture = writeCapture( dir, "small.pcap", captureOf( 1 ) );
-
-        WHEN( "a capture is opened" )
-        {
-            widget.openPcapFile( capture );
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
-
-            THEN( "the error names the temporary directory, and no tab is opened" )
-            {
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE( host.notifications.size() == 1 );
-                REQUIRE(
-                    host.notifications.first().contains( "Cannot create a temporary directory" ) );
-                REQUIRE( child<QLabel>( widget, "summary" )
-                             ->text()
-                             .contains( "Error: Cannot create a temporary directory" ) );
             }
         }
     }
@@ -341,29 +270,56 @@ SCENARIO( "the Open button asks for a capture and opens it", "[sidebar]" )
     }
 }
 
-SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
+SCENARIO( "the Cancel button cancels the running conversion", "[sidebar]" )
 {
     QTemporaryDir dir;
+    QTemporaryDir tempRoot;
     REQUIRE( dir.isValid() );
+    REQUIRE( tempRoot.isValid() );
 
-    GIVEN( "a conversion of a capture that is running" )
+    GIVEN( "a sidebar converting a capture until it is cancelled" )
     {
         FakeHost host;
         auto widget = std::make_unique<SidebarWidget>();
-        widget->setTempRoot( dir.path() );
-        widget->openPcapFile( writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
+        widget->setTempRoot( tempRoot.path() );
+        // Converts, then holds its result until cancelled: a conversion that
+        // was done when the cancel came.
+        widget->conversionSession()->setConverter(
+            []( const QString& filePath, const QString& outputRoot, const std::atomic_bool* cancel,
+                const std::function<void( int )>&, const tcpdump::ConversionOptions& options ) {
+                auto result = tcpdump::convertPcap( filePath, outputRoot, nullptr, {}, options );
+                while ( !cancel->load() ) {
+                    std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+                }
+                return result;
+            } );
+        widget->openPcapFile( writeCapture( dir, "small.pcap", captureOf( 3 ) ) );
         REQUIRE( widget->isConverting() );
 
-        WHEN( "the user cancels it" )
+        WHEN( "the user clicks Cancel" )
         {
             child<QPushButton>( *widget, "cancelButton" )->click();
-            REQUIRE( waitFor( [ &widget ] { return !widget->isConverting(); } ) );
 
-            THEN( "no tab is opened, and the sidebar says it was cancelled" )
+            THEN( "Cancel is disabled and the label says it is cancelling" )
             {
-                REQUIRE( host.openedFiles.isEmpty() );
-                REQUIRE( child<QLabel>( *widget, "summary" )->text().contains( "Cancelled" ) );
-                REQUIRE( child<QPushButton>( *widget, "openButton" )->isEnabled() );
+                REQUIRE_FALSE( child<QPushButton>( *widget, "cancelButton" )->isEnabled() );
+                REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelling\xe2\x80\xa6" );
+                REQUIRE( waitFor( [ &widget ] { return !widget->isConverting(); } ) );
+            }
+
+            AND_WHEN( "the conversion has ended" )
+            {
+                REQUIRE( waitFor( [ &widget ] { return !widget->isConverting(); } ) );
+
+                THEN( "no tab is opened, the sidebar says it was cancelled, and is idle" )
+                {
+                    REQUIRE( host.openedFiles.isEmpty() );
+                    REQUIRE( child<QLabel>( *widget, "summary" )->text() == "Cancelled." );
+                    REQUIRE( child<QPushButton>( *widget, "openButton" )->isEnabled() );
+                    REQUIRE( child<QPushButton>( *widget, "cancelButton" )->isHidden() );
+                    REQUIRE( child<QProgressBar>( *widget, "progress" )->isHidden() );
+                    REQUIRE( QDir( tempRoot.path() ).isEmpty() );
+                }
             }
         }
 
@@ -372,106 +328,11 @@ SCENARIO( "a running conversion can be cancelled", "[sidebar]" )
             widget.reset();
             QCoreApplication::processEvents();
 
-            THEN( "the conversion is stopped first, and no tab is opened" )
+            THEN( "the conversion is stopped first, no tab is opened, and its directory goes" )
             {
                 REQUIRE( host.openedFiles.isEmpty() );
-            }
-        }
-    }
-}
-
-SCENARIO( "each conversion writes a new private file", "[sidebar]" )
-{
-    QTemporaryDir captures;
-    QTemporaryDir tempRoot;
-    REQUIRE( captures.isValid() );
-    REQUIRE( tempRoot.isValid() );
-    QDir( captures.path() ).mkdir( "a" );
-    QDir( captures.path() ).mkdir( "b" );
-
-    GIVEN( "a sidebar whose temporary files go below a test directory" )
-    {
-        FakeHost host;
-        SidebarWidget widget;
-        widget.setTempRoot( tempRoot.path() );
-
-        WHEN( "two captures with the same name are opened one after the other" )
-        {
-            widget.openPcapFile( writeCapture( captures, "a/capture.pcap", captureOf( 1 ) ) );
-            REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
-            widget.openPcapFile( writeCapture( captures, "b/capture.pcap", captureOf( 2 ) ) );
-            REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 2; } ) );
-            const auto first = host.openedFiles.at( 0 );
-            const auto second = host.openedFiles.at( 1 );
-
-            THEN( "each gets its own file, named after the capture, and the first is kept" )
-            {
-                REQUIRE( first != second );
-                REQUIRE( QFileInfo( first ).fileName() == "capture.log" );
-                REQUIRE( QFileInfo( second ).fileName() == "capture.log" );
-                QFile out( first );
-                REQUIRE( out.open( QIODevice::ReadOnly ) );
-                REQUIRE( out.readAll().count( '\n' ) == 2 ); // header + 1 packet
-            }
-
-            THEN( "each lives in its own directory below the temporary root" )
-            {
-                const auto dir = QFileInfo( first ).absoluteDir();
-                REQUIRE( QFileInfo( dir.absolutePath() ).absolutePath()
-                         == QFileInfo( tempRoot.path() ).absoluteFilePath() );
-                REQUIRE(
-                    dir.dirName().startsWith( QString( "logsquirl-tcpdump-%1-" )
-                                                  .arg( QCoreApplication::applicationPid() ) ) );
-            }
-
-#ifdef Q_OS_UNIX
-            THEN( "only the user can read the file and enter its directory" )
-            {
-                const QFileDevice::Permissions groupOrOther
-                    = QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
-                      | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
-                REQUIRE( ( QFile::permissions( first ) & groupOrOther ) == 0 );
-                REQUIRE( ( QFile::permissions( QFileInfo( first ).absolutePath() ) & groupOrOther )
-                         == 0 );
-            }
-#endif
-        }
-
-        WHEN( "a conversion fails" )
-        {
-            widget.openPcapFile( writeCapture( captures, "junk.pcap", Bytes( 64, 0xEE ) ) );
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
-
-            THEN( "its temporary directory is removed" )
-            {
                 REQUIRE( QDir( tempRoot.path() ).isEmpty() );
             }
-        }
-
-        WHEN( "a conversion is cancelled" )
-        {
-            widget.openPcapFile( writeCapture( captures, "big.pcap", captureOf( 20000 ) ) );
-            widget.cancel();
-            REQUIRE( waitFor( [ &widget ] { return !widget.isConverting(); } ) );
-
-            THEN( "its temporary directory is removed" )
-            {
-                REQUIRE( QDir( tempRoot.path() ).isEmpty() );
-            }
-        }
-    }
-
-    GIVEN( "a sidebar that is destroyed while it converts" )
-    {
-        FakeHost host;
-        auto widget = std::make_unique<SidebarWidget>();
-        widget->setTempRoot( tempRoot.path() );
-        widget->openPcapFile( writeCapture( captures, "big.pcap", captureOf( 20000 ) ) );
-        widget.reset();
-
-        THEN( "the unfinished conversion's directory is removed" )
-        {
-            REQUIRE( QDir( tempRoot.path() ).isEmpty() );
         }
     }
 }

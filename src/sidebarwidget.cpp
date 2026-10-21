@@ -23,10 +23,12 @@
  *
  * When the user clicks "Open pcap…", the widget:
  *   1. Opens a file dialog for .pcap / .cap / .dmp files
- *   2. Converts the pcap packet by packet with pcap_converter: parses each
- *      packet, formats it into a human-readable line, and writes the line
- *      to a temporary .log file
- *   3. Opens the .log file in LogSquirl's main viewer
+ *   2. Hands it to its File Conversion session, which converts the pcap
+ *      packet by packet with pcap_converter: parses each packet, formats it
+ *      into a human-readable line, and writes the line to a temporary .log
+ *      file
+ *   3. The session opens the .log file in LogSquirl's main viewer, through
+ *      the capture catalog
  *
  * Its Stream lines in Regex Lab button, on a host that offers it, opens the
  * Regex Lab on the conversation of the selected packet line (see
@@ -53,6 +55,10 @@
  * session's state, progress, stderr lines and outcome.  The Live capture section, and the Start
  * live capture… dialog, choose what to capture from the Live Source Kinds (live_source.h): the kind
  * chosen makes the stream, and explains a failure.
+ *
+ * Opening a capture file is its FileConversionSession's, which converts it
+ * and keeps it in the catalog: the sidebar forwards Open and Cancel to it,
+ * and shows its progress, label and outcome.
  *
  * Export packets… reads the selected lines, lets the user confirm or change
  * their packets in the ExportDialog, asks where to write them, and writes
@@ -476,11 +482,20 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                == QMessageBox::Yes;
     };
 
-    // This widget is the session's host; the session keeps its captures'
+    // This widget is the sessions' host; the sessions keep their captures'
     // summaries in the catalog, and the sidebar shows the one in front,
     // anew whenever the catalog announces that it changed.
     catalog_.observeFront( [ this ] { showFront(); } );
-    LiveCaptureHost& host = *this;
+    SessionHost& host = *this;
+    conversion_ = std::make_unique<FileConversionSession>( host, catalog_ );
+    conversion_->setOutputRoot( tempRoot_ );
+    connect( conversion_.get(), &FileConversionSession::stateChanged, this,
+             &SidebarWidget::showConversionState );
+    connect( conversion_.get(), &FileConversionSession::progressed, this,
+             [ this ]( int permille ) { progressBar_->setValue( permille ); } );
+    connect( conversion_.get(), &FileConversionSession::finished, this,
+             &SidebarWidget::showConversionOutcome );
+
     live_ = std::make_unique<LiveCaptureSession>( host, catalog_ );
     live_->setOutputRoot( tempRoot_ );
     connect( live_.get(), &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
@@ -494,7 +509,7 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     } );
     connect( live_.get(), &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
 
-    setConverting( false );
+    showConversionState();
     showLiveState();
     setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
 }
@@ -515,13 +530,10 @@ SidebarWidget::~SidebarWidget()
     live_.reset();
 
     // The host unloads the library right after the plugin is shut down:
-    // the worker must be done with it before.  It checks the cancel flag
-    // between packets, and convertPcap() reads regular files only, so it
-    // cannot block on a FIFO or device; a regular file on a network share
-    // that stalls can still hold it up until the system gives up on it.
-    // A conversion that finished before the cancel reached it wrote a file
-    // no tab will show: the cancel wins, and the file goes.
-    conversion_.cancelAndWait();
+    // the session cancels its conversion and waits for its worker, and
+    // tells this widget nothing more.
+    conversion_->disconnect( this );
+    conversion_.reset();
 
     // An export stops between two packets and leaves nothing behind; one
     // that was done when the cancel came keeps its file, as on Cancel.  Its
@@ -547,7 +559,8 @@ bool SidebarWidget::refuse( Activity activity )
 void SidebarWidget::chooseAndOpen()
 {
     // The Open button is disabled meanwhile, but the menu entry is not.
-    if ( refuse( Activity::OpenFile ) ) {
+    if ( const auto why = conversion_->refusal(); !why.isEmpty() ) {
+        hostNotify( why );
         return;
     }
     if ( lastDir_.isEmpty() ) {
@@ -582,49 +595,13 @@ void SidebarWidget::chooseAndOpen()
 
 void SidebarWidget::openPcapFile( const QString& filePath )
 {
-    // One conversion at a time (Open is disabled meanwhile), so the outcome
-    // that arrives is always that of the running one.
-    if ( activityRefusal( Activity::OpenFile, runningActivities() ) ) {
-        return;
-    }
-    hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
-
-    // The Converter writes into a new private directory below the temporary
-    // root, kept for its tab until LogSquirl quits, and reports every
-    // failure as a result: nothing is caught here.  It converts with the
-    // options saved when it starts: a change of them in the configuration
-    // dialog applies to the next capture, the tab of this one keeps its own.
-    // A cancel wins over a conversion that was done when it came: its
-    // directory goes.
-    const auto tempRoot = tempRoot_;
-    const auto options = loadConversionOptions( hostConfigDir() );
-    conversion_.start(
-        [ filePath, tempRoot,
-          options ]( const std::atomic_bool* cancel,
-                     const BackgroundJob<ConversionResult>::Progress& progress ) {
-            return convertPcap( filePath, tempRoot, cancel, progress, options );
-        },
-        []( const ConversionResult& result ) {
-            removeOutput( result );
-            return true;
-        },
-        [ this, filePath ]( ConversionResult result ) {
-            finishConversion( filePath, std::move( result ) );
-        },
-        [ this ]( int permille ) { progressBar_->setValue( permille ); } );
-    setConverting( true );
-    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
-                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
+    // The session refuses, converts, and tells its state and outcome.
+    conversion_->start( filePath );
 }
 
 void SidebarWidget::cancel()
 {
-    if ( !isConverting() ) {
-        return;
-    }
-    conversion_.cancel();
-    cancelButton_->setEnabled( false );
-    summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
+    conversion_->cancel();
 }
 
 void SidebarWidget::exportSelectedPackets()
@@ -841,47 +818,29 @@ void SidebarWidget::openLink( const QString& link )
     }
 }
 
-void SidebarWidget::setConverting( bool converting )
+void SidebarWidget::showConversionState()
 {
+    const auto state = conversion_->state();
+    const bool converting = state != FileConversionSession::State::Idle;
     openButton_->setEnabled( !activityRefusal( Activity::OpenFile, runningActivities() ) );
-    cancelButton_->setEnabled( converting );
+    cancelButton_->setEnabled( state == FileConversionSession::State::Converting );
     cancelButton_->setHidden( !converting );
     progressBar_->setHidden( !converting );
-    progressBar_->setValue( 0 );
+    progressBar_->setValue( conversion_->progress() );
     updateStartButton();
+    // Once it is over, the outcome, or the tab it opened, says what it came to.
+    if ( converting ) {
+        summaryLabel_->setText( conversion_->label() );
+    }
 }
 
-void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
+void SidebarWidget::showConversionOutcome( const FileConversionOutcome& outcome )
 {
-    setConverting( false );
-
-    switch ( result.status ) {
-    case ConversionResult::Status::Cancelled:
-    case ConversionResult::Status::Stopped: // only a stream is stopped
-        summaryLabel_->setText( "Cancelled." );
-        hostLog( LOGSQUIRL_LOG_INFO, "Cancelled opening " + filePath );
-        return;
-
-    case ConversionResult::Status::Failed: {
-        const auto& msg = result.error;
-        summaryLabel_->setText( "Error: " + msg.toHtmlEscaped() );
-        hostLog( LOGSQUIRL_LOG_ERROR, "pcap parse error: " + msg );
-        hostNotify( "Failed to open pcap: " + msg );
-        return;
+    // A capture opened is in front: the catalog announced it, and its
+    // summary is drawn already.
+    if ( !outcome.label.isEmpty() ) {
+        summaryLabel_->setText( outcome.label );
     }
-
-    case ConversionResult::Status::Converted:
-        break;
-    }
-
-    // Its tab opens in the LogSquirl viewer; the file stays until LogSquirl quits.
-    const auto packets = result.summary.packets;
-    catalog_.openConverted( result.outputPath, filePath, std::move( result.summary ),
-                            std::move( result.index ) );
-    showSummaryFor( result.outputPath );
-
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 packets from %2" ).arg( packets ).arg( filePath ) );
 }
 
 void SidebarWidget::showSummaryFor( const QString& filePath )
@@ -1110,9 +1069,8 @@ void SidebarWidget::notify( const QString& message )
 
 RunningActivities SidebarWidget::runningElsewhere() const
 {
-    auto running = runningActivities();
-    running.capturing = false; // the session's own
-    return running;
+    // Each session puts in its own, converting or capturing.
+    return runningActivities();
 }
 
 void SidebarWidget::showLiveFile( const QString& logPath )
