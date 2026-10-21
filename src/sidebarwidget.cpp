@@ -65,9 +65,7 @@
 #include "conversation_table.h"
 #include "display_filter_dialog.h"
 #include "follow_stream.h"
-#include "live_capture_form.h"
 #include "packet_panel.h"
-#include "pcap_converter.h"
 #include "plugin.h"
 #include "regex_lab.h"
 
