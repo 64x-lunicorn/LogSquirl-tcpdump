@@ -63,6 +63,7 @@ add_executable(logsquirl_tcpdump_tests
     process_source_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    sidebar_text_test.cpp
     packet_panel_test.cpp
     conversation_table_test.cpp
     follow_stream_test.cpp
@@ -196,6 +197,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/ssh_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/command_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_form.cpp"
+        "${CMAKE_SOURCE_DIR}/src/sidebar_text.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_content.cpp"

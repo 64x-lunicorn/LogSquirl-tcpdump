@@ -19,30 +19,35 @@
 
 /**
  * @file sidebarwidget_test.cpp
- * @brief BDD tests for opening a capture from the sidebar.
+ * @brief Smoke tests of the sidebar, a view of the plugin's sessions: its
+ *        layout and scrolling, and that its buttons, labels and links are
+ *        wired to the sessions, the catalog and the host.
+ *
+ * What the sessions do is tested at the sessions (capture_sessions_test.cpp,
+ * file_conversion_session_test.cpp, live_capture_session_test.cpp,
+ * export_session_test.cpp), what the Activity rule allows in
+ * activity_test.cpp, what the catalog says is in front in
+ * capture_catalog_test.cpp, and what the labels say of all of them in
+ * sidebar_text_test.cpp; here, only that the sidebar shows it.
  */
 
 #include <catch2/catch.hpp>
 
+#include "conversation_table.h"
 #include "fake_live_session.h"
 #include "fakehost.h"
 #include "packet_panel.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "regex_lab.h"
-#include "settings.h"
 #include "sidebarwidget.h"
 
 #include <QCoreApplication>
 #include <QDesktopServices>
-#include <QDir>
 #include <QFile>
-#include <QFileInfo>
-#include <QImage>
 #include <QLabel>
-#include <QLocale>
 #include <QPalette>
-#include <QPixmap>
+#include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -54,10 +59,8 @@
 
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <functional>
 #include <memory>
-#include <set>
 #include <thread>
 
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
@@ -65,6 +68,7 @@ extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* hand
 
 using tcpdump::CaptureSessions;
 using tcpdump::SidebarWidget;
+using tcpdump::SummaryStatus;
 using tcpdump_test::FakeHost;
 using tcpdump_test::waitFor;
 using namespace tcpdump_test;
@@ -100,23 +104,6 @@ QString linkTarget( const QString& html, const QString& text )
     const QRegularExpression link( "<a href=\"([^\"]*)\">"
                                    + QRegularExpression::escape( text.toHtmlEscaped() ) + "</a>" );
     return link.match( html ).captured( 1 );
-}
-
-/** The numbers of the lines of @p path that @p pattern matches, from 1. */
-std::set<int> matchedLines( const QString& path, const QString& pattern )
-{
-    QFile file( path );
-    REQUIRE( file.open( QIODevice::ReadOnly ) );
-    const auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
-    const QRegularExpression regex( pattern );
-    REQUIRE( regex.isValid() );
-    std::set<int> numbers;
-    for ( int i = 0; i < lines.size(); ++i ) {
-        if ( regex.match( lines[ i ] ).hasMatch() ) {
-            numbers.insert( i + 1 );
-        }
-    }
-    return numbers;
 }
 
 /** Records the URLs QDesktopServices::openUrl() is asked to open. */
@@ -163,496 +150,352 @@ bool scrollIntoView( QWidget* widget, const QRect& rect )
     return shown == rect;
 }
 
+/** A converter that converts, then holds its result until cancelled. */
+tcpdump::FileConversionSession::Converter heldConverter()
+{
+    return []( const QString& filePath, const QString& outputRoot, const std::atomic_bool* cancel,
+               const std::function<void( int )>&, const tcpdump::ConversionOptions& options ) {
+        auto result = tcpdump::convertPcap( filePath, outputRoot, nullptr, {}, options );
+        while ( !cancel->load() ) {
+            std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+        }
+        return result;
+    };
+}
+
 } // namespace
 
-// What opening a capture file does, its refusal, cancel, failure, private
-// output and options, is the File Conversion session's, tested in
-// file_conversion_session_test.cpp; here, that the sidebar forwards to it
-// and renders what it says.
-SCENARIO( "a capture is converted in the background and opened in a tab", "[sidebar]" )
+SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
 {
-    QTemporaryDir dir;
-    REQUIRE( dir.isValid() );
+    FakeHost host;
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
 
-    GIVEN( "a sidebar and a small capture" )
+    THEN( "the summary says no capture is loaded, the Packet section not again, and the "
+          "controls are idle" )
     {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( dir.path() );
-        const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
-
-        WHEN( "the capture is opened" )
-        {
-            sessions.conversionSession().start( capture );
-
-            THEN( "the sidebar shows the conversion running, with a Cancel button" )
-            {
-                REQUIRE( sessions.conversionSession().isBusy() );
-                REQUIRE_FALSE( child<QPushButton>( widget, "openButton" )->isEnabled() );
-                REQUIRE_FALSE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
-                REQUIRE( child<QPushButton>( widget, "cancelButton" )->isEnabled() );
-                REQUIRE_FALSE( child<QProgressBar>( widget, "progress" )->isHidden() );
-                REQUIRE( child<QLabel>( widget, "summary" )->text()
-                         == "Reading small.pcap\xe2\x80\xa6" );
-                widget.setPalette( QPalette( QColor( 0x20, 0x20, 0x20 ) ) );
-                REQUIRE( child<QLabel>( widget, "summary" )->text()
-                         == "Reading small.pcap\xe2\x80\xa6" );
-            }
-
-            THEN( "the text file is opened in a tab once it is written, not followed" )
-            {
-                REQUIRE( waitFor( [ &host ] { return !host.openedFiles.isEmpty(); } ) );
-                REQUIRE( host.openedFiles.size() == 1 );
-                REQUIRE( host.openedFollowing == QList<bool>{ false } );
-                QFile out( host.openedFiles.first() );
-                REQUIRE( out.open( QIODevice::ReadOnly ) );
-                REQUIRE( out.readAll().count( '\n' ) == 4 ); // header + 3 packets
-            }
-
-            THEN( "the sidebar returns to idle and shows the summary" )
-            {
-                REQUIRE(
-                    waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-                REQUIRE( child<QPushButton>( widget, "openButton" )->isEnabled() );
-                REQUIRE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
-                REQUIRE( child<QProgressBar>( widget, "progress" )->isHidden() );
-                REQUIRE( child<QLabel>( widget, "summary" )->text().contains( "small.pcap" ) );
-            }
-        }
+        REQUIRE( child<QLabel>( widget, "summary" )->text() == "No capture loaded." );
+        REQUIRE( child<QLabel>( widget, "packetStatus" )->isHidden() );
+        REQUIRE( child<QPushButton>( widget, "openButton" )->isEnabled() );
+        REQUIRE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
+        REQUIRE( child<QProgressBar>( widget, "progress" )->isHidden() );
+        REQUIRE( child<QPushButton>( widget, "liveCaptureButton" )->isEnabled() );
+        REQUIRE( child<QPushButton>( widget, "stopButton" )->isHidden() );
+        REQUIRE( child<QPushButton>( widget, "saveCaptureButton" )->isHidden() );
     }
 
-    GIVEN( "a file that is not a capture" )
+    THEN( "it is the sessions' dialog parent, until it goes" )
     {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( dir.path() );
-        const auto junk = writeCapture( dir, "junk.pcap", Bytes( 64, 0xEE ) );
-
-        WHEN( "it is opened" )
-        {
-            sessions.conversionSession().start( junk );
-            REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-
-            THEN( "the summary label shows the outcome's, and the user is told" )
-            {
-                const auto& outcome = sessions.conversionSession().outcome();
-                REQUIRE( outcome );
-                REQUIRE( child<QLabel>( widget, "summary" )->text() == outcome->label );
-                REQUIRE( outcome->label.contains( "magic" ) );
-                REQUIRE( host.notifications == QStringList{ outcome->notification } );
-                REQUIRE( host.openedFiles.isEmpty() );
-            }
-        }
+        REQUIRE( sessions.dialogParent() == &widget );
     }
 }
 
-SCENARIO( "the Open button asks for a capture and opens it", "[sidebar]" )
+SCENARIO( "the Open and Cancel buttons reach the File Conversion session, and the sidebar shows "
+          "it",
+          "[sidebar]" )
 {
     QTemporaryDir dir;
     REQUIRE( dir.isValid() );
+    FakeHost host;
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
+    sessions.setTempRoot( dir.path() );
+    auto& conversion = sessions.conversionSession();
+    conversion.setConverter( heldConverter() );
+    const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
+    QWidget* dialogParent = nullptr;
+    sessions.setFileChooser( [ & ]( QWidget* parent, const QString& ) {
+        dialogParent = parent;
+        return capture;
+    } );
+    auto* summary = child<QLabel>( widget, "summary" );
 
-    GIVEN( "a sidebar whose file dialog selects a capture" )
+    WHEN( "the Open button is clicked" )
     {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( dir.path() );
-        const auto capture = writeCapture( dir, "small.pcap", captureOf( 3 ) );
-        QWidget* dialogParent = nullptr;
-        sessions.setFileChooser( [ &dialogParent, &capture ]( QWidget* parent, const QString& ) {
-            dialogParent = parent;
-            return capture;
-        } );
+        child<QPushButton>( widget, "openButton" )->click();
 
-        WHEN( "the Open button is clicked" )
+        THEN( "the dialog is shown over the sidebar, and its controls show the conversion" )
         {
-            child<QPushButton>( widget, "openButton" )->click();
-
-            THEN( "the dialog is shown over the sidebar and the capture opened in a tab" )
-            {
-                REQUIRE( dialogParent == &widget );
-                REQUIRE( waitFor( [ &host ] { return host.openedFiles.size() == 1; } ) );
-            }
+            REQUIRE( dialogParent == &widget );
+            REQUIRE( conversion.isBusy() );
+            REQUIRE_FALSE( child<QPushButton>( widget, "openButton" )->isEnabled() );
+            REQUIRE_FALSE( child<QPushButton>( widget, "liveCaptureButton" )->isEnabled() );
+            REQUIRE_FALSE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
+            REQUIRE( child<QPushButton>( widget, "cancelButton" )->isEnabled() );
+            REQUIRE_FALSE( child<QProgressBar>( widget, "progress" )->isHidden() );
+            REQUIRE( summary->text()
+                     == tcpdump::summaryLabelText( SummaryStatus::Conversion, sessions, false,
+                                                   widget.palette() ) );
         }
-    }
-}
 
-SCENARIO( "the Cancel button cancels the running conversion", "[sidebar]" )
-{
-    QTemporaryDir dir;
-    QTemporaryDir tempRoot;
-    REQUIRE( dir.isValid() );
-    REQUIRE( tempRoot.isValid() );
-
-    GIVEN( "a sidebar converting a capture until it is cancelled" )
-    {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( tempRoot.path() );
-        // Converts, then holds its result until cancelled: a conversion that
-        // was done when the cancel came.
-        sessions.conversionSession().setConverter(
-            []( const QString& filePath, const QString& outputRoot, const std::atomic_bool* cancel,
-                const std::function<void( int )>&, const tcpdump::ConversionOptions& options ) {
-                auto result = tcpdump::convertPcap( filePath, outputRoot, nullptr, {}, options );
-                while ( !cancel->load() ) {
-                    std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
-                }
-                return result;
-            } );
-        sessions.conversionSession().start( writeCapture( dir, "small.pcap", captureOf( 3 ) ) );
-        REQUIRE( sessions.conversionSession().isBusy() );
-
-        WHEN( "the user clicks Cancel" )
+        AND_WHEN( "Cancel is clicked" )
         {
             child<QPushButton>( widget, "cancelButton" )->click();
 
-            THEN( "Cancel is disabled and the label says it is cancelling" )
+            THEN( "the session cancels; Cancel is disabled and the label says so" )
             {
+                REQUIRE( conversion.state() == tcpdump::FileConversionSession::State::Cancelling );
                 REQUIRE_FALSE( child<QPushButton>( widget, "cancelButton" )->isEnabled() );
-                REQUIRE( child<QLabel>( widget, "summary" )->text() == "Cancelling\xe2\x80\xa6" );
-                REQUIRE( waitFor( [ & ] { return !sessions.conversionSession().isBusy(); } ) );
+                REQUIRE( summary->text() == "Cancelling\xe2\x80\xa6" );
+                REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
             }
 
             AND_WHEN( "the conversion has ended" )
             {
-                REQUIRE( waitFor( [ & ] { return !sessions.conversionSession().isBusy(); } ) );
+                REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
 
-                THEN( "no tab is opened, the sidebar says it was cancelled, and is idle" )
+                THEN( "the sidebar shows its outcome, and is idle" )
                 {
-                    REQUIRE( host.openedFiles.isEmpty() );
-                    REQUIRE( child<QLabel>( widget, "summary" )->text() == "Cancelled." );
-                    widget.setPalette( QPalette( QColor( 0x20, 0x20, 0x20 ) ) );
-                    REQUIRE( child<QLabel>( widget, "summary" )->text() == "Cancelled." );
+                    REQUIRE( summary->text() == "Cancelled." );
                     REQUIRE( child<QPushButton>( widget, "openButton" )->isEnabled() );
                     REQUIRE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
                     REQUIRE( child<QProgressBar>( widget, "progress" )->isHidden() );
-                    REQUIRE( QDir( tempRoot.path() ).isEmpty() );
                 }
             }
         }
     }
-}
 
-// Which summary carries the Log Format hint is the Capture Catalog's rule,
-// tested in capture_catalog_test.cpp; here, that the sidebar shows its link.
-SCENARIO( "the first summary of a session points to the Log Format", "[sidebar]" )
-{
-    QTemporaryDir dir;
-    REQUIRE( dir.isValid() );
-
-    GIVEN( "a sidebar, as created when the plugin is loaded" )
+    WHEN( "a capture is converted" )
     {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( dir.path() );
-        auto* summary = child<QLabel>( widget, "summary" );
-        const QString readmeSection
-            = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
+        conversion.setConverter( []( const QString& filePath, const QString& outputRoot,
+                                     const std::atomic_bool*, const std::function<void( int )>&,
+                                     const tcpdump::ConversionOptions& options ) {
+            return tcpdump::convertPcap( filePath, outputRoot, nullptr, {}, options );
+        } );
+        child<QPushButton>( widget, "openButton" )->click();
+        REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
 
-        WHEN( "a first capture is converted" )
+        THEN( "the sidebar is idle and shows its summary, its tab in front" )
         {
-            sessions.conversionSession().start( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
-            REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-
-            THEN( "the summary links to the README section on installing the Log Format" )
-            {
-                REQUIRE( summary->text().contains( "first.pcap" ) );
-                REQUIRE( summary->text().contains( "href=\"" + readmeSection + "\"" ) );
-
-                AND_WHEN( "the user clicks the link" )
-                {
-                    UrlRecorder browser;
-                    QDesktopServices::setUrlHandler( "https", &browser, "open" );
-                    emit summary->linkActivated( linkTarget( summary->text(), "install it once" ) );
-                    QDesktopServices::unsetUrlHandler( "https" );
-
-                    THEN( "the README section opens in the browser" )
-                    {
-                        REQUIRE( browser.opened == QList<QUrl>{ QUrl( readmeSection ) } );
-                        REQUIRE( host.regexLabs.isEmpty() );
-                    }
-                }
-            }
-        }
-
-        WHEN( "a conversion fails first" )
-        {
-            sessions.conversionSession().start( writeCapture( dir, "bad.pcap", Bytes( 64, 0 ) ) );
-            REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-
-            THEN( "the hint waits for the first converted capture" )
-            {
-                REQUIRE_FALSE( summary->text().contains( readmeSection ) );
-                sessions.conversionSession().start(
-                    writeCapture( dir, "good.pcap", captureOf( 1 ) ) );
-                REQUIRE(
-                    waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-                REQUIRE( summary->text().contains( readmeSection ) );
-            }
+            REQUIRE( child<QPushButton>( widget, "openButton" )->isEnabled() );
+            REQUIRE( child<QPushButton>( widget, "cancelButton" )->isHidden() );
+            REQUIRE( summary->text().startsWith( "<b>small.pcap</b>" ) );
         }
     }
 }
 
-// Which capture is in front, by any spelling of its path, and that the
-// captures before keep theirs, are the Capture Catalog's rules, tested in
-// capture_catalog_test.cpp; here, that the host's tab switches reach it and
-// the sidebar renders what it says.
-SCENARIO( "the sidebar shows the summary of the capture in the tab in front", "[sidebar]" )
+SCENARIO( "the sidebar follows the tab in front", "[sidebar]" )
 {
     QTemporaryDir dir;
     QTemporaryDir tempRoot;
     REQUIRE( dir.isValid() );
     REQUIRE( tempRoot.isValid() );
+    FakeHost host;
+    tcpdump::g_state.tempRoot = tempRoot.path();
+    REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+    REQUIRE( host.hasActiveFileCallback() );
+    auto* widget = tcpdump::g_state.sidebarWidget;
+    auto* sessions = tcpdump::g_state.sessions;
+    auto* summary = child<QLabel>( *widget, "summary" );
+    auto* conversations = widget->packetPanel()->conversationTable()->model();
+    auto& conversion = sessions->conversionSession();
+    REQUIRE( conversion.start( writeCapture( dir, "first.pcap", captureOf( 1 ) ) ) );
+    REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
+    REQUIRE( host.openedFiles.size() == 1 );
 
-    GIVEN( "an initialised plugin that converted two captures, each opened in a tab" )
+    WHEN( "a tab with a file the plugin did not write comes to the front" )
     {
-        FakeHost host;
-        tcpdump::g_state.tempRoot = tempRoot.path();
-        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
-        REQUIRE( host.hasActiveFileCallback() );
-        auto* widget = tcpdump::g_state.sidebarWidget;
-        auto* sessions = tcpdump::g_state.sessions;
-        auto* summary = child<QLabel>( *widget, "summary" );
+        host.activateFile( dir.filePath( "server.log" ) );
 
-        sessions->conversionSession().start( writeCapture( dir, "first.pcap", captureOf( 1 ) ) );
-        REQUIRE( waitFor( [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
-        sessions->conversionSession().start( writeCapture( dir, "second.pcap", captureOf( 2 ) ) );
-        REQUIRE( waitFor( [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
-        REQUIRE( host.openedFiles.size() == 2 );
-        const auto first = host.openedFiles.at( 0 );
-        const auto second = host.openedFiles.at( 1 );
-
-        WHEN( "the first capture's tab comes to the front" )
+        THEN( "the catalog is told, and the sidebar shows no capture" )
         {
-            host.activateFile( first );
-
-            THEN( "the sidebar shows the first capture's summary, as it was" )
-            {
-                REQUIRE( summary->text().contains( "first.pcap" ) );
-                REQUIRE_FALSE( summary->text().contains( "second.pcap" ) );
-            }
-
-            AND_WHEN( "the second capture's tab comes to the front again" )
-            {
-                host.activateFile( second );
-
-                THEN( "the sidebar shows the second capture's summary" )
-                {
-                    REQUIRE( summary->text().contains( "second.pcap" ) );
-                    REQUIRE_FALSE( summary->text().contains( "first.pcap" ) );
-                }
-            }
+            REQUIRE( sessions->catalog().front() == nullptr );
+            REQUIRE( summary->text() == "No capture in this tab." );
+            REQUIRE( conversations->rowCount() == 0 );
         }
 
-        WHEN( "a tab with a file the plugin did not write comes to the front" )
+        AND_WHEN( "the capture's tab comes back" )
         {
-            host.activateFile( dir.filePath( "server.log" ) );
+            host.activateFile( host.openedFiles.first() );
 
-            THEN( "the sidebar says the tab holds no capture, and names none" )
+            THEN( "its summary and its conversations are shown again" )
             {
-                REQUIRE( summary->text() == "No capture in this tab." );
+                REQUIRE( summary->text().startsWith( "<b>first.pcap</b>" ) );
+                REQUIRE( conversations->rowCount() == 1 );
             }
-
-            AND_WHEN( "a capture's tab comes back" )
-            {
-                host.activateFile( first );
-
-                THEN( "its summary is shown again" )
-                {
-                    REQUIRE( summary->text().contains( "first.pcap" ) );
-                }
-            }
-        }
-
-        WHEN( "the tab in front changes while a capture is being read" )
-        {
-            sessions->conversionSession().start(
-                writeCapture( dir, "big.pcap", captureOf( 20000 ) ) );
-            host.activateFile( first );
-
-            THEN( "the sidebar keeps showing the reading, until it is done" )
-            {
-                REQUIRE( summary->text().contains( "Reading big.pcap" ) );
-                sessions->conversionSession().cancel();
-                REQUIRE(
-                    waitFor( [ sessions ] { return !sessions->conversionSession().isBusy(); } ) );
-            }
-        }
-
-        logsquirl_plugin_shutdown();
-    }
-}
-
-SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
-{
-    GIVEN( "a sidebar, as created when the plugin is loaded" )
-    {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-
-        THEN( "the summary says no capture is loaded, and the Packet section not again" )
-        {
-            REQUIRE( child<QLabel>( widget, "summary" )->text() == "No capture loaded." );
-            REQUIRE( child<QLabel>( widget, "packetStatus" )->isHidden() );
         }
     }
+
+    logsquirl_plugin_shutdown();
 }
 
-// What a live capture does is the Live Capture Session's, tested in
-// live_capture_session_test.cpp; here, what the summary label says of it,
-// with captures the test scripts, and that a palette change keeps it.
-SCENARIO( "the summary label says what a live capture comes to", "[sidebar]" )
+SCENARIO( "the sidebar shows the Live Capture Session, and its Stop reaches it", "[sidebar]" )
 {
     QTemporaryDir dir;
     REQUIRE( dir.isValid() );
+    FakeHost host;
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
+    sessions.setTempRoot( dir.path() );
+    ScriptedRuns runs;
+    auto& live = sessions.liveSession();
+    live.setRunFactory( runs.factory() );
+    auto* start = child<QPushButton>( widget, "liveCaptureButton" );
+    auto* stop = child<QPushButton>( widget, "stopButton" );
+    auto* progress = child<QLabel>( widget, "liveProgress" );
+    auto* stderrView = child<QPlainTextEdit>( widget, "liveStderr" );
+    auto* error = child<QLabel>( widget, "liveError" );
+    auto* summary = child<QLabel>( widget, "summary" );
 
-    GIVEN( "a sidebar whose live captures the test scripts" )
+    WHEN( "a capture starts, and its program writes to stderr" )
     {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( dir.path() );
-        ScriptedRuns runs;
-        sessions.liveSession().setRunFactory( runs.factory() );
-        auto* summary = child<QLabel>( widget, "summary" );
-        const auto logPath = dir.filePath( "eth0.log" );
-        const auto rawPath = dir.filePath( "eth0.pcap" );
-        const auto otherTab = dir.filePath( "server.log" );
-        tcpdump::LiveSnapshot snapshot;
-        snapshot.summary.packets = 1;
-        tcpdump::ConversionResult captured;
-        captured.status = tcpdump::ConversionResult::Status::Converted;
-        captured.outputPath = logPath;
-        captured.summary.packets = 2;
-        // A switch of the colour scheme redraws the label from what it says.
-        const auto paletteKeeps = [ & ] {
-            const auto before = summary->text();
-            QPalette dark;
-            dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
-            dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
-            widget.setPalette( dark );
-            return summary->text() == before;
-        };
+        REQUIRE( live.start( "eth0", {} ) );
+        runs.last().stderrLine( "eth0: listening" );
 
-        WHEN( "a capture starts" )
+        THEN( "Start is gone, and Stop, the progress, stderr and the label show" )
         {
-            REQUIRE( sessions.liveSession().start( "eth0", {} ) );
+            REQUIRE( start->isHidden() );
+            REQUIRE_FALSE( stop->isHidden() );
+            REQUIRE( stop->isEnabled() );
+            REQUIRE_FALSE( progress->isHidden() );
+            REQUIRE( progress->text() == tcpdump::liveStateText( live ) );
+            REQUIRE_FALSE( stderrView->isHidden() );
+            REQUIRE( stderrView->toPlainText() == "eth0: listening" );
+            REQUIRE_FALSE( child<QPushButton>( widget, "openButton" )->isEnabled() );
+            REQUIRE( summary->text()
+                     == tcpdump::summaryLabelText( SummaryStatus::LiveStarted, sessions, false,
+                                                   widget.palette() ) );
+        }
 
-            THEN( "the label says it waits for the first packet" )
+        AND_WHEN( "Stop is clicked" )
+        {
+            stop->click();
+
+            THEN( "the session stops it, and Stop is disabled" )
             {
+                REQUIRE( runs.last().stopped );
+                REQUIRE( live.state() == tcpdump::LiveCaptureSession::State::Stopping );
+                REQUIRE_FALSE( stop->isEnabled() );
+                REQUIRE( progress->text() == tcpdump::liveStateText( live ) );
+            }
+        }
+
+        AND_WHEN( "it fails" )
+        {
+            tcpdump::ConversionResult failed;
+            failed.status = tcpdump::ConversionResult::Status::Failed;
+            failed.error = "no such device";
+            runs.last().finish( failed );
+
+            THEN( "the section shows its error, and Start is back" )
+            {
+                REQUIRE( live.outcome() );
+                REQUIRE_FALSE( error->isHidden() );
+                REQUIRE( error->text() == tcpdump::liveErrorHtml( *live.outcome() ) );
+                REQUIRE_FALSE( start->isHidden() );
+                REQUIRE( stop->isHidden() );
                 REQUIRE( summary->text()
-                         == "Capturing eth0\xe2\x80\xa6 waiting for the first packet." );
-                REQUIRE( paletteKeeps() );
+                         == tcpdump::summaryLabelText( SummaryStatus::LiveOutcome, sessions, false,
+                                                       widget.palette() ) );
             }
 
-            AND_WHEN( "its tab opens behind another" )
+            AND_WHEN( "the next capture starts" )
             {
-                sessions.catalog().setFront( otherTab );
-                runs.last().open( logPath, rawPath );
+                REQUIRE( live.start( "eth1", {} ) );
 
-                THEN( "the label says the capture goes on" )
+                THEN( "the error and the stderr lines go" )
                 {
-                    REQUIRE( summary->text() == "Capturing eth0\xe2\x80\xa6" );
-                    REQUIRE( paletteKeeps() );
-                }
-
-                AND_WHEN( "it ends with packets" )
-                {
-                    runs.last().finish( captured );
-
-                    THEN( "the label says its tab shows its summary" )
-                    {
-                        REQUIRE( summary->text()
-                                 == "The capture eth0 has ended: its tab shows its summary." );
-                        REQUIRE( paletteKeeps() );
-                    }
-
-                    AND_WHEN( "its tab comes to the front" )
-                    {
-                        sessions.catalog().setFront( logPath );
-
-                        THEN( "the label shows its final summary" )
-                        {
-                            REQUIRE( summary->text().contains( "Packets: <b>2</b>" ) );
-                            REQUIRE_FALSE( summary->text().contains( "Capturing" ) );
-                        }
-                    }
+                    REQUIRE( error->isHidden() );
+                    REQUIRE( stderrView->isHidden() );
                 }
             }
+        }
+    }
+}
 
-            AND_WHEN( "its tab opens and comes to the front, and a snapshot comes" )
+SCENARIO( "the summary's links open the README in the browser and filters in the Regex Lab",
+          "[sidebar]" )
+{
+    QTemporaryDir tempRoot;
+    REQUIRE( tempRoot.isValid() );
+    FakeHost host;
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
+    sessions.setTempRoot( tempRoot.path() );
+    auto* summary = child<QLabel>( widget, "summary" );
+    auto& conversion = sessions.conversionSession();
+    REQUIRE( conversion.start( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) ) );
+    REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
+
+    WHEN( "the user clicks the Log Format hint's link" )
+    {
+        UrlRecorder browser;
+        QDesktopServices::setUrlHandler( "https", &browser, "open" );
+        emit summary->linkActivated( linkTarget( summary->text(), "install it once" ) );
+        QDesktopServices::unsetUrlHandler( "https" );
+
+        THEN( "the README section opens in the browser" )
+        {
+            REQUIRE( browser.opened == QList<QUrl>{ QUrl( tcpdump::kLogFormatHelpUrl ) } );
+            REQUIRE( host.regexLabs.isEmpty() );
+        }
+    }
+
+    WHEN( "the user clicks an endpoint" )
+    {
+        const auto link = linkTarget( summary->text(), "fe80::1" );
+        emit summary->linkActivated( link );
+
+        THEN( "the Regex Lab opens with its filter's pattern, matching case, and logs it" )
+        {
+            REQUIRE( host.regexLabs.size() == 1 );
+            const auto& lab = host.regexLabs.first();
+            REQUIRE( lab.pattern == tcpdump::summaryLinkPattern( link ) );
+            REQUIRE( lab.flags == LOGSQUIRL_REGEX_LAB_MATCH_CASE );
+            REQUIRE( host.logs.contains( "Filter: " + lab.pattern ) );
+        }
+
+        AND_WHEN( "the user applies it" )
+        {
+            host.regexLabs.first().apply( host.regexLabs.first().pattern,
+                                          LOGSQUIRL_REGEX_LAB_MATCH_CASE );
+
+            THEN( "the applied pattern is logged" )
             {
-                runs.last().open( logPath, rawPath );
-                sessions.catalog().setFront( logPath );
-                runs.last().snapshot( snapshot );
-
-                THEN( "the label shows the summary so far" )
-                {
-                    REQUIRE( summary->text().startsWith(
-                        "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br><b>eth0.pcap</b>" ) );
-                    REQUIRE( summary->text().contains( "Packets: <b>1</b>" ) );
-                }
-
-                AND_WHEN( "it ends with packets" )
-                {
-                    runs.last().finish( captured );
-
-                    THEN( "the label shows its final summary" )
-                    {
-                        REQUIRE( summary->text().startsWith( "<b>eth0.pcap</b>" ) );
-                        REQUIRE( summary->text().contains( "Packets: <b>2</b>" ) );
-                    }
-                }
-
-                AND_WHEN( "it fails" )
-                {
-                    auto failed = captured;
-                    failed.status = tcpdump::ConversionResult::Status::Failed;
-                    failed.error = "tcpdump exited with code 1";
-                    runs.last().finish( failed );
-
-                    THEN( "the label shows the error above the summary" )
-                    {
-                        REQUIRE( summary->text().startsWith(
-                            "<b>Error:</b> tcpdump exited with code 1<br>The capture so far is "
-                            "kept.<br><b>eth0.pcap</b>" ) );
-                    }
-                }
+                REQUIRE(
+                    host.logs.contains( "Filter: applied " + host.regexLabs.first().pattern ) );
             }
+        }
+    }
+}
 
-            AND_WHEN( "it is stopped before anything came" )
-            {
-                tcpdump::ConversionResult stopped;
-                stopped.status = tcpdump::ConversionResult::Status::Stopped;
-                runs.last().finish( stopped );
+SCENARIO( "on a host older than LogSquirl 26.11 the summary has no filter links", "[sidebar]" )
+{
+    QTemporaryDir tempRoot;
+    REQUIRE( tempRoot.isValid() );
+    FakeHost host( LOGSQUIRL_HOST_API_BASE_SIZE );
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
+    sessions.setTempRoot( tempRoot.path() );
+    auto& conversion = sessions.conversionSession();
+    REQUIRE( conversion.start( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) ) );
+    REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
 
-                THEN( "the label says so" )
-                {
-                    REQUIRE( summary->text()
-                             == "The capture eth0 was stopped before anything was captured." );
-                    REQUIRE( paletteKeeps() );
-                }
-            }
+    const auto text = child<QLabel>( widget, "summary" )->text();
+    REQUIRE( text.contains( "<b>Endpoints</b>" ) );
+    REQUIRE_FALSE( text.contains( "tcpdump-filter:" ) );
+}
 
-            AND_WHEN( "it fails before a packet came" )
-            {
-                tcpdump::ConversionResult failed;
-                failed.status = tcpdump::ConversionResult::Status::Failed;
-                failed.error = "no <such> device";
-                runs.last().finish( failed );
+SCENARIO( "a sidebar that goes leaves the sessions running", "[sidebar]" )
+{
+    QTemporaryDir dir;
+    QTemporaryDir tempRoot;
+    FakeHost host;
+    CaptureSessions sessions;
+    sessions.setTempRoot( tempRoot.path() );
+    auto widget = std::make_unique<SidebarWidget>( sessions );
+    auto& conversion = sessions.conversionSession();
+    REQUIRE( conversion.start( writeCapture( dir, "small.pcap", captureOf( 3 ) ) ) );
 
-                THEN( "the label says why" )
-                {
-                    REQUIRE( summary->text() == "Error: no &lt;such&gt; device" );
-                    REQUIRE( paletteKeeps() );
-                }
-            }
+    WHEN( "it goes while a capture is being read" )
+    {
+        widget.reset();
+
+        THEN( "the capture is opened all the same, and the dialogs are shown over no window" )
+        {
+            REQUIRE( sessions.dialogParent() == nullptr );
+            REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
+            REQUIRE( host.openedFiles.size() == 1 );
         }
     }
 }
@@ -727,57 +570,6 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
         }
     }
 }
-
-SCENARIO( "the line under the capture's name takes the palette's colours", "[sidebar]" )
-{
-    GIVEN( "a light and a dark palette" )
-    {
-        QPalette light;
-        light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
-        light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
-        QPalette dark;
-        dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
-        dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
-        const auto palette = GENERATE_COPY( light, dark );
-
-        WHEN( "a summary is shown in a label of that palette" )
-        {
-            QLabel label;
-            label.setPalette( palette );
-            label.setAutoFillBackground( true );
-            label.setTextFormat( Qt::RichText );
-            label.setText(
-                tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary(), false, palette ) );
-            label.resize( 300, label.sizeHint().height() );
-            const auto image = label.grab().toImage();
-
-            THEN( "the line is drawn between the window's and the text's colour" )
-            {
-                // The line is the one row mostly of one colour other than
-                // the window's.
-                const auto window = palette.color( QPalette::Window ).rgb();
-                const auto text = palette.color( QPalette::WindowText );
-                bool found = false;
-                for ( int y = 0; y < image.height() && !found; ++y ) {
-                    const QColor middle = image.pixelColor( image.width() / 2, y );
-                    if ( middle.rgb() == window ) {
-                        continue;
-                    }
-                    int same = 0;
-                    for ( int x = 0; x < image.width(); ++x ) {
-                        same += image.pixelColor( x, y ) == middle;
-                    }
-                    if ( same > image.width() / 2 ) {
-                        found = true;
-                        REQUIRE( std::abs( middle.lightness() - text.lightness() ) > 60 );
-                    }
-                }
-                REQUIRE( found );
-            }
-        }
-    }
-}
-
 SCENARIO( "the summary's line follows a switch of the colour scheme", "[sidebar]" )
 {
     QTemporaryDir dir;
@@ -812,471 +604,6 @@ SCENARIO( "the summary's line follows a switch of the colour scheme", "[sidebar]
                 expected.replace( "#a6a6a6", "#656565" );
                 REQUIRE( summary->text() == expected );
             }
-        }
-    }
-}
-
-SCENARIO( "the summary shows names as text, not markup", "[sidebar]" )
-{
-    GIVEN( "a capture whose file name, protocol and endpoint contain markup" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 1;
-        summary.protocolPackets[ "<i>P</i>" ] = 1;
-        summary.protocolBytes[ "<i>P</i>" ] = 60;
-        summary.endpointPackets[ "<img src=x>" ] = 1;
-
-        WHEN( "the summary is built" )
-        {
-            const auto html = tcpdump::summaryHtml( "<b>a&b</b>.pcap", 100, summary );
-
-            THEN( "each is escaped" )
-            {
-                REQUIRE( html.contains( "&lt;b&gt;a&amp;b&lt;/b&gt;.pcap" ) );
-                REQUIRE( html.contains( "&lt;i&gt;P&lt;/i&gt;" ) );
-                REQUIRE( html.contains( "&lt;img src=x&gt;" ) );
-                REQUIRE_FALSE( html.contains( "<img" ) );
-                REQUIRE_FALSE( html.contains( "<i>" ) );
-            }
-        }
-    }
-}
-
-SCENARIO( "the summary's filter links keep any name intact", "[sidebar]" )
-{
-    GIVEN( "a protocol and an endpoint whose names hold ':', '%' and markup" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 2;
-        summary.protocolPackets[ "A:B%1<i>" ] = 2;
-        summary.protocolBytes[ "A:B%1<i>" ] = 120;
-        summary.endpointPackets[ "fe80::1%2" ] = 2;
-
-        WHEN( "the summary is built with filter links" )
-        {
-            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary, true );
-
-            THEN( "each is a link, followed by its counts" )
-            {
-                REQUIRE_FALSE( linkTarget( html, "A:B%1<i>" ).isEmpty() );
-                REQUIRE_FALSE( linkTarget( html, "fe80::1%2" ).isEmpty() );
-                REQUIRE( html.contains( "A:B%1&lt;i&gt;</a>: 2 (100.0%, 120 B)<br>" ) );
-                REQUIRE( html.contains( "fe80::1%2</a>: 2 pkts<br>" ) );
-                REQUIRE_FALSE( html.contains( "<i>" ) );
-            }
-        }
-    }
-}
-
-SCENARIO( "the summary lists the capture's link-layer types", "[sidebar]" )
-{
-    GIVEN( "a capture of one link-layer type" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.linkTypeNames = { "Ethernet" };
-
-        THEN( "it is named" )
-        {
-            REQUIRE( tcpdump::summaryHtml( "a.pcap", 100, summary )
-                         .contains( "Link type: Ethernet<br>" ) );
-        }
-    }
-
-    GIVEN( "a capture of several link-layer types" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.linkTypeNames = { "Linux SLL2", "Ethernet", "<147>" };
-
-        THEN( "they are listed comma-separated, as text" )
-        {
-            REQUIRE( tcpdump::summaryHtml( "a.pcap", 100, summary )
-                         .contains( "Link types: Linux SLL2, Ethernet, &lt;147&gt;<br>" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary tells what the TLS decryption did", "[sidebar]" )
-{
-    GIVEN( "a capture converted with a key log" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.tlsSessionsDecrypted = 3;
-
-        THEN( "the sessions decrypted are counted" )
-        {
-            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
-            REQUIRE( html.contains( "<b>TLS decryption</b><br>Sessions decrypted: 3<br>" ) );
-        }
-    }
-
-    GIVEN( "a key log that could not be read" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.tlsSessionsDecrypted = 0;
-        summary.keyLogError = "Cannot read the TLS key log: <No such file>";
-
-        THEN( "it says why, as text" )
-        {
-            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
-            REQUIRE( html.contains( "<i>Cannot read the TLS key log: &lt;No such "
-                                    "file&gt;</i><br>Sessions decrypted: 0" ) );
-        }
-    }
-
-    GIVEN( "a capture converted without a key log" )
-    {
-        THEN( "nothing is said about TLS decryption" )
-        {
-            REQUIRE_FALSE( tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary() )
-                               .contains( "TLS decryption" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary shows the earliest and latest packet time", "[sidebar]" )
-{
-    GIVEN( "a capture with packets" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 2;
-        summary.firstTimeUtc = "2026-10-09 08:41:10.123456Z";
-        summary.lastTimeUtc = "2026-10-09 08:41:40.000000Z";
-
-        THEN( "both are shown in UTC, as the log's UTC Time column has them" )
-        {
-            const auto html = tcpdump::summaryHtml( "a.pcap", 100, summary );
-            REQUIRE( html.contains( "First packet: 2026-10-09 08:41:10.123456Z<br>" ) );
-            REQUIRE( html.contains( "Last packet: 2026-10-09 08:41:40.000000Z<br>" ) );
-        }
-    }
-
-    GIVEN( "a capture without packets" )
-    {
-        THEN( "neither is shown" )
-        {
-            const auto html = tcpdump::summaryHtml( "a.pcap", 100, tcpdump::CaptureSummary() );
-            REQUIRE_FALSE( html.contains( "First packet" ) );
-            REQUIRE_FALSE( html.contains( "Last packet" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary lists the busiest endpoints", "[sidebar]" )
-{
-    GIVEN( "a capture with ten endpoints" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 55;
-        for ( int i = 1; i <= 10; ++i ) {
-            summary.endpointPackets[ "10.0.0." + std::to_string( i ) ] = static_cast<uint64_t>( i );
-        }
-
-        THEN( "the eight busiest are listed, busiest first, and all are counted" )
-        {
-            const auto html = tcpdump::summaryHtml( "ten.pcap", 100, summary );
-            REQUIRE( html.contains( "<b>Endpoints</b> (10 unique)" ) );
-            REQUIRE( html.contains( "10.0.0.10: 10 pkts" ) );
-            REQUIRE( html.contains( "10.0.0.3: 3 pkts" ) );
-            REQUIRE_FALSE( html.contains( "10.0.0.2: 2 pkts" ) );
-            REQUIRE( html.indexOf( "10.0.0.10:" ) < html.indexOf( "10.0.0.9:" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary names the endpoints DNS answers named", "[sidebar]" )
-{
-    GIVEN( "a capture converted with host names, one endpoint named" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 5;
-        summary.endpointPackets[ "93.184.216.34" ] = 3;
-        summary.endpointPackets[ "192.0.2.10" ] = 2;
-        summary.endpointNames[ "93.184.216.34" ] = "www.example.com";
-
-        THEN( "its name follows the address, the filter link is the address's" )
-        {
-            const auto html = tcpdump::summaryHtml( "names.pcap", 100, summary, true );
-            REQUIRE( html.contains( "93.184.216.34</a> (www.example.com): 3 pkts" ) );
-            REQUIRE( html.contains( "endpoint/93.184.216.34\"" ) );
-            REQUIRE( html.contains( "192.0.2.10</a>: 2 pkts" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary lists a tunnel's endpoints apart, without a filter", "[sidebar]" )
-{
-    GIVEN( "a capture whose packets were carried through tunnels" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.endpointPackets[ "10.1.0.10" ] = 4;
-        summary.tunnelEndpointPackets[ "192.0.2.1" ] = 4;
-        summary.tunnelEndpointPackets[ "<img src=x>" ] = 1;
-
-        THEN( "they are listed under Tunnel endpoints, after the endpoints, as plain text" )
-        {
-            const auto html = tcpdump::summaryHtml( "tunnels.pcap", 100, summary, true );
-            REQUIRE( html.contains( "<b>Endpoints</b> (1 unique)" ) );
-            REQUIRE( html.contains( "<b>Tunnel endpoints</b> (2 unique)<br>192.0.2.1: 4 pkts" ) );
-            REQUIRE( html.contains( "&lt;img src=x&gt;: 1 pkts" ) );
-            REQUIRE( html.indexOf( "<b>Endpoints</b>" ) < html.indexOf( "<b>Tunnel endpoints" ) );
-            REQUIRE( html.contains( "endpoint/10.1.0.10" ) );
-            REQUIRE_FALSE( html.contains( "192.0.2.1\"" ) );
-            REQUIRE_FALSE( html.contains( "endpoint/192.0.2.1" ) );
-        }
-    }
-
-    GIVEN( "a capture without tunnels" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.endpointPackets[ "10.1.0.10" ] = 4;
-
-        THEN( "there is no such group" )
-        {
-            REQUIRE_FALSE( tcpdump::summaryHtml( "plain.pcap", 100, summary, true )
-                               .contains( "Tunnel endpoints" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary says what was cut", "[sidebar]" )
-{
-    GIVEN( "a capture that was cut off" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.endsInsideRecord = true;
-
-        THEN( "the summary says so" )
-        {
-            REQUIRE( tcpdump::summaryHtml( "cut.pcap", 100, summary ).contains( "cut off" ) );
-        }
-    }
-
-    GIVEN( "a capture with more packets than the No. column can number" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packetNumbersUsedUp = true;
-
-        THEN( "the summary says the rest was not converted" )
-        {
-            REQUIRE( tcpdump::summaryHtml( "huge.pcap", 100, summary )
-                         .contains( "the last one the No. column can number; the rest was not "
-                                    "converted" ) );
-        }
-    }
-
-    GIVEN( "a capture with more conversations than were numbered" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.streamCap = 5;
-
-        THEN( "the summary names the cap and the ? stream" )
-        {
-            const auto html = tcpdump::summaryHtml( "many.pcap", 100, summary );
-            REQUIRE( html.contains( "More than 5 conversations" ) );
-            REQUIRE( html.contains( "stream ?" ) );
-        }
-    }
-
-    GIVEN( "a capture with more addresses than were counted" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.endpointPackets[ "10.0.0.1" ] = 3;
-        summary.otherEndpointPackets = 7;
-
-        THEN( "the summary counts the rest as other endpoints" )
-        {
-            const auto html = tcpdump::summaryHtml( "many.pcap", 100, summary );
-            REQUIRE( html.contains( "(more than 1 unique)" ) );
-            REQUIRE( html.contains( "Other endpoints: 7 pkts" ) );
-        }
-    }
-
-    GIVEN( "a capture with packets cut at the snaplen" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 1500;
-        summary.cutPackets = 1200;
-
-        THEN( "the summary counts them" )
-        {
-            const auto html = tcpdump::summaryHtml( "snaplen.pcap", 100, summary );
-            REQUIRE( html.contains(
-                QString( "Cut packets: <b>%1</b>" ).arg( QLocale().toString( 1200 ) ) ) );
-        }
-    }
-
-    GIVEN( "a capture with nothing cut" )
-    {
-        THEN( "none of the messages shows" )
-        {
-            const auto html = tcpdump::summaryHtml( "whole.pcap", 100, tcpdump::CaptureSummary() );
-            REQUIRE_FALSE( html.contains( "Cut packets" ) );
-            REQUIRE_FALSE( html.contains( "cut off" ) );
-            REQUIRE_FALSE( html.contains( "stream ?" ) );
-            REQUIRE_FALSE( html.contains( "Other endpoints" ) );
-        }
-    }
-}
-
-SCENARIO( "the summary lists the TCP analysis markers", "[sidebar]" )
-{
-    GIVEN( "a capture with retransmissions and duplicate ACKs" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.packets = 5000;
-        summary.tcpMarkers = { { "TCP Retransmission", 1200 }, { "TCP Dup ACK", 3 } };
-
-        THEN( "they are counted under Analysis, in the summary's order" )
-        {
-            const auto html = tcpdump::summaryHtml( "lossy.pcap", 100, summary );
-            REQUIRE( html.contains( "<b>Analysis</b><br>" ) );
-            REQUIRE( html.contains(
-                QString( "TCP Retransmission: %1<br>" ).arg( QLocale().toString( 1200 ) ) ) );
-            REQUIRE( html.contains( "TCP Dup ACK: 3<br>" ) );
-            REQUIRE( html.indexOf( "TCP Retransmission" ) < html.indexOf( "TCP Dup ACK" ) );
-        }
-    }
-
-    GIVEN( "a capture with handshakes and no marker" )
-    {
-        tcpdump::CaptureSummary summary;
-        summary.handshakes = 1200;
-        summary.medianInitialRttNs = 12345678;
-
-        THEN( "the median initial round-trip time is under Analysis, in milliseconds" )
-        {
-            const auto html = tcpdump::summaryHtml( "clean.pcap", 100, summary );
-            REQUIRE( html.contains( "<b>Analysis</b><br>" ) );
-            REQUIRE( html.contains( QString( "Median iRTT: 12.346 ms (%1 handshakes)<br>" )
-                                        .arg( QLocale().toString( 1200 ) ) ) );
-        }
-    }
-
-    GIVEN( "a capture without any" )
-    {
-        THEN( "there is no Analysis heading" )
-        {
-            const auto html = tcpdump::summaryHtml( "clean.pcap", 100, tcpdump::CaptureSummary() );
-            REQUIRE_FALSE( html.contains( "Analysis" ) );
-        }
-    }
-}
-
-SCENARIO( "endpoints and protocols in the summary open the Regex Lab as filters", "[sidebar]" )
-{
-    QTemporaryDir tempRoot;
-    REQUIRE( tempRoot.isValid() );
-    const auto capture = QDir( QStringLiteral( TCPDUMP_CORPUS_DIR ) ).filePath( "mixed.pcap" );
-
-    GIVEN( "a capture converted on a host with the Regex Lab" )
-    {
-        FakeHost host;
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( tempRoot.path() );
-        auto* summary = child<QLabel>( widget, "summary" );
-        sessions.conversionSession().start( capture );
-        REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-        REQUIRE( host.openedFiles.size() == 1 );
-        const auto text = host.openedFiles.first();
-
-        THEN( "each endpoint and protocol listed is a link" )
-        {
-            for ( const auto& name :
-                  { "192.168.1.1", "192.168.1.100", "fe80::1", "HTTP", "ICMPv6", "SOCKS" } ) {
-                INFO( name );
-                REQUIRE_FALSE( linkTarget( summary->text(), name ).isEmpty() );
-            }
-        }
-
-        WHEN( "the user clicks an IPv6 endpoint" )
-        {
-            emit summary->linkActivated( linkTarget( summary->text(), "fe80::1" ) );
-
-            THEN( "the Regex Lab opens with the pattern of that address, matching case" )
-            {
-                REQUIRE( host.regexLabs.size() == 1 );
-                const auto& lab = host.regexLabs.first();
-                REQUIRE( lab.pattern == tcpdump::endpointPattern( "fe80::1" ) );
-                REQUIRE( lab.flags == LOGSQUIRL_REGEX_LAB_MATCH_CASE );
-                REQUIRE( matchedLines( text, lab.pattern ) == std::set<int>{ 8, 9, 10 } );
-                REQUIRE( host.logs.contains( "Filter: " + lab.pattern ) );
-            }
-
-            AND_WHEN( "the user applies it" )
-            {
-                host.regexLabs.first().apply( host.regexLabs.first().pattern,
-                                              LOGSQUIRL_REGEX_LAB_MATCH_CASE );
-
-                THEN( "the applied pattern is logged" )
-                {
-                    REQUIRE(
-                        host.logs.contains( "Filter: applied " + host.regexLabs.first().pattern ) );
-                }
-            }
-        }
-
-        WHEN( "the user clicks an IPv4 endpoint that starts another" )
-        {
-            emit summary->linkActivated( linkTarget( summary->text(), "192.168.1.1" ) );
-
-            THEN( "the pattern matches its lines in Source or Destination, not the other's" )
-            {
-                REQUIRE( host.regexLabs.size() == 1 );
-                const auto& lab = host.regexLabs.first();
-                REQUIRE( lab.pattern == tcpdump::endpointPattern( "192.168.1.1" ) );
-                std::set<int> expected;
-                for ( int line = 2; line <= 22; ++line ) {
-                    if ( line < 8 || line > 10 ) {
-                        expected.insert( line );
-                    }
-                }
-                REQUIRE( matchedLines( text, lab.pattern ) == expected );
-            }
-        }
-
-        WHEN( "the user clicks the endpoint it starts" )
-        {
-            emit summary->linkActivated( linkTarget( summary->text(), "192.168.1.100" ) );
-
-            THEN( "the pattern matches that address's line only" )
-            {
-                REQUIRE( host.regexLabs.size() == 1 );
-                REQUIRE( matchedLines( text, host.regexLabs.first().pattern )
-                         == std::set<int>{ 22 } );
-            }
-        }
-
-        WHEN( "the user clicks a protocol" )
-        {
-            emit summary->linkActivated( linkTarget( summary->text(), "HTTP" ) );
-
-            THEN( "the Regex Lab opens with the pattern of that Protocol column" )
-            {
-                REQUIRE( host.regexLabs.size() == 1 );
-                const auto& lab = host.regexLabs.first();
-                REQUIRE( lab.pattern == tcpdump::protocolPattern( "HTTP" ) );
-                REQUIRE( matchedLines( text, lab.pattern ) == std::set<int>{ 2, 3, 4 } );
-            }
-        }
-    }
-
-    GIVEN( "a capture converted on a host older than LogSquirl 26.11" )
-    {
-        FakeHost host( LOGSQUIRL_HOST_API_BASE_SIZE );
-        CaptureSessions sessions;
-        SidebarWidget widget( sessions );
-        sessions.setTempRoot( tempRoot.path() );
-        auto* summary = child<QLabel>( widget, "summary" );
-        sessions.conversionSession().start( capture );
-        REQUIRE( waitFor( [ &sessions ] { return !sessions.conversionSession().isBusy(); } ) );
-
-        THEN( "the summary lists endpoints and protocols as plain text, as before" )
-        {
-            REQUIRE( summary->text().contains( "<b>Endpoints</b>" ) );
-            REQUIRE( summary->text().contains( "192.168.1.1: " ) );
-            REQUIRE( summary->text().contains( "HTTP: " ) );
-            REQUIRE_FALSE( summary->text().contains( "tcpdump-filter:" ) );
         }
     }
 }

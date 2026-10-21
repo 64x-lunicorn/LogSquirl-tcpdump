@@ -28,8 +28,7 @@
 #pragma once
 
 #include "capture_sessions.h"
-#include "live_capture.h"
-#include "pcap_converter.h"
+#include "sidebar_text.h"
 
 #include <QLabel>
 #include <QPalette>
@@ -46,28 +45,13 @@ namespace tcpdump {
 
 class PacketPanel;
 
-/// The capture summary shown in the sidebar, as rich text.  With
-/// @p filterLinks, each endpoint and protocol listed is a link that
-/// SidebarWidget opens in the Regex Lab as a filter.  A tunnel's endpoints
-/// are listed apart and never a link: no column of a line shows them.
-/// The line under the capture's name is drawn in a colour of @p palette.
-QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
-                     bool filterLinks = false, const QPalette& palette = QPalette() );
-
-/// The progress of a live capture as the sidebar shows it, in place of a
-/// percentage (a stream has no size): packets, bytes and packets/s as of
-/// @p snapshot, and the time since the capture started, @p elapsedMs.  With
-/// @p limits, how far the capture is to each stop condition, and the ring
-/// buffer's file.
-QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
-                          const LiveLimits& limits = {} );
-
 /**
  * Sidebar widget displayed in the LogSquirl sidebar panel: a view of the
  * plugin's CaptureSessions (capture_sessions.h).  It builds its widgets,
  * forwards its buttons to the sessions, and shows what the sessions, the
  * Activity rule and the Capture Catalog say; it keeps no state of a
- * conversion, live capture or export of its own, and tells none.
+ * conversion, live capture or export of its own, and tells none.  What its
+ * labels say is decided in sidebar_text.h.
  *
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does),
@@ -93,8 +77,9 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *     the Log Format, which the plugin cannot tell is installed; on a host
  *     with the Regex Lab, a click on an endpoint or a protocol listed opens
  *     the Lab on its lines, as Wireshark's Apply as Filter; what the label
- *     says is one status, decided in summaryText() from the sessions and
- *     the tab in front, and said again on a palette change
+ *     says is one status, decided in summaryLabelText() (sidebar_text.h)
+ *     from the sessions and the tab in front, and said again on a palette
+ *     change
  *   - the Packet Panel (packet_panel.h): the layer tree and hex dump of the
  *     packet of the line selected in the tab in front, and the
  *     Conversations table of the capture in front
@@ -191,26 +176,9 @@ private:
     /// Show the Export session's state: its progress dialog while it
     /// exports, with its label, and none once it is idle.
     void showExportState();
-    /// What the summary label says, of what last claimed it: a session's
-    /// start, file or outcome, or the tab in front.  An export claims
-    /// nothing: its progress dialog says how it goes.
-    enum class SummaryStatus {
-        NothingLoaded, ///< Nothing was opened or captured since the plugin was loaded.
-        Front,         ///< The capture in the tab in front, or that it holds none.
-        Conversion,    ///< The File Conversion session's label: reading, or its outcome.
-        LiveStarted,   ///< A live capture waits for its first packet.
-        LiveFile,      ///< A live capture's tab opened, behind another one or in front.
-        LiveOutcome,   ///< A live capture ended.
-    };
-    /// Say @p status in the summary label from now on.
+    /// Say @p status in the summary label from now on, as summaryLabelText()
+    /// decides it (sidebar_text.h), in this widget's palette.
     void showSummary( SummaryStatus status );
-    /// The summary label's text: the status, as the sessions and the tab in
-    /// front say it now, in the palette's colours.  While a capture is being
-    /// read, the label keeps saying so.  The one place that decides it.
-    QString summaryText() const;
-    /// The summary of the capture in the tab in front, in the palette's
-    /// colours, or that the tab holds no capture of this plugin.
-    QString frontSummaryHtml() const;
     /// Enable Stream lines in Regex Lab when the Packet Panel can tell the
     /// selected line's stream; its tooltip says why not.
     void updateStreamLinesButton();
@@ -233,7 +201,7 @@ private:
     QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
     QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
     QLabel* liveError_ = nullptr;              ///< Why the last live capture failed.
-    /// What the summary label says, drawn by summaryText().
+    /// What the summary label says, drawn by summaryLabelText().
     SummaryStatus summaryStatus_ = SummaryStatus::NothingLoaded;
     QTimer liveTicker_;                        ///< Moves the elapsed time on.
     QPointer<QProgressDialog> exportProgress_; ///< The export's progress, and Cancel.
