@@ -104,7 +104,11 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    its content, not its name). A compressed capture is decompressed while
    it is read, never as a whole, and the progress bar counts its compressed
    bytes; one whose gzip stream is cut off or corrupt shows its packets up
-   to there and says so in the summary. zstd and xz are not read:
+   to there and says so in the summary. A gzip bomb is refused: the
+   conversion fails with a message once a capture decompresses to more
+   than 64 GiB, or, past its first 256 MiB, to more than 200 times the
+   compressed bytes read (real captures compress 2 to 20 times). zstd and
+   xz are not read:
    decompress such a file first. The
    same dialog opens from **Plugins → tcpdump → Open pcap…**, and so from
    the Command Palette (`Ctrl+Shift+P`, `Cmd+Shift+P` on macOS); while a

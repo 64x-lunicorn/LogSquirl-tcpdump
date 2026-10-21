@@ -352,7 +352,14 @@ gzip stream is cut off", "the gzip data is corrupt (…)"). The Converter
 then ends Converted with what it read, and the summary is cut off
 (`endsInsideRecord`, with the reason in `compressionProblem`, which the
 sidebar shows); a stream cut off before the capture header fails the
-conversion ("Cannot read the gzip-compressed capture: …"). Progress counts
+conversion ("Cannot read the gzip-compressed capture: …"). Against a gzip
+bomb, the output stops at `GzipLimits` (`setLimits()`, the option
+`gzipLimits` for tests): beyond 64 GiB (`maxBytes`), or, once 256 MiB are
+out (`ratioFrom`), beyond 200 times the compressed bytes consumed
+(`maxRatio`; deflate packs at most some 1032 times). The stream then ends
+cut off with `overLimit()`, and the Converter fails the conversion with
+that message, keeping nothing: the zero-length records of a run of zeros
+are no capture to show. Progress counts
 compressed bytes consumed (`CaptureFile::consumed()`) against the file
 size. A gzip stream read from a live source is not decompressed:
 `findCaptureStart()` names gzip data as such.

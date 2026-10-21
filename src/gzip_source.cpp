@@ -50,6 +50,19 @@ constexpr uint8_t kReservedFlags = 0xe0;
 
 const char* kCutOff = "the gzip stream is cut off";
 
+/// @p bytes in GiB or MiB, whichever is whole, for a message.
+std::string sizeText( uint64_t bytes )
+{
+    constexpr uint64_t kMiB = 1024 * 1024;
+    if ( bytes % ( 1024 * kMiB ) == 0 ) {
+        return std::to_string( bytes / ( 1024 * kMiB ) ) + " GiB";
+    }
+    if ( bytes % kMiB == 0 ) {
+        return std::to_string( bytes / kMiB ) + " MiB";
+    }
+    return std::to_string( bytes ) + " bytes";
+}
+
 } // namespace
 
 bool findGzipStart( const uint8_t* data, size_t size, size_t& offset )
@@ -234,6 +247,9 @@ bool GzipSource::produce()
         const auto produced = room - z.avail_out;
         writePos_ += produced;
         out_ += produced;
+        if ( beyondLimits() ) {
+            return produced > 0;
+        }
         if ( status == Z_NEED_DICT || status == Z_DATA_ERROR || status == Z_STREAM_ERROR
              || status == Z_MEM_ERROR ) {
             end( std::string( "the gzip data is corrupt (" ) + ( z.msg ? z.msg : "unknown error" )
@@ -257,6 +273,26 @@ bool GzipSource::produce()
         }
     }
     return false;
+}
+
+/// Whether the output went beyond the limits: then it ends there.
+bool GzipSource::beyondLimits()
+{
+    std::string problem;
+    const auto compressed = std::max<uint64_t>( compressedRead() - start_, 1 );
+    if ( out_ > limits_.maxBytes ) {
+        problem = "the decompressed capture is larger than " + sizeText( limits_.maxBytes );
+    }
+    else if ( out_ >= limits_.ratioFrom && out_ / compressed > limits_.maxRatio ) {
+        problem = "the capture decompresses to more than " + std::to_string( limits_.maxRatio )
+                  + " times its compressed size";
+    }
+    if ( problem.empty() ) {
+        return false;
+    }
+    end( problem );
+    overLimit_ = true;
+    return true;
 }
 
 size_t GzipSource::read( uint8_t* dst, size_t n )
@@ -324,6 +360,7 @@ bool GzipSource::startOver()
     out_ = 0;
     readPos_ = writePos_ = 0;
     cutOff_ = false;
+    overLimit_ = false;
     error_.clear();
     return true;
 }
@@ -355,6 +392,7 @@ bool GzipSource::resumeAt( const GzipAccessPoint& point )
     readPos_ = writePos_ = kGzipWindow;
     out_ = point.out;
     cutOff_ = false;
+    overLimit_ = false;
     error_.clear();
     return true;
 }
