@@ -269,8 +269,9 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
         REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
         auto* sidebar = tcpdump::g_state.sidebarWidget;
         auto* button = sidebar->findChild<QPushButton*>( "streamLinesButton" );
-        sidebar->openPcapFile( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) );
-        REQUIRE( waitFor( [ sidebar ] { return !sidebar->isConverting(); } ) );
+        auto& conversion = tcpdump::g_state.sessions->conversionSession();
+        conversion.start( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) );
+        REQUIRE( waitFor( [ &conversion ] { return !conversion.isBusy(); } ) );
         REQUIRE( host.openedFiles.size() == 1 );
         host.activateFile( host.openedFiles.first() );
 

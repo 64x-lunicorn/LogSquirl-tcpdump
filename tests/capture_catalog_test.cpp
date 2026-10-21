@@ -435,6 +435,203 @@ SCENARIO( "A live capture's tabs stay the last capture's when it ends", "[captur
     }
 }
 
+SCENARIO( "The catalog announces when what the tab in front shows changes", "[capture_catalog]" )
+{
+    QTemporaryDir dir;
+    RecordingTabs tabs;
+    CaptureCatalog catalog{ tabs };
+    int announced = 0;
+    int heard = 0; // by a second observer
+    QList<const CaptureCatalog::Entry*> shown;
+    catalog.observeFront( [ & ] {
+        ++announced;
+        shown << catalog.front();
+    } );
+    const auto secondObserver = catalog.observeFront( [ & ] { ++heard; } );
+    const auto first = fileOf( dir, "first.log" );
+    const auto second = fileOf( dir, "second.log" );
+    catalog.openConverted( first, fileOf( dir, "first.pcap" ), summaryOf( 1 ), {} );
+    catalog.openConverted( second, fileOf( dir, "second.pcap" ), summaryOf( 2 ), {} );
+
+    THEN( "captures added behind no tab in front are not announced" )
+    {
+        REQUIRE( announced == 0 );
+        REQUIRE( catalog.frontObserverCount() == 2 );
+    }
+
+    WHEN( "an observer is removed, and another tab comes to the front" )
+    {
+        catalog.stopObserving( secondObserver );
+        catalog.setFront( first );
+
+        THEN( "only the observers left hear it" )
+        {
+            REQUIRE( catalog.frontObserverCount() == 1 );
+            REQUIRE( announced == 1 );
+            REQUIRE( heard == 0 );
+        }
+
+        AND_WHEN( "it is removed again" )
+        {
+            catalog.stopObserving( secondObserver );
+
+            THEN( "nothing changes" )
+            {
+                REQUIRE( catalog.frontObserverCount() == 1 );
+            }
+        }
+    }
+
+    WHEN( "an observer removes itself while it is told" )
+    {
+        CaptureCatalog::ObserverId self = 0;
+        int told = 0;
+        self = catalog.observeFront( [ & ] {
+            ++told;
+            catalog.stopObserving( self );
+        } );
+        catalog.setFront( first );
+        catalog.setFront( second );
+
+        THEN( "it is told once, and the others every time" )
+        {
+            REQUIRE( told == 1 );
+            REQUIRE( announced == 2 );
+            REQUIRE( heard == 2 );
+        }
+    }
+
+    WHEN( "another tab comes to the front" )
+    {
+        catalog.setFront( first );
+
+        THEN( "every observer hears it once, with the new capture in front" )
+        {
+            REQUIRE( announced == 1 );
+            REQUIRE( heard == 1 );
+            REQUIRE( shown == QList<const CaptureCatalog::Entry*>{ catalog.find( first ) } );
+        }
+
+        AND_WHEN( "the same tab is reported again, spelled another way" )
+        {
+            catalog.setFront( otherSpelling( dir, "first.log" ) );
+
+            THEN( "nothing is announced" )
+            {
+                REQUIRE( announced == 1 );
+            }
+        }
+
+        AND_WHEN( "the captures behind it change, or one is added behind it" )
+        {
+            catalog.updateSummary( second, summaryOf( 7 ) );
+            catalog.startLive();
+            const auto live = fileOf( dir, "eth0.log" );
+            catalog.openLiveFile( live, fileOf( dir, "eth0.pcap" ), "eth0" );
+            catalog.updateFile( live, summaryOf( 3 ), std::make_shared<CaptureIndex>(), 300 );
+            catalog.setFileError( live, "tcpdump: permission denied" );
+            catalog.endLive();
+
+            THEN( "nothing is announced" )
+            {
+                REQUIRE( announced == 1 );
+            }
+        }
+
+        AND_WHEN( "its summary is replaced" )
+        {
+            REQUIRE( catalog.updateSummary( first, summaryOf( 9 ) ) );
+
+            THEN( "that is announced" )
+            {
+                REQUIRE( announced == 2 );
+                REQUIRE( shown.last()->summary.packets == 9 );
+            }
+        }
+
+        AND_WHEN( "a tab of a file the plugin did not write comes to the front, then none" )
+        {
+            catalog.setFront( fileOf( dir, "notes.txt" ) );
+            catalog.setFront( QString() );
+
+            THEN( "both are announced, with no capture in front" )
+            {
+                REQUIRE( announced == 3 );
+                REQUIRE( shown.mid( 1 )
+                         == QList<const CaptureCatalog::Entry*>{ nullptr, nullptr } );
+            }
+        }
+    }
+
+    WHEN( "a capture is added for the tab already in front" )
+    {
+        const auto log = fileOf( dir, "late.log" );
+        catalog.setFront( log );
+        REQUIRE( announced == 1 );
+        catalog.openConverted( log, fileOf( dir, "late.pcap" ), summaryOf( 4 ), {} );
+
+        THEN( "it is announced, with the capture in front" )
+        {
+            REQUIRE( announced == 2 );
+            REQUIRE( shown.last() == catalog.find( log ) );
+            REQUIRE( shown.last()->summary.packets == 4 );
+        }
+    }
+
+    GIVEN( "a live capture in the tab in front" )
+    {
+        const auto log = fileOf( dir, "eth0.log" );
+        catalog.startLive();
+        catalog.openLiveFile( log, fileOf( dir, "eth0.pcap" ), "eth0" );
+        catalog.setFront( log );
+        REQUIRE( announced == 1 );
+
+        WHEN( "a snapshot comes" )
+        {
+            catalog.updateFile( log, summaryOf( 3 ), std::make_shared<CaptureIndex>(), 300 );
+
+            THEN( "it is announced" )
+            {
+                REQUIRE( announced == 2 );
+                REQUIRE( shown.last()->summary.packets == 3 );
+            }
+        }
+
+        WHEN( "it fails" )
+        {
+            catalog.setFileError( log, "tcpdump: permission denied" );
+
+            THEN( "it is announced, with the error" )
+            {
+                REQUIRE( announced == 2 );
+                REQUIRE( shown.last()->error == "tcpdump: permission denied" );
+            }
+        }
+
+        WHEN( "it finishes" )
+        {
+            catalog.endLive();
+
+            THEN( "it is announced, no longer capturing" )
+            {
+                REQUIRE( announced == 2 );
+                REQUIRE_FALSE( catalog.isCapturing( log ) );
+            }
+
+            AND_WHEN( "the next capture starts and ends without a tab in front" )
+            {
+                catalog.startLive();
+                catalog.endLive();
+
+                THEN( "nothing more is announced" )
+                {
+                    REQUIRE( announced == 2 );
+                }
+            }
+        }
+    }
+}
+
 SCENARIO( "A live capture's failed file keeps its error with the final summary",
           "[capture_catalog]" )
 {

@@ -22,22 +22,24 @@
  * @brief Fakes around a Live Capture Session: its host, captures the test
  *        scripts, and captures run for real.
  *
- * FakeLiveHost is the host of a LiveCaptureSession and of its catalog: it
- * records the tabs opened and the notifications, and can say something else
- * is busy.  The session keeps what each tab shows in a real CaptureCatalog,
- * which opens the tabs and which the tests read.  ScriptedRuns makes the
- * session's runs (setRunFactory()): each a ScriptedRun that records what it
- * was asked to run and whether it was told to stop, and tells the session
- * what the test says, when the test says it, on the test's thread, so that
- * no event loop is needed.  WorkerSession is a session whose captures run on
- * a worker, as in the app (runOnWorker()), for a source kind's tests with
- * its fake programs: it runs the event loop until the session told what the
- * test waits for.
+ * The host of a LiveCaptureSession and of its catalog is a
+ * FakeSessionHost (fake_session_host.h): it records the tabs opened and the
+ * notifications, and can say what else runs, which the Activity rule
+ * weighs.  The session keeps what each tab
+ * shows in a real CaptureCatalog, which opens the tabs and which the tests
+ * read.  ScriptedRuns makes the session's runs (setRunFactory()): each a
+ * ScriptedRun that records what it was asked to run and whether it was told
+ * to stop, and tells the session what the test says, when the test says it,
+ * on the test's thread, so that no event loop is needed.  WorkerSession is
+ * a session whose captures run on a worker, as in the app (runOnWorker()),
+ * for a source kind's tests with its fake programs: it runs the event loop
+ * until the session told what the test waits for.
  */
 
 #pragma once
 
 #include "capture_catalog.h"
+#include "fake_session_host.h"
 #include "live_capture_session.h"
 
 #include <QEventLoop>
@@ -51,27 +53,6 @@
 #include <vector>
 
 namespace tcpdump_test {
-
-/// A Live Capture Session's host, and its catalog's tab host, recording.
-class FakeLiveHost : public tcpdump::LiveCaptureHost, public tcpdump::CaptureTabHost {
-public:
-    void openTab( const QString& logPath, bool /*follow*/ ) override
-    {
-        openedTabs << logPath;
-    }
-    void notify( const QString& message ) override
-    {
-        notifications << message;
-    }
-    QString busyElsewhere() const override
-    {
-        return busy;
-    }
-
-    QStringList openedTabs;    ///< The text files opened in tabs, in order.
-    QStringList notifications; ///< What the user was told, in order.
-    QString busy;              ///< Set: something else is busy, and this says so.
-};
 
 /// A capture the test scripts: what the session asked for, and what it is told.
 class ScriptedRun {
@@ -181,7 +162,7 @@ private:
 /**
  * A Live Capture Session that runs its captures on a worker, as in the app,
  * with the kinds of a registry, writing below a temporary directory of its
- * own, on a FakeLiveHost and a CaptureCatalog; it records the lines its programs wrote to
+ * own, on a FakeSessionHost and a CaptureCatalog; it records the lines its programs wrote to
  * stderr.  What a run tells comes through the event loop, which the waits
  * run until the session told it: the deadline only guards against a hang.
  */
@@ -242,7 +223,7 @@ public:
         return stderrLines.join( '\n' );
     }
 
-    FakeLiveHost host;
+    FakeSessionHost host;
     tcpdump::CaptureCatalog catalog{ host };
     QTemporaryDir outputRoot; ///< Outlives the session, which writes below it.
     tcpdump::LiveCaptureSession session{ host, catalog };

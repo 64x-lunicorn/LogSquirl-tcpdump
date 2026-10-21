@@ -1,0 +1,57 @@
+/*
+ * Copyright (C) 2026 LogSquirl Contributors
+ *
+ * This file is part of logsquirl-tcpdump.
+ *
+ * logsquirl-tcpdump is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * logsquirl-tcpdump is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with logsquirl-tcpdump.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file session_host.h
+ * @brief Where a session (the Live Capture Session, the File Conversion
+ *        session, the Export session) tells the user, and learns what runs.
+ *
+ * In the app the Capture Sessions are the host of every session; in tests a fake
+ * that records.  A session asks the Activity rule (activity.h) with what
+ * runs, its own activity replaced by what it runs itself, so that the host
+ * need not know which session asks.
+ */
+
+#pragma once
+
+#include "activity.h"
+
+#include <QString>
+
+namespace tcpdump {
+
+/// Where a session tells the user: LogSquirl, through the Capture Sessions,
+/// in the app; a fake in tests.
+class SessionHost {
+public:
+    virtual ~SessionHost() = default;
+
+    /// Tell the user @p message in a notification.
+    virtual void notify( const QString& message ) = 0;
+    /// What runs, the asking session's own activity among it, which the
+    /// Activity rule weighs; the session's own field (a conversion's
+    /// @c converting, a live capture's @c capturing, an export's
+    /// @c exporting) is not read: the session puts in its own.
+    virtual RunningActivities running() const
+    {
+        return {};
+    }
+};
+
+} // namespace tcpdump

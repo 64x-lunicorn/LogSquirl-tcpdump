@@ -19,8 +19,9 @@
 
 /**
  * @file live_capture_test.cpp
- * @brief BDD tests for a live capture in the sidebar: its tab, its summary,
- *        its progress, Stop and Save capture….
+ * @brief BDD tests for a live capture through the plugin's sessions, shown
+ *        in the sidebar: its tab, its summary, its progress, Stop and Save
+ *        capture….
  */
 
 #include <catch2/catch.hpp>
@@ -165,18 +166,18 @@ SCENARIO( "The UI thread never waits for a live capture's source to end", "[live
     const auto slow = factoryOf( []( const std::atomic_bool* stop ) {
         return std::make_unique<SlowEndingSource>( pcapOf( { datagram( 0 ) } ), stop );
     } );
-    auto sidebar = std::make_unique<SidebarWidget>();
-    sidebar->setTempRoot( root.path() );
-    REQUIRE( sidebar->startLiveCapture( "slow", slow ) );
+    auto sessions = std::make_unique<CaptureSessions>();
+    sessions->setTempRoot( root.path() );
+    REQUIRE( sessions->liveSession().start( "slow", slow ) );
     REQUIRE( waitFor( [ & ] { return host.openedFiles.size() == 1; } ) );
-    sidebar->stopLiveCapture();
-    REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+    sessions->liveSession().stop();
+    REQUIRE( waitFor( [ & ] { return !sessions->liveSession().isBusy(); } ) );
 
     WHEN( "the next capture starts while the last one's source is still ending" )
     {
         QElapsedTimer clock;
         clock.start();
-        REQUIRE( sidebar->startLiveCapture( "next", slow ) );
+        REQUIRE( sessions->liveSession().start( "next", slow ) );
         const auto took = clock.elapsed();
 
         THEN( "it starts at once, and the last one ends on its own" )
@@ -187,14 +188,14 @@ SCENARIO( "The UI thread never waits for a live capture's source to end", "[live
         }
     }
 
-    WHEN( "the sidebar is closed while the source is still ending" )
+    WHEN( "the plugin's sessions go while the source is still ending" )
     {
         QElapsedTimer clock;
         clock.start();
-        sidebar.reset();
+        sessions.reset();
         const auto took = clock.elapsed();
 
-        THEN( "it closes at once; the plugin's shutdown joins the worker" )
+        THEN( "they go at once; the plugin's shutdown joins the worker" )
         {
             REQUIRE( took < 500 );
             REQUIRE( retiredLiveCaptures() == 1 );
@@ -202,7 +203,7 @@ SCENARIO( "The UI thread never waits for a live capture's source to end", "[live
             REQUIRE( retiredLiveCaptures() == 0 );
         }
     }
-    sidebar.reset();
+    sessions.reset();
     joinLiveCaptures();
 }
 
@@ -213,21 +214,22 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
     {
         FakeHost host;
         QTemporaryDir root;
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( root.path() );
+        CaptureSessions sessions;
+        SidebarWidget sidebar( sessions );
+        sessions.setTempRoot( root.path() );
         auto pipe = std::make_shared<Pipe>();
-        REQUIRE( sidebar.startLiveCapture(
+        REQUIRE( sessions.liveSession().start(
             "eth0", factoryOf( [ pipe ]( const std::atomic_bool* stop ) {
                 return std::make_unique<FdSource>( pipe->readEnd(), stop );
             } ) ) );
         auto* live = sidebar.findChild<QLabel*>( "liveProgress" );
         auto* stop = sidebar.findChild<QPushButton*>( "stopButton" );
         auto* summary = sidebar.findChild<QLabel*>( "summary" );
-        REQUIRE( sidebar.isCapturing() );
+        REQUIRE( sessions.liveSession().isBusy() );
         REQUIRE( stop->isVisibleTo( &sidebar ) );
         REQUIRE( live->isVisibleTo( &sidebar ) );
         REQUIRE_FALSE( sidebar.findChild<QProgressBar*>( "progress" )->isVisibleTo( &sidebar ) );
-        REQUIRE_FALSE( sidebar.startLiveCapture( "again", {} ) );
+        REQUIRE_FALSE( sessions.liveSession().start( "again", {} ) );
         REQUIRE( host.notifications.size() == 1 );
         host.notifications.clear();
 
@@ -258,7 +260,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
             pipe->write( first );
             REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
             const auto logPath = host.openedFiles.first();
-            sidebar.showSummaryFor( logPath ); // the host brings the new tab to the front
+            sessions.catalog().setFront( logPath ); // the host brings the new tab to the front
 
             THEN( "its tab is opened once, following the file, on the UI thread" )
             {
@@ -291,7 +293,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
                     pipe->write( second );
                     REQUIRE( waitFor( [ & ] { return readLines( logPath ).size() == 3; } ) );
                     stop->click();
-                    REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+                    REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
                     THEN( "it shows that packet too, from the final index" )
                     {
@@ -310,7 +312,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
                 QElapsedTimer stopping;
                 stopping.start();
                 stop->click();
-                REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+                REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
                 const auto took = stopping.elapsed();
 
                 THEN( "it ends within a second with the final summary, and nothing else opens" )
@@ -329,7 +331,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
                     QTemporaryDir saved;
                     const auto target = saved.filePath( "kept.pcap" );
                     QString suggested;
-                    sidebar.setSaveChooser( [ & ]( QWidget*, const QString& path ) {
+                    sessions.setSaveChooser( [ & ]( QWidget*, const QString& path ) {
                         suggested = path;
                         return target;
                     } );
@@ -343,7 +345,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
         WHEN( "Stop is pressed before the header has come" )
         {
             stop->click();
-            REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+            REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
             THEN( "no tab is opened, it says it was stopped, not failed, and nothing is left" )
             {
@@ -361,7 +363,7 @@ SCENARIO( "A live capture opens its tab once a packet line is there, and Stop fi
         {
             pipe->write( header );
             pipe->closeWrite();
-            REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+            REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
             THEN( "no tab is opened, it says so, and nothing is left behind" )
             {
@@ -381,14 +383,15 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
     {
         FakeHost host;
         QTemporaryDir root;
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( root.path() );
+        CaptureSessions sessions;
+        SidebarWidget sidebar( sessions );
+        sessions.setTempRoot( root.path() );
         sidebar.show();
         auto pipe = std::make_shared<Pipe>();
         LiveLimits limits;
         limits.ringFiles = 2;
         limits.fileBytes = 24 + 2 * ( 16 + datagram( 0 ).size() );
-        REQUIRE( sidebar.startLiveCapture(
+        REQUIRE( sessions.liveSession().start(
             "eth0", factoryOf( [ pipe ]( const std::atomic_bool* stop ) {
                 return std::make_unique<FdSource>( pipe->readEnd(), stop );
             } ),
@@ -406,7 +409,7 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
             pipe->write( Bytes( whole.begin(), whole.begin() + firstEnd ) );
             REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
             const auto logPath = host.openedFiles.first();
-            sidebar.showSummaryFor( logPath );
+            sessions.catalog().setFront( logPath );
             const auto firstLine = readLines( logPath ).at( 1 );
 
             AND_WHEN( "five more come, so that its file is deleted, and the capture is stopped" )
@@ -417,7 +420,7 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
                 const auto lastLog = host.openedFiles.last();
                 REQUIRE( waitFor( [ & ] { return readLines( lastLog ).size() == 3; } ) );
                 sidebar.findChild<QPushButton*>( "stopButton" )->click();
-                REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+                REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
                 THEN( "each file's text is in a tab of its own, followed, opened in order" )
                 {
@@ -436,7 +439,7 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
                     auto* summary = sidebar.findChild<QLabel*>( "summary" );
                     for ( const auto& opened : host.openedFiles ) {
                         CAPTURE( opened );
-                        sidebar.showSummaryFor( opened );
+                        sessions.catalog().setFront( opened );
                         REQUIRE( summary->text().contains( "Packets: <b>6</b>" ) );
                     }
                 }
@@ -454,7 +457,7 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
 
                 THEN( "the last tab's Packet Panel shows its packets" )
                 {
-                    sidebar.showSummaryFor( lastLog );
+                    sessions.catalog().setFront( lastLog );
                     auto* panel = sidebar.packetPanel();
                     host.selectedLines = { readLines( lastLog ).at( 1 ) };
                     panel->refresh();
@@ -466,7 +469,7 @@ SCENARIO( "A live capture with a ring buffer opens a tab for each file", "[live_
                     QTemporaryDir saved;
                     const auto target = saved.filePath( "kept.pcap" );
                     QString suggested;
-                    sidebar.setSaveChooser( [ & ]( QWidget*, const QString& path ) {
+                    sessions.setSaveChooser( [ & ]( QWidget*, const QString& path ) {
                         suggested = path;
                         return target;
                     } );
@@ -489,16 +492,17 @@ SCENARIO( "A live capture whose source fails keeps its tab and says why", "[live
 {
     FakeHost host;
     QTemporaryDir root;
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( root.path() );
+    CaptureSessions sessions;
+    SidebarWidget sidebar( sessions );
+    sessions.setTempRoot( root.path() );
     const auto capture = pcapOf( { datagram( 0 ), datagram( 1 ), datagram( 2 ) } );
-    REQUIRE( sidebar.startLiveCapture( "usb0", factoryOf( [ capture ]( const std::atomic_bool* ) {
-                                           return std::make_unique<BreakingSource>(
-                                               capture, "tcpdump exited with code 1" );
-                                       } ) ) );
-    REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+    REQUIRE( sessions.liveSession().start(
+        "usb0", factoryOf( [ capture ]( const std::atomic_bool* ) {
+            return std::make_unique<BreakingSource>( capture, "tcpdump exited with code 1" );
+        } ) ) );
+    REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
     REQUIRE( host.openedFiles.size() == 1 );
-    sidebar.showSummaryFor( host.openedFiles.first() );
+    sessions.catalog().setFront( host.openedFiles.first() );
 
     auto* summary = sidebar.findChild<QLabel*>( "summary" );
     REQUIRE( summary->text().contains( "tcpdump exited with code 1" ) );
@@ -513,14 +517,14 @@ SCENARIO( "A live capture's stderr lines reach the host's log from the UI thread
 {
     FakeHost host;
     QTemporaryDir root;
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( root.path() );
-    REQUIRE( sidebar.startLiveCapture(
+    CaptureSessions sessions;
+    sessions.setTempRoot( root.path() );
+    REQUIRE( sessions.liveSession().start(
         "eth1", []( const std::atomic_bool*, std::function<void( const QString& )> onLine ) {
             onLine( "tcpdump: listening on eth1" );
             return std::make_unique<BreakingSource>( Bytes{}, "no capture" );
         } ) );
-    REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+    REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
     REQUIRE( host.logs.contains( "eth1: tcpdump: listening on eth1" ) );
     REQUIRE( host.openedFiles.isEmpty() );
 }

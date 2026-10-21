@@ -177,7 +177,11 @@ add_library(logsquirl_tcpdump SHARED
     src/selected_packet_line.cpp
     src/packet_panel.cpp
     src/live_capture.cpp
+    src/activity.cpp
     src/live_capture_session.cpp
+    src/file_conversion_session.cpp
+    src/export_session.cpp
+    src/capture_sessions.cpp
     src/live_source.cpp
     src/local_source.cpp
     src/adb_source.cpp
@@ -187,6 +191,7 @@ add_library(logsquirl_tcpdump SHARED
     src/ssh_source.cpp
     src/command_source.cpp
     src/live_capture_form.cpp
+    src/sidebar_text.cpp
     src/sidebarwidget.cpp
     src/follow_stream.cpp
     src/stream_content.cpp

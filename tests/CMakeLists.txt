@@ -50,6 +50,9 @@ add_executable(logsquirl_tcpdump_tests
     live_limits_test.cpp
     live_capture_test.cpp
     live_capture_session_test.cpp
+    file_conversion_session_test.cpp
+    export_session_test.cpp
+    capture_sessions_test.cpp
     live_source_test.cpp
     local_source_test.cpp
     adb_source_test.cpp
@@ -60,6 +63,7 @@ add_executable(logsquirl_tcpdump_tests
     process_source_test.cpp
     plugin_test.cpp
     sidebarwidget_test.cpp
+    sidebar_text_test.cpp
     packet_panel_test.cpp
     conversation_table_test.cpp
     follow_stream_test.cpp
@@ -75,6 +79,7 @@ add_executable(logsquirl_tcpdump_tests
     packet_formatter_test.cpp
     packet_line_test.cpp
     selected_packet_line_test.cpp
+    activity_test.cpp
     payload_describer_test.cpp
     protocol_names_test.cpp
     stream_tracker_test.cpp
@@ -178,7 +183,11 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/selected_packet_line.cpp"
         "${CMAKE_SOURCE_DIR}/src/packet_panel.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture.cpp"
+        "${CMAKE_SOURCE_DIR}/src/activity.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_session.cpp"
+        "${CMAKE_SOURCE_DIR}/src/file_conversion_session.cpp"
+        "${CMAKE_SOURCE_DIR}/src/export_session.cpp"
+        "${CMAKE_SOURCE_DIR}/src/capture_sessions.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/local_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/adb_source.cpp"
@@ -188,6 +197,7 @@ target_sources(logsquirl_tcpdump_tests
         "${CMAKE_SOURCE_DIR}/src/ssh_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/command_source.cpp"
         "${CMAKE_SOURCE_DIR}/src/live_capture_form.cpp"
+        "${CMAKE_SOURCE_DIR}/src/sidebar_text.cpp"
         "${CMAKE_SOURCE_DIR}/src/sidebarwidget.cpp"
         "${CMAKE_SOURCE_DIR}/src/follow_stream.cpp"
         "${CMAKE_SOURCE_DIR}/src/stream_content.cpp"

@@ -150,7 +150,7 @@ std::unique_ptr<LiveRun> runOnWorker( LiveRunRequest request )
     return std::make_unique<WorkerRun>( std::move( request ) );
 }
 
-LiveCaptureSession::LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog,
+LiveCaptureSession::LiveCaptureSession( SessionHost& host, CaptureCatalog& catalog,
                                         QObject* parent )
     : QObject( parent )
     , host_( host )
@@ -175,15 +175,14 @@ LiveCaptureSession::~LiveCaptureSession()
 
 bool LiveCaptureSession::refuseWhileBusy()
 {
-    if ( const auto elsewhere = host_.busyElsewhere(); !elsewhere.isEmpty() ) {
-        host_.notify( elsewhere );
-        return true;
+    auto running = host_.running();
+    running.capturing = isBusy();
+    const auto why = activityRefusalMessage( Activity::LiveCapture, running );
+    if ( why.isEmpty() ) {
+        return false;
     }
-    if ( isBusy() ) {
-        host_.notify( "A live capture is still running: stop it first." );
-        return true;
-    }
-    return false;
+    host_.notify( why );
+    return true;
 }
 
 bool LiveCaptureSession::start( const LiveChoice& choice )

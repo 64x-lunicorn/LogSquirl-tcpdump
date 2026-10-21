@@ -21,7 +21,8 @@
  * @file plugin.h
  * @brief Global plugin state shared across all translation units.
  *
- * Centralises the host API pointer, opaque handle, and sidebar widget.
+ * Centralises the host API pointer, opaque handle, the plugin's sessions
+ * and the sidebar widget.
  */
 
 #pragma once
@@ -33,6 +34,7 @@
 #include <cstddef>
 
 namespace tcpdump {
+class CaptureSessions;
 class SidebarWidget;
 } // namespace tcpdump
 
@@ -69,7 +71,8 @@ struct PluginState {
     const LogSquirlHostApi* api = nullptr;  ///< Host API function table.
     void* handle = nullptr;                 ///< Opaque plugin instance handle.
     HostCapabilities hostCapabilities;      ///< The later functions api offers.
-    SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for pcap control.
+    CaptureSessions* sessions = nullptr;    ///< What the menu and the sidebar start.
+    SidebarWidget* sidebarWidget = nullptr; ///< Sidebar panel for pcap control, a view of sessions.
     bool sidebarTabRegistered = false;      ///< The host holds sidebarWidget as a tab.
     bool initialised = false;               ///< True between init() and shutdown().
     bool quitting = false; ///< LogSquirl is quitting (aboutToQuit), not just unloading the plugin.

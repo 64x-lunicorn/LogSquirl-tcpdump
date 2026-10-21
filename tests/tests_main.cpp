@@ -25,8 +25,8 @@
 #define CATCH_CONFIG_RUNNER
 #include <catch2/catch.hpp>
 
+#include "capture_sessions.h"
 #include "live_source.h"
-#include "sidebarwidget.h"
 
 #include <QApplication>
 
@@ -40,12 +40,12 @@ int main( int argc, char* argv[] )
         qputenv( "QT_QPA_PLATFORM", "offscreen" );
     }
     QApplication app( argc, argv );
-    // Hermetic: a sidebar offers no kind a test did not give it, so none
+    // Hermetic: the sessions offer no kind a test did not give them, so none
     // runs a real capture program (tcpdump -D, adb devices) on this machine.
-    tcpdump::SidebarWidget::setDefaultLiveSources(
+    tcpdump::CaptureSessions::setDefaultLiveSources(
         std::make_shared<tcpdump::LiveSourceRegistry>() );
     const auto failed = Catch::Session().run( argc, argv );
-    // The live captures sidebars retired end before the application does.
+    // The live captures the sessions retired end before the application does.
     tcpdump::joinLiveCaptures();
     return failed;
 }

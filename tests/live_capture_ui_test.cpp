@@ -26,6 +26,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "activity.h"
 #include "fake_live_source.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
@@ -105,11 +106,12 @@ struct Fields {
     QPushButton* start;
 };
 
-/// Press Start live capture… in @p sidebar, and start what @p dialog shows,
-/// as if the dialog it opens were filled so and its Start pressed.
-void startFrom( SidebarWidget& sidebar, const LiveCaptureDialog& dialog )
+/// Press Start live capture… in @p sidebar, a view of @p sessions, and start
+/// what @p dialog shows, as if the dialog it opens were filled so and its
+/// Start pressed.
+void startFrom( CaptureSessions& sessions, SidebarWidget& sidebar, const LiveCaptureDialog& dialog )
 {
-    sidebar.setLiveChoiceAsker( [ &dialog ]( QWidget*, LiveChoice& choice ) {
+    sessions.setLiveChoiceAsker( [ &dialog ]( QWidget*, LiveChoice& choice ) {
         choice = dialog.choice();
         return true;
     } );
@@ -134,9 +136,10 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
     auto fake = std::make_shared<FakeSourceKind>();
     fake->capture = pcapOf( { datagram( 0 ), datagram( 1 ), datagram( 2 ) } );
 
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( root.path() );
-    sidebar.setLiveSources( registryOf( fake ) );
+    CaptureSessions sessions;
+    SidebarWidget sidebar( sessions );
+    sessions.setTempRoot( root.path() );
+    sessions.setLiveSources( registryOf( fake ) );
     auto* button = sidebar.findChild<QPushButton*>( "liveCaptureButton" );
     auto* stop = sidebar.findChild<QPushButton*>( "stopButton" );
     auto* stderrView = sidebar.findChild<QPlainTextEdit*>( "liveStderr" );
@@ -150,7 +153,7 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
         REQUIRE_FALSE( button->isHidden() );
     }
 
-    const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+    const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
     auto* form = dialog->form();
     const Fields fields( dialog.get() );
 
@@ -168,11 +171,11 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
             fields.networkInterface->setCurrentIndex( 1 );
             fields.filter->setText( "udp port 9999 and host 10.0.0.1" );
             fields.snaplen->setValue( 1500 );
-            startFrom( sidebar, *dialog );
+            startFrom( sessions, sidebar, *dialog );
 
             THEN( "the source is asked for exactly that, and the tab opens following the file" )
             {
-                REQUIRE( sidebar.isCapturing() );
+                REQUIRE( sessions.liveSession().isBusy() );
                 REQUIRE( fake->started().size() == 1 );
                 const auto choice = fake->started().front();
                 REQUIRE(
@@ -198,14 +201,23 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
                 REQUIRE( stderrView->toPlainText() == "fakecap: listening" );
             }
 
+            THEN( "Open pcap… is disabled, and opening a file is refused with the Activity rule's "
+                  "reason" )
+            {
+                REQUIRE_FALSE( sidebar.findChild<QPushButton*>( "openButton" )->isEnabled() );
+                sessions.chooseAndOpen();
+                REQUIRE( host.notifications
+                         == QStringList{ refusalMessage( ActivityRefusal::Capturing ) } );
+            }
+
             AND_WHEN( "Stop is pressed" )
             {
                 REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
                 const auto logPath = host.openedFiles.first();
-                sidebar.showSummaryFor( logPath );
+                sessions.catalog().setFront( logPath );
                 REQUIRE( waitFor( [ & ] { return readLines( logPath ).size() == 4; } ) );
                 stop->click();
-                REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+                REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
                 THEN( "the capture is final, and Start live capture… is back" )
                 {
@@ -219,7 +231,7 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
 
                 THEN( "the dialog shows the choice again after a restart" )
                 {
-                    SidebarWidget restarted;
+                    CaptureSessions restarted;
                     restarted.setLiveSources( registryOf( fake ) );
                     const auto shown = restarted.makeLiveCaptureDialog( nullptr );
                     const Fields again( shown.get() );
@@ -268,7 +280,7 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
                 REQUIRE( fields.filterHint->text().contains( "display filter" ) );
                 REQUIRE_FALSE( fields.start->isEnabled() );
                 REQUIRE( fields.start->toolTip().contains( "display filter" ) );
-                REQUIRE_FALSE( sidebar.startLiveCapture( form->choice() ) );
+                REQUIRE_FALSE( sessions.liveSession().start( form->choice() ) );
                 REQUIRE( host.notifications.size() == 1 );
                 REQUIRE( fake->started().empty() );
             }
@@ -276,14 +288,14 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
 
         WHEN( "a capture file is being read" )
         {
-            sidebar.openPcapFile(
+            sessions.conversionSession().start(
                 QDir( QStringLiteral( TCPDUMP_CORPUS_DIR ) ).filePath( "mixed.pcap" ) );
 
             THEN( "Start live capture… is disabled until it is done" )
             {
                 REQUIRE_FALSE( button->isEnabled() );
                 REQUIRE( button->toolTip().contains( "being read" ) );
-                REQUIRE( waitFor( [ & ] { return !sidebar.isConverting(); } ) );
+                REQUIRE( waitFor( [ & ] { return !sessions.conversionSession().isBusy(); } ) );
                 REQUIRE( button->isEnabled() );
             }
         }
@@ -298,10 +310,11 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
     auto fake = std::make_shared<FakeSourceKind>();
     fake->capture = pcapOf( { datagram( 0 ), datagram( 1 ), datagram( 2 ) } );
 
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( root.path() );
-    sidebar.setLiveSources( registryOf( fake ) );
-    const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+    CaptureSessions sessions;
+    SidebarWidget sidebar( sessions );
+    sessions.setTempRoot( root.path() );
+    sessions.setLiveSources( registryOf( fake ) );
+    const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
     auto* form = dialog->form();
     const Fields fields( dialog.get() );
     auto spin = [ & ]( const char* name ) {
@@ -348,10 +361,10 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
             REQUIRE( fields.start->isEnabled() );
         }
 
-        AND_WHEN( "the dialog is opened in a new sidebar after a capture" )
+        AND_WHEN( "the dialog is opened by new sessions after a capture" )
         {
             REQUIRE( saveLiveChoice( host.configDir(), form->choice() ) );
-            SidebarWidget restarted;
+            CaptureSessions restarted;
             restarted.setLiveSources( registryOf( fake ) );
 
             THEN( "the fields are restored" )
@@ -370,7 +383,7 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
         {
             REQUIRE_FALSE( fields.start->isEnabled() );
             REQUIRE( fields.start->toolTip().contains( "ring buffer needs a file size" ) );
-            REQUIRE_FALSE( sidebar.startLiveCapture( form->choice() ) );
+            REQUIRE_FALSE( sessions.liveSession().start( form->choice() ) );
             REQUIRE( fake->started().empty() );
         }
     }
@@ -378,11 +391,11 @@ SCENARIO( "The stop conditions and the ring buffer are fields of the form, for e
     WHEN( "the capture is to stop after two packets, and three come" )
     {
         stopPackets->setValue( 2 );
-        startFrom( sidebar, *dialog );
-        REQUIRE( sidebar.isCapturing() );
+        startFrom( sessions, sidebar, *dialog );
+        REQUIRE( sessions.liveSession().isBusy() );
         auto* live = sidebar.findChild<QLabel*>( "liveProgress" );
         const auto progress = live->text();
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
         THEN( "the counters showed the condition, and the capture ended by itself with two" )
         {
@@ -407,10 +420,11 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
     GIVEN( "a source that is unavailable" )
     {
         fake->unavailableReason = "fakecap not found: install the Fake Capture Tools";
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( root.path() );
-        sidebar.setLiveSources( registryOf( fake ) );
-        const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+        CaptureSessions sessions;
+        SidebarWidget sidebar( sessions );
+        sessions.setTempRoot( root.path() );
+        sessions.setLiveSources( registryOf( fake ) );
+        const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
         const Fields fields( dialog.get() );
 
         THEN( "the dialog shows the reason, lists nothing, and Start is disabled" )
@@ -425,7 +439,8 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
 
         THEN( "starting it anyway is refused with the reason" )
         {
-            REQUIRE_FALSE( sidebar.startLiveCapture( LiveChoice{ "fake", "", "fake0", "", 100 } ) );
+            REQUIRE_FALSE(
+                sessions.liveSession().start( LiveChoice{ "fake", "", "fake0", "", 100 } ) );
             REQUIRE( host.notifications.size() == 1 );
             REQUIRE( host.notifications.first().contains( "fakecap not found" ) );
             REQUIRE( fake->started().empty() );
@@ -437,14 +452,15 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
         fake->capture = pcapOf( { datagram( 0 ) } );
         fake->failure = "fakecap exited with code 1:\nfakecap: permission denied";
         fake->hint = "Give fakecap the capture permission.";
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( root.path() );
-        sidebar.setLiveSources( registryOf( fake ) );
-        const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+        CaptureSessions sessions;
+        SidebarWidget sidebar( sessions );
+        sessions.setTempRoot( root.path() );
+        sessions.setLiveSources( registryOf( fake ) );
+        const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
         const Fields fields( dialog.get() );
         REQUIRE( listed( dialog->form(), fields ) );
-        startFrom( sidebar, *dialog );
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        startFrom( sessions, sidebar, *dialog );
+        REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
         THEN( "the section shows the error and what the source says to do" )
         {
@@ -458,13 +474,13 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
         AND_WHEN( "the next capture starts" )
         {
             fake->failure.clear();
-            startFrom( sidebar, *dialog );
+            startFrom( sessions, sidebar, *dialog );
 
             THEN( "the error goes" )
             {
                 REQUIRE( sidebar.findChild<QLabel*>( "liveError" )->isHidden() );
-                sidebar.stopLiveCapture();
-                REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+                sessions.liveSession().stop();
+                REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
             }
         }
     }
@@ -473,19 +489,20 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
     {
         fake->failure = "fakecap exited with code 1:\nfakecap: <eth0> permission denied";
         fake->hint = "Run: setcap cap_net_raw=eip <fakecap> && log in again.";
-        SidebarWidget sidebar;
-        sidebar.setTempRoot( root.path() );
-        sidebar.setLiveSources( registryOf( fake ) );
-        const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+        CaptureSessions sessions;
+        SidebarWidget sidebar( sessions );
+        sessions.setTempRoot( root.path() );
+        sessions.setLiveSources( registryOf( fake ) );
+        const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
         const Fields fields( dialog.get() );
         REQUIRE( listed( dialog->form(), fields ) );
-        startFrom( sidebar, *dialog );
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        startFrom( sessions, sidebar, *dialog );
+        REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
         THEN( "the section shows the error's lines and the Guidance as text, the summary the "
               "error" )
         {
-            const auto outcome = sidebar.liveSession()->outcome();
+            const auto outcome = sessions.liveSession().outcome();
             REQUIRE( outcome );
             REQUIRE( outcome->status == LiveOutcome::Status::Failed );
             REQUIRE( outcome->files.isEmpty() );
@@ -509,10 +526,11 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
     auto fake = std::make_shared<FakeSourceKind>();
     fake->deviceMode = LiveSourceKind::Devices::Listed;
     fake->capture = pcapOf( { datagram( 0 ) } );
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( root.path() );
-    sidebar.setLiveSources( registryOf( fake ) );
-    const auto dialog = sidebar.makeLiveCaptureDialog( nullptr );
+    CaptureSessions sessions;
+    SidebarWidget sidebar( sessions );
+    sessions.setTempRoot( root.path() );
+    sessions.setLiveSources( registryOf( fake ) );
+    const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
     const Fields fields( dialog.get() );
     auto* device = dialog->findChild<QComboBox*>( "liveDevice" );
     REQUIRE( listed( dialog->form(), fields ) );
@@ -528,7 +546,7 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
 
     WHEN( "it is started" )
     {
-        startFrom( sidebar, *dialog );
+        startFrom( sessions, sidebar, *dialog );
         REQUIRE( waitFor( [ & ] { return !host.openedFiles.isEmpty(); } ) );
 
         THEN( "the device is part of the choice and of the capture's name" )
@@ -536,8 +554,8 @@ SCENARIO( "A source with devices lists them, and the interfaces of the one chose
             REQUIRE( fake->started().front().device == "phoneA" );
             REQUIRE( QFileInfo( host.openedFiles.first() ).fileName() == "phoneA-fake0.log" );
         }
-        sidebar.stopLiveCapture();
-        REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+        sessions.liveSession().stop();
+        REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
     }
 }
 
@@ -596,10 +614,11 @@ SCENARIO( "A source's own options show in the dialog, are part of the choice, an
     auto registry = registryOf( fake );
     registry->add( plain );
 
-    auto sidebar = std::make_unique<SidebarWidget>();
-    sidebar->setTempRoot( root.path() );
-    sidebar->setLiveSources( registry );
-    auto dialog = sidebar->makeLiveCaptureDialog( nullptr );
+    auto sessions = std::make_unique<CaptureSessions>();
+    auto sidebar = std::make_unique<SidebarWidget>( *sessions );
+    sessions->setTempRoot( root.path() );
+    sessions->setLiveSources( registry );
+    auto dialog = sessions->makeLiveCaptureDialog( nullptr );
     auto* form = dialog->form();
     const Fields fields( dialog.get() );
     REQUIRE( listed( form, fields ) );
@@ -639,15 +658,16 @@ SCENARIO( "A source's own options show in the dialog, are part of the choice, an
 
         AND_WHEN( "the capture is started and the plugin restarts" )
         {
-            startFrom( *sidebar, *dialog );
+            startFrom( *sessions, *sidebar, *dialog );
             REQUIRE( fake->started().size() == 1 );
             REQUIRE( fake->started().front().options == LiveOptions{ { "note", "hello" } } );
-            sidebar->stopLiveCapture();
-            REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
-            // The dialog lists on the sidebar's pool: it goes first.
+            sessions->liveSession().stop();
+            REQUIRE( waitFor( [ & ] { return !sessions->liveSession().isBusy(); } ) );
+            // The dialog lists on the sessions' pool: it goes first.
             dialog.reset();
             sidebar.reset();
-            SidebarWidget restarted;
+            sessions.reset();
+            CaptureSessions restarted;
             restarted.setLiveSources( registry );
             const auto shown = restarted.makeLiveCaptureDialog( nullptr );
 
@@ -769,11 +789,11 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
     FakeHost host;
     tcpdump::g_state.tempRoot = root.path();
     REQUIRE( logsquirl_plugin_init( host.api(), &host ) == 0 );
-    auto* sidebar = tcpdump::g_state.sidebarWidget;
-    sidebar->setTempRoot( root.path() );
+    auto* sessions = tcpdump::g_state.sessions;
+    sessions->setTempRoot( root.path() );
     auto fake = std::make_shared<FakeSourceKind>();
     fake->capture = pcapOf( { datagram( 0 ) } );
-    sidebar->setLiveSources( registryOf( fake ) );
+    sessions->setLiveSources( registryOf( fake ) );
 
     const auto entry = [ &host ]( const QString& label ) {
         for ( const auto& action : host.menuActions ) {
@@ -813,7 +833,7 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
         THEN( "the dialog's choice is captured" )
         {
             REQUIRE( dialogs == 1 );
-            REQUIRE( sidebar->isCapturing() );
+            REQUIRE( sessions->liveSession().isBusy() );
             REQUIRE( fake->started().size() == 1 );
             REQUIRE( fake->started().front().networkInterface == "fake1" );
             REQUIRE( fake->started().front().filter == "udp" );
@@ -823,12 +843,12 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
         {
             int asked = 0;
             int dialogsAgain = 0;
-            sidebar->setStopConfirmer( [ & ]( QWidget*, const QString& running ) {
+            sessions->setStopConfirmer( [ & ]( QWidget*, const QString& running ) {
                 ++asked;
                 REQUIRE( running == "fake1" );
                 return false;
             } );
-            sidebar->setLiveChoiceAsker( [ & ]( QWidget*, LiveChoice& ) {
+            sessions->setLiveChoiceAsker( [ & ]( QWidget*, LiveChoice& ) {
                 ++dialogsAgain;
                 return true;
             } );
@@ -838,15 +858,15 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
             {
                 REQUIRE( asked == 1 );
                 REQUIRE( dialogsAgain == 0 );
-                REQUIRE( sidebar->isCapturing() );
+                REQUIRE( sessions->liveSession().isBusy() );
                 REQUIRE( fake->started().size() == 1 );
             }
         }
 
         AND_WHEN( "the entry is chosen again and the user stops the running capture" )
         {
-            sidebar->setStopConfirmer( []( QWidget*, const QString& ) { return true; } );
-            sidebar->setLiveChoiceAsker( []( QWidget*, LiveChoice& choice ) {
+            sessions->setStopConfirmer( []( QWidget*, const QString& ) { return true; } );
+            sessions->setLiveChoiceAsker( []( QWidget*, LiveChoice& choice ) {
                 REQUIRE( choice.networkInterface == "fake1" ); // the last choice is shown
                 choice.networkInterface = "fake0";
                 return true;
@@ -856,7 +876,7 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
             THEN( "the first ends, then the second starts" )
             {
                 REQUIRE( waitFor( [ & ] { return fake->started().size() == 2; } ) );
-                REQUIRE( waitFor( [ & ] { return sidebar->isCapturing(); } ) );
+                REQUIRE( waitFor( [ & ] { return sessions->liveSession().isBusy(); } ) );
                 REQUIRE( fake->started().back().networkInterface == "fake0" );
                 REQUIRE( waitFor( [ & ] {
                     return !host.openedFiles.isEmpty()
@@ -871,7 +891,7 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
 
             THEN( "the capture ends" )
             {
-                REQUIRE( waitFor( [ & ] { return !sidebar->isCapturing(); } ) );
+                REQUIRE( waitFor( [ & ] { return !sessions->liveSession().isBusy(); } ) );
             }
         }
     }
@@ -890,12 +910,12 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
 
         WHEN( "the dialog is cancelled" )
         {
-            sidebar->setLiveChoiceAsker( []( QWidget*, LiveChoice& ) { return false; } );
+            sessions->setLiveChoiceAsker( []( QWidget*, LiveChoice& ) { return false; } );
             startEntry.trigger();
 
             THEN( "nothing starts" )
             {
-                REQUIRE_FALSE( sidebar->isCapturing() );
+                REQUIRE_FALSE( sessions->liveSession().isBusy() );
                 REQUIRE( fake->started().empty() );
             }
         }
@@ -906,7 +926,7 @@ SCENARIO( "Plugins > tcpdump > Start live capture… starts one capture at a tim
 
 #ifdef Q_OS_UNIX
 
-SCENARIO( "A listing that hangs does not hold up closing the sidebar or a dialog", "[live_ui]" )
+SCENARIO( "A listing that hangs does not hold up closing the plugin or a dialog", "[live_ui]" )
 {
     FakeHost host;
     QTemporaryDir dir;
@@ -930,17 +950,19 @@ SCENARIO( "A listing that hangs does not hold up closing the sidebar or a dialog
         REQUIRE( form->isListing() );
     };
 
-    WHEN( "the sidebar's dialog and the sidebar go while it lists" )
+    WHEN( "the plugin's dialog, its sidebar and its sessions go while it lists" )
     {
-        auto sidebar = std::make_unique<SidebarWidget>();
-        sidebar->setTempRoot( dir.path() );
-        sidebar->setLiveSources( registryOf( fake ) );
-        auto dialog = sidebar->makeLiveCaptureDialog( nullptr );
+        auto sessions = std::make_unique<CaptureSessions>();
+        auto sidebar = std::make_unique<SidebarWidget>( *sessions );
+        sessions->setTempRoot( dir.path() );
+        sessions->setLiveSources( registryOf( fake ) );
+        auto dialog = sessions->makeLiveCaptureDialog( nullptr );
         whileListing( dialog->form() );
         QElapsedTimer took;
         took.start();
         dialog.reset();
         sidebar.reset();
+        sessions.reset();
 
         THEN( "the listing is cancelled, not waited for" )
         {
@@ -985,13 +1007,14 @@ SCENARIO( "A source's capture program gets the capture filter as one argument, n
     }
     auto fake = std::make_shared<FakeSourceKind>();
     fake->program = program;
-    SidebarWidget sidebar;
-    sidebar.setTempRoot( dir.path() );
-    sidebar.setLiveSources( registryOf( fake ) );
+    CaptureSessions sessions;
+    SidebarWidget sidebar( sessions );
+    sessions.setTempRoot( dir.path() );
+    sessions.setLiveSources( registryOf( fake ) );
 
-    REQUIRE( sidebar.startLiveCapture(
+    REQUIRE( sessions.liveSession().start(
         LiveChoice{ "fake", "", "fake0", "host 10.0.0.1 and not (port 22 or port '$(x)')", 64 } ) );
-    REQUIRE( waitFor( [ & ] { return !sidebar.isCapturing(); } ) );
+    REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
     REQUIRE( sidebar.findChild<QPlainTextEdit*>( "liveStderr" )->toPlainText()
              == "[-i]\n[fake0]\n[-s]\n[64]\n[host 10.0.0.1 and not (port 22 or port '$(x)')]" );
     REQUIRE( host.openedFiles.size() == 1 );

@@ -600,6 +600,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the last live capture said *Capturing… the summary so far:* again while
   the source of the next one was being checked before it started; it now
   says so only while its capture runs (#156).
+- **One reason for each activity that cannot start.** Whether a capture
+  file may be opened, a live capture started or packets exported is
+  decided in one place, so the sidebar, the tcpdump menu and the live
+  capture refuse the same things with the same message. The only change
+  you see: the tooltip of the disabled **Start live capture…** while a
+  capture file is read now says what the notification says, *A capture is
+  still being read: wait for it, or cancel it first.* (#174).
+- **Opening a capture file is decided in one place.** Opening, cancelling
+  and failing to open a capture file behave as before, from the sidebar
+  and the tcpdump menu alike. The only change you see: a file chosen in
+  the Open dialog while a live capture started meanwhile (one waiting for
+  the last to end) is no longer dropped without a word; a notification
+  says why it was not opened (#170).
+- **Exporting packets is decided in one place.** Export packets…, its
+  progress dialog and Cancel behave as before: a Cancel that comes after
+  the export wrote its file, or the sidebar closing then, still keeps the
+  file (#171).
+- **The sidebar's summary says one status.** What the summary label says,
+  of a capture file being read, a live capture and the tab in front, is
+  decided in one place. It says the same as before, at the same moments;
+  a switch between light and dark mode redraws whatever it says (#172).
+- **The tcpdump menu talks to the sessions, the sidebar shows them.** Open
+  pcap…, Start and Stop live capture and Export packets… in the tcpdump
+  menu reach what opens, captures and exports directly, instead of going
+  through the sidebar; the sidebar only shows them. Nothing changes for
+  you: the same dialogs, over the sidebar, the same refusals and messages
+  (#173).
 
 ### Fixed
 - **Packet numbers no longer wrap.** The No. column counted packets in 32

@@ -71,8 +71,9 @@ struct LoadedCapture {
         sidebar = tcpdump::g_state.sidebarWidget;
         table = sidebar->packetPanel()->conversationTable();
         model = table->model();
-        sidebar->openPcapFile( capture );
-        REQUIRE( waitFor( [ this ] { return !sidebar->isConverting(); } ) );
+        tcpdump::g_state.sessions->conversionSession().start( capture );
+        REQUIRE( waitFor(
+            [ this ] { return !tcpdump::g_state.sessions->conversionSession().isBusy(); } ) );
         REQUIRE( host.openedFiles.size() == 1 );
         text = host.openedFiles.first();
         QFile file( text );
@@ -250,7 +251,7 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
             rows.push_back( added );
             tcpdump::CaptureSummary summary;
             summary.conversations = std::make_shared<const tcpdump::ConversationRows>( rows );
-            loaded.sidebar->updateSummary( loaded.text, summary );
+            tcpdump::g_state.sessions->catalog().updateSummary( loaded.text, summary );
 
             THEN( "the table shows it, in the same sort, the same conversation selected" )
             {
@@ -269,7 +270,7 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
             loaded.host.activateFile( "/some/other.log" );
             tcpdump::CaptureSummary summary;
             summary.conversations = std::make_shared<const tcpdump::ConversationRows>();
-            loaded.sidebar->updateSummary( loaded.text, summary );
+            tcpdump::g_state.sessions->catalog().updateSummary( loaded.text, summary );
 
             THEN( "it is kept for when its tab comes back" )
             {

@@ -21,12 +21,17 @@
  * @file sidebarwidget.cpp
  * @brief Implementation of the tcpdump sidebar panel.
  *
- * When the user clicks "Open pcap…", the widget:
- *   1. Opens a file dialog for .pcap / .cap / .dmp files
- *   2. Converts the pcap packet by packet with pcap_converter: parses each
- *      packet, formats it into a human-readable line, and writes the line
- *      to a temporary .log file
- *   3. Opens the .log file in LogSquirl's main viewer
+ * The sidebar is a view of the plugin's CaptureSessions: its buttons
+ * forward to them, and it shows what they tell.  When the user clicks
+ * "Open pcap…", the sessions:
+ *   1. Open a file dialog for .pcap / .cap / .dmp files, over the sidebar
+ *   2. Hand it to the File Conversion session, which converts the pcap
+ *      packet by packet with pcap_converter: parses each packet, formats it
+ *      into a human-readable line, and writes the line to a temporary .log
+ *      file
+ *   3. The session opens the .log file in LogSquirl's main viewer, through
+ *      the capture catalog
+ * and the sidebar shows the session's progress, label and outcome.
  *
  * Its Stream lines in Regex Lab button, on a host that offers it, opens the
  * Regex Lab on the conversation of the selected packet line (see
@@ -39,123 +44,46 @@
  * packets that carried a tunnelled one show in no column, so no pattern
  * could pick their lines.
  *
- * Its CaptureCatalog keeps each converted capture's summary and CaptureIndex
- * under the path of its .log file, opens its tab and says which is in the
- * tab in front, as the host reports tab switches; the sidebar shows that
- * one's summary, and its Packet Panel the packets of that capture.  The
- * sidebar is the catalog's tab host: it opens a tab on the UI thread.
+ * The sessions' CaptureCatalog keeps each capture's summary and CaptureIndex
+ * under the path of its .log file and says which is in the tab in front, as
+ * the host reports tab switches; the sidebar shows that one's summary, and
+ * its Packet Panel the packets of that capture, whenever the catalog
+ * announces a change.
  *
- * A live capture (startLiveCapture()) is its LiveCaptureSession's, which
- * decides what it does: the sidebar is the session's host (a notification),
- * and the session keeps the summaries of its text files in the catalog,
- * which opens each one's tab once the first packet line is there; the
- * summaries follow the snapshots until the capture ends.  The sidebar shows the
- * session's state, progress, stderr lines and outcome.  The Live capture section, and the Start
- * live capture… dialog, choose what to capture from the Live Source Kinds (live_source.h): the kind
- * chosen makes the stream, and explains a failure.
+ * A live capture is the Live Capture Session's, which keeps the summaries
+ * of its text files in the catalog; the sidebar shows the session's state,
+ * progress, stderr lines and outcome.  Start live capture… asks, through
+ * the sessions, in the Start live capture dialog, which chooses what to
+ * capture from the Live Source Kinds (live_source.h).
  *
- * Export packets… reads the selected lines, lets the user confirm or change
- * their packets in the ExportDialog, asks where to write them, and writes
- * them with exportPackets() on a worker thread of its own, so that an
- * export and a conversion can run side by side.
+ * Export packets… is the Export session's; the sidebar shows its progress
+ * dialog, whose Cancel forwards to it.
  */
 
 #include "sidebarwidget.h"
 
-#include "capture_file.h"
 #include "conversation_table.h"
 #include "display_filter_dialog.h"
 #include "follow_stream.h"
-#include "live_capture_form.h"
-#include "packet_export.h"
 #include "packet_panel.h"
-#include "pcap_converter.h"
 #include "plugin.h"
-#include "raw_capture.h"
 #include "regex_lab.h"
-#include "selected_packet_line.h"
-#include "settings.h"
-#include "tempdirs.h"
 
 #include <QDesktopServices>
-#include <QDir>
-#include <QFileDialog>
-#include <QFileInfo>
 #include <QGroupBox>
-#include <QLocale>
-#include <QMessageBox>
 #include <QPointer>
 #include <QResizeEvent>
 #include <QScrollArea>
-#include <QStandardPaths>
 #include <QStringList>
+#include <QStyle>
 #include <QUrl>
 
 #include <algorithm>
 #include <exception>
-#include <map>
-#include <vector>
 
 namespace tcpdump {
 
 namespace {
-
-/// The README section on installing the Log Format and what it unlocks.
-const char* const kLogFormatHelpUrl
-    = "https://github.com/64x-lunicorn/LogSquirl-tcpdump#log-format";
-
-/// What the summary says for a tab that shows no capture of the plugin.
-const char* const kNoCaptureText = "No capture in this tab.";
-
-/// The links of the summary that open a filter: this, then "endpoint/" or
-/// "protocol/" and the percent-encoded name.
-const char* const kFilterScheme = "tcpdump-filter:";
-const char* const kEndpointFilter = "endpoint/";
-const char* const kProtocolFilter = "protocol/";
-
-/// The pattern of the filter @p link opens; empty for any other link.
-QString filterPattern( const QString& link )
-{
-    if ( !link.startsWith( kFilterScheme ) ) {
-        return {};
-    }
-    const auto filter = link.mid( static_cast<qsizetype>( qstrlen( kFilterScheme ) ) );
-    const auto nameOf = []( const QString& rest, const char* kind ) {
-        return QString::fromUtf8(
-            QByteArray::fromPercentEncoding( rest.mid( qstrlen( kind ) ).toUtf8() ) );
-    };
-    if ( filter.startsWith( kEndpointFilter ) ) {
-        return endpointPattern( nameOf( filter, kEndpointFilter ) );
-    }
-    if ( filter.startsWith( kProtocolFilter ) ) {
-        return protocolPattern( nameOf( filter, kProtocolFilter ) );
-    }
-    return {};
-}
-
-/// What setDefaultLiveSources() set; null: builtInLiveSources().
-std::shared_ptr<const LiveSourceRegistry>& defaultLiveSources()
-{
-    static std::shared_ptr<const LiveSourceRegistry> sources;
-    return sources;
-}
-
-/// How far the line under the capture's name is from the window's colour
-/// to the text's: one part in this many.
-constexpr int kSeparatorShare = 3;
-
-/// The line under the capture's name.  A rule is drawn in the text's
-/// colour, stark on a dark window: this one a third of the way from the
-/// window's colour to the text's.
-QString separatorHtml( const QPalette& palette )
-{
-    const auto window = palette.color( QPalette::Window );
-    const auto text = palette.color( QPalette::WindowText );
-    const auto mix = []( int from, int to ) { return from + ( to - from ) / kSeparatorShare; };
-    const QColor line( mix( window.red(), text.red() ), mix( window.green(), text.green() ),
-                       mix( window.blue(), text.blue() ) );
-    return QString( "<hr style=\"background-color:%1\">" ).arg( line.name() );
-}
 
 /// The summary, scrolled when the sidebar is too short for all of it.  It
 /// asks for the height of its text at its width, up to
@@ -264,45 +192,9 @@ private:
 
 } // namespace
 
-void SidebarWidget::setDefaultLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
-{
-    defaultLiveSources() = std::move( sources );
-}
-
-SidebarWidget::SidebarWidget( QWidget* parent )
+SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     : QWidget( parent )
-    , chooseFile_( []( QWidget* parent, const QString& dir ) {
-        return QFileDialog::getOpenFileName(
-            parent, "Open pcap Capture File", dir,
-            "Capture files (*.pcap *.pcapng *.cap *.dmp *.pcap.gz *.pcapng.gz *.cap.gz);;"
-            "All files (*)" );
-    } )
-    , chooseSaveFile_( []( QWidget* parent, const QString& suggested ) {
-        return QFileDialog::getSaveFileName( parent, "Save Capture", suggested,
-                                             "Capture files (*.pcap *.pcapng);;All files (*)" );
-    } )
-    , tempRoot_( tcpdump::tempRoot() )
-    , confirmExport_( [ this ]( QWidget* parent, ExportRequest& request ) {
-        const auto dir = lastDir_.isEmpty()
-                             ? QStandardPaths::writableLocation( QStandardPaths::HomeLocation )
-                             : lastDir_;
-        // Neither this widget nor its members are used after the dialogs:
-        // it may be gone when they return.
-        ExportDialog dialog( request, parent );
-        if ( dialog.exec() != QDialog::Accepted ) {
-            return false;
-        }
-        request.numbers = dialog.packetSet().numbers;
-        const bool pcapng = request.format == CaptureFormat::Pcapng;
-        const auto suggested
-            = QDir( dir ).filePath( tcpdump::captureBaseName( request.captureName ) + "-packets."
-                                    + ( pcapng ? "pcapng" : "pcap" ) );
-        request.outputPath
-            = QFileDialog::getSaveFileName( parent, "Export Packets", suggested,
-                                            pcapng ? "pcapng captures (*.pcapng);;All files (*)"
-                                                   : "pcap captures (*.pcap);;All files (*)" );
-        return !request.outputPath.isEmpty();
-    } )
+    , sessions_( sessions )
 {
     // All of it scrolls when the sidebar is shorter than its minimum.
     auto* content = new QWidget;
@@ -320,7 +212,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
     layout->addWidget( openButton_ );
 
-    connect( openButton_, &QPushButton::clicked, this, &SidebarWidget::chooseAndOpen );
+    connect( openButton_, &QPushButton::clicked, this,
+             [ this ] { forward( "Opening a capture", &CaptureSessions::chooseAndOpen ); } );
 
     // Stream lines in Regex Lab, as in the Plugins menu: only a host that
     // has the Regex Lab and tells the selected lines gets it.  It is enabled
@@ -357,7 +250,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     cancelButton_->setObjectName( "cancelButton" );
     cancelButton_->setToolTip( "Stop reading the capture" );
     layout->addWidget( cancelButton_ );
-    connect( cancelButton_, &QPushButton::clicked, this, &SidebarWidget::cancel );
+    connect( cancelButton_, &QPushButton::clicked, this,
+             [ this ] { sessions_.conversionSession().cancel(); } );
 
     // Live capture: Start live capture… asks what to capture in its dialog;
     // while one runs, its progress (no percentage, a stream has no size),
@@ -367,18 +261,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     auto* liveLayout = new QVBoxLayout( liveSection );
     liveLayout->setSpacing( 4 );
 
-    listingPool_.setMaxThreadCount( 4 );
-    startButton_ = new QPushButton( "Start live capture\u2026" );
+    startButton_ = new QPushButton( "Start live capture…" );
     startButton_->setObjectName( "liveCaptureButton" );
     liveLayout->addWidget( startButton_ );
     connect( startButton_, &QPushButton::clicked, this, [ this ] {
-        try {
-            chooseAndStartLiveCapture();
-        } catch ( const std::exception& e ) {
-            // An exception must not escape into Qt or the host.
-            hostLog( LOGSQUIRL_LOG_ERROR,
-                     "Starting a live capture failed: " + QString::fromUtf8( e.what() ) );
-        }
+        forward( "Starting a live capture", &CaptureSessions::chooseAndStartLiveCapture );
     } );
 
     liveLabel_ = new QLabel;
@@ -390,7 +277,11 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     stopButton_->setObjectName( "stopButton" );
     stopButton_->setToolTip( "End the capture and keep what was captured" );
     liveLayout->addWidget( stopButton_ );
-    connect( stopButton_, &QPushButton::clicked, this, &SidebarWidget::stopLiveCapture );
+    // Shown only while a capture runs, so Stop live capture never says none
+    // does.
+    connect( stopButton_, &QPushButton::clicked, this, [ this ] {
+        forward( "Stopping a live capture", &CaptureSessions::stopLiveCapture );
+    } );
 
     liveError_ = new QLabel;
     liveError_->setObjectName( "liveError" );
@@ -417,8 +308,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     liveTicker_.setInterval( 1000 );
     connect( &liveTicker_, &QTimer::timeout, this, &SidebarWidget::showLiveProgress );
 
-    // Summary label
-    summaryLabel_ = new QLabel( "No capture loaded." );
+    // Summary label, which says what summaryLabelText() decides
+    summaryLabel_ = new QLabel;
     summaryLabel_->setObjectName( "summary" );
     summaryLabel_->setTextFormat( Qt::RichText );
     summaryLabel_->setWordWrap( true );
@@ -438,7 +329,8 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                              "files kept as one" );
     saveButton_->setHidden( true );
     layout->addWidget( saveButton_ );
-    connect( saveButton_, &QPushButton::clicked, this, &SidebarWidget::saveCapture );
+    connect( saveButton_, &QPushButton::clicked, this,
+             [ this ] { forward( "Saving a capture", &CaptureSessions::saveCapture ); } );
 
     // The packet of the selected line, below; it takes the room left, and
     // keeps room for its tabs and the Conversations however long the summary.
@@ -457,314 +349,115 @@ SidebarWidget::SidebarWidget( QWidget* parent )
         updateStreamLinesButton();
     }
 
-    askLiveChoice_ = [ this ]( QWidget* parent, LiveChoice& choice ) {
-        // Neither this widget nor its members are used after the dialog:
-        // it may be gone when it returns (its pool waits for the listings).
-        const auto dialog = makeLiveCaptureDialog( parent, choice );
-        if ( dialog->exec() != QDialog::Accepted ) {
-            return false;
-        }
-        choice = dialog->choice();
-        return true;
-    };
-    confirmStop_ = []( QWidget* parent, const QString& running ) {
-        return QMessageBox::question(
-                   parent, "Start Live Capture",
-                   QString( "The live capture %1 is running: only one runs at a time. Stop it?" )
-                       .arg( running ),
-                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No )
-               == QMessageBox::Yes;
-    };
+    // The sessions ask the user over this sidebar, and it shows what they
+    // tell: the capture in front anew whenever the catalog announces that it
+    // changed, each session's state, progress and outcome.
+    sessions_.setDialogParent( this );
+    // The destructor stops observing.
+    frontObserver_ = sessions_.catalog().observeFront( [ this ] { showFront(); } );
+    auto* conversion = &sessions_.conversionSession();
+    connect( conversion, &FileConversionSession::stateChanged, this,
+             &SidebarWidget::showConversionState );
+    connect( conversion, &FileConversionSession::progressed, this,
+             [ this ]( int permille ) { progressBar_->setValue( permille ); } );
+    connect( conversion, &FileConversionSession::finished, this,
+             &SidebarWidget::showConversionOutcome );
 
-    // This widget is the session's host; the session keeps its captures'
-    // summaries in the catalog, and the sidebar shows the one in front.
-    LiveCaptureHost& host = *this;
-    live_ = std::make_unique<LiveCaptureSession>( host, catalog_ );
-    live_->setOutputRoot( tempRoot_ );
-    connect( live_.get(), &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
-    connect( live_.get(), &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
-    connect( live_.get(), &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
-    connect( live_.get(), &LiveCaptureSession::progressed, this, [ this ] {
-        showLiveProgress();
-        showLiveSummary();
-    } );
-    connect( live_.get(), &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
+    auto* live = &sessions_.liveSession();
+    connect( live, &LiveCaptureSession::stateChanged, this, &SidebarWidget::showLiveState );
+    connect( live, &LiveCaptureSession::started, this, &SidebarWidget::showLiveStart );
+    connect( live, &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
+    // The catalog's snapshot of the tab in front redraws its summary.
+    connect( live, &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
+    connect( live, &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
         liveStderr_->appendPlainText( line );
         liveStderr_->setHidden( false );
     } );
-    connect( live_.get(), &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
+    connect( live, &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
 
-    setConverting( false );
+    // The Export session asks and tells the outcome itself; the sidebar
+    // shows its progress dialog.
+    auto* exporting = &sessions_.exportSession();
+    connect( exporting, &ExportSession::stateChanged, this, &SidebarWidget::showExportState );
+    connect( exporting, &ExportSession::progressed, this, [ this ]( int permille ) {
+        if ( exportProgress_ ) {
+            exportProgress_->setValue( permille );
+        }
+    } );
+
+    showSummary( SummaryStatus::NothingLoaded );
+    showConversionState();
     showLiveState();
-    setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
+    showExportState();
 }
 
 SidebarWidget::~SidebarWidget()
 {
-    // The listings of the form and the dialog are waited for by
-    // listingPool_, as the host unloads the library next: their programs
-    // are killed first, so that this takes moments, not a listing's timeout.
-    // First, as a live capture's worker may be listing too.
-    cancelListings();
-
-    // A live capture is stopped, not cancelled: its tab may stay open after
-    // a runtime disable.  Its worker is not waited for here: the plugin's
-    // shutdown joins it (joinLiveCaptures()), with its program ended.  The
-    // session tells this widget nothing more.
-    live_->disconnect( this );
-    live_.reset();
-
-    // The host unloads the library right after the plugin is shut down:
-    // the worker must be done with it before.  It checks the cancel flag
-    // between packets, and convertPcap() reads regular files only, so it
-    // cannot block on a FIFO or device; a regular file on a network share
-    // that stalls can still hold it up until the system gives up on it.
-    // A conversion that finished before the cancel reached it wrote a file
-    // no tab will show: the cancel wins, and the file goes.
-    conversion_.cancelAndWait();
-
-    // An export stops between two packets and leaves nothing behind; one
-    // that was done when the cancel came keeps its file, as on Cancel.  Its
-    // progress dialog goes first, as closing it would cancel through this
-    // half-destroyed widget.
+    // The sessions run on, and tell this widget nothing more.  The export's
+    // progress dialog goes first, as closing it would cancel the export
+    // through this half-destroyed widget.
+    sessions_.catalog().stopObserving( frontObserver_ );
+    sessions_.conversionSession().disconnect( this );
+    sessions_.liveSession().disconnect( this );
+    sessions_.exportSession().disconnect( this );
     if ( exportProgress_ ) {
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
-    export_.cancelAndWait();
 }
 
-bool SidebarWidget::refuseWhileBusy()
+void SidebarWidget::forward( const char* what, void ( CaptureSessions::*action )() )
 {
-    if ( isConverting() ) {
-        hostNotify( "A capture is still being read: wait for it, or cancel it first." );
-        return true;
-    }
-    if ( isCapturing() ) {
-        hostNotify( "A live capture is still running: stop it first." );
-        return true;
-    }
-    return false;
-}
-
-void SidebarWidget::chooseAndOpen()
-{
-    // The Open button is disabled meanwhile, but the menu entry is not.
-    if ( refuseWhileBusy() ) {
-        return;
-    }
-    if ( lastDir_.isEmpty() ) {
-        lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
-    }
-
-    // The dialog runs its own event loop, in which this widget may be
-    // deleted, e.g. with a parent that is closed meanwhile: then there is
-    // nothing left to open the file for.  This does not help if the plugin
-    // is unloaded while the dialog is open: the code this call returns into
-    // is gone then, and only the host can prevent that.
-    const QPointer<SidebarWidget> self( this );
-    const auto filePath = chooseFile_( this, lastDir_ );
-    if ( !self ) {
-        return;
-    }
-
-    if ( filePath.isEmpty() ) {
-        return;
-    }
-
-    lastDir_ = QFileInfo( filePath ).absolutePath();
     try {
-        openPcapFile( filePath );
+        ( sessions_.*action )();
     } catch ( const std::exception& e ) {
         // An exception must not escape into Qt or the host.
-        hostLog(
-            LOGSQUIRL_LOG_ERROR,
-            QString( "Opening %1 failed: %2" ).arg( filePath, QString::fromUtf8( e.what() ) ) );
+        hostLog( LOGSQUIRL_LOG_ERROR,
+                 QString( "%1 failed: %2" ).arg( what, QString::fromUtf8( e.what() ) ) );
     }
 }
 
-void SidebarWidget::openPcapFile( const QString& filePath )
+void SidebarWidget::showExportState()
 {
-    // One conversion at a time (Open is disabled meanwhile), so the outcome
-    // that arrives is always that of the running one.
-    if ( isConverting() || isCapturing() ) {
+    auto& session = sessions_.exportSession();
+    switch ( session.state() ) {
+    case ExportSession::State::Exporting:
+        if ( !exportProgress_ ) {
+            exportProgress_ = new QProgressDialog( this );
+            exportProgress_->setObjectName( "exportProgress" );
+            // The session's label() is plain text, which a QLabel would
+            // take for markup if it looked like it: an error or a path with
+            // a '<' in it.  Aligned as the dialog's own label.
+            auto* label = new QLabel;
+            label->setTextFormat( Qt::PlainText );
+            label->setAlignment( Qt::Alignment( exportProgress_->style()->styleHint(
+                QStyle::SH_ProgressDialog_TextLabelAlignment, nullptr, exportProgress_ ) ) );
+            exportProgress_->setLabel( label );
+            exportProgress_->setLabelText( session.label() );
+            exportProgress_->setCancelButtonText( "Cancel" );
+            exportProgress_->setRange( 0, 1000 );
+            exportProgress_->setWindowTitle( "Export Packets" );
+            exportProgress_->setAutoClose( false );
+            exportProgress_->setAutoReset( false );
+            exportProgress_->setMinimumDuration( 500 );
+            connect( exportProgress_, &QProgressDialog::canceled, this,
+                     [ this ] { sessions_.exportSession().cancel(); } );
+        }
+        return;
+    case ExportSession::State::Cancelling:
+        if ( exportProgress_ ) {
+            exportProgress_->setLabelText( session.label() );
+        }
+        return;
+    case ExportSession::State::Idle:
+        if ( exportProgress_ ) {
+            // Closing it would cancel the export that is over.
+            exportProgress_->disconnect( this );
+            exportProgress_->deleteLater();
+            exportProgress_ = nullptr;
+        }
         return;
     }
-    hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
-
-    // The Converter writes into a new private directory below the temporary
-    // root, kept for its tab until LogSquirl quits, and reports every
-    // failure as a result: nothing is caught here.  It converts with the
-    // options saved when it starts: a change of them in the configuration
-    // dialog applies to the next capture, the tab of this one keeps its own.
-    // A cancel wins over a conversion that was done when it came: its
-    // directory goes.
-    const auto tempRoot = tempRoot_;
-    const auto options = loadConversionOptions( hostConfigDir() );
-    conversion_.start(
-        [ filePath, tempRoot,
-          options ]( const std::atomic_bool* cancel,
-                     const BackgroundJob<ConversionResult>::Progress& progress ) {
-            return convertPcap( filePath, tempRoot, cancel, progress, options );
-        },
-        []( const ConversionResult& result ) {
-            removeOutput( result );
-            return true;
-        },
-        [ this, filePath ]( ConversionResult result ) {
-            finishConversion( filePath, std::move( result ) );
-        },
-        [ this ]( int permille ) { progressBar_->setValue( permille ); } );
-    setConverting( true );
-    summaryLabel_->setText( QString( "Reading %1\xe2\x80\xa6" )
-                                .arg( QFileInfo( filePath ).fileName().toHtmlEscaped() ) );
-}
-
-void SidebarWidget::cancel()
-{
-    if ( !isConverting() ) {
-        return;
-    }
-    conversion_.cancel();
-    cancelButton_->setEnabled( false );
-    summaryLabel_->setText( "Cancelling\xe2\x80\xa6" );
-}
-
-void SidebarWidget::exportSelectedPackets()
-{
-    // The menu entry stays enabled while an export runs.
-    if ( isExporting() ) {
-        hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
-        return;
-    }
-    const auto* front = catalog_.front();
-    if ( !front ) {
-        hostNotify( "Export packets: the tab in front shows no capture opened by the tcpdump "
-                    "plugin." );
-        return;
-    }
-    const auto& st = g_state;
-    if ( !st.api || !st.handle || !st.hostCapabilities.selectedLogLines ) {
-        hostNotify( "Export packets needs LogSquirl 26.11 or later, which tells the selected "
-                    "lines." );
-        return;
-    }
-    const auto index = front->index;
-    ExportRequest request;
-    request.captureName = front->fileName;
-    request.packets = index->packets();
-    request.format = captureFormatOf( index->capturePath() );
-
-    // Without a selection, the user may still name or paste the packets.
-    const auto selected = selectedPackets( readSelectedLines(), request.packets );
-    if ( !selected.reason.isEmpty() ) {
-        hostNotify( "Export packets: " + selected.reason );
-        return;
-    }
-    request.numbers = selected.set.numbers;
-    request.selectedLines = selected.lineCount;
-    request.truncated = selected.truncated;
-    if ( request.truncated ) {
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 QString( "Export packets: LogSquirl told only the first %1 selected lines" )
-                     .arg( request.selectedLines ) );
-    }
-    const auto ofSelection = request.numbers;
-
-    // The dialogs run their own event loops, in which this widget may be
-    // deleted, or the menu entry chosen again.
-    const QPointer<SidebarWidget> self( this );
-    const bool confirmed = confirmExport_( this, request );
-    if ( !self || !confirmed || request.numbers.empty() || request.outputPath.isEmpty() ) {
-        return;
-    }
-    if ( isExporting() ) {
-        hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
-        return;
-    }
-    // Only when the selection's packets are exported does its truncation matter.
-    request.truncated = request.truncated && request.numbers == ofSelection;
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Exporting %1 packets of %2 to %3" )
-                                     .arg( request.numbers.count() )
-                                     .arg( request.captureName, request.outputPath ) );
-
-    exportProgress_ = new QProgressDialog(
-        QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.count() ), "Cancel", 0,
-        1000, this );
-    exportProgress_->setObjectName( "exportProgress" );
-    exportProgress_->setWindowTitle( "Export Packets" );
-    exportProgress_->setAutoClose( false );
-    exportProgress_->setAutoReset( false );
-    exportProgress_->setMinimumDuration( 500 );
-    connect( exportProgress_, &QProgressDialog::canceled, this, &SidebarWidget::cancelExport );
-
-    // An export stops at a cancel, before its file replaces the one chosen
-    // (exportPackets()).  Once it has, a cancel comes too late: the file
-    // that was there is gone, and removing the export would lose both.
-    // The export stands, and is reported.
-    const auto numbers = request.numbers;
-    const auto path = request.outputPath;
-    export_.start(
-        [ index, numbers, path ]( const std::atomic_bool* cancel,
-                                  const BackgroundJob<ExportResult>::Progress& progress ) {
-            return exportPackets( index, numbers, path, cancel, progress );
-        },
-        // A cancelled or failed export left nothing behind to take back;
-        // one that wrote its file cannot be taken back.
-        []( const ExportResult& result ) {
-            return result.status != ExportResult::Status::Exported;
-        },
-        [ this, request ]( ExportResult result ) { finishExport( request, std::move( result ) ); },
-        [ progress = exportProgress_ ]( int permille ) {
-            if ( progress ) {
-                progress->setValue( permille );
-            }
-        } );
-}
-
-void SidebarWidget::cancelExport()
-{
-    if ( !isExporting() ) {
-        return;
-    }
-    export_.cancel();
-    if ( exportProgress_ ) {
-        exportProgress_->setLabelText( "Cancelling\xe2\x80\xa6" );
-    }
-}
-
-void SidebarWidget::finishExport( const ExportRequest& request, ExportResult result )
-{
-    if ( exportProgress_ ) {
-        // Closing it would cancel the export that is over.
-        exportProgress_->disconnect( this );
-        exportProgress_->deleteLater();
-        exportProgress_ = nullptr;
-    }
-
-    const auto fileName = QDir::toNativeSeparators( request.outputPath );
-    switch ( result.status ) {
-    case ExportResult::Status::Cancelled:
-        hostLog( LOGSQUIRL_LOG_INFO, "Cancelled exporting packets to " + fileName );
-        return;
-    case ExportResult::Status::Failed:
-        hostLog( LOGSQUIRL_LOG_ERROR, "Exporting packets failed: " + result.error );
-        hostNotify( "Exporting packets failed: " + result.error );
-        return;
-    case ExportResult::Status::Exported:
-        break;
-    }
-    auto message = QString( "Exported %1 packets of %2 to %3." )
-                       .arg( result.packets )
-                       .arg( request.captureName, fileName );
-    if ( request.truncated ) {
-        message += QString( " LogSquirl told only the first %1 selected lines: to export the "
-                            "packets of more, copy their lines and paste them in the Export "
-                            "dialog." )
-                       .arg( request.selectedLines );
-    }
-    hostLog( LOGSQUIRL_LOG_INFO, message );
-    hostNotify( message );
 }
 
 void SidebarWidget::showPacketDetails()
@@ -833,7 +526,7 @@ void SidebarWidget::updateStreamLinesButton()
 void SidebarWidget::openLink( const QString& link )
 {
     try {
-        const auto pattern = filterPattern( link );
+        const auto pattern = summaryLinkPattern( link );
         if ( pattern.isEmpty() ) {
             QDesktopServices::openUrl( QUrl( link ) );
             return;
@@ -846,171 +539,67 @@ void SidebarWidget::openLink( const QString& link )
     }
 }
 
-void SidebarWidget::setConverting( bool converting )
+void SidebarWidget::updateOpenButton()
 {
-    openButton_->setEnabled( !converting );
-    cancelButton_->setEnabled( converting );
+    openButton_->setEnabled(
+        !activityRefusal( Activity::OpenFile, sessions_.runningActivities() ) );
+}
+
+void SidebarWidget::showConversionState()
+{
+    const auto& session = sessions_.conversionSession();
+    const auto state = session.state();
+    const bool converting = state != FileConversionSession::State::Idle;
+    updateOpenButton();
+    cancelButton_->setEnabled( state == FileConversionSession::State::Converting );
     cancelButton_->setHidden( !converting );
     progressBar_->setHidden( !converting );
-    progressBar_->setValue( 0 );
+    progressBar_->setValue( session.progress() );
     updateStartButton();
+    // Once it is over, the outcome, or the tab it opened, says what it came to.
+    if ( converting ) {
+        showSummary( SummaryStatus::Conversion );
+    }
 }
 
-void SidebarWidget::finishConversion( const QString& filePath, ConversionResult result )
+void SidebarWidget::showConversionOutcome( const FileConversionOutcome& outcome )
 {
-    setConverting( false );
-
-    switch ( result.status ) {
-    case ConversionResult::Status::Cancelled:
-    case ConversionResult::Status::Stopped: // only a stream is stopped
-        summaryLabel_->setText( "Cancelled." );
-        hostLog( LOGSQUIRL_LOG_INFO, "Cancelled opening " + filePath );
-        return;
-
-    case ConversionResult::Status::Failed: {
-        const auto& msg = result.error;
-        summaryLabel_->setText( "Error: " + msg.toHtmlEscaped() );
-        hostLog( LOGSQUIRL_LOG_ERROR, "pcap parse error: " + msg );
-        hostNotify( "Failed to open pcap: " + msg );
-        return;
+    // A capture opened is in front: the catalog announced it, and its
+    // summary is drawn already.
+    if ( !outcome.label.isEmpty() ) {
+        showSummary( SummaryStatus::Conversion );
     }
-
-    case ConversionResult::Status::Converted:
-        break;
-    }
-
-    // Its tab opens in the LogSquirl viewer; the file stays until LogSquirl quits.
-    const auto packets = result.summary.packets;
-    catalog_.openConverted( result.outputPath, filePath, std::move( result.summary ),
-                            std::move( result.index ) );
-    showSummaryFor( result.outputPath );
-
-    hostLog( LOGSQUIRL_LOG_INFO,
-             QString( "Opened %1 packets from %2" ).arg( packets ).arg( filePath ) );
 }
 
-void SidebarWidget::showSummaryFor( const QString& filePath )
+void SidebarWidget::showFront()
 {
-    catalog_.setFront( filePath );
-    const auto* front = catalog_.front();
+    const auto& catalog = sessions_.catalog();
+    const auto* front = catalog.front();
     packetPanel_->setCapture( front ? front->index : nullptr );
     packetPanel_->conversationTable()->setSummary( front ? &front->summary : nullptr );
 
     // The capture being read is shown in a tab of its own when it is done.
-    if ( isConverting() ) {
-        return;
+    if ( !sessions_.conversionSession().isBusy() ) {
+        saveButton_->setHidden( catalog.partsToSave().empty() );
     }
-    saveButton_->setHidden( catalog_.partsToSave().empty() );
-    shownSummary_ = frontSummaryHtml();
-    summaryLabel_->setText( shownSummary_ );
+    showSummary( SummaryStatus::Front );
 }
 
-QString SidebarWidget::frontSummaryHtml() const
+void SidebarWidget::showSummary( SummaryStatus status )
 {
-    const auto* front = catalog_.front();
-    if ( !front ) {
-        return kNoCaptureText;
-    }
-    const auto& capture = *front;
-    QString html;
-    if ( catalog_.isCapturing( catalog_.frontFile() ) ) {
-        html += "<i>Capturing\xe2\x80\xa6 the summary so far:</i><br>";
-    }
-    if ( !capture.error.isEmpty() ) {
-        html += QString( "<b>Error:</b> %1<br>The capture so far is kept.<br>" )
-                    .arg( capture.error.toHtmlEscaped() );
-    }
-    html += summaryHtml( capture.fileName, capture.fileSize, capture.summary,
-                         g_state.hostCapabilities.regexLab, palette() );
-    if ( capture.withFormatHint ) {
-        html += QString( "<br><i>Table view, \xce\x94t and Go to timestamp need the plugin's "
-                         "Log Format: <a href=\"%1\">install it once</a>.</i>" )
-                    .arg( kLogFormatHelpUrl );
-    }
-    return html;
+    summaryStatus_ = status;
+    summaryLabel_->setText(
+        summaryLabelText( status, sessions_, g_state.hostCapabilities.regexLab, palette() ) );
 }
 
 void SidebarWidget::changeEvent( QEvent* event )
 {
     QWidget::changeEvent( event );
-    // A switch between light and dark mode: the summary is made again, so
-    // that the line under the capture's name takes the new colours.  Not
-    // while the label says something else, a conversion's progress or end.
-    if ( event->type() == QEvent::PaletteChange && summaryLabel_
-         && summaryLabel_->text() == shownSummary_ ) {
-        shownSummary_ = frontSummaryHtml();
-        summaryLabel_->setText( shownSummary_ );
+    // A switch between light and dark mode: the label says its status again,
+    // so that the line under a capture's name takes the new colours.
+    if ( event->type() == QEvent::PaletteChange && summaryLabel_ ) {
+        showSummary( summaryStatus_ );
     }
-}
-
-bool SidebarWidget::startLiveCapture( const QString& name, LiveCapture::SourceFactory makeSource,
-                                      const LiveLimits& limits,
-                                      std::shared_ptr<const LiveSourceKind> kind )
-{
-    return live_->start( name, std::move( makeSource ), limits, std::move( kind ) );
-}
-
-bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
-{
-    return live_->start( choice );
-}
-
-void SidebarWidget::chooseAndStartLiveCapture()
-{
-    if ( isConverting() ) {
-        refuseWhileBusy();
-        return;
-    }
-    if ( live_->hasPendingStart() ) {
-        hostNotify( "A live capture is still stopping: the next one starts when it has ended." );
-        return;
-    }
-    // The dialogs run their own event loops, in which this widget may be
-    // deleted, or the capture end by itself.
-    const QPointer<SidebarWidget> self( this );
-    if ( live_->isBusy() ) {
-        const auto running
-            = live_->state() == LiveCaptureSession::State::Checking && live_->choice()
-                  ? liveCaptureName( *live_->choice() )
-                  : live_->name();
-        if ( !confirmStop_( this, running ) || !self ) {
-            return;
-        }
-    }
-    auto choice = loadLiveChoice( hostConfigDir() );
-    if ( !askLiveChoice_( this, choice ) || !self ) {
-        return;
-    }
-    // Once the running one, if any, has ended and its program too.
-    live_->startWhenIdle( choice );
-}
-
-void SidebarWidget::setLiveSources( std::shared_ptr<const LiveSourceRegistry> sources )
-{
-    liveSources_ = std::move( sources );
-    live_->setSources( liveSources_ );
-}
-
-std::unique_ptr<LiveCaptureDialog> SidebarWidget::makeLiveCaptureDialog( QWidget* parent )
-{
-    return makeLiveCaptureDialog( parent, loadLiveChoice( hostConfigDir() ) );
-}
-
-std::unique_ptr<LiveCaptureDialog> SidebarWidget::makeLiveCaptureDialog( QWidget* parent,
-                                                                         const LiveChoice& choice )
-{
-    auto dialog
-        = std::make_unique<LiveCaptureDialog>( liveSources_, choice, parent, &listingPool_ );
-    // Another source chosen there starts with the options saved for it.
-    if ( liveSources_ ) {
-        for ( const auto& kind : liveSources_->kinds() ) {
-            if ( kind->id() != choice.source ) {
-                dialog->form()->setSourceOptions( kind->id(),
-                                                  loadLiveOptions( hostConfigDir(), kind->id() ) );
-            }
-        }
-    }
-    return dialog;
 }
 
 void SidebarWidget::updateStartButton()
@@ -1018,24 +607,19 @@ void SidebarWidget::updateStartButton()
     if ( !startButton_ ) {
         return;
     }
-    const QString why = isConverting() ? "A capture is being read." : QString();
+    // As in CaptureSessions::chooseAndStartLiveCapture(), a capture that
+    // runs is no reason: the button is hidden meanwhile.
+    const auto refusal = activityRefusal( Activity::LiveCapture, sessions_.runningActivities() );
+    const auto why = refusal && *refusal != ActivityRefusal::Capturing ? refusalMessage( *refusal )
+                                                                       : QString();
     startButton_->setEnabled( why.isEmpty() );
     startButton_->setToolTip( why.isEmpty() ? "Choose what to capture, and start capturing" : why );
 }
 
 void SidebarWidget::showLiveError( const LiveOutcome& outcome )
 {
-    auto text = "Error: " + guidanceHtml( outcome.error );
-    if ( !outcome.guidance.isEmpty() ) {
-        text += "<br>" + guidanceHtml( outcome.guidance );
-    }
-    liveError_->setText( text );
+    liveError_->setText( liveErrorHtml( outcome ) );
     liveError_->setHidden( false );
-}
-
-void SidebarWidget::stopLiveCapture()
-{
-    live_->stop();
 }
 
 void SidebarWidget::showLiveStart()
@@ -1044,15 +628,15 @@ void SidebarWidget::showLiveStart()
     liveStderr_->setHidden( true );
     liveError_->clear();
     liveError_->setHidden( true );
-    summaryLabel_->setText( QString( "Capturing %1\xe2\x80\xa6 waiting for the first packet." )
-                                .arg( live_->name().toHtmlEscaped() ) );
+    showSummary( SummaryStatus::LiveStarted );
 }
 
 void SidebarWidget::showLiveState()
 {
-    const bool capturing = isCapturing();
-    openButton_->setEnabled( !capturing && !isConverting() );
-    stopButton_->setEnabled( capturing && live_->state() != LiveCaptureSession::State::Stopping );
+    const auto& live = sessions_.liveSession();
+    const bool capturing = live.isBusy();
+    updateOpenButton();
+    stopButton_->setEnabled( capturing && live.state() != LiveCaptureSession::State::Stopping );
     stopButton_->setHidden( !capturing );
     liveLabel_->setHidden( !capturing );
     startButton_->setHidden( capturing );
@@ -1070,362 +654,23 @@ void SidebarWidget::showLiveState()
 
 void SidebarWidget::showLiveProgress()
 {
-    switch ( live_->state() ) {
-    case LiveCaptureSession::State::Idle:
-        return;
-    case LiveCaptureSession::State::Checking:
-        liveLabel_->setText( "Asking the source about the choice before it starts\xe2\x80\xa6" );
-        return;
-    case LiveCaptureSession::State::Capturing:
-        liveLabel_->setText(
-            liveProgressText( live_->progress(), live_->elapsedMs(), live_->limits() ) );
-        return;
-    case LiveCaptureSession::State::Stopping:
-        liveLabel_->setText(
-            liveProgressText( live_->progress(), live_->elapsedMs(), live_->limits() )
-            + " \xe2\x80\x94 stopping\xe2\x80\xa6" );
-        return;
+    // Hidden while idle, with what it said last.
+    if ( const auto text = liveStateText( sessions_.liveSession() ); !text.isEmpty() ) {
+        liveLabel_->setText( text );
     }
 }
 
-void SidebarWidget::openTab( const QString& logPath, bool follow )
+void SidebarWidget::showLiveFile()
 {
-    // On this, the UI thread.  The header and a packet line are in it, so
-    // the host recognises the Log Format; a live capture's grows.
-    if ( g_state.api && g_state.handle ) {
-        g_state.api->open_file( g_state.handle, logPath.toUtf8().constData(), follow ? 1 : 0 );
-    }
-}
-
-void SidebarWidget::notify( const QString& message )
-{
-    hostNotify( message );
-}
-
-QString SidebarWidget::busyElsewhere() const
-{
-    return isConverting()
-               ? QStringLiteral( "A capture is still being read: wait for it, or cancel it first." )
-               : QString();
-}
-
-void SidebarWidget::showLiveFile( const QString& logPath )
-{
-    // The host may have brought its tab to the front at once, showing its
-    // summary; otherwise the label says the capture goes on.
-    if ( !catalog_.isFront( logPath ) ) {
-        summaryLabel_->setText(
-            QString( "Capturing %1\xe2\x80\xa6" ).arg( live_->name().toHtmlEscaped() ) );
-    }
-}
-
-void SidebarWidget::showLiveSummary()
-{
-    // showSummaryFor() redraws the summary and the Conversations table.
-    if ( catalog_.isLive( catalog_.frontFile() ) ) {
-        showSummaryFor( catalog_.frontFile() );
-    }
-}
-
-void SidebarWidget::updateSummary( const QString& textPath, CaptureSummary summary )
-{
-    if ( catalog_.updateSummary( textPath, std::move( summary ) )
-         && catalog_.isFront( textPath ) ) {
-        showSummaryFor( textPath );
-    }
+    showSummary( SummaryStatus::LiveFile );
 }
 
 void SidebarWidget::showLiveOutcome( const LiveOutcome& outcome )
 {
-    switch ( outcome.status ) {
-    case LiveOutcome::Status::Stopped:
-    case LiveOutcome::Status::Empty:
-        summaryLabel_->setText( liveOutcomeText( outcome ).toHtmlEscaped() );
-        return;
-    case LiveOutcome::Status::Failed:
+    if ( outcome.status == LiveOutcome::Status::Failed ) {
         showLiveError( outcome );
-        if ( outcome.files.isEmpty() ) {
-            summaryLabel_->setText( "Error: " + outcome.error.toHtmlEscaped() );
-            return;
-        }
-        break;
-    case LiveOutcome::Status::Captured:
-        break;
     }
-    // Its tabs show the final summary.
-    if ( catalog_.isLive( catalog_.frontFile() ) ) {
-        showSummaryFor( catalog_.frontFile() );
-    }
-    else {
-        summaryLabel_->setText( QString( "The capture %1 has ended: its tab shows its summary." )
-                                    .arg( outcome.name.toHtmlEscaped() ) );
-    }
-}
-
-void SidebarWidget::saveCapture()
-{
-    const auto parts = catalog_.partsToSave();
-    if ( parts.empty() ) {
-        return;
-    }
-    if ( lastDir_.isEmpty() ) {
-        lastDir_ = QStandardPaths::writableLocation( QStandardPaths::HomeLocation );
-    }
-    const auto suggested = catalog_.saveName();
-    // The dialog runs its own event loop, as in chooseAndOpen().
-    const QPointer<SidebarWidget> self( this );
-    const auto target = chooseSaveFile_( this, QDir( lastDir_ ).filePath( suggested ) );
-    if ( !self || target.isEmpty() ) {
-        return;
-    }
-    lastDir_ = QFileInfo( target ).absolutePath();
-
-    // The dialog asked before replacing a file; it is replaced when the
-    // capture is complete.
-    QString error;
-    if ( !saveCaptureParts( parts, target, error ) ) {
-        const auto message = QString( "The capture could not be saved as %1: %2" )
-                                 .arg( QDir::toNativeSeparators( target ), error );
-        hostLog( LOGSQUIRL_LOG_ERROR, message );
-        hostNotify( message );
-        return;
-    }
-    hostLog( LOGSQUIRL_LOG_INFO, parts.size() > 1
-                                     ? QString( "Saved the %1 files of the ring buffer as %2" )
-                                           .arg( parts.size() )
-                                           .arg( target )
-                                     : "Saved the capture as " + target );
-}
-
-namespace {
-
-/// @p name as text, or, with @p link, as a link to the filter of @p kind.
-QString filterName( const std::string& name, const char* kind, bool link )
-{
-    const auto text = QString::fromStdString( name ).toHtmlEscaped();
-    if ( !link ) {
-        return text;
-    }
-    return QString( "<a href=\"%1%2%3\">%4</a>" )
-        .arg( QString( kFilterScheme ), QString( kind ),
-              QString::fromUtf8( QUrl::toPercentEncoding( QString::fromStdString( name ) ) ),
-              text );
-}
-
-/// Entries of @p counts by count, highest first.
-std::vector<std::pair<std::string, uint64_t>>
-byCount( const std::map<std::string, uint64_t>& counts )
-{
-    std::vector<std::pair<std::string, uint64_t>> sorted( counts.begin(), counts.end() );
-    std::stable_sort( sorted.begin(), sorted.end(),
-                      []( const auto& a, const auto& b ) { return a.second > b.second; } );
-    return sorted;
-}
-
-} // namespace
-
-QString summaryHtml( const QString& fileName, qint64 fileSize, const CaptureSummary& summary,
-                     bool filterLinks, const QPalette& palette )
-{
-    const double duration = summary.durationSeconds;
-
-    // Packets per second
-    QString ppsStr = "-";
-    if ( duration > 0.0 ) {
-        auto pps = static_cast<double>( summary.packets ) / duration;
-        ppsStr = QString::number( pps, 'f', 0 );
-    }
-
-    // Build summary HTML; anything from the file or its name is escaped,
-    // since the label renders markup
-    QString html;
-    html += QString( "<b>%1</b><br>" ).arg( fileName.toHtmlEscaped() );
-    html += separatorHtml( palette );
-
-    // General stats
-    html += QString( "<b>Overview</b><br>" );
-    html += QString( "Packets: <b>%1</b><br>" )
-                .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
-    if ( summary.cutPackets > 0 ) {
-        html += QString( "Cut packets: <b>%1</b> (captured shorter than on the wire)<br>" )
-                    .arg( QLocale().toString( static_cast<qulonglong>( summary.cutPackets ) ) );
-    }
-    html += QString( "File size: %1<br>" ).arg( formatBytes( static_cast<uint64_t>( fileSize ) ) );
-    if ( !summary.firstTimeUtc.empty() ) {
-        html += QString( "First packet: %1<br>" )
-                    .arg( QString::fromStdString( summary.firstTimeUtc ) );
-        html += QString( "Last packet: %1<br>" )
-                    .arg( QString::fromStdString( summary.lastTimeUtc ) );
-    }
-    html += QString( "Duration: <b>%1 s</b><br>" ).arg( duration, 0, 'f', 3 );
-    html += QString( "Packets/s: %1<br>" ).arg( ppsStr );
-    QStringList linkTypes;
-    for ( const auto& name : summary.linkTypeNames ) {
-        linkTypes << QString::fromStdString( name ).toHtmlEscaped();
-    }
-    html += QString( "%1: %2<br>" )
-                .arg( linkTypes.size() > 1 ? "Link types" : "Link type" )
-                .arg( linkTypes.join( ", " ) );
-    if ( !summary.compressionProblem.empty() ) {
-        html += QString( "<i>The capture was cut off: %1.</i><br>" )
-                    .arg( QString::fromStdString( summary.compressionProblem ).toHtmlEscaped() );
-    }
-    else if ( summary.endsInsideRecord ) {
-        html += "<i>The capture was cut off in the middle of a packet.</i><br>";
-    }
-    if ( summary.packetNumbersUsedUp ) {
-        html += QString( "<i>Stopped at packet %1, the last one the No. column can number; the "
-                         "rest was not converted.</i><br>" )
-                    .arg( QLocale().toString( static_cast<qulonglong>( summary.packets ) ) );
-    }
-    html += "<br>";
-
-    // Protocol breakdown
-    html += "<b>Protocols</b><br>";
-    for ( const auto& [ proto, count ] : byCount( summary.protocolPackets ) ) {
-        const auto bytes = summary.protocolBytes.at( proto );
-        const auto pct
-            = static_cast<double>( count ) / static_cast<double>( summary.packets ) * 100.0;
-        // The name is not put in with arg(), which would read a '%' in it.
-        html += filterName( proto, kProtocolFilter, filterLinks );
-        html += QString( ": %1 (%2%, %3)<br>" )
-                    .arg( QLocale().toString( static_cast<qulonglong>( count ) ) )
-                    .arg( pct, 0, 'f', 1 )
-                    .arg( formatBytes( bytes ) );
-    }
-    html += "<br>";
-
-    // TCP analysis markers, and the handshakes' round-trip time
-    if ( !summary.tcpMarkers.empty() || summary.medianInitialRttNs ) {
-        html += "<b>Analysis</b><br>";
-        if ( summary.medianInitialRttNs ) {
-            html += QString( "Median iRTT: %1 ms (%2 %3)<br>" )
-                        .arg( static_cast<double>( *summary.medianInitialRttNs ) / 1e6, 0, 'f', 3 )
-                        .arg( QLocale().toString( static_cast<qulonglong>( summary.handshakes ) ) )
-                        .arg( summary.handshakes == 1 ? "handshake" : "handshakes" );
-        }
-        for ( const auto& [ marker, count ] : summary.tcpMarkers ) {
-            html += QString( "%1: %2<br>" )
-                        .arg( QString::fromStdString( marker ).toHtmlEscaped() )
-                        .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
-        }
-        html += "<br>";
-    }
-
-    // TLS decryption, with a key log: what it decrypted, or why it could not
-    if ( summary.tlsSessionsDecrypted ) {
-        html += "<b>TLS decryption</b><br>";
-        if ( !summary.keyLogError.empty() ) {
-            html += QString( "<i>%1</i><br>" )
-                        .arg( QString::fromStdString( summary.keyLogError ).toHtmlEscaped() );
-        }
-        html += QString( "Sessions decrypted: %1<br><br>" )
-                    .arg( QLocale().toString(
-                        static_cast<qulonglong>( *summary.tlsSessionsDecrypted ) ) );
-    }
-
-    // Top IPs
-    html += QString( "<b>Endpoints</b> (%1%2 unique)<br>" )
-                .arg( summary.otherEndpointPackets ? "more than " : "" )
-                .arg( summary.endpointPackets.size() );
-    int shown = 0;
-    for ( const auto& [ ip, count ] : byCount( summary.endpointPackets ) ) {
-        if ( shown >= 8 )
-            break;
-        html += filterName( ip, kEndpointFilter, filterLinks );
-        // The name a DNS answer gave it, with host names shown: plain
-        // text, the filter is the address's.
-        const auto name = summary.endpointNames.find( ip );
-        if ( name != summary.endpointNames.end() ) {
-            html += " (" + QString::fromStdString( name->second ).toHtmlEscaped() + ")";
-        }
-        html += QString( ": %1 pkts<br>" )
-                    .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
-        shown++;
-    }
-    if ( summary.otherEndpointPackets ) {
-        html += QString( "Other endpoints: %1 pkts<br>" )
-                    .arg( QLocale().toString(
-                        static_cast<qulonglong>( *summary.otherEndpointPackets ) ) );
-    }
-
-    // The tunnels' endpoints, which no line shows: plain text, no filter
-    if ( !summary.tunnelEndpointPackets.empty() ) {
-        html += QString( "<br><b>Tunnel endpoints</b> (%1 unique)<br>" )
-                    .arg( summary.tunnelEndpointPackets.size() );
-        int shownTunnel = 0;
-        for ( const auto& [ ip, count ] : byCount( summary.tunnelEndpointPackets ) ) {
-            if ( shownTunnel >= 8 )
-                break;
-            html += QString::fromStdString( ip ).toHtmlEscaped();
-            html += QString( ": %1 pkts<br>" )
-                        .arg( QLocale().toString( static_cast<qulonglong>( count ) ) );
-            shownTunnel++;
-        }
-    }
-    if ( summary.streamCap ) {
-        html += QString( "<br><i>More than %1 conversations: later ones show stream ? in the "
-                         "log.</i><br>" )
-                    .arg( QLocale().toString( static_cast<qulonglong>( *summary.streamCap ) ) );
-    }
-
-    return html;
-}
-
-namespace {
-
-/// How far @p done is to @p limit, in percent, at most 100.
-int percentOf( uint64_t done, uint64_t limit )
-{
-    return static_cast<int>(
-        std::min<uint64_t>( done * 100 / std::max<uint64_t>( limit, 1 ), 100 ) );
-}
-
-} // namespace
-
-QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs, const LiveLimits& limits )
-{
-    const auto packets = snapshot.summary.packets;
-    QString rate = "-";
-    if ( snapshot.elapsed.count() > 0 ) {
-        rate = QString::number( static_cast<double>( packets ) * 1000.0
-                                    / static_cast<double>( snapshot.elapsed.count() ),
-                                'f', 1 );
-    }
-    const auto seconds = std::max<qint64>( elapsedMs, 0 ) / 1000;
-    auto text
-        = QString( "Packets: %1 \xc2\xb7 Bytes: %2 \xc2\xb7 %3 packets/s \xc2\xb7 Elapsed %4" )
-              .arg( QLocale().toString( static_cast<qulonglong>( packets ) ),
-                    formatBytes( snapshot.summary.bytes ), rate, clockTime( seconds ) );
-
-    // Each stop condition, and how far the capture is to it: the one
-    // furthest on stops it first, unless the traffic changes.
-    QStringList stops;
-    if ( limits.duration.count() > 0 ) {
-        stops << QString( "after %1 (%2%)" )
-                     .arg( clockTime( limits.duration.count() ) )
-                     .arg( percentOf( static_cast<uint64_t>( seconds ),
-                                      static_cast<uint64_t>( limits.duration.count() ) ) );
-    }
-    if ( limits.packets > 0 ) {
-        stops << QString( "at %1 packets (%2%)" )
-                     .arg( QLocale().toString( static_cast<qulonglong>( limits.packets ) ) )
-                     .arg( percentOf( packets, limits.packets ) );
-    }
-    if ( limits.bytes > 0 ) {
-        stops << QString( "at %1 (%2%)" )
-                     .arg( formatBytes( limits.bytes ) )
-                     .arg( percentOf( snapshot.rawBytes, limits.bytes ) );
-    }
-    if ( !stops.isEmpty() ) {
-        text += "\nStops " + stops.join( ", or " );
-    }
-    if ( limits.ringBuffer() ) {
-        text += QString( "\nRing buffer: file %1, keeping the last %2" )
-                    .arg( snapshot.rawFile )
-                    .arg( limits.ringFiles );
-    }
-    return text;
+    showSummary( SummaryStatus::LiveOutcome );
 }
 
 } // namespace tcpdump

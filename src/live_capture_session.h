@@ -38,7 +38,8 @@
  *     packets has its files removed; a failure is told with what the kind
  *     says to do about it (its Guidance), keeping what was captured.
  *
- * It reaches LogSquirl (a notification) through a LiveCaptureHost and keeps
+ * It reaches LogSquirl (a notification) through a SessionHost, whose
+ * @c capturing it does not read, and keeps
  * what each tab shows in a CaptureCatalog (capture_catalog.h), which opens
  * the tabs and which it tells when a capture starts and ends, so that the
  * catalog knows the tabs of the running or the last capture.  It runs a
@@ -51,10 +52,12 @@
 
 #pragma once
 
+#include "activity.h"
 #include "capture_catalog.h"
 #include "live_capture.h"
 #include "live_source.h"
 #include "pcap_converter.h"
+#include "session_host.h"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -79,23 +82,6 @@ QString clockTime( qint64 seconds );
 /// What the user is told of a live capture @p name that @p condition of
 /// @p limits stopped: "The capture eth0 stopped after 1,000 packets."
 QString liveStopText( const QString& name, StopCondition condition, const LiveLimits& limits );
-
-/// Where a Live Capture Session tells the user: LogSquirl, through the
-/// sidebar, in the app; a fake in tests.  Its tabs open through its
-/// CaptureCatalog.
-class LiveCaptureHost {
-public:
-    virtual ~LiveCaptureHost() = default;
-
-    /// Tell the user @p message in a notification.
-    virtual void notify( const QString& message ) = 0;
-    /// Why no capture can start now for something outside the session, e.g.
-    /// a capture file being read; empty if one can.
-    virtual QString busyElsewhere() const
-    {
-        return {};
-    }
-};
 
 /// What a capture is run with.
 struct LiveRunRequest {
@@ -187,7 +173,7 @@ public:
 
     /// A session telling the user on @p host and keeping summaries in, and
     /// opening tabs through, @p catalog, both outliving it.
-    LiveCaptureSession( LiveCaptureHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
+    LiveCaptureSession( SessionHost& host, CaptureCatalog& catalog, QObject* parent = nullptr );
     /// Lets go of a capture that may still run (its run is retired, not
     /// waited for), and cancels and waits for a check that runs.
     ~LiveCaptureSession() override;
@@ -219,18 +205,18 @@ public:
     /**
      * Capture @p choice: its kind makes the stream, named after its device
      * and interface (liveCaptureName()), and the choice is saved in
-     * settings.ini as it starts.  False, with a notification, while a
-     * capture runs or something else is busy, or when the choice cannot
-     * start (liveChoiceProblem()).  A kind that must ask first is asked on a
-     * worker thread (Checking): the choice is checked again then, and
-     * refused with a notification, or started.
+     * settings.ini as it starts.  False, with a notification, while the
+     * Activity rule refuses a live capture (activityRefusal()), or when the
+     * choice cannot start (liveChoiceProblem()).  A kind that must ask
+     * first is asked on a worker thread (Checking): the choice is checked
+     * again then, and refused with a notification, or started.
      */
     bool start( const LiveChoice& choice );
 
     /**
      * Capture from the stream @p makeSource makes, named @p name, as @p
      * limits say; a failure is explained by @p kind, if it is given.  False,
-     * with a notification, while a capture runs or something else is busy.
+     * with a notification, while the Activity rule refuses a live capture.
      */
     bool start( const QString& name, LiveCapture::SourceFactory makeSource,
                 const LiveLimits& limits = {}, std::shared_ptr<const LiveSourceKind> kind = {} );
@@ -316,7 +302,8 @@ private:
     bool startChecked( const LiveChoice& choice );
     /// Run @p request, its failures explained by @p kind.
     void run( LiveRunRequest request, std::shared_ptr<const LiveSourceKind> kind );
-    /// Why nothing can start now, said in a notification; false if it can.
+    /// Why no capture can start now, as the Activity rule says, said in a
+    /// notification; false if one can.
     bool refuseWhileBusy();
     /// The kind of @p choice was asked (check @p check): check it again and
     /// start it, or refuse it.
@@ -329,7 +316,7 @@ private:
     void finish( unsigned run, const ConversionResult& result );
     void runDone( unsigned run );
 
-    LiveCaptureHost& host_;
+    SessionHost& host_;
     CaptureCatalog& catalog_;
     std::shared_ptr<const LiveSourceRegistry> sources_;
     QString outputRoot_;
