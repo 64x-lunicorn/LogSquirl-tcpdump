@@ -47,8 +47,7 @@ RunningActivities runningOf( int mask )
 
 } // namespace
 
-SCENARIO( "The Activity rule says whether an activity may start, and why not",
-          "[activity]" )
+SCENARIO( "The Activity rule says whether an activity may start, and why not", "[activity]" )
 {
     const auto mask = GENERATE( range( 0, 8 ) );
     const auto running = runningOf( mask );

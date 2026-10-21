@@ -25,6 +25,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "activity.h"
 #include "capture_reader.h"
 #include "corpus_layouts.h"
 #include "export_dialog.h"
@@ -39,6 +40,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QPushButton>
+#include <QStringList>
 #include <QTemporaryDir>
 
 #include <atomic>
@@ -638,6 +640,27 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
             REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
             REQUIRE( host.notifications.isEmpty() );
         }
+    }
+
+    GIVEN( "an export running, and the entry chosen again" )
+    {
+        host.selectedLines = { loaded.lines[ 1 ] };
+        const auto entry
+            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
+                  return a.label == "Export packets\xe2\x80\xa6";
+              } );
+        entry->trigger();
+        REQUIRE( loaded.sidebar->isExporting() );
+        entry->trigger();
+
+        THEN( "nothing more is asked, and the Activity rule's reason is told" )
+        {
+            REQUIRE( loaded.requests.size() == 1 );
+            REQUIRE( host.notifications
+                     == QStringList{ refusalMessage( ActivityRefusal::Exporting ) } );
+        }
+        loaded.sidebar->cancelExport();
+        REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
     }
 }
 

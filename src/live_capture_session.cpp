@@ -175,15 +175,14 @@ LiveCaptureSession::~LiveCaptureSession()
 
 bool LiveCaptureSession::refuseWhileBusy()
 {
-    if ( const auto elsewhere = host_.busyElsewhere(); !elsewhere.isEmpty() ) {
-        host_.notify( elsewhere );
-        return true;
+    auto running = host_.runningElsewhere();
+    running.capturing = isBusy();
+    const auto why = activityRefusalMessage( Activity::LiveCapture, running );
+    if ( why.isEmpty() ) {
+        return false;
     }
-    if ( isBusy() ) {
-        host_.notify( "A live capture is still running: stop it first." );
-        return true;
-    }
-    return false;
+    host_.notify( why );
+    return true;
 }
 
 bool LiveCaptureSession::start( const LiveChoice& choice )

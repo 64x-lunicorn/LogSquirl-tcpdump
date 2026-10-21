@@ -534,23 +534,20 @@ SidebarWidget::~SidebarWidget()
     export_.cancelAndWait();
 }
 
-bool SidebarWidget::refuseWhileBusy()
+bool SidebarWidget::refuse( Activity activity )
 {
-    if ( isConverting() ) {
-        hostNotify( "A capture is still being read: wait for it, or cancel it first." );
-        return true;
+    const auto why = activityRefusalMessage( activity, runningActivities() );
+    if ( why.isEmpty() ) {
+        return false;
     }
-    if ( isCapturing() ) {
-        hostNotify( "A live capture is still running: stop it first." );
-        return true;
-    }
-    return false;
+    hostNotify( why );
+    return true;
 }
 
 void SidebarWidget::chooseAndOpen()
 {
     // The Open button is disabled meanwhile, but the menu entry is not.
-    if ( refuseWhileBusy() ) {
+    if ( refuse( Activity::OpenFile ) ) {
         return;
     }
     if ( lastDir_.isEmpty() ) {
@@ -587,7 +584,7 @@ void SidebarWidget::openPcapFile( const QString& filePath )
 {
     // One conversion at a time (Open is disabled meanwhile), so the outcome
     // that arrives is always that of the running one.
-    if ( isConverting() || isCapturing() ) {
+    if ( activityRefusal( Activity::OpenFile, runningActivities() ) ) {
         return;
     }
     hostLog( LOGSQUIRL_LOG_INFO, "Opening pcap file: " + filePath );
@@ -633,8 +630,7 @@ void SidebarWidget::cancel()
 void SidebarWidget::exportSelectedPackets()
 {
     // The menu entry stays enabled while an export runs.
-    if ( isExporting() ) {
-        hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
+    if ( refuse( Activity::Export ) ) {
         return;
     }
     const auto* front = catalog_.front();
@@ -678,8 +674,7 @@ void SidebarWidget::exportSelectedPackets()
     if ( !self || !confirmed || request.numbers.empty() || request.outputPath.isEmpty() ) {
         return;
     }
-    if ( isExporting() ) {
-        hostNotify( "Packets are still being exported: wait for it, or cancel it first." );
+    if ( refuse( Activity::Export ) ) {
         return;
     }
     // Only when the selection's packets are exported does its truncation matter.
@@ -848,7 +843,7 @@ void SidebarWidget::openLink( const QString& link )
 
 void SidebarWidget::setConverting( bool converting )
 {
-    openButton_->setEnabled( !converting );
+    openButton_->setEnabled( !activityRefusal( Activity::OpenFile, runningActivities() ) );
     cancelButton_->setEnabled( converting );
     cancelButton_->setHidden( !converting );
     progressBar_->setHidden( !converting );
@@ -957,8 +952,10 @@ bool SidebarWidget::startLiveCapture( const LiveChoice& choice )
 
 void SidebarWidget::chooseAndStartLiveCapture()
 {
-    if ( isConverting() ) {
-        refuseWhileBusy();
+    // A capture that runs is not refused: the user is offered to stop it.
+    const auto refusal = activityRefusal( Activity::LiveCapture, runningActivities() );
+    if ( refusal && *refusal != ActivityRefusal::Capturing ) {
+        hostNotify( refusalMessage( *refusal ) );
         return;
     }
     if ( live_->hasPendingStart() ) {
@@ -968,7 +965,7 @@ void SidebarWidget::chooseAndStartLiveCapture()
     // The dialogs run their own event loops, in which this widget may be
     // deleted, or the capture end by itself.
     const QPointer<SidebarWidget> self( this );
-    if ( live_->isBusy() ) {
+    if ( refusal ) {
         const auto running
             = live_->state() == LiveCaptureSession::State::Checking && live_->choice()
                   ? liveCaptureName( *live_->choice() )
@@ -1018,7 +1015,11 @@ void SidebarWidget::updateStartButton()
     if ( !startButton_ ) {
         return;
     }
-    const QString why = isConverting() ? "A capture is being read." : QString();
+    // As in chooseAndStartLiveCapture(), a capture that runs is no reason:
+    // the button is hidden meanwhile.
+    const auto refusal = activityRefusal( Activity::LiveCapture, runningActivities() );
+    const auto why = refusal && *refusal != ActivityRefusal::Capturing ? refusalMessage( *refusal )
+                                                                       : QString();
     startButton_->setEnabled( why.isEmpty() );
     startButton_->setToolTip( why.isEmpty() ? "Choose what to capture, and start capturing" : why );
 }
@@ -1051,7 +1052,7 @@ void SidebarWidget::showLiveStart()
 void SidebarWidget::showLiveState()
 {
     const bool capturing = isCapturing();
-    openButton_->setEnabled( !capturing && !isConverting() );
+    openButton_->setEnabled( !activityRefusal( Activity::OpenFile, runningActivities() ) );
     stopButton_->setEnabled( capturing && live_->state() != LiveCaptureSession::State::Stopping );
     stopButton_->setHidden( !capturing );
     liveLabel_->setHidden( !capturing );
@@ -1102,11 +1103,11 @@ void SidebarWidget::notify( const QString& message )
     hostNotify( message );
 }
 
-QString SidebarWidget::busyElsewhere() const
+RunningActivities SidebarWidget::runningElsewhere() const
 {
-    return isConverting()
-               ? QStringLiteral( "A capture is still being read: wait for it, or cancel it first." )
-               : QString();
+    auto running = runningActivities();
+    running.capturing = false; // the session's own
+    return running;
 }
 
 void SidebarWidget::showLiveFile( const QString& logPath )

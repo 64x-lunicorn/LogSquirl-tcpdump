@@ -51,6 +51,7 @@
 
 #pragma once
 
+#include "activity.h"
 #include "capture_catalog.h"
 #include "live_capture.h"
 #include "live_source.h"
@@ -89,9 +90,10 @@ public:
 
     /// Tell the user @p message in a notification.
     virtual void notify( const QString& message ) = 0;
-    /// Why no capture can start now for something outside the session, e.g.
-    /// a capture file being read; empty if one can.
-    virtual QString busyElsewhere() const
+    /// What runs outside the session, e.g. a capture file being read, which
+    /// the Activity rule weighs with the session's own capture; its
+    /// @c capturing is not read.
+    virtual RunningActivities runningElsewhere() const
     {
         return {};
     }
@@ -219,18 +221,18 @@ public:
     /**
      * Capture @p choice: its kind makes the stream, named after its device
      * and interface (liveCaptureName()), and the choice is saved in
-     * settings.ini as it starts.  False, with a notification, while a
-     * capture runs or something else is busy, or when the choice cannot
-     * start (liveChoiceProblem()).  A kind that must ask first is asked on a
-     * worker thread (Checking): the choice is checked again then, and
-     * refused with a notification, or started.
+     * settings.ini as it starts.  False, with a notification, while the
+     * Activity rule refuses a live capture (activityRefusal()), or when the
+     * choice cannot start (liveChoiceProblem()).  A kind that must ask
+     * first is asked on a worker thread (Checking): the choice is checked
+     * again then, and refused with a notification, or started.
      */
     bool start( const LiveChoice& choice );
 
     /**
      * Capture from the stream @p makeSource makes, named @p name, as @p
      * limits say; a failure is explained by @p kind, if it is given.  False,
-     * with a notification, while a capture runs or something else is busy.
+     * with a notification, while the Activity rule refuses a live capture.
      */
     bool start( const QString& name, LiveCapture::SourceFactory makeSource,
                 const LiveLimits& limits = {}, std::shared_ptr<const LiveSourceKind> kind = {} );
@@ -316,7 +318,8 @@ private:
     bool startChecked( const LiveChoice& choice );
     /// Run @p request, its failures explained by @p kind.
     void run( LiveRunRequest request, std::shared_ptr<const LiveSourceKind> kind );
-    /// Why nothing can start now, said in a notification; false if it can.
+    /// Why no capture can start now, as the Activity rule says, said in a
+    /// notification; false if one can.
     bool refuseWhileBusy();
     /// The kind of @p choice was asked (check @p check): check it again and
     /// start it, or refuse it.

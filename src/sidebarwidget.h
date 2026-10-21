@@ -27,6 +27,7 @@
 
 #pragma once
 
+#include "activity.h"
 #include "background_job.h"
 #include "capture_catalog.h"
 #include "export_dialog.h"
@@ -354,6 +355,17 @@ public:
         return conversion_.isRunning();
     }
 
+    /// What runs now, which the Activity rule weighs before Open, Start
+    /// live capture and Export packets start.
+    RunningActivities runningActivities() const
+    {
+        RunningActivities running;
+        running.converting = isConverting();
+        running.capturing = isCapturing();
+        running.exporting = isExporting();
+        return running;
+    }
+
 protected:
     void changeEvent( QEvent* event ) override;
 
@@ -368,7 +380,7 @@ private:
     void openTab( const QString& logPath, bool follow ) override;
     // The Live Capture Session's host.
     void notify( const QString& message ) override;
-    QString busyElsewhere() const override;
+    RunningActivities runningElsewhere() const override;
 
     /// A live capture started: clear the last one's error and stderr lines.
     void showLiveStart();
@@ -384,10 +396,11 @@ private:
     void showLiveOutcome( const LiveOutcome& outcome );
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();
-    /// Whether a capture is being read or captured, said in a notification.
-    bool refuseWhileBusy();
-    /// Enable Start if no capture is read or captured and the form's choice
-    /// can be captured; its tooltip says why not.
+    /// Whether the Activity rule refuses @p activity now, said in a
+    /// notification.
+    bool refuse( Activity activity );
+    /// Enable Start if the Activity rule allows a live capture; its tooltip
+    /// says why not.
     void updateStartButton();
     /// The Start live capture dialog showing @p choice.
     std::unique_ptr<LiveCaptureDialog> makeLiveCaptureDialog( QWidget* parent,

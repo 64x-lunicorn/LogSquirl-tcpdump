@@ -26,6 +26,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "activity.h"
 #include "fake_live_source.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
@@ -196,6 +197,15 @@ SCENARIO( "Start live capture… captures what its dialog is given, and Stop fin
                 REQUIRE( live->text().contains( "Elapsed" ) );
                 REQUIRE( waitFor( [ & ] { return !stderrView->isHidden(); } ) );
                 REQUIRE( stderrView->toPlainText() == "fakecap: listening" );
+            }
+
+            THEN( "Open pcap… is disabled, and opening a file is refused with the Activity rule's "
+                  "reason" )
+            {
+                REQUIRE_FALSE( sidebar.findChild<QPushButton*>( "openButton" )->isEnabled() );
+                sidebar.chooseAndOpen();
+                REQUIRE( host.notifications
+                         == QStringList{ refusalMessage( ActivityRefusal::Capturing ) } );
             }
 
             AND_WHEN( "Stop is pressed" )

@@ -23,16 +23,16 @@
  *        scripts, and captures run for real.
  *
  * FakeLiveHost is the host of a LiveCaptureSession and of its catalog: it
- * records the tabs opened and the notifications, and can say something else
- * is busy.  The session keeps what each tab shows in a real CaptureCatalog,
- * which opens the tabs and which the tests read.  ScriptedRuns makes the
- * session's runs (setRunFactory()): each a ScriptedRun that records what it
- * was asked to run and whether it was told to stop, and tells the session
- * what the test says, when the test says it, on the test's thread, so that
- * no event loop is needed.  WorkerSession is a session whose captures run on
- * a worker, as in the app (runOnWorker()), for a source kind's tests with
- * its fake programs: it runs the event loop until the session told what the
- * test waits for.
+ * records the tabs opened and the notifications, and can say what else
+ * runs, which the Activity rule weighs.  The session keeps what each tab
+ * shows in a real CaptureCatalog, which opens the tabs and which the tests
+ * read.  ScriptedRuns makes the session's runs (setRunFactory()): each a
+ * ScriptedRun that records what it was asked to run and whether it was told
+ * to stop, and tells the session what the test says, when the test says it,
+ * on the test's thread, so that no event loop is needed.  WorkerSession is
+ * a session whose captures run on a worker, as in the app (runOnWorker()),
+ * for a source kind's tests with its fake programs: it runs the event loop
+ * until the session told what the test waits for.
  */
 
 #pragma once
@@ -63,14 +63,14 @@ public:
     {
         notifications << message;
     }
-    QString busyElsewhere() const override
+    tcpdump::RunningActivities runningElsewhere() const override
     {
-        return busy;
+        return running;
     }
 
-    QStringList openedTabs;    ///< The text files opened in tabs, in order.
-    QStringList notifications; ///< What the user was told, in order.
-    QString busy;              ///< Set: something else is busy, and this says so.
+    QStringList openedTabs;             ///< The text files opened in tabs, in order.
+    QStringList notifications;          ///< What the user was told, in order.
+    tcpdump::RunningActivities running; ///< What runs outside the session.
 };
 
 /// A capture the test scripts: what the session asked for, and what it is told.

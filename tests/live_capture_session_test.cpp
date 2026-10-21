@@ -502,18 +502,29 @@ SCENARIO( "A live capture is refused with why it cannot start", "[live_session]"
         }
     }
 
-    WHEN( "something else is busy" )
+    WHEN( "a capture file is being read" )
     {
-        s.liveHost.busy = "A capture is still being read.";
+        s.liveHost.running.converting = true;
 
-        THEN( "neither a choice nor a capture by name starts" )
+        THEN( "neither a choice nor a capture by name starts, as the Activity rule says" )
         {
             REQUIRE_FALSE( s.session.start( kChoice ) );
             REQUIRE_FALSE( s.session.start( "usb0", s.kind->makeSource( kChoice ) ) );
-            REQUIRE( s.liveHost.notifications
-                     == QStringList{ "A capture is still being read.",
-                                     "A capture is still being read." } );
+            const auto why = refusalMessage( ActivityRefusal::Converting );
+            REQUIRE( s.liveHost.notifications == QStringList{ why, why } );
             REQUIRE( s.runs.runs.empty() );
+        }
+    }
+
+    WHEN( "packets are being exported" )
+    {
+        s.liveHost.running.exporting = true;
+
+        THEN( "a capture starts all the same" )
+        {
+            REQUIRE( s.session.start( kChoice ) );
+            REQUIRE( s.liveHost.notifications.isEmpty() );
+            REQUIRE( s.runs.runs.size() == 1 );
         }
     }
 }
