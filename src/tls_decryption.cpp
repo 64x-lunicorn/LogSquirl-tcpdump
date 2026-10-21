@@ -504,6 +504,11 @@ void TlsDecryption::handshake( const Stream& stream, ByteView fragment )
             return;
         }
         auto& session = *it->second;
+        if ( session.serverHello ) {
+            // A second one, which no peer sends: the keys are of the first's
+            // suite, and the records are read by it.
+            return;
+        }
         if ( equalBytes( random.data, kHelloRetryRandom, tls::kRandomBytes ) ) {
             return; // a HelloRetryRequest: the next ServerHello is the one
         }
@@ -712,6 +717,9 @@ bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t typ
 
     // TLS 1.2: the sequence number, type, version and plaintext length are
     // the additional data, or what the MAC covers (RFC 5246, 6.2.3).
+    if ( !direction.cipher || direction.iv.size() != ivBytes( suite ) ) {
+        return false; // the direction has no keys of the suite
+    }
     inner = type;
     auto additional = [ & ]( uint64_t seq, size_t length, uint8_t* out ) {
         putBE64( out, seq );

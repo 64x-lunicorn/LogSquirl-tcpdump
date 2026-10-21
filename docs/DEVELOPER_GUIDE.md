@@ -1289,7 +1289,9 @@ it runs, and the text is the same as before.
 - **Sessions**: per TCP stream, from its plaintext ClientHello (client
   random, the client's direction) and ServerHello (server random, cipher
   suite, version from `supported_versions`, encrypt-then-MAC, ALPN; a
-  HelloRetryRequest is passed over). The keys are set up from the key log
+  HelloRetryRequest is passed over, and so is any ServerHello after the
+  one that set the suite, so keys are never read by another suite's
+  record layout). The keys are set up from the key log
   at the first protected record (`ensureKeys()`): TLS 1.2's key block from
   the master secret with the PRF (`tls::tls12Prf`, P_hash over HMAC);
   TLS 1.3's key and IV from each traffic secret with HKDF-Expand-Label
