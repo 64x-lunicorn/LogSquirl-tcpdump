@@ -351,9 +351,11 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
     else {
         // The buffer went to completed_: the entry is counted without it,
         // and the next message's is made room for, as much as it announces
-        // if there is room, else its bytes at hand.
+        // if there is room, else its bytes at hand; with the segments that
+        // came early, within the direction's limit.
         recharge( entry );
-        auto room = std::max( rest, std::min( walk.incomplete.length, streamLimit_ ) );
+        const auto early = entry.order.earlyBytes();
+        auto room = std::max( rest, std::min( walk.incomplete.length, streamLimit_ - early ) );
         if ( !makeRoom( room, key ) ) {
             room = rest;
         }
