@@ -60,10 +60,12 @@
  * and keeps it in the catalog: the sidebar forwards Open and Cancel to it,
  * and shows its progress, label and outcome.
  *
- * Export packets… reads the selected lines, lets the user confirm or change
- * their packets in the ExportDialog, asks where to write them, and writes
- * them with exportPackets() on a worker thread of its own, so that an
- * export and a conversion can run side by side.
+ * Export packets… is its ExportSession's, which reads the selected lines,
+ * lets the user confirm or change their packets in the sidebar's
+ * ExportDialog, asks where to write them in its save dialog, and writes them
+ * with exportPackets() on a worker thread of its own, so that an export and
+ * a conversion can run side by side.  The sidebar forwards Export packets…
+ * and its progress dialog's Cancel to it, and shows that dialog.
  */
 
 #include "sidebarwidget.h"
@@ -73,13 +75,11 @@
 #include "display_filter_dialog.h"
 #include "follow_stream.h"
 #include "live_capture_form.h"
-#include "packet_export.h"
 #include "packet_panel.h"
 #include "pcap_converter.h"
 #include "plugin.h"
 #include "raw_capture.h"
 #include "regex_lab.h"
-#include "selected_packet_line.h"
 #include "settings.h"
 #include "tempdirs.h"
 
@@ -288,27 +288,6 @@ SidebarWidget::SidebarWidget( QWidget* parent )
                                              "Capture files (*.pcap *.pcapng);;All files (*)" );
     } )
     , tempRoot_( tcpdump::tempRoot() )
-    , confirmExport_( [ this ]( QWidget* parent, ExportRequest& request ) {
-        const auto dir = lastDir_.isEmpty()
-                             ? QStandardPaths::writableLocation( QStandardPaths::HomeLocation )
-                             : lastDir_;
-        // Neither this widget nor its members are used after the dialogs:
-        // it may be gone when they return.
-        ExportDialog dialog( request, parent );
-        if ( dialog.exec() != QDialog::Accepted ) {
-            return false;
-        }
-        request.numbers = dialog.packetSet().numbers;
-        const bool pcapng = request.format == CaptureFormat::Pcapng;
-        const auto suggested
-            = QDir( dir ).filePath( tcpdump::captureBaseName( request.captureName ) + "-packets."
-                                    + ( pcapng ? "pcapng" : "pcap" ) );
-        request.outputPath
-            = QFileDialog::getSaveFileName( parent, "Export Packets", suggested,
-                                            pcapng ? "pcapng captures (*.pcapng);;All files (*)"
-                                                   : "pcap captures (*.pcap);;All files (*)" );
-        return !request.outputPath.isEmpty();
-    } )
 {
     // All of it scrolls when the sidebar is shorter than its minimum.
     auto* content = new QWidget;
@@ -509,6 +488,39 @@ SidebarWidget::SidebarWidget( QWidget* parent )
     } );
     connect( live_.get(), &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
 
+    // The Export session asks with the Export dialog and a save dialog, and
+    // tells the outcome itself; the sidebar shows its progress dialog.
+    export_ = std::make_unique<ExportSession>( host, catalog_ );
+    export_->setConfirmer( [ this ]( ExportRequest& request ) {
+        // Neither this widget nor its members are used after the dialog: it
+        // may be gone when it returns.
+        ExportDialog dialog( request, this );
+        if ( dialog.exec() != QDialog::Accepted ) {
+            return false;
+        }
+        request.numbers = dialog.packetSet().numbers;
+        return true;
+    } );
+    export_->setFileChooser( [ this ]( const ExportRequest& request ) {
+        const auto dir = lastDir_.isEmpty()
+                             ? QStandardPaths::writableLocation( QStandardPaths::HomeLocation )
+                             : lastDir_;
+        const bool pcapng = request.format == CaptureFormat::Pcapng;
+        const auto suggested
+            = QDir( dir ).filePath( tcpdump::captureBaseName( request.captureName ) + "-packets."
+                                    + ( pcapng ? "pcapng" : "pcap" ) );
+        // Neither this widget nor its members are used after the dialog.
+        return QFileDialog::getSaveFileName( this, "Export Packets", suggested,
+                                             pcapng ? "pcapng captures (*.pcapng);;All files (*)"
+                                                    : "pcap captures (*.pcap);;All files (*)" );
+    } );
+    connect( export_.get(), &ExportSession::stateChanged, this, &SidebarWidget::showExportState );
+    connect( export_.get(), &ExportSession::progressed, this, [ this ]( int permille ) {
+        if ( exportProgress_ ) {
+            exportProgress_->setValue( permille );
+        }
+    } );
+
     showConversionState();
     showLiveState();
     setLiveSources( defaultLiveSources() ? defaultLiveSources() : builtInLiveSources() );
@@ -535,25 +547,17 @@ SidebarWidget::~SidebarWidget()
     conversion_->disconnect( this );
     conversion_.reset();
 
-    // An export stops between two packets and leaves nothing behind; one
-    // that was done when the cancel came keeps its file, as on Cancel.  Its
-    // progress dialog goes first, as closing it would cancel through this
-    // half-destroyed widget.
+    // The session cancels its export and waits for its worker, and tells
+    // this widget nothing more: an export stops between two packets and
+    // leaves nothing behind; one that was done when the cancel came keeps
+    // its file, as on Cancel.  Its progress dialog goes first, as closing it
+    // would cancel through this half-destroyed widget.
+    export_->disconnect( this );
     if ( exportProgress_ ) {
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
-    export_.cancelAndWait();
-}
-
-bool SidebarWidget::refuse( Activity activity )
-{
-    const auto why = activityRefusalMessage( activity, runningActivities() );
-    if ( why.isEmpty() ) {
-        return false;
-    }
-    hostNotify( why );
-    return true;
+    export_.reset();
 }
 
 void SidebarWidget::chooseAndOpen()
@@ -606,137 +610,44 @@ void SidebarWidget::cancel()
 
 void SidebarWidget::exportSelectedPackets()
 {
-    // The menu entry stays enabled while an export runs.
-    if ( refuse( Activity::Export ) ) {
-        return;
-    }
-    const auto* front = catalog_.front();
-    if ( !front ) {
-        hostNotify( "Export packets: the tab in front shows no capture opened by the tcpdump "
-                    "plugin." );
-        return;
-    }
-    const auto& st = g_state;
-    if ( !st.api || !st.handle || !st.hostCapabilities.selectedLogLines ) {
-        hostNotify( "Export packets needs LogSquirl 26.11 or later, which tells the selected "
-                    "lines." );
-        return;
-    }
-    const auto index = front->index;
-    ExportRequest request;
-    request.captureName = front->fileName;
-    request.packets = index->packets();
-    request.format = captureFormatOf( index->capturePath() );
-
-    // Without a selection, the user may still name or paste the packets.
-    const auto selected = selectedPackets( readSelectedLines(), request.packets );
-    if ( !selected.reason.isEmpty() ) {
-        hostNotify( "Export packets: " + selected.reason );
-        return;
-    }
-    request.numbers = selected.set.numbers;
-    request.selectedLines = selected.lineCount;
-    request.truncated = selected.truncated;
-    if ( request.truncated ) {
-        hostLog( LOGSQUIRL_LOG_INFO,
-                 QString( "Export packets: LogSquirl told only the first %1 selected lines" )
-                     .arg( request.selectedLines ) );
-    }
-    const auto ofSelection = request.numbers;
-
-    // The dialogs run their own event loops, in which this widget may be
-    // deleted, or the menu entry chosen again.
-    const QPointer<SidebarWidget> self( this );
-    const bool confirmed = confirmExport_( this, request );
-    if ( !self || !confirmed || request.numbers.empty() || request.outputPath.isEmpty() ) {
-        return;
-    }
-    if ( refuse( Activity::Export ) ) {
-        return;
-    }
-    // Only when the selection's packets are exported does its truncation matter.
-    request.truncated = request.truncated && request.numbers == ofSelection;
-    hostLog( LOGSQUIRL_LOG_INFO, QString( "Exporting %1 packets of %2 to %3" )
-                                     .arg( request.numbers.count() )
-                                     .arg( request.captureName, request.outputPath ) );
-
-    exportProgress_ = new QProgressDialog(
-        QString( "Exporting %1 packets\xe2\x80\xa6" ).arg( request.numbers.count() ), "Cancel", 0,
-        1000, this );
-    exportProgress_->setObjectName( "exportProgress" );
-    exportProgress_->setWindowTitle( "Export Packets" );
-    exportProgress_->setAutoClose( false );
-    exportProgress_->setAutoReset( false );
-    exportProgress_->setMinimumDuration( 500 );
-    connect( exportProgress_, &QProgressDialog::canceled, this, &SidebarWidget::cancelExport );
-
-    // An export stops at a cancel, before its file replaces the one chosen
-    // (exportPackets()).  Once it has, a cancel comes too late: the file
-    // that was there is gone, and removing the export would lose both.
-    // The export stands, and is reported.
-    const auto numbers = request.numbers;
-    const auto path = request.outputPath;
-    export_.start(
-        [ index, numbers, path ]( const std::atomic_bool* cancel,
-                                  const BackgroundJob<ExportResult>::Progress& progress ) {
-            return exportPackets( index, numbers, path, cancel, progress );
-        },
-        // A cancelled or failed export left nothing behind to take back;
-        // one that wrote its file cannot be taken back.
-        []( const ExportResult& result ) {
-            return result.status != ExportResult::Status::Exported;
-        },
-        [ this, request ]( ExportResult result ) { finishExport( request, std::move( result ) ); },
-        [ progress = exportProgress_ ]( int permille ) {
-            if ( progress ) {
-                progress->setValue( permille );
-            }
-        } );
+    // The session refuses, asks, exports, and tells its state and outcome.
+    export_->start();
 }
 
 void SidebarWidget::cancelExport()
 {
-    if ( !isExporting() ) {
-        return;
-    }
-    export_.cancel();
-    if ( exportProgress_ ) {
-        exportProgress_->setLabelText( "Cancelling\xe2\x80\xa6" );
-    }
+    export_->cancel();
 }
 
-void SidebarWidget::finishExport( const ExportRequest& request, ExportResult result )
+void SidebarWidget::showExportState()
 {
-    if ( exportProgress_ ) {
-        // Closing it would cancel the export that is over.
-        exportProgress_->disconnect( this );
-        exportProgress_->deleteLater();
-        exportProgress_ = nullptr;
-    }
-
-    const auto fileName = QDir::toNativeSeparators( request.outputPath );
-    switch ( result.status ) {
-    case ExportResult::Status::Cancelled:
-        hostLog( LOGSQUIRL_LOG_INFO, "Cancelled exporting packets to " + fileName );
+    switch ( export_->state() ) {
+    case ExportSession::State::Exporting:
+        if ( !exportProgress_ ) {
+            exportProgress_ = new QProgressDialog( export_->label(), "Cancel", 0, 1000, this );
+            exportProgress_->setObjectName( "exportProgress" );
+            exportProgress_->setWindowTitle( "Export Packets" );
+            exportProgress_->setAutoClose( false );
+            exportProgress_->setAutoReset( false );
+            exportProgress_->setMinimumDuration( 500 );
+            connect( exportProgress_, &QProgressDialog::canceled, this,
+                     &SidebarWidget::cancelExport );
+        }
         return;
-    case ExportResult::Status::Failed:
-        hostLog( LOGSQUIRL_LOG_ERROR, "Exporting packets failed: " + result.error );
-        hostNotify( "Exporting packets failed: " + result.error );
+    case ExportSession::State::Cancelling:
+        if ( exportProgress_ ) {
+            exportProgress_->setLabelText( export_->label() );
+        }
         return;
-    case ExportResult::Status::Exported:
-        break;
+    case ExportSession::State::Idle:
+        if ( exportProgress_ ) {
+            // Closing it would cancel the export that is over.
+            exportProgress_->disconnect( this );
+            exportProgress_->deleteLater();
+            exportProgress_ = nullptr;
+        }
+        return;
     }
-    auto message = QString( "Exported %1 packets of %2 to %3." )
-                       .arg( result.packets )
-                       .arg( request.captureName, fileName );
-    if ( request.truncated ) {
-        message += QString( " LogSquirl told only the first %1 selected lines: to export the "
-                            "packets of more, copy their lines and paste them in the Export "
-                            "dialog." )
-                       .arg( request.selectedLines );
-    }
-    hostLog( LOGSQUIRL_LOG_INFO, message );
-    hostNotify( message );
 }
 
 void SidebarWidget::showPacketDetails()

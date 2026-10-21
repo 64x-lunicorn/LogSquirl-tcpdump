@@ -28,9 +28,8 @@
 #pragma once
 
 #include "activity.h"
-#include "background_job.h"
 #include "capture_catalog.h"
-#include "export_dialog.h"
+#include "export_session.h"
 #include "file_conversion_session.h"
 #include "live_capture.h"
 #include "live_capture_session.h"
@@ -116,7 +115,9 @@ QString liveProgressText( const LiveSnapshot& snapshot, qint64 elapsedMs,
  *
  * Plugins > tcpdump > Export packets… writes the packets of the lines
  * selected in the tab in front to a new capture file (packet_export.h), on
- * a worker thread of its own, with a progress dialog and Cancel.
+ * a worker thread of its own, with a progress dialog and Cancel: the export
+ * is its ExportSession's (export_session.h), which asks with the sidebar's
+ * Export dialog and save dialog; the sidebar shows its progress dialog.
  *
  * The summaries of all captures converted while the plugin is loaded are
  * kept with their CaptureIndex in a CaptureCatalog (capture_catalog.h),
@@ -214,29 +215,26 @@ public:
 
     /// Plugins > tcpdump > Export packets…: the packets of the lines selected
     /// in the tab in front, confirmed by the user, written to a new capture
-    /// file in the background.  While an export runs, only a notification
-    /// says so.
+    /// file in the background, by its Export session.  While an export
+    /// runs, only a notification says so.
     void exportSelectedPackets();
-
-    /// Asks the user to confirm the packets of @p request and where to write
-    /// them; false if the user does not want them exported.
-    using ExportConfirmer = std::function<bool( QWidget* parent, ExportRequest& request )>;
-
-    /// Ask with @p confirmer instead of the Export dialog and a file dialog
-    /// (for tests).
-    void setExportConfirmer( ExportConfirmer confirmer )
-    {
-        confirmExport_ = std::move( confirmer );
-    }
 
     /// Whether an export is running.
     bool isExporting() const
     {
-        return export_.isRunning();
+        return export_ && export_->isBusy();
     }
 
-    /// Stop a running export; nothing is left of it then.
+    /// Stop a running export, unless it has written its file.
     void cancelExport();
+
+    /// The Export session Export packets… and its progress dialog's Cancel
+    /// forward to; it asks with the Export dialog and a save dialog, which
+    /// tests replace (ExportSession::setConfirmer(), setFileChooser()).
+    ExportSession* exportSession() const
+    {
+        return export_.get();
+    }
 
     /// The Packet Panel.
     PacketPanel* packetPanel() const
@@ -417,9 +415,6 @@ private:
     void showLiveOutcome( const LiveOutcome& outcome );
     /// Show the live capture's packets, bytes, packets/s and elapsed time.
     void showLiveProgress();
-    /// Whether the Activity rule refuses @p activity now, said in a
-    /// notification.
-    bool refuse( Activity activity );
     /// Enable Start if the Activity rule allows a live capture; its tooltip
     /// says why not.
     void updateStartButton();
@@ -428,8 +423,9 @@ private:
                                                               const LiveChoice& choice );
     /// Show why the live capture failed, and what its source says to do.
     void showLiveError( const LiveOutcome& outcome );
-    /// Report the outcome of the export @p request asked for.
-    void finishExport( const ExportRequest& request, ExportResult result );
+    /// Show the Export session's state: its progress dialog while it
+    /// exports, with its label, and none once it is idle.
+    void showExportState();
     /// The summary of the capture in the tab in front, in the palette's
     /// colours, or that the tab holds no capture of this plugin.
     QString frontSummaryHtml() const;
@@ -476,9 +472,9 @@ private:
     LiveChoiceAsker askLiveChoice_; ///< Shows the Start live capture dialog.
     StopConfirmer confirmStop_;     ///< Asks whether to stop the running capture.
 
-    ExportConfirmer confirmExport_; ///< Shows the Export dialog and a file dialog.
-    /// The export of packets, on a worker thread apart from the conversion's.
-    BackgroundJob<ExportResult> export_{ "export" };
+    /// Exporting packets, running or the last, and what it comes to; its
+    /// export is cancelled and waited for when the widget goes.
+    std::unique_ptr<ExportSession> export_;
     QPointer<QProgressDialog> exportProgress_; ///< Its progress, and Cancel.
 };
 

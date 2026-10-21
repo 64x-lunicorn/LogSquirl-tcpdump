@@ -35,10 +35,11 @@
 #include "sidebarwidget.h"
 
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QLabel>
+#include <QPointer>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -124,11 +125,12 @@ struct LoadedCapture {
         REQUIRE( file.open( QIODevice::ReadOnly ) );
         lines = QString::fromUtf8( file.readAll() ).split( '\n', Qt::SkipEmptyParts );
         host.activateFile( host.openedFiles.first() );
-        sidebar->setExportConfirmer( [ this ]( QWidget*, ExportRequest& request ) {
+        sidebar->exportSession()->setConfirmer( [ this ]( ExportRequest& request ) {
             requests.push_back( request );
-            request.outputPath = outputPath;
             return confirm;
         } );
+        sidebar->exportSession()->setFileChooser(
+            [ this ]( const ExportRequest& ) { return outputPath; } );
     }
 
     ~LoadedCapture()
@@ -136,8 +138,8 @@ struct LoadedCapture {
         logsquirl_plugin_shutdown();
     }
 
-    /// Choose Plugins > tcpdump > Export packets… and wait for the export.
-    void exportSelected()
+    /// Choose Plugins > tcpdump > Export packets…, not waiting for the export.
+    void chooseExport()
     {
         const auto entry
             = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
@@ -145,6 +147,12 @@ struct LoadedCapture {
               } );
         REQUIRE( entry != host.menuActions.end() );
         entry->trigger();
+    }
+
+    /// Choose Plugins > tcpdump > Export packets… and wait for the export.
+    void exportSelected()
+    {
+        chooseExport();
         REQUIRE( waitFor( [ this ] { return !sidebar->isExporting(); } ) );
     }
 
@@ -462,7 +470,8 @@ SCENARIO( "The packets to export are read from packet lines, numbers and ranges"
     }
 }
 
-SCENARIO( "Export packets writes the packets of the selected lines", "[packet_export]" )
+SCENARIO( "Export packets… exports the selected lines' packets through the sidebar's session",
+          "[packet_export]" )
 {
     const auto capture = QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" );
     LoadedCapture loaded( capture );
@@ -512,155 +521,66 @@ SCENARIO( "Export packets writes the packets of the selected lines", "[packet_ex
         }
     }
 
-    GIVEN( "no line selected" )
+    GIVEN( "an export that runs until it is cancelled" )
     {
-        loaded.confirm = false;
-        loaded.exportSelected();
-
-        THEN( "the user may still name the packets, and nothing is exported unconfirmed" )
-        {
-            REQUIRE( loaded.requests.size() == 1 );
-            REQUIRE( loaded.requests.front().numbers.empty() );
-            REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
-            REQUIRE( host.notifications.isEmpty() );
-        }
-    }
-
-    GIVEN( "a host that refuses to tell the selection" )
-    {
+        // The guards, the cancel rules and the messages are the Export
+        // session's (export_session_test.cpp); here the sidebar shows them.
         host.selectedLines = { loaded.lines[ 1 ] };
-        host.selectionResult = LOGSQUIRL_LOG_LINES_NOT_ON_UI_THREAD;
-        loaded.exportSelected();
-
-        THEN( "nothing is asked and the user is told why" )
-        {
-            REQUIRE( loaded.requests.empty() );
-            REQUIRE( host.notifications.size() == 1 );
-            REQUIRE( host.notifications.first()
-                     == "Export packets: LogSquirl did not tell the selected lines (-1)." );
-        }
-    }
-
-    GIVEN( "a tab in front that shows no capture" )
-    {
-        host.activateFile( QString() );
-        loaded.exportSelected();
-
-        THEN( "nothing is asked and the user is told" )
-        {
-            REQUIRE( loaded.requests.empty() );
-            REQUIRE( host.notifications.size() == 1 );
-            REQUIRE( host.notifications.first().contains( "shows no capture" ) );
-        }
-    }
-
-    GIVEN( "an export over an existing file, cancelled once it has written the file" )
-    {
-        {
-            QFile old( loaded.outputPath );
-            REQUIRE( old.open( QIODevice::WriteOnly ) );
-            REQUIRE( old.write( "the capture it replaces" ) > 0 );
-        }
-        host.selectedLines = { loaded.lines[ 1 ] };
-        const auto entry
-            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
-                  return a.label == "Export packets\xe2\x80\xa6";
-              } );
-        entry->trigger();
+        loaded.sidebar->exportSession()->setExporter(
+            []( std::shared_ptr<const CaptureIndex> index, const PacketNumbers& numbers,
+                const QString& outputPath, const std::atomic_bool* cancel,
+                const std::function<void( int )>& progress ) {
+                while ( !cancel->load() ) {
+                    std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
+                }
+                return exportPackets( std::move( index ), numbers, outputPath, cancel, progress );
+            } );
+        loaded.chooseExport();
         REQUIRE( loaded.sidebar->isExporting() );
-        // Its result waits for this thread's event loop, which does not run
-        // until the file has replaced the old one.
-        QElapsedTimer clock;
-        clock.start();
-        while ( readAll( loaded.outputPath ) == "the capture it replaces"
-                && clock.elapsed() < 5000 ) {
-            std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
-        }
-        REQUIRE( loaded.sidebar->isExporting() );
-        loaded.sidebar->cancelExport();
-        REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
 
-        THEN( "the cancel came too late: the export is kept and reported" )
+        THEN( "its progress dialog says what is exported" )
         {
-            REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
-            REQUIRE( host.notifications.size() == 1 );
-            REQUIRE( host.notifications.first().startsWith( "Exported 1 packet" ) );
+            auto* dialog = loaded.sidebar->findChild<QProgressDialog*>( "exportProgress" );
+            REQUIRE( dialog );
+            REQUIRE( dialog->labelText() == "Exporting 1 packets\xe2\x80\xa6" );
+            loaded.sidebar->cancelExport();
+            REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
         }
-    }
 
-    GIVEN( "an export over an existing file, whose sidebar is destroyed once it has written the "
-           "file" )
-    {
+        WHEN( "the user cancels it in its progress dialog" )
         {
-            QFile old( loaded.outputPath );
-            REQUIRE( old.open( QIODevice::WriteOnly ) );
-            REQUIRE( old.write( "the capture it replaces" ) > 0 );
-        }
-        host.selectedLines = { loaded.lines[ 1 ] };
-        const auto entry
-            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
-                  return a.label == "Export packets\xe2\x80\xa6";
-              } );
-        entry->trigger();
-        REQUIRE( loaded.sidebar->isExporting() );
-        // Its result waits for this thread's event loop, which does not run
-        // until the file has replaced the old one.
-        QElapsedTimer clock;
-        clock.start();
-        while ( readAll( loaded.outputPath ) == "the capture it replaces"
-                && clock.elapsed() < 5000 ) {
-            std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
-        }
-        REQUIRE( loaded.sidebar->isExporting() );
-        // The sidebar is deleted, as when LogSquirl unloads the plugin.
-        logsquirl_plugin_shutdown();
-        QCoreApplication::processEvents();
+            const QPointer<QProgressDialog> dialog
+                = loaded.sidebar->findChild<QProgressDialog*>( "exportProgress" );
+            REQUIRE( dialog );
+            auto* cancel = dialog->findChild<QPushButton*>();
+            REQUIRE( cancel );
+            cancel->click();
 
-        THEN( "the cancel came too late: the export is kept, reported to no one" )
+            THEN( "the session cancels, the dialog says so, then goes, and nothing is left" )
+            {
+                REQUIRE( loaded.sidebar->exportSession()->state()
+                         == ExportSession::State::Cancelling );
+                REQUIRE( dialog->labelText() == "Cancelling\xe2\x80\xa6" );
+                REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
+                REQUIRE( waitFor( [ & ] { return !dialog; } ) );
+                REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
+                REQUIRE( host.notifications.isEmpty() );
+            }
+        }
+
+        WHEN( "the entry is chosen again" )
         {
-            REQUIRE( recordsOf( readAll( loaded.outputPath ) ).records.size() == 1 );
-            REQUIRE( host.notifications.isEmpty() );
+            loaded.chooseExport();
+
+            THEN( "nothing more is asked, and the Activity rule's reason is told" )
+            {
+                REQUIRE( loaded.requests.size() == 1 );
+                REQUIRE( host.notifications
+                         == QStringList{ refusalMessage( ActivityRefusal::Exporting ) } );
+            }
+            loaded.sidebar->cancelExport();
+            REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
         }
-    }
-
-    GIVEN( "an export cancelled at once" )
-    {
-        host.selectedLines = { loaded.lines[ 1 ] };
-        const auto entry
-            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
-                  return a.label == "Export packets\xe2\x80\xa6";
-              } );
-        entry->trigger();
-        REQUIRE( loaded.sidebar->isExporting() );
-        loaded.sidebar->cancelExport();
-        REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
-
-        THEN( "the cancel wins: no file, no notification" )
-        {
-            REQUIRE_FALSE( QFile::exists( loaded.outputPath ) );
-            REQUIRE( host.notifications.isEmpty() );
-        }
-    }
-
-    GIVEN( "an export running, and the entry chosen again" )
-    {
-        host.selectedLines = { loaded.lines[ 1 ] };
-        const auto entry
-            = std::find_if( host.menuActions.begin(), host.menuActions.end(), []( const auto& a ) {
-                  return a.label == "Export packets\xe2\x80\xa6";
-              } );
-        entry->trigger();
-        REQUIRE( loaded.sidebar->isExporting() );
-        entry->trigger();
-
-        THEN( "nothing more is asked, and the Activity rule's reason is told" )
-        {
-            REQUIRE( loaded.requests.size() == 1 );
-            REQUIRE( host.notifications
-                     == QStringList{ refusalMessage( ActivityRefusal::Exporting ) } );
-        }
-        loaded.sidebar->cancelExport();
-        REQUIRE( waitFor( [ & ] { return !loaded.sidebar->isExporting(); } ) );
     }
 }
 
