@@ -33,8 +33,9 @@
  * What the user is asked, the file dialogs, the Start live capture dialog,
  * the Export dialog and whether to stop a running capture, is asked here,
  * over the dialog parent (the sidebar, setDialogParent()); tests replace
- * each with a function of their own.  The directory browsed last is shared
- * by all of them.
+ * each with a function of their own.  The file dialogs start in the
+ * directory browsed last, which Open pcap… and Save capture… set, and an
+ * export does not.
  *
  * Destroying it ends the sessions as the plugin is unloaded: a conversion
  * and an export are cancelled and waited for, a live capture is stopped,

@@ -113,6 +113,7 @@ CaptureSessions::CaptureSessions( QObject* parent )
         return true;
     } );
     export_->setFileChooser( [ this ]( const ExportRequest& request ) {
+        // It starts where the user browsed last, but does not move that.
         const auto dir = browseDir();
         const bool pcapng = request.format == CaptureFormat::Pcapng;
         const auto suggested

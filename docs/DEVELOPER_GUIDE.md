@@ -2182,8 +2182,9 @@ none does. A Cancel has no menu entry and asks nothing: the sidebar's
 
 Every dialog is shown over the dialog parent, the sidebar, which sets
 itself (`setDialogParent()`, a `QPointer`: over no window once it is
-gone); the directory browsed last is shared by the Open, save and export
-dialogs. A dialog runs its own event loop, in which the sessions may go
+gone); the Open, save and export dialogs start in the directory browsed
+last, which a file opened or a capture saved sets, and an export does not.
+A dialog runs its own event loop, in which the sessions may go
 with the plugin: nothing of theirs is used after it then.
 `setTempRoot()` sets the output root of the File Conversion and Live
 Capture sessions (tests). Destroying them, in `shutdown()` after the
