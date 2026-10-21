@@ -36,6 +36,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+#include <algorithm>
+#include <cstdint>
 #include <random>
 #include <string>
 #include <vector>
@@ -341,6 +343,42 @@ SCENARIO( "A truncated or malformed SOME/IP message is described as such", "[som
             for ( const auto& bad : { version2, badType, shortLength } ) {
                 REQUIRE( overUdp( bad, kServicePort ).label != "SOME/IP" );
             }
+        }
+    }
+
+    GIVEN( "a Length near the most its 32 bits hold" )
+    {
+        // Added to the header's bytes, a length near 0xFFFFFFFF overflows 32
+        // bits: it must still be a message too long to hold, not a short one.
+        const uint32_t length = GENERATE( 0xFFFFFFF8u, 0xFFFFFFFFu );
+        auto huge = message;
+        huge[ 4 ] = static_cast<uint8_t>( length >> 24 );
+        huge[ 5 ] = static_cast<uint8_t>( length >> 16 );
+        huge[ 6 ] = static_cast<uint8_t>( length >> 8 );
+        huge[ 7 ] = static_cast<uint8_t>( length );
+        auto tp = huge;
+        tp[ 14 ] = kTpNotification;
+        const auto payloadBytes = std::to_string( uint64_t{ length } + 8 - 16 );
+        const auto segment = huge + someIp( 0x1234, 0x0002, kRequest );
+
+        THEN( "it is described as cut, followed by nothing" )
+        {
+            REQUIRE( overUdp( segment ).description
+                     == "Service 0x1234 Method 0x0001 Client 0x0010 Session 0x0001 REQUEST, "
+                            + payloadBytes + " bytes " + kEllipsis );
+            REQUIRE( overTcp( tp ).description
+                     == "Service 0x1234 Method 0x0001 Client 0x0010 Session 0x0001 TP_NOTIFICATION "
+                        "Offset=0, "
+                            + std::to_string( uint64_t{ length } + 8 - 16 - 4 ) + " bytes "
+                            + kEllipsis );
+        }
+        THEN( "the TCP Reassembly waits for all of it" )
+        {
+            const auto extent
+                = tcpMessageExtent( segment.data(), segment.size(), kClientPort, kSdPort );
+            REQUIRE( extent.needsMore );
+            REQUIRE( uint64_t{ extent.length }
+                     == std::min<uint64_t>( uint64_t{ length } + 8, SIZE_MAX ) );
         }
     }
 }
