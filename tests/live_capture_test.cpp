@@ -205,10 +205,14 @@ void checkFlood( LiveCapture& capture, StderrBatches& seen, qint64 lines )
 {
     REQUIRE( waitFor( [ & ] { return seen.next >= lines; } ) );
     const auto elapsed = seen.clock.elapsed();
-    // At most one batch an interval (the count can only come out lower on
-    // a slow machine), none larger than kept: the UI thread's queue holds
-    // one event for the flood, whatever its rate.
-    REQUIRE( seen.batches <= elapsed / LiveCapture::kStderrBatchInterval.count() + 2 );
+    // About one batch an interval (the count can only come out lower on a
+    // slow machine), none larger than kept: the UI thread's queue holds one
+    // event for the flood, whatever its rate. The bound allows twice that
+    // and a few more, as a timer may fire early (Windows) and the worker's
+    // final batch does not wait for the interval; a batch a line would be
+    // thousands.
+    const auto halfInterval = LiveCapture::kStderrBatchInterval.count() / 2;
+    REQUIRE( seen.batches <= elapsed / halfInterval + 4 );
     REQUIRE( seen.largest <= static_cast<qsizetype>( LiveCapture::kStderrBatchLines ) );
     REQUIRE( seen.dropped > 0 );
     REQUIRE( seen.inOrder );

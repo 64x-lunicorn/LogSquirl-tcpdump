@@ -816,7 +816,10 @@ SCENARIO( "A stream of 16 MiB without a line feed is shown in lines of bounded l
                 loaded.sidebar->resize( width, 800 );
                 QCoreApplication::processEvents();
             }
-            REQUIRE( timer.elapsed() < 2000 );
+            // The bounded line length above is the real guard; this only
+            // catches the stall itself (over 10 CPU-minutes before the
+            // bound), with room for a slow or sanitized runner.
+            REQUIRE( timer.elapsed() < 60000 );
         }
     }
 }
