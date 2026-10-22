@@ -523,16 +523,22 @@ void writeIntoPipe( const QString& path, const Bytes& bytes )
 #endif
 }
 
-/// A program that runs for a while and writes nothing.
-ProcessCommand sleeper()
+/**
+ * A program given @p pipePath as an extcap is, that runs for a while and
+ * writes nothing.  sleep would refuse the extra arguments and end at once,
+ * so a shell runs it and takes them as its own.  On Windows ping takes no
+ * arguments it does not know, and is not given the pipe.
+ */
+ProcessCommand sleeper( const QString& pipePath )
 {
     ProcessCommand command;
 #ifdef Q_OS_WIN
+    Q_UNUSED( pipePath );
     command.program = "ping";
     command.arguments = { "-n", "60", "127.0.0.1" };
 #else
-    command.program = "/bin/sleep";
-    command.arguments = { "60" };
+    command.program = "/bin/sh";
+    command.arguments = { "-c", "exec /bin/sleep 60", "sleeper", "--fifo", pipePath };
 #endif
     return command;
 }
@@ -565,9 +571,7 @@ SCENARIO( "A capture is read from a pipe the plugin made: a FIFO, or a named pip
     auto source = std::make_unique<PipeSource>(
         [ & ]( const QString& path ) {
             pipePath = path;
-            auto command = sleeper();
-            command.arguments << "--fifo" << path; // as an extcap is given it
-            return command;
+            return sleeper( path );
         },
         &stop );
     REQUIRE_FALSE( pipePath.isEmpty() );
@@ -583,6 +587,10 @@ SCENARIO( "A capture is read from a pipe the plugin made: a FIFO, or a named pip
 
     WHEN( "nothing is written yet" )
     {
+        // The writer still runs: one that has ended reads as the end, and a
+        // slow build would notice that before the stream is looked at.
+        REQUIRE_FALSE( source->process()->waitForEnd( std::chrono::milliseconds( 500 ) ) );
+
         THEN( "the stream has not ended" )
         {
             REQUIRE_FALSE( source->ready() );
