@@ -80,6 +80,10 @@
       "name": "dev-asan",
       "inherits": "dev",
       "configurePreset": "dev-asan",
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      },
       "environment": {
         "QT_QPA_PLATFORM": "offscreen",
         "ASAN_OPTIONS": "detect_leaks=0",

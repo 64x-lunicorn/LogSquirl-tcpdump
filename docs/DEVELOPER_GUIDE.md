@@ -3342,13 +3342,14 @@ AddressSanitizer and UndefinedBehaviorSanitizer into `build-asan/`; its test
 preset runs them offscreen, with leak detection off, and an undefined
 behaviour report ends its test as an ASan report does. The CI runs it on Linux
 (`.github/workflows/ci-sanitizers.yml`, this plugin's own workflow beside the
-shared ones). The build is slow; on a small machine, limit its jobs and
-the tests':
+shared ones). Its test preset runs 4 tests at a time, not the `dev` preset's
+unbounded `jobs: 0`: every sanitized test started at once exhausts a CI
+runner. The build is slow; on a small machine, limit its jobs:
 
 ```bash
 cmake --preset dev-asan-homebrew     # or: dev-asan
 cmake --build build-asan -j 6
-ctest --preset dev-asan-homebrew -j 4
+ctest --preset dev-asan-homebrew
 ```
 
 Each Catch2 test case is a CTest test of its own, named as Catch2 names it: a

@@ -101,6 +101,8 @@ jobs:
 
       # The preset sets QT_QPA_PLATFORM=offscreen and the sanitizer options;
       # -fno-sanitize-recover=undefined makes an undefined behaviour report
-      # end its test like an ASan report does.
+      # end its test like an ASan report does. It runs 4 tests at a time: the
+      # dev preset's jobs 0 means no limit in CMake 3.29 and later, and a
+      # runner starting every sanitized test at once is killed.
       - name: Test
-        run: ctest --preset dev-asan
+        run: ctest --preset dev-asan -j 4
