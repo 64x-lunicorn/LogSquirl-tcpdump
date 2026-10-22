@@ -156,6 +156,9 @@ bool fitsWidth( const QLabel* label, const QWidget* window )
     words.setDefaultFont( label->font() );
     words.setHtml( label->text() );
     words.setDocumentMargin( 0 );
+    auto wordWrap = words.defaultTextOption();
+    wordWrap.setWrapMode( QTextOption::WordWrap ); // not anywhere, as a document would
+    words.setDefaultTextOption( wordWrap );
     words.setTextWidth( 0 ); // its ideal width is then its widest word's
     if ( words.idealWidth() > label->contentsRect().width() ) {
         WARN( "a word is " << words.idealWidth() << " px wide in this platform's font, "
