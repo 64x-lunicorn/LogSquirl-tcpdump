@@ -441,6 +441,24 @@ SCENARIO( "a capture program's stderr flood keeps the last lines shown and the h
         }
     }
 
+    WHEN( "a capture's program writes more lines than are logged, none dropped" )
+    {
+        REQUIRE( live.start( "eth0", {} ) );
+        QStringList lines;
+        for ( int i = 0; i < 150; ++i ) {
+            lines << QString( "line %1" ).arg( i );
+        }
+        runs.last().stderrLines( lines, 0 );
+
+        THEN( "the host log took the first ones, and says so" )
+        {
+            REQUIRE( logged()
+                     == static_cast<int>( tcpdump::LiveCaptureSession::kStderrLogged ) + 1 );
+            REQUIRE( host.logs.contains( "eth0: line 0" ) );
+            REQUIRE( host.logs.last().contains( "only its first 100 lines are" ) );
+        }
+    }
+
     WHEN( "a capture's program writes far more lines than are shown, some dropped on the way" )
     {
         REQUIRE( live.start( "eth0", {} ) );
@@ -475,6 +493,14 @@ SCENARIO( "a capture program's stderr flood keeps the last lines shown and the h
                      == static_cast<int>( tcpdump::LiveCaptureSession::kStderrLogged ) + 1 );
             REQUIRE( host.logs.last().startsWith( "eth0: " ) );
             REQUIRE( host.logs.last().contains( "not logged" ) );
+        }
+
+        THEN( "that line does not claim the first lines were logged, as some were dropped" )
+        {
+            // 7 dropped before each batch of 100: the first batch and the
+            // second's 7 before the notice.
+            REQUIRE_FALSE( host.logs.last().contains( "its first" ) );
+            REQUIRE( host.logs.last().contains( "not the first: 14 were dropped" ) );
         }
 
         AND_WHEN( "the next capture starts and writes a line" )

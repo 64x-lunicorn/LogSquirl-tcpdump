@@ -308,21 +308,33 @@ void LiveCaptureSession::run( LiveRunRequest request, std::shared_ptr<const Live
     listener.snapshot
         = [ this, number ]( const LiveSnapshot& snapshot ) { takeSnapshot( number, snapshot ); };
     stderrLogged_ = 0;
+    stderrDropped_ = 0;
     listener.stderrLines = [ this, number ]( const QStringList& lines, quint64 dropped ) {
         if ( number != runs_ ) {
             return;
         }
         // A program that prints without end must not flood the host's log.
+        // Lines dropped before they came here are not among those logged,
+        // which then are not the first: the last line says so.
+        if ( stderrLogged_ <= kStderrLogged ) {
+            stderrDropped_ += dropped;
+        }
         for ( const auto& line : lines ) {
             if ( stderrLogged_ < kStderrLogged ) {
                 hostLog( LOGSQUIRL_LOG_INFO, name_ + ": " + line );
             }
             else if ( stderrLogged_ == kStderrLogged ) {
+                const auto logged
+                    = stderrDropped_ == 0
+                          ? QString( "only its first %1 lines are" ).arg( kStderrLogged )
+                          : QString( "only %1 of its lines are, not the first: %2 were dropped "
+                                     "before they reached the log" )
+                                .arg( kStderrLogged )
+                                .arg( stderrDropped_ );
                 hostLog( LOGSQUIRL_LOG_INFO,
-                         QString( "%1: more stderr output is not logged (only its first %2 "
-                                  "lines are); the sidebar shows the latest" )
-                             .arg( name_ )
-                             .arg( kStderrLogged ) );
+                         QString( "%1: more stderr output is not logged (%2); the sidebar shows "
+                                  "the latest" )
+                             .arg( name_, logged ) );
             }
             else {
                 break;

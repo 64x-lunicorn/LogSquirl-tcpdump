@@ -331,6 +331,7 @@ private:
 
     State state_ = State::Idle;
     quint64 stderrLogged_ = 0;     ///< Of the run's stderr lines, those in the host's log.
+    quint64 stderrDropped_ = 0;    ///< Those dropped before they reached it, until it was full.
     std::unique_ptr<LiveRun> run_; ///< Running, or the last: it may still be ending.
     unsigned runs_ = 0;            ///< The number of the last run made.
     std::shared_ptr<const LiveSourceKind> kind_; ///< Explains the run's failure; may be null.

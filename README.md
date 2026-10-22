@@ -266,7 +266,8 @@ source that has any. The plugin never stores a password: one a source's
 options ask for (an extcap's password argument) is kept in memory for the
 session only. While the capture runs, the section shows what the capture
 program writes to stderr, its last 200 lines and how many earlier ones
-were dropped (its first 100 lines are also in LogSquirl's log); if it fails, the
+were dropped (up to 100 of its lines are also in LogSquirl's log, the first
+ones unless some were dropped before); if it fails, the
 section shows why, with what the source says to do about it.
 
 #### Local: this computer, with dumpcap or tcpdump

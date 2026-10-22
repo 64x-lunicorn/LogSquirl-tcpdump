@@ -2048,8 +2048,10 @@ The session's signals (`stateChanged`, `started`, `fileOpened`,
 the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view
 (its last 200 lines, and how many earlier ones it dropped),
 the error and Guidance, the summary label. Of a capture's stderr lines,
-the session writes the first `kStderrLogged` (100) to the host's log, then
-one line that the rest are not logged. `tests/fake_live_session.h`
+the session writes the first `kStderrLogged` (100) it gets to the host's log,
+then one line that the rest are not logged, which says how many were
+dropped before they reached the session, if any (those logged are then not
+the first). `tests/fake_live_session.h`
 uses `FakeSessionHost` (the host, recording, of
 `tests/fake_session_host.h`) and has `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
