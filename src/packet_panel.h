@@ -72,6 +72,7 @@
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QSplitter;
 class QTabWidget;
 class QTreeWidgetItem;
 
@@ -217,6 +218,19 @@ public:
         return conversations_;
     }
 
+    /// The splitter between the layer tree and the hex dump; the sidebar
+    /// remembers where the user left it.
+    QSplitter* layersSplitter() const
+    {
+        return layersSplitter_;
+    }
+
+    /// The splitter between the tabs and the Conversations, as remembered.
+    QSplitter* conversationsSplitter() const
+    {
+        return conversationsSplitter_;
+    }
+
 signals:
     /// The selected line changed what streamContentProblem() and
     /// streamLinesProblem() say (or may have).
@@ -261,6 +275,8 @@ private:
     LayerTree* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
     ConversationTable* conversations_ = nullptr;
+    QSplitter* layersSplitter_ = nullptr;
+    QSplitter* conversationsSplitter_ = nullptr;
     QTimer timer_;
 
     std::shared_ptr<const CaptureIndex> index_;

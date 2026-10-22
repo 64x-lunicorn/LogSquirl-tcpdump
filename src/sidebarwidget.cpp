@@ -69,6 +69,7 @@
 #include "packet_panel.h"
 #include "plugin.h"
 #include "regex_lab.h"
+#include "settings.h"
 
 #include <QDesktopServices>
 #include <QGroupBox>
@@ -76,6 +77,7 @@
 #include <QPointer>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSplitter>
 #include <QStringList>
 #include <QStyle>
 #include <QUrl>
@@ -135,6 +137,73 @@ protected:
             updateGeometry();
         }
     }
+};
+
+/// The splitter between the summary and the Packet panel.  Until the user
+/// drags its handle, or a position is restored, it is at the default split:
+/// the summary as tall as it asks (SummaryArea, up to
+/// SidebarWidget::kSummaryMaxLines), the Packet panel the rest, as a new
+/// summary or a resize ask anew.  Neither pane can be dragged below its
+/// minimum, and on a resize the Packet panel takes what is gained or lost.
+class SummarySplitter : public QSplitter {
+public:
+    SummarySplitter( QWidget* summary, QWidget* panel )
+        : QSplitter( Qt::Vertical )
+    {
+        setChildrenCollapsible( false );
+        addWidget( summary );
+        addWidget( panel );
+        setStretchFactor( 0, 0 );
+        setStretchFactor( 1, 1 );
+        // Only the user's drag moves the splitter, not setSizes().
+        connect( this, &QSplitter::splitterMoved, this, [ this ] { atDefault_ = false; } );
+    }
+
+    /// Put the panes at @p sizes, as saved; the default split if they are
+    /// not one size per pane.
+    void restore( const QList<int>& sizes )
+    {
+        if ( sizes.size() == count() ) {
+            atDefault_ = false;
+            setSizes( sizes );
+        }
+    }
+
+protected:
+    bool event( QEvent* event ) override
+    {
+        const auto handled = QSplitter::event( event );
+        // A pane asks for another height: a new summary, Save capture… shown.
+        if ( event->type() == QEvent::LayoutRequest ) {
+            fitSummary();
+        }
+        return handled;
+    }
+
+    void resizeEvent( QResizeEvent* event ) override
+    {
+        QSplitter::resizeEvent( event );
+        fitSummary();
+    }
+
+private:
+    /// At the default split, give the summary the height it asks for.
+    void fitSummary()
+    {
+        const auto room = height() - handleWidth();
+        if ( !atDefault_ || room <= 0 ) {
+            return;
+        }
+        const auto* summary = widget( 0 );
+        const auto least = summary->minimumSizeHint().height();
+        const auto most = std::max( least, room - widget( 1 )->minimumHeight() );
+        const auto top = std::clamp( summary->sizeHint().height(), least, most );
+        if ( sizes().value( 0 ) != top ) {
+            setSizes( { top, room - top } );
+        }
+    }
+
+    bool atDefault_ = true;
 };
 
 /// The sidebar's content, scrolled as a whole only when the sidebar is
@@ -319,7 +388,13 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     connect( summaryLabel_, &QLabel::linkActivated, this, &SidebarWidget::openLink );
     auto* summaryArea = new SummaryArea( summaryLabel_ );
     summaryArea->setObjectName( "summaryArea" );
-    layout->addWidget( summaryArea );
+    // The summary's pane of the splitter below: the summary and Save capture….
+    auto* summaryPane = new QWidget;
+    summaryPane->setObjectName( "summaryPane" );
+    auto* summaryLayout = new QVBoxLayout( summaryPane );
+    summaryLayout->setContentsMargins( 0, 0, 0, 0 );
+    summaryLayout->setSpacing( layout->spacing() );
+    summaryLayout->addWidget( summaryArea, 1 );
 
     // A live capture's raw file is in the temporary directory, which goes
     // when LogSquirl quits: this keeps it.
@@ -328,7 +403,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     saveButton_->setToolTip( "Save the raw capture of this tab as a pcap file; a ring buffer's "
                              "files kept as one" );
     saveButton_->setHidden( true );
-    layout->addWidget( saveButton_ );
+    summaryLayout->addWidget( saveButton_ );
     connect( saveButton_, &QPushButton::clicked, this,
              [ this ] { forward( "Saving a capture", &CaptureSessions::saveCapture ); } );
 
@@ -337,7 +412,34 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     packetPanel_ = new PacketPanel;
     packetPanel_->setObjectName( "packetPanel" );
     packetPanel_->setMinimumHeight( kPacketPanelMinLines * fontMetrics().lineSpacing() );
-    layout->addWidget( packetPanel_, 1 );
+
+    // The user drags the handle between the two; where it and the panel's
+    // own handles were left is restored from settings.ini, and saved there.
+    auto* summarySplitter = new SummarySplitter( summaryPane, packetPanel_ );
+    summarySplitter->setObjectName( "summarySplitter" );
+    layout->addWidget( summarySplitter, 1 );
+    splitters_ = { { kSummarySplitName, summarySplitter },
+                   { kLayersSplitName, packetPanel_->layersSplitter() },
+                   { kConversationsSplitName, packetPanel_->conversationsSplitter() } };
+    const auto configDir = hostConfigDir();
+    summarySplitter->restore( loadSplitterSizes( configDir, kSummarySplitName ) );
+    for ( const auto& [ name, splitter ] : splitters_ ) {
+        if ( splitter != summarySplitter ) {
+            if ( const auto sizes = loadSplitterSizes( configDir, name );
+                 sizes.size() == splitter->count() ) {
+                splitter->setSizes( sizes );
+            }
+        }
+        // A drag sends many moves: the sizes are saved once it rests.
+        connect( splitter, &QSplitter::splitterMoved, this, [ this, name = name ] {
+            movedSplitters_.insert( name );
+            layoutSaver_.start();
+        } );
+    }
+    layoutSaver_.setSingleShot( true );
+    layoutSaver_.setInterval( kLayoutSaveDelayMs );
+    connect( &layoutSaver_, &QTimer::timeout, this, &SidebarWidget::saveLayout );
+
     auto* contentArea = new ContentArea( content );
     contentArea->setObjectName( "sidebarScroll" );
     auto* outer = new QVBoxLayout( this );
@@ -416,6 +518,25 @@ SidebarWidget::~SidebarWidget()
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
+    // A drag not saved yet is saved now, while the splitters are still here.
+    if ( layoutSaver_.isActive() ) {
+        layoutSaver_.stop();
+        saveLayout();
+    }
+}
+
+void SidebarWidget::saveLayout()
+{
+    const auto configDir = hostConfigDir();
+    for ( const auto& [ name, splitter ] : splitters_ ) {
+        if ( movedSplitters_.contains( name )
+             && !saveSplitterSizes( configDir, name, splitter->sizes() ) ) {
+            hostLog( LOGSQUIRL_LOG_WARNING, "The sidebar's layout could not be saved in "
+                                                + settingsFilePath( configDir ) );
+            return;
+        }
+    }
+    movedSplitters_.clear();
 }
 
 void SidebarWidget::forward( const char* what, void ( CaptureSessions::*action )() )

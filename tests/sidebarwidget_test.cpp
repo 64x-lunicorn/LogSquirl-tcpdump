@@ -40,6 +40,7 @@
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "regex_lab.h"
+#include "settings.h"
 #include "sidebarwidget.h"
 
 #include <QCoreApplication>
@@ -47,6 +48,7 @@
 #include <QFile>
 #include <QLabel>
 #include <QLocale>
+#include <QMouseEvent>
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QProgressBar>
@@ -54,13 +56,16 @@
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSplitter>
 #include <QTabWidget>
 #include <QTemporaryDir>
+#include <QTextDocument>
 #include <QUrl>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <thread>
@@ -150,6 +155,60 @@ bool scrollIntoView( QWidget* widget, const QRect& rect )
         shown &= QRect( widget->mapFrom( parent, QPoint( 0, 0 ) ), parent->size() );
     }
     return shown == rect;
+}
+
+/// Drag the handle before pane @p index of @p splitter by @p dy pixels, as a
+/// user would with the mouse.
+void dragHandle( QSplitter* splitter, int index, int dy )
+{
+    auto* handle = splitter->handle( index );
+    const QPoint start( handle->width() / 2, handle->height() / 2 );
+    const auto end = start + QPoint( 0, dy );
+    // The handle moves as it is dragged: where the mouse is, on the screen.
+    const auto startGlobal = handle->mapToGlobal( start );
+    const auto endGlobal = handle->mapToGlobal( end );
+    const auto send = [ handle ]( QEvent::Type type, QPoint local, QPoint global,
+                                  Qt::MouseButton button, Qt::MouseButtons buttons ) {
+        QMouseEvent event( type, QPointF( local ), QPointF( global ), button, buttons,
+                           Qt::NoModifier );
+        QCoreApplication::sendEvent( handle, &event );
+    };
+    send( QEvent::MouseButtonPress, start, startGlobal, Qt::LeftButton, Qt::LeftButton );
+    send( QEvent::MouseMove, end, endGlobal, Qt::NoButton, Qt::LeftButton );
+    send( QEvent::MouseButtonRelease, end, endGlobal, Qt::LeftButton, Qt::NoButton );
+    QCoreApplication::processEvents();
+}
+
+/// The lines of the text file at @p path.
+QStringList linesOf( const QString& path )
+{
+    QFile file( path );
+    REQUIRE( file.open( QIODevice::ReadOnly ) );
+    return QString::fromUtf8( file.readAll() ).split( '\n', Qt::SkipEmptyParts );
+}
+
+/// The summary @p html up to the end of its Protocols section, without the
+/// empty line after it.
+QString upToSectionAfterProtocols( const QString& html )
+{
+    const QString heading = "<b>Protocols</b>";
+    const auto protocols = html.indexOf( heading );
+    REQUIRE( protocols >= 0 );
+    const auto next = html.indexOf( QRegularExpression( "<br><br><b>[A-Z][a-zA-Z ]*</b>" ),
+                                    protocols + heading.size() );
+    return next < 0 ? html : html.left( next );
+}
+
+/// The height of rich text @p html in @p label, as the label lays it out at
+/// its width.
+int textHeight( const QString& html, const QLabel* label )
+{
+    QTextDocument document;
+    document.setDefaultFont( label->font() );
+    document.setDocumentMargin( 0 );
+    document.setHtml( html );
+    document.setTextWidth( label->width() );
+    return static_cast<int>( std::ceil( document.size().height() ) );
 }
 
 /** A converter that converts, then holds its result until cancelled. */
@@ -659,7 +718,7 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
         const auto line = widget->fontMetrics().lineSpacing();
 
         // The summary comes after the sidebar is shown, as a capture's does,
-        // and takes the room the Packet panel leaves, up to 24 lines.
+        // and takes the room the Packet panel leaves, up to kSummaryMaxLines.
         QStringList lines;
         for ( int i = 1; i < 80; ++i ) {
             lines << QString( "Endpoint line %1" ).arg( i );
@@ -703,6 +762,233 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
                 REQUIRE(
                     child<QScrollArea>( *widget, "sidebarScroll" )->verticalScrollBar()->maximum()
                     == 0 );
+            }
+        }
+
+        if ( height <= 250 ) {
+            THEN( "a sidebar shorter than the summary's and the Packet panel's minimums scrolls "
+                  "as a whole, the splitter between them at its minimum" )
+            {
+                REQUIRE(
+                    child<QScrollArea>( *widget, "sidebarScroll" )->verticalScrollBar()->maximum()
+                    > 0 );
+                auto* splitter = child<QSplitter>( *widget, "summarySplitter" );
+                REQUIRE( splitter->height() == splitter->minimumSizeHint().height() );
+            }
+        }
+    }
+}
+
+SCENARIO( "at the default split, a selected packet leaves the summary's Overview and Protocols "
+          "in view",
+          "[sidebar]" )
+{
+    QTemporaryDir tempRoot;
+    REQUIRE( tempRoot.isValid() );
+    FakeHost host;
+    tcpdump::g_state.tempRoot = tempRoot.path();
+    REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+    auto* widget = tcpdump::g_state.sidebarWidget;
+    widget->resize( 360, 1000 );
+    widget->show();
+    auto& conversion = tcpdump::g_state.sessions->conversionSession();
+    REQUIRE( conversion.start( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) ) );
+    REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
+    REQUIRE( host.openedFiles.size() == 1 );
+    host.activateFile( host.openedFiles.first() );
+
+    WHEN( "a packet line is selected" )
+    {
+        auto* panel = widget->packetPanel();
+        host.selectedLines = { linesOf( host.openedFiles.first() )[ 3 ] };
+        REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+        QCoreApplication::processEvents();
+
+        THEN( "the summary shows its Overview and Protocols without scrolling" )
+        {
+            auto* summary = child<QLabel>( *widget, "summary" );
+            auto* area = child<QScrollArea>( *widget, "summaryArea" );
+            const auto html = summary->text();
+            REQUIRE( html.contains( "<b>Overview</b>" ) );
+            REQUIRE( html.contains( "<b>Protocols</b>" ) );
+            REQUIRE( area->verticalScrollBar()->value() == 0 );
+            REQUIRE( textHeight( upToSectionAfterProtocols( html ), summary )
+                     <= area->viewport()->height() );
+        }
+
+        THEN( "the Packet panel keeps at least its minimum" )
+        {
+            REQUIRE( panel->height() >= panel->minimumHeight() );
+        }
+    }
+
+    logsquirl_plugin_shutdown();
+}
+
+SCENARIO( "the handle between the summary and the Packet panel moves their share", "[sidebar]" )
+{
+    GIVEN( "a sidebar showing a long summary, at the default split" )
+    {
+        QTemporaryDir tempRoot;
+        REQUIRE( tempRoot.isValid() );
+        FakeHost host;
+        CaptureSessions sessions;
+        SidebarWidget widget( sessions );
+        sessions.setTempRoot( tempRoot.path() );
+        // Tall enough that the Packet panel is above its minimum.
+        widget.resize( 360, 1200 );
+        widget.show();
+        auto& conversion = sessions.conversionSession();
+        REQUIRE( conversion.start( QStringLiteral( TCPDUMP_CORPUS_DIR "/mixed.pcap" ) ) );
+        REQUIRE( waitFor( [ & ] { return !conversion.isBusy(); } ) );
+        QCoreApplication::processEvents();
+        auto* splitter = child<QSplitter>( widget, "summarySplitter" );
+        auto* summaryPane = splitter->widget( 0 );
+        auto* panel = child<QWidget>( widget, "packetPanel" );
+        REQUIRE( splitter->widget( 1 ) == panel );
+        const auto paneBefore = summaryPane->height();
+        const auto panelBefore = panel->height();
+        REQUIRE( panelBefore > panel->minimumHeight() );
+
+        WHEN( "the user drags the handle up" )
+        {
+            dragHandle( splitter, 1, -60 );
+
+            THEN( "the summary is shorter, and the Packet panel taller by as much" )
+            {
+                REQUIRE( summaryPane->height() == paneBefore - 60 );
+                REQUIRE( panel->height() == panelBefore + 60 );
+            }
+        }
+
+        WHEN( "the user drags the handle far down" )
+        {
+            dragHandle( splitter, 1, 5000 );
+
+            THEN( "the Packet panel stops at its minimum" )
+            {
+                REQUIRE( panel->height() == panel->minimumHeight() );
+                REQUIRE( summaryPane->height() > paneBefore );
+            }
+        }
+
+        WHEN( "the user drags the handle far up" )
+        {
+            dragHandle( splitter, 1, -5000 );
+
+            THEN( "the summary stops at its minimum" )
+            {
+                REQUIRE( summaryPane->height() == summaryPane->minimumSizeHint().height() );
+                REQUIRE( child<QScrollArea>( widget, "summaryArea" )->height()
+                         >= SidebarWidget::kSummaryMinLines * widget.fontMetrics().lineSpacing() );
+            }
+        }
+    }
+}
+
+SCENARIO( "the sidebar's splitter positions are kept in settings.ini across a restart",
+          "[sidebar]" )
+{
+    QTemporaryDir tempRoot;
+    REQUIRE( tempRoot.isValid() );
+    FakeHost host;
+    CaptureSessions sessions;
+    sessions.setTempRoot( tempRoot.path() );
+    const auto makeSidebar = [ &sessions ] {
+        auto widget = std::make_unique<SidebarWidget>( sessions );
+        widget->resize( 360, 1200 );
+        widget->show();
+        QCoreApplication::processEvents();
+        return widget;
+    };
+    const auto splitters = []( const SidebarWidget& widget ) {
+        return std::vector<QSplitter*>{ child<QSplitter>( widget, "summarySplitter" ),
+                                        child<QSplitter>( widget, "layersSplitter" ),
+                                        child<QSplitter>( widget, "conversationsSplitter" ) };
+    };
+    const auto sizesOf = [ & ]( const SidebarWidget& widget ) {
+        std::vector<QList<int>> sizes;
+        for ( auto* splitter : splitters( widget ) ) {
+            sizes.push_back( splitter->sizes() );
+        }
+        return sizes;
+    };
+
+    GIVEN( "a settings file without them" )
+    {
+        auto widget = makeSidebar();
+
+        THEN( "the split is the default: the summary as tall as it asks, the Packet panel the "
+              "rest" )
+        {
+            auto* splitter = child<QSplitter>( *widget, "summarySplitter" );
+            REQUIRE( splitter->widget( 0 )->height()
+                     == splitter->widget( 0 )->sizeHint().height() );
+            REQUIRE( tcpdump::loadSplitterSizes( host.configDir(), "summarySplit" ).isEmpty() );
+        }
+    }
+
+    GIVEN( "a settings file with sizes of another number of panes" )
+    {
+        REQUIRE( tcpdump::saveSplitterSizes( host.configDir(), "summarySplit", { 300 } ) );
+        auto widget = makeSidebar();
+
+        THEN( "the split is the default" )
+        {
+            auto* splitter = child<QSplitter>( *widget, "summarySplitter" );
+            REQUIRE( splitter->widget( 0 )->height()
+                     == splitter->widget( 0 )->sizeHint().height() );
+        }
+    }
+
+    GIVEN( "a sidebar whose three handles the user dragged" )
+    {
+        auto widget = makeSidebar();
+        auto all = splitters( *widget );
+        const auto before = sizesOf( *widget );
+        dragHandle( all[ 0 ], 1, 120 );
+        dragHandle( all[ 1 ], 1, 30 );
+        dragHandle( all[ 2 ], 1, -40 );
+        const auto dragged = sizesOf( *widget );
+        for ( size_t i = 0; i < dragged.size(); ++i ) {
+            REQUIRE( dragged[ i ] != before[ i ] );
+        }
+
+        THEN( "settings.ini holds their sizes" )
+        {
+            REQUIRE( waitFor( [ & ] {
+                return tcpdump::loadSplitterSizes( host.configDir(), "summarySplit" )
+                           == dragged[ 0 ]
+                       && tcpdump::loadSplitterSizes( host.configDir(), "layersSplit" )
+                              == dragged[ 1 ]
+                       && tcpdump::loadSplitterSizes( host.configDir(), "conversationsSplit" )
+                              == dragged[ 2 ];
+            } ) );
+        }
+
+        WHEN( "LogSquirl restarts, its sidebar made anew" )
+        {
+            widget.reset();
+            widget = makeSidebar();
+
+            THEN( "the splitters are where the user left them" )
+            {
+                REQUIRE( sizesOf( *widget ) == dragged );
+            }
+        }
+
+        WHEN( "LogSquirl restarts with a shorter sidebar" )
+        {
+            widget.reset();
+            widget = makeSidebar();
+            widget->resize( 360, 1000 );
+            QCoreApplication::processEvents();
+
+            THEN( "the summary keeps its height, and the Packet panel is shorter" )
+            {
+                const auto sizes = child<QSplitter>( *widget, "summarySplitter" )->sizes();
+                REQUIRE( sizes[ 0 ] == dragged[ 0 ][ 0 ] );
+                REQUIRE( sizes[ 1 ] < dragged[ 0 ][ 1 ] );
             }
         }
     }

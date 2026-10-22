@@ -195,6 +195,8 @@ PacketPanel::PacketPanel( QWidget* parent )
     layout->addWidget( status_ );
 
     auto* splitter = new QSplitter( Qt::Vertical );
+    splitter->setObjectName( "layersSplitter" );
+    layersSplitter_ = splitter;
     tree_ = new LayerTree;
     tree_->setObjectName( "packetLayers" );
     tree_->setHeaderHidden( true );
@@ -234,6 +236,8 @@ PacketPanel::PacketPanel( QWidget* parent )
     tabs_->addTab( streamView_, "Stream" );
     // Neither can be dragged away: the Conversations keep a few rows.
     auto* outer = new QSplitter( Qt::Vertical );
+    outer->setObjectName( "conversationsSplitter" );
+    conversationsSplitter_ = outer;
     outer->setChildrenCollapsible( false );
     outer->addWidget( tabs_ );
     conversations_ = new ConversationTable;

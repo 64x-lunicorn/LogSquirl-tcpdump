@@ -31,6 +31,9 @@
  * options of each source (live/options/<source>/<name>).  Never a
  * password: a secret option (isSecretLiveOption(), an extcap's password
  * argument) is left out.
+ *
+ * And the sidebar's layout (group [sidebar]): the sizes of the panes of each
+ * splitter the user dragged, so that the layout is back after a restart.
  */
 
 #pragma once
@@ -39,6 +42,7 @@
 #include "pcap_converter.h"
 #include "someip.h"
 
+#include <QList>
 #include <QString>
 
 #include <cstddef>
@@ -87,5 +91,14 @@ LiveOptions loadLiveOptions( const QString& configDir, const QString& source );
 /// false if it could not be written.
 bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
                      const QString& value );
+
+/// The sizes of the panes of the sidebar's splitter @p name saved in
+/// @p configDir, in pixels, first pane first; none without a directory, a
+/// file, or sizes saved for it, or if one of them is not a number of pixels.
+QList<int> loadSplitterSizes( const QString& configDir, const QString& name );
+
+/// Save @p sizes as those of the sidebar's splitter @p name in @p configDir,
+/// the other settings as they are; false if they could not be written.
+bool saveSplitterSizes( const QString& configDir, const QString& name, const QList<int>& sizes );
 
 } // namespace tcpdump

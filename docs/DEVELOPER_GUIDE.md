@@ -2591,7 +2591,11 @@ source's, which the sidebar hands the form (`setSourceOptions()`) for every
 kind, so that each source keeps its own options. A secret option (its name
 starts with `kSecretOptionMark`, `*`: an extcap's password) is never
 written (`isSecretLiveOption()`): it lives in the form's options for the
-session only.
+session only. `loadSplitterSizes()` and `saveSplitterSizes()` keep the
+sizes of the panes of each sidebar splitter the user dragged, in pixels,
+under `sidebar/<name>` (`summarySplit`, `layersSplit`,
+`conversationsSplit`, see *Sidebar Widget*); a list with a value that is
+not a number of pixels reads as none saved.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 The sidebar is a view over the Capture Sessions (see *The Capture
@@ -2636,7 +2640,7 @@ sessions run on (the plugin destroys them after it). Qt UI that provides:
   shown once per load; the catalog decides which entry carries it
   (`Entry::withFormatHint`)
 - The summary scrolls in a `SummaryArea`, a `QScrollArea` that asks for
-  the height of its text at its width, up to `kSummaryMaxLines` (24), so
+  the height of its text at its width, up to `kSummaryMaxLines` (30), so
   that a long summary leaves the Packet Panel room in a tall sidebar, and
   gives in down to `kSummaryMinLines` (3) in a short one. The label is top
   aligned and as tall as its text; none of it is cut off or drawn over the
@@ -2649,6 +2653,20 @@ sessions run on (the plugin destroys them after it). Qt UI that provides:
 - The Packet Panel (see *Packet Panel* below), which takes the room left
   and keeps at least `kPacketPanelMinLines` (16) for its tabs and the
   Conversations
+- The summary's pane (the summary and **Save capture…**) and the Packet
+  Panel are the two panes of a `SummarySplitter` ("summarySplitter"), a
+  `QSplitter` whose panes cannot be collapsed. Until the user drags its
+  handle, or a position is restored, it is at the default split: the
+  summary's pane as tall as it asks (`fitSummary()`, on a resize and a
+  pane's `LayoutRequest`), within its minimum and what the Packet Panel's
+  minimum leaves, the Packet Panel the rest. Once dragged it stays where
+  the user left it; on a resize the Packet Panel (stretch 1) takes what is
+  gained or lost. Its sizes and those of the Packet Panel's two splitters
+  (`layersSplitter()`, `conversationsSplitter()`) are restored from
+  `settings.ini` when the sidebar is made (`loadSplitterSizes()`, ignored
+  unless one size per pane), and saved there (`saveLayout()`) for each
+  splitter dragged, `kLayoutSaveDelayMs` after its last `splitterMoved`, or
+  when the sidebar goes before then
 - All of the above in a `ContentArea` ("sidebarScroll"), a `QScrollArea`
   that scrolls the sidebar as a whole only when the sidebar is shorter
   than the content's minimum (the summary's and the Packet Panel's
@@ -2803,6 +2821,12 @@ that its links open the README and the Regex Lab, that it goes and leaves
 the sessions running and no observer of the catalog behind, its layout and scrolling in a `QTabWidget` of fixed
 heights below and above the minimum (the summary's last line and the
 Conversations' bottom), and that a palette change redraws the summary;
+the splitter's default split with a packet selected (the summary's
+Overview and Protocols in view in a 360 × 1000 sidebar), a drag of its
+handle with real mouse events (`dragHandle()`) down to either minimum,
+and the three splitters' sizes saved in and restored from `settings.ini`
+across a sidebar made anew, a file without them or with sizes of another
+number of panes giving the default split;
 `packet_export_test.cpp` that an export's progress dialog shows, as plain
 text, and leaves the label as it was.
 
@@ -2987,7 +3011,10 @@ export, conversation statistics):
   `statusText()` still tells it, and the stream buttons' tooltips show it.
   The panel's tabs and the Conversations table below them are in a
   vertical `QSplitter` whose children cannot be collapsed, the table
-  keeping at least `kConversationsMinLines` (5) lines. The tree items keep their layer's or field's
+  keeping at least `kConversationsMinLines` (5) lines
+  (`conversationsSplitter()`); the tree and the dump in another
+  (`layersSplitter()`). The sidebar remembers where the user left both
+  (see *Sidebar Widget*). The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
   and ASCII on each line. The dump is `kDumpBytesPerLine` (16) bytes a

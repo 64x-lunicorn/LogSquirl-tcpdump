@@ -64,6 +64,12 @@ constexpr const char* kLiveStopMegabytesKey = "live/stopMegabytes";
 constexpr const char* kLiveRingFilesKey = "live/ringFiles";
 constexpr const char* kLiveRingMegabytesKey = "live/ringMegabytes";
 constexpr const char* kLiveRingSecondsKey = "live/ringSeconds";
+/// The key of a sidebar splitter's sizes, in the [sidebar] group.
+QString splitterKey( const QString& name )
+{
+    return QStringLiteral( "sidebar/" ) + name;
+}
+
 /// The group of a source's options: live/options/<source>/<name>.
 QString liveOptionsGroup( const QString& source )
 {
@@ -274,6 +280,44 @@ bool saveLiveOption( const QString& configDir, const QString& source, const QStr
     file.beginGroup( liveOptionsGroup( source ) );
     file.setValue( name, value );
     file.endGroup();
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+QList<int> loadSplitterSizes( const QString& configDir, const QString& name )
+{
+    if ( configDir.isEmpty() || name.isEmpty() ) {
+        return {};
+    }
+    const QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    // A list in the file ("200, 600"), or a string a user wrote as one.
+    const auto values = file.value( splitterKey( name ) )
+                            .toStringList()
+                            .join( QLatin1Char( ',' ) )
+                            .split( QLatin1Char( ',' ), Qt::SkipEmptyParts );
+    QList<int> sizes;
+    for ( const auto& value : values ) {
+        bool ok = false;
+        const auto size = value.trimmed().toInt( &ok );
+        if ( !ok || size < 0 ) {
+            return {};
+        }
+        sizes << size;
+    }
+    return sizes;
+}
+
+bool saveSplitterSizes( const QString& configDir, const QString& name, const QList<int>& sizes )
+{
+    if ( configDir.isEmpty() || name.isEmpty() || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    QStringList values;
+    for ( const auto size : sizes ) {
+        values << QString::number( size );
+    }
+    file.setValue( splitterKey( name ), values );
     file.sync();
     return file.status() == QSettings::NoError;
 }

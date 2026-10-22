@@ -121,7 +121,14 @@ After installing, restart LogSquirl or re-scan via *Plugins â†’ Manage Pluginsâ€
    switching tabs switches it, and a tab that is not a converted capture
    shows none. Under *Analysis* it gives the median initial round-trip time
    (iRTT) of the TCP handshakes captured whole, and the segments per TCP
-   analysis marker
+   analysis marker. The summary and the **Packet** panel below it (step 10)
+   share the sidebar: drag the handle between them, or the handles inside
+   the Packet panel (between the layers and the bytes, and above the
+   Conversations), to resize the panes. Where you leave them is kept in the
+   plugin's `settings.ini` and is back after a restart; until you drag it,
+   the summary is as tall as it needs (up to 30 lines, then it scrolls)
+   and the Packet panel takes the rest, always keeping room for its tabs and
+   a few Conversations rows
 7. Use LogSquirl's built-in search, filters, and highlighters on the
    packet data; the plugin's [highlighter set and filter
    group](#highlighters-and-filters) colour and filter it as Wireshark does

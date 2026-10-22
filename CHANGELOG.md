@@ -544,6 +544,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The dialog is at most about 600 pixels high, where it was about 800
   and cut off on a 13-inch screen; every option and note stays, and
   **Restore Defaults** resets the options of all tabs (#206)
+- **The sidebar's panes can be resized, and are remembered.** The capture
+  summary and the Packet panel share the sidebar through a handle you
+  drag; the summary no longer shrinks to three lines once a packet line is
+  selected, but keeps its Overview and Protocols in view (it asks for up to
+  30 lines, then scrolls in itself), and the Packet panel always keeps room
+  for its tabs and a few Conversations rows. Where you leave that handle,
+  and the two inside the Packet panel (layers and bytes, tabs and
+  Conversations), is kept in `settings.ini` (`[sidebar]`) and is back after
+  a restart. A sidebar too short for both still scrolls as a whole (#204).
 - **The live capture form is in the Start live capture dialog only.** The
   sidebar's Live capture section is a **Start live capture…** button,
   which opens the same dialog as the tcpdump menu entry, with the choice
