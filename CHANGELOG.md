@@ -662,6 +662,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   An export that has written its file now stays and is reported, however
   late the Cancel comes; one cancelled before leaves the file it would have
   replaced as it was (#166).
+- **A second ServerHello no longer crashes TLS decryption.** A server
+  that sent another ServerHello after the first made the decryption use
+  the new cipher suite with the old suite's keys and read past them. Once
+  a session has its ServerHello, a later one is ignored, and a TLS 1.2
+  record is decrypted only with keys made for its suite (#176).
+- **Programs and devices cannot flood the plugin.** Listing interfaces
+  stops a program once it has written more than 4 MiB to stdout or stderr
+  and says so (#177). A capture program's stderr reaches the sidebar in
+  batches, the sidebar keeps its last 200 lines and says how many earlier
+  ones were dropped, and the host log takes at most 100 lines a capture
+  (#178).
+- **What a capture program or device writes shows as it wrote it.** In
+  the Start live capture dialog, extcap argument names, tooltips and
+  status, and interface and device descriptions, are shown as plain text,
+  not markup, and descriptions are cut at 300 characters (#179). Only
+  the plugin's own guidance carries clickable links; a URL a program
+  wrote is shown as text (#180).
+- **A password for an extcap says who can see it.** A password field
+  notes that the extcap gets the value on its command line, where other
+  users of the computer can read it while the capture runs, and suggests
+  a key where the extcap offers one (#181).
+- **Ending a capture no longer signals a process that is not its own.**
+  A capture's process group is signalled only until its program has
+  ended, so a reused process ID is never hit (#182).
+- **Stopping a capture on Android ends only its tcpdump.** The pid file
+  and the stop mark live in a directory only root can write, and the stop
+  and cleanup scripts end only a positive process ID (#183).
+- **A batch file is recognised behind trailing spaces and dots.** On
+  Windows, a custom command's program `dump.bat.` is the batch file it
+  runs, and its arguments are checked as such (#185).
+- **Crafted captures are held to bounded memory and work.** A pcapng
+  section header or interface block longer than 256 KiB is refused, and a
+  ring buffer copies at most 16 MiB of headers into its next file (#186);
+  a gzip-compressed capture that decompresses beyond 64 GiB or 200 times
+  its size fails with a message naming the limit (#187); HTTP and SIP
+  headers in many small segments are scanned once (#188); a SOME/IP
+  length near its maximum is a message too long on 32-bit builds too
+  (#189); an SMB segment of NetBIOS keep-alives names at most eight of
+  them (#190); the reassembly keeps a direction within its limit while it
+  holds early segments (#193); pcapng checkpoints share the interface
+  table instead of copying it (#194).
+- **The TLS key log leaves no copy of its secrets.** The key log file is
+  read unbuffered, so the only copy of its bytes is the one wiped (#191).
+- **A long line in Follow stream no longer stalls LogSquirl.** Stream
+  text is broken into lines of at most 4,096 characters, and bidi
+  overrides and other invisible format characters are shown escaped, so
+  they cannot reorder what the Stream tab shows (#192).
 
 ## [0.3.0] — 2026-10-09
 
