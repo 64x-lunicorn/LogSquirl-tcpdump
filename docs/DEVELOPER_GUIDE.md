@@ -2712,6 +2712,13 @@ per source when another is chosen. `problem()` (`liveChoiceProblem()`,
 then an options widget that cannot tell yet) keeps the dialog's **Start**
 disabled, with the reason as its tooltip.
 
+What a program or host wrote (a listing's descriptions and problems, an
+extcap's argument names, tooltips, link types and stderr) is shown as
+typed, never as markup: the labels it fills are plain text, and its
+tooltips, Start's among them, go through `plainToolTip()`, which escapes
+text Qt would take for HTML (`Qt::mightBeRichText()`) and cuts it, as the
+list entries are cut, at `kMaxShownTextChars`.
+
 The File Conversion session (see *The File Conversion session*) runs
 `convertPcap()` as its Background Job (see *The Background Job* below), on
 a worker thread of its own, with the system's temporary directory as the

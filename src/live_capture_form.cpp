@@ -35,6 +35,7 @@
 #include <QRegularExpression>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QTextDocument>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -47,14 +48,34 @@ namespace tcpdump {
 
 namespace {
 
-/// What a target's item says: its id, and its description or problem.
+/// @p text cut to kMaxShownTextChars, with an ellipsis if it was longer.
+QString cut( const QString& text )
+{
+    if ( text.size() <= kMaxShownTextChars ) {
+        return text;
+    }
+    auto start = text.left( kMaxShownTextChars );
+    if ( start.back().isHighSurrogate() ) {
+        start.chop( 1 ); // not half a character
+    }
+    return start + QChar( 0x2026 );
+}
+
+/// What a target's item says: its id, and its description or problem, cut.
 QString targetText( const LiveTarget& target )
 {
-    const auto& more = target.problem.isEmpty() ? target.description : target.problem;
+    const auto more = cut( target.problem.isEmpty() ? target.description : target.problem );
     return more.isEmpty() ? target.id : target.id + QString::fromUtf8( " \xe2\x80\x94 " ) + more;
 }
 
 } // namespace
+
+QString plainToolTip( const QString& text )
+{
+    const auto shown = cut( text );
+    // Text a tooltip would take for HTML is made HTML that shows it.
+    return Qt::mightBeRichText( shown ) ? Qt::convertFromPlainText( shown ) : shown;
+}
 
 QString guidanceHtml( const QString& text )
 {
@@ -545,8 +566,9 @@ void LiveCaptureForm::fill( QComboBox* box, const LiveListing& listing, const QS
     for ( const auto& target : listing.targets ) {
         box->addItem( targetText( target ), target.id );
         const int row = box->count() - 1;
-        box->setItemData( row, target.description.isEmpty() ? target.problem : target.description,
-                          Qt::ToolTipRole );
+        box->setItemData(
+            row, plainToolTip( target.description.isEmpty() ? target.problem : target.description ),
+            Qt::ToolTipRole );
         if ( !target.problem.isEmpty() ) {
             if ( model ) {
                 model->item( row )->setEnabled( false );
@@ -687,7 +709,9 @@ LiveCaptureDialog::LiveCaptureDialog( std::shared_ptr<const LiveSourceRegistry> 
     const auto check = [ this, start ] {
         const auto why = form_->problem();
         start->setEnabled( why.isEmpty() );
-        start->setToolTip( why.isEmpty() ? QStringLiteral( "Start capturing" ) : why );
+        // The problem may echo what an extcap wrote (an argument's name).
+        start->setToolTip( why.isEmpty() ? QStringLiteral( "Start capturing" )
+                                         : plainToolTip( why ) );
     };
     connect( form_, &LiveCaptureForm::changed, this, check );
     check();

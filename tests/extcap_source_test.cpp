@@ -47,8 +47,10 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPushButton>
 #include <QRadioButton>
 #include <QTemporaryDir>
+#include <QTextDocument>
 
 #include <memory>
 #include <thread>
@@ -1111,6 +1113,105 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
             REQUIRE( choice.options.value( "fake0:--remote-host" ) == "kept" );
             REQUIRE( extcaps.kind()->command( choice ).arguments
                      == QStringList{ "--capture", "--extcap-interface", "fake1" } );
+        }
+    }
+}
+
+namespace {
+
+/// What @p label shows of its text, as plain text.
+QString shownBy( const QLabel* label )
+{
+    if ( label->textFormat() == Qt::PlainText ) {
+        return label->text();
+    }
+    if ( label->textFormat() == Qt::RichText ) {
+        QTextDocument document;
+        document.setHtml( label->text() );
+        return document.toPlainText();
+    }
+    return asShown( label->text() );
+}
+
+} // namespace
+
+SCENARIO( "An extcap's text shows in the form as it wrote it, not as markup", "[extcap_source]" )
+{
+    FakeHost host;
+    FakeExtcaps extcaps;
+    const QString display = "<b>Host</b><img src=\"file:///etc/logo.png\">";
+    const QString tip = "<i>Where</i> & <img src=\"file:///etc/logo.png\"> to capture";
+    writeFile( extcaps.path( "config-fake0.txt" ),
+               text( ( "arg {number=0}{call=--remote-host}{display=" + display
+                       + "}{type=string}{required=true}{tooltip=" + tip + "}\n" )
+                         .toStdString() ) );
+    writeFile( extcaps.path( "interfaces.txt" ),
+               text( "extcap {version=1.0}\n"
+                     "interface {value=fake0}{display=<b>Fake</b> capture}\n" ) );
+    const QString stderrMarkup = "<b>no</b> <img src=\"file:///etc/logo.png\"> libfoo";
+    writeScript( extcaps.path( "extcap/markupdump" ), "echo '" + stderrMarkup + "' >&2; exit 3" );
+    const auto sources = registryOf( extcaps.kind() );
+
+    GIVEN( "the form showing the extcap's arguments" )
+    {
+        auto form = formFor( sources, host.configDir() );
+        REQUIRE( waitFor( [ & ] { return form->choice().networkInterface == "fake0"; } ) );
+        optionsOf( form.get() );
+
+        THEN( "an argument's display name and tooltip show their characters" )
+        {
+            const QLabel* label = nullptr;
+            for ( const auto* each : form->findChildren<QLabel*>() ) {
+                if ( each->text().startsWith( display ) ) {
+                    label = each;
+                }
+            }
+            REQUIRE( label );
+            REQUIRE( label->textFormat() == Qt::PlainText );
+            REQUIRE( shownBy( label ) == display + " *:" );
+            REQUIRE( asShown( label->toolTip() ) == tip );
+            REQUIRE( asShown( form->findChild<QLineEdit*>( "extcapArg--remote-host" )->toolTip() )
+                     == tip );
+        }
+
+        THEN( "the lists' tooltips show an interface's description and an extcap's stderr as "
+              "typed" )
+        {
+            auto* interfaces = form->findChild<QComboBox*>( "liveInterface" );
+            REQUIRE( asShown( interfaces->itemData( 0, Qt::ToolTipRole ).toString() )
+                     == "<b>Fake</b> capture" );
+            auto* devices = form->findChild<QComboBox*>( "liveDevice" );
+            const auto row = devices->findData( "markupdump" );
+            REQUIRE( row >= 0 );
+            REQUIRE( asShown( devices->itemData( row, Qt::ToolTipRole ).toString() )
+                         .contains( stderrMarkup ) );
+        }
+    }
+
+    GIVEN( "an extcap that writes markup on stderr when asked for its arguments" )
+    {
+        ExtcapOptionsWidget options( extcaps.kind() );
+        options.setTarget( "markupdump", "any" );
+        REQUIRE( waitFor( [ & ] { return !options.isListing(); } ) );
+
+        THEN( "the status says so as typed" )
+        {
+            const auto* status = options.findChild<QLabel*>( "extcapStatus" );
+            REQUIRE( status->textFormat() == Qt::PlainText );
+            REQUIRE( shownBy( status ).contains( stderrMarkup ) );
+        }
+    }
+
+    GIVEN( "the Start live capture dialog with the required argument empty" )
+    {
+        LiveCaptureDialog dialog( sources, LiveChoice{ "extcap", "fakedump", "fake0", "", 96 } );
+        optionsOf( &dialog );
+        auto* start = dialog.findChild<QPushButton*>( "liveStartButton" );
+
+        THEN( "Start's tooltip names the argument as the extcap wrote it" )
+        {
+            REQUIRE_FALSE( start->isEnabled() );
+            REQUIRE( asShown( start->toolTip() ) == display + " is required." );
         }
     }
 }

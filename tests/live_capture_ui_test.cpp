@@ -579,6 +579,45 @@ SCENARIO( "A long interface name does not widen the Start live capture dialog", 
     }
 }
 
+SCENARIO( "A source's descriptions show in the dialog's lists as typed, and cut when long",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+
+    GIVEN( "an interface whose description is markup" )
+    {
+        const QString markup = "<b>Fake</b> <img src=\"file:///etc/logo.png\"> & co";
+        fake->firstDescription = markup;
+        LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+        const Fields fields( &dialog );
+        REQUIRE( listed( dialog.form(), fields ) );
+
+        THEN( "the entry and its tooltip show the description's characters" )
+        {
+            REQUIRE( fields.networkInterface->itemText( 0 ).contains( markup ) );
+            REQUIRE( asShown( fields.networkInterface->itemData( 0, Qt::ToolTipRole ).toString() )
+                     == markup );
+        }
+    }
+
+    GIVEN( "an interface whose description is a megabyte long" )
+    {
+        fake->firstDescription = QString( 1024 * 1024, 'w' );
+        LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+        const Fields fields( &dialog );
+        REQUIRE( listed( dialog.form(), fields ) );
+
+        THEN( "the entry and its tooltip show its start, cut off" )
+        {
+            const auto tip
+                = asShown( fields.networkInterface->itemData( 0, Qt::ToolTipRole ).toString() );
+            REQUIRE( tip == QString( kMaxShownTextChars, 'w' ) + QChar( 0x2026 ) );
+            REQUIRE( fields.networkInterface->itemText( 0 ).endsWith( tip ) );
+        }
+    }
+}
+
 SCENARIO( "A source of typed devices that lists none says where they come from, and how to type "
           "one",
           "[live_ui]" )

@@ -94,6 +94,8 @@ ExtcapOptionsWidget::ExtcapOptionsWidget( std::shared_ptr<const ExtcapSourceKind
     status_ = new QLabel;
     status_->setObjectName( QStringLiteral( "extcapStatus" ) );
     status_->setWordWrap( true );
+    // The extcap's text (its stderr, its link types' names) as written.
+    status_->setTextFormat( Qt::PlainText );
     status_->setTextInteractionFlags( Qt::TextSelectableByMouse );
     status_->setHidden( true );
     layout->addWidget( status_ );
@@ -248,10 +250,12 @@ void ExtcapOptionsWidget::show( const ExtcapConfig& config )
         const auto value = initialValue( arg );
         options_.insert( extcapOptionName( shownInterface_, arg ), value );
         auto* field = makeField( arg, value );
+        // The extcap's names and tooltips as written, never as markup.
         auto* label = new QLabel(
             arg.display + ( arg.required ? QStringLiteral( " *:" ) : QStringLiteral( ":" ) ) );
-        label->setToolTip( arg.tooltip );
-        field->setToolTip( arg.tooltip );
+        label->setTextFormat( Qt::PlainText );
+        label->setToolTip( plainToolTip( arg.tooltip ) );
+        field->setToolTip( plainToolTip( arg.tooltip ) );
         form->addRow( label, field );
     }
     emit changed();

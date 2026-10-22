@@ -84,6 +84,18 @@ namespace tcpdump {
  */
 QString guidanceHtml( const QString& text );
 
+/// The characters shown of a text a program or host wrote, in a list's
+/// entry or a tooltip; the rest is cut off (a description of a megabyte).
+constexpr qsizetype kMaxShownTextChars = 300;
+
+/**
+ * @p text, which a program or host may have written, as a tooltip that
+ * shows its characters as they are: markup is escaped, not rendered (a
+ * tooltip takes text that starts like HTML for HTML).  Longer than
+ * kMaxShownTextChars, it is cut, with an ellipsis.
+ */
+QString plainToolTip( const QString& text );
+
 /**
  * The fields of a Live Source Kind's own options, below the form's while
  * the kind is chosen (LiveSourceKind::makeOptionsWidget()): the form hands
