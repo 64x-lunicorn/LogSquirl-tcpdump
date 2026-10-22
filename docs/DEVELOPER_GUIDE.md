@@ -2442,7 +2442,9 @@ The form of an interface's arguments is `ExtcapOptionsWidget`
 `kSettleMs`) it runs `config()` on a thread pool of its own under a
 `ListingCancelScope` (cancelled when another interface is chosen or it
 goes; its destructor waits), and makes a field per argument: `QLineEdit`
-(string, password with `QLineEdit::Password`, numbers), `QCheckBox`
+(string, password with `QLineEdit::Password` and a note, below it and in
+its tooltip, that the value is visible in the process list while the
+capture runs, numbers), `QCheckBox`
 (boolean, boolflag), `QComboBox` (selector; editable for editselector),
 radio buttons, a checkable `QListWidget` (multicheck, children indented
 under their parent), a path with Browse… (fileselect). Fields start with the

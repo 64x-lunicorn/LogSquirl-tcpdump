@@ -54,6 +54,13 @@ QString fieldName( const ExtcapArg& arg )
     return QStringLiteral( "extcapArg" ) + arg.call;
 }
 
+/// What a password field says of its value, which the extcap is given on
+/// its command line.
+const QString kPasswordVisibleNote = QStringLiteral(
+    "The extcap is given this value on its command line: other users of this computer can see "
+    "it in the process list while the capture runs. Where the extcap offers one, use a key "
+    "instead (sshdump: an SSH key file, or an SSH agent)." );
+
 bool isNumber( ExtcapArgType type )
 {
     return type == ExtcapArgType::Integer || type == ExtcapArgType::Unsigned
@@ -254,9 +261,23 @@ void ExtcapOptionsWidget::show( const ExtcapConfig& config )
         auto* label = new QLabel(
             arg.display + ( arg.required ? QStringLiteral( " *:" ) : QStringLiteral( ":" ) ) );
         label->setTextFormat( Qt::PlainText );
-        label->setToolTip( plainToolTip( arg.tooltip ) );
-        field->setToolTip( plainToolTip( arg.tooltip ) );
+        auto tooltip = arg.tooltip;
+        if ( arg.type == ExtcapArgType::Password ) {
+            tooltip += ( tooltip.isEmpty() ? QString() : QStringLiteral( "\n\n" ) )
+                       + kPasswordVisibleNote;
+        }
+        label->setToolTip( plainToolTip( tooltip ) );
+        field->setToolTip( plainToolTip( tooltip ) );
         form->addRow( label, field );
+        if ( arg.type == ExtcapArgType::Password ) {
+            // Passed as the extcap protocol passes it (as Wireshark does):
+            // the user is told, the argument is not changed.
+            auto* note = new QLabel( kPasswordVisibleNote );
+            note->setObjectName( fieldName( arg ) + QStringLiteral( "Note" ) );
+            note->setTextFormat( Qt::PlainText );
+            note->setWordWrap( true );
+            form->addRow( QString(), note );
+        }
     }
     emit changed();
 }

@@ -1006,6 +1006,18 @@ SCENARIO( "An extcap interface's arguments are a form whose values reach the com
         REQUIRE( form->findChild<QLabel*>( "extcapStatus" )->text().contains( "EN10MB" ) );
     }
 
+    THEN( "the password field says that other users can see it in the process list" )
+    {
+        auto* note = form->findChild<QLabel*>( "extcapArg--passwordNote" );
+        REQUIRE( note );
+        REQUIRE_FALSE( note->isHidden() );
+        REQUIRE( note->text().contains( "process list" ) );
+        REQUIRE( note->text().contains( "key" ) );
+        REQUIRE( asShown( form->findChild<QLineEdit*>( "extcapArg--password" )->toolTip() )
+                     .contains( "process list" ) );
+        REQUIRE_FALSE( form->findChild<QLabel*>( "extcapArg--tokenNote" ) );
+    }
+
     THEN( "a required argument left empty is the form's problem, and a start is refused" )
     {
         REQUIRE( form->problem() == "Remote host is required." );

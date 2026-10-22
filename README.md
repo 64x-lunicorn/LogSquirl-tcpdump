@@ -450,8 +450,11 @@ stderr is shown as a capture program's, and **Stop** ends it with what it
 started. An extcap's toolbar controls (`--extcap-control-in`/`-out`) are
 not used: extcaps capture without them. Note that, as with Wireshark, a
 password argument is on the extcap's command line, which other users of
-the computer may see in its process list while it runs. The snaplen is not
-passed: an extcap has its own option for that, if any.
+the computer can see in its process list while it runs; the form says so
+below a password field. Where the extcap offers one, log in with a key
+instead: sshdump takes an SSH key file (its private key option) or uses
+your SSH agent. The snaplen is not passed: an extcap has its own option for
+that, if any.
 
 On Windows an extcap that is a batch file (`.bat`, `.cmd`) is run by
 `cmd.exe`, which reads its arguments again, quoted or not. For such an
