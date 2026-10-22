@@ -2336,12 +2336,23 @@ capture's worker thread (throwing, as a failed capture, without root or
 tcpdump) and runs `captureCommand()`: `adb -s <serial> exec-out 'exec
 2>/dev/null; [su -c] <script>'`, the script (`adbCaptureScript()`)
 running tcpdump in the background with its stderr and pid in
-`logsquirl-<tag>.err`/`.pid` (`AdbCaptureFiles`) and waiting for it. Every
+`tcpdump.err`/`tcpdump.pid` (`kAdbErrFile`, `kAdbPidFile`) in the directory
+`logsquirl-<tag>` (`AdbCaptureFiles`) and waiting for it. The device's
+temporary directory is the shell user's, who could plant a symlink or a pid
+there: the script makes the directory itself with `mkdir` under `umask
+077` and runs nothing if it was there; every script enters it only if it
+is no symlink and, once in it, root's (`[ -O . ]`) and `drwx------` (`ls
+-ld .`), then names the files relative to it; the stop and cleanup scripts
+kill only a positive integer (`case $p in ''|0*|*[!0-9]*)`), and the stop
+mark `logsquirl-<tag>.stop` is a directory, made with `mkdir`, which never
+writes through a symlink. The scripts use only what Android's mksh and
+toybox have (`[ -O ]`, `set -C`, `umask`, `ls -ld`, `mkdir`, `rmdir`). Every
 word in a device command line goes through `shellQuote()` (POSIX single
 quotes). The stream is a Process Source that, as it goes, ends tcpdump on
 the device (through su when it runs as root) and removes its files, and
 that reads the `.err` file for the error of a capture that ended before
-any byte came. While adb still runs, Stop runs `adbStopScript()`: it
+any byte came (`adbStderrScript()`, which says so when the directory was
+not the capture's own). While adb still runs, Stop runs `adbStopScript()`: it
 leaves a `.stop` mark first and then kills the pid if the script has left
 it; the script leaves its pid first and then looks for the mark, killing
 its own tcpdump if it is there, so a Stop between `&` and the pid file
@@ -2349,7 +2360,7 @@ ends tcpdump too (the script removes the mark, the pid and, stopped so,
 the stderr file as it ends). After adb has ended by itself,
 `adbCleanupScript()` kills by the pid if it is still there and removes the
 files. A LogSquirl that crashes leaves tcpdump running until its next
-write to the dead stream, and the files in `/data/local/tmp`.
+write to the dead stream, and the directory in `/data/local/tmp`.
 `explainFailure()` maps adb's and tcpdump's errors to
 `adbAuthorizeGuidance()`, `adbConnectGuidance()`, `adbRootGuidance()`,
 `adbTcpdumpGuidance()`. `tests/adb_source_test.cpp` uses a fake `adb`
@@ -2357,7 +2368,10 @@ script whose "device" is this computer's `/bin/sh` with a `PATH` of fake
 `id`, `su`, `ip` and `tcpdump` (exec-out in a process group of its own, as
 a device's tcpdump is not ended with the local adb), so that quoting,
 root through `adb root` and su, binary-clean streams and the kill on Stop
-are tested end to end.
+are tested end to end. The device scripts are also run on their own with
+`/bin/sh` and, where it is, `dash` (`kill` a function that only logs), with
+planted pids, symlinks and directories in the device's temporary
+directory.
 
 The **SSH** kind (`ssh_source.h/cpp`, id `ssh`) is `SshSourceKind(
 SshPrograms )`: `SshPrograms::forThisComputer()` holds the paths tried first
