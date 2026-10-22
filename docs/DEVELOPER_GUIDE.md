@@ -2571,6 +2571,12 @@ path (`someIpNamesFile`). The host names are a flag (`hostNames`, off
 unless the file says `true`). The key log's path (`tlsKeyLogFile`) is kept as it
 is, its file is not touched until a conversion reads it. `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
+It puts them on three tabs, so that it is at most about 600 pixels high at
+the default font and fits a 13-inch laptop's screen: *Columns and Info*
+(time and MAC columns, host names, payload preview, TCP timestamps),
+*Protocols* (SOME/IP ports and name table, TLS key log) and *Advanced* (the
+caps); the note on the next capture and the buttons stay below the tabs,
+and Restore Defaults resets the controls of every tab.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
 only. `loadLiveChoice()` and `saveLiveChoice()` keep the last

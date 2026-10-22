@@ -579,21 +579,22 @@ selected packets from the files they are in.
 ### Options
 
 **Plugins → Plugin Management…**, **Configure…** on the plugin's card,
-opens its options:
+opens its options, on three tabs: *Columns and Info*, *Protocols* and
+*Advanced*. **Restore Defaults** resets the options of all three tabs.
 
-| Option | Default | Choices |
-|--------|---------|---------|
-| Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
-| Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet or Wi-Fi |
-| Show names from the capture's DNS answers with the addresses | off | on: Source and Destination show an address a DNS answer earlier in the capture named as `93.184.216.34(www.example.com)`, see [Names from DNS answers](#names-from-dns-answers) |
-| Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
-| Show TCP timestamps (TSval, TSecr) on every segment | off: on SYNs only, among their options | on: every segment with the option, as Wireshark shows it |
-| SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
-| SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
-| TLS decryption: key log file | none | an `SSLKEYLOGFILE` to decrypt TLS sessions with, see [TLS decryption](#tls-decryption) |
-| Streams numbered at most (Advanced) | 1,000,000 | 1 to 10,000,000; later streams show `?` |
-| Endpoints counted at most (Advanced) | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
-| TCP reassembly memory at most (Advanced) | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]`, and the segments after it up to its announced end are labelled `[continuation of a message past the reassembly limit]` |
+| Tab | Option | Default | Choices |
+|-----|--------|---------|---------|
+| Columns and Info | Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
+| Columns and Info | Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet or Wi-Fi |
+| Columns and Info | Show names from the capture's DNS answers with the addresses | off | on: Source and Destination show an address a DNS answer earlier in the capture named as `93.184.216.34(www.example.com)`, see [Names from DNS answers](#names-from-dns-answers) |
+| Columns and Info | Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
+| Columns and Info | Show TCP timestamps (TSval, TSecr) on every segment | off: on SYNs only, among their options | on: every segment with the option, as Wireshark shows it |
+| Protocols | SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
+| Protocols | SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
+| Protocols | TLS decryption: key log file | none | an `SSLKEYLOGFILE` to decrypt TLS sessions with, see [TLS decryption](#tls-decryption) |
+| Advanced | Streams numbered at most | 1,000,000 | 1 to 10,000,000; later streams show `?` |
+| Advanced | Endpoints counted at most | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
+| Advanced | TCP reassembly memory at most | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]`, and the segments after it up to its announced end are labelled `[continuation of a message past the reassembly limit]` |
 
 They are kept in `settings.ini` in the plugin's configuration directory
 (`plugin_config/io.github.logsquirl.tcpdump` beside LogSquirl's plugin

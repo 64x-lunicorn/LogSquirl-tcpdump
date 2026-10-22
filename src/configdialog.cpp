@@ -37,7 +37,10 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QVBoxLayout>
+
+#include <initializer_list>
 
 namespace tcpdump {
 
@@ -51,6 +54,19 @@ QSpinBox* countBox( const char* name, size_t min, size_t max )
     box->setRange( static_cast<int>( min ), static_cast<int>( max ) );
     box->setGroupSeparatorShown( true );
     return box;
+}
+
+/// A tab page named @p name showing @p groups one below the other, at its top.
+QWidget* tab( const char* name, std::initializer_list<QWidget*> groups )
+{
+    auto* page = new QWidget;
+    page->setObjectName( name );
+    auto* layout = new QVBoxLayout( page );
+    for ( auto* group : groups ) {
+        layout->addWidget( group );
+    }
+    layout->addStretch();
+    return page;
 }
 
 } // namespace
@@ -87,6 +103,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     auto* layoutNote = new QLabel( QStringLiteral(
         "<small>Other columns than the defaults change the line layout: highlighters and "
         "filters written for the default one may no longer match.</small>" ) );
+    layoutNote->setObjectName( "layoutNote" );
     layoutNote->setWordWrap( true );
     columnsLayout->addRow( layoutNote );
 
@@ -131,6 +148,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
         "<small>The file SSLKEYLOGFILE makes browsers, curl and OpenSSL write. Its secrets "
         "decrypt every session they belong to: keep it as private as the traffic itself. The "
         "plugin only reads it, while converting, and never shows or stores a secret.</small>" ) );
+    tlsNote->setObjectName( "tlsNote" );
     tlsNote->setWordWrap( true );
     tlsLayout->addRow( tlsNote );
 
@@ -139,8 +157,8 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     maxEndpoints_ = countBox( "maxEndpoints", kMinCap, kMaxEndpointCap );
     reassemblyMegabytes_ = countBox( "reassemblyMegabytes", kMinCap, kMaxReassemblyMegabytes );
     reassemblyMegabytes_->setSuffix( QStringLiteral( " MB" ) );
-    auto* advanced = new QGroupBox( QStringLiteral( "Advanced" ) );
-    auto* advancedLayout = new QFormLayout( advanced );
+    auto* caps = new QGroupBox( QStringLiteral( "Memory caps" ) );
+    auto* advancedLayout = new QFormLayout( caps );
     advancedLayout->addRow( QStringLiteral( "Streams numbered at most:" ), maxStreams_ );
     advancedLayout->addRow( QStringLiteral( "Endpoints counted at most:" ), maxEndpoints_ );
     advancedLayout->addRow( QStringLiteral( "TCP reassembly memory at most:" ),
@@ -149,6 +167,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
         "<small>The caps bound the memory a conversion takes; later streams show stream ?, "
         "later endpoints are counted together, and a message reassembly cannot hold is marked "
         "[reassembly limit].</small>" ) );
+    capsNote->setObjectName( "capsNote" );
     capsNote->setWordWrap( true );
     advancedLayout->addRow( capsNote );
 
@@ -180,6 +199,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
         "header fits. The name table names services, methods and eventgroups, one per line: "
         "<tt>service 0x1234 Navigation</tt>, <tt>method 0x1234 0x0001 GetRoute</tt>, "
         "<tt>eventgroup 0x1234 0x0010 Route</tt>.</small>" ) );
+    someIpNote->setObjectName( "someIpNote" );
     someIpNote->setWordWrap( true );
     someIpLayout->addRow( someIpNote );
 
@@ -197,18 +217,23 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     connect( buttons->button( QDialogButtonBox::RestoreDefaults ), &QPushButton::clicked, this,
              [ this ] { showOptions( ConversionOptions{} ); } );
 
+    // On tabs: all group boxes one below the other are about 800 pixels high, more than a
+    // 13-inch laptop's screen.
+    auto* tabs = new QTabWidget;
+    tabs->setObjectName( "tabs" );
+    tabs->addTab( tab( "columnsTab", { columns, previewBox } ),
+                  QStringLiteral( "Columns and Info" ) );
+    tabs->addTab( tab( "protocolsTab", { someIp, tls } ), QStringLiteral( "Protocols" ) );
+    tabs->addTab( tab( "advancedTab", { caps } ), QStringLiteral( "Advanced" ) );
+
     auto* layout = new QVBoxLayout( this );
-    layout->addWidget( columns );
-    layout->addWidget( previewBox );
-    layout->addWidget( someIp );
-    layout->addWidget( tls );
-    layout->addWidget( advanced );
+    layout->addWidget( tabs );
     layout->addWidget( note );
     layout->addWidget( buttons );
 
     showOptions( options );
-    // Its own size: a window without one opens at most 2/3 of the screen high, and the
-    // dialog is taller than that on a laptop's screen, which cut off the notes.
+    // Its own size, which holds the wrapped notes of every tab: a window without one opens
+    // at most 2/3 of the screen high, which could cut them off.
     resize( sizeHint() );
 }
 
