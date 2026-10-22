@@ -257,6 +257,12 @@ std::shared_ptr<ProcessGroup> newProcessGroup();
 /// started, or, on Unix, has been reaped: its id may be another's by then.
 void endProcessGroup( ProcessGroup& group, QProcess* leader, std::chrono::milliseconds grace );
 
+/// Kill @p group at once (SIGKILL; on Windows its job or tree terminated),
+/// not waiting for it: from a slot of its program's QProcess, which reaps
+/// the program as it sees it end.  Does nothing for a group whose program
+/// was not started or, on Unix, has been reaped.
+void killProcessGroup( ProcessGroup& group );
+
 /// End every capture program that is running (ProcessSource::terminate()),
 /// whichever thread reads it; returns when all are gone.  Called when the
 /// plugin is shut down, as LogSquirl quits or the plugin is disabled.

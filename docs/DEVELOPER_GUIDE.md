@@ -2267,7 +2267,11 @@ listing was told, for `validate()`, behind a mutex). `runListing( command, timeo
 listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
 device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
-returns its stdout, stderr and exit code. A listing can be cancelled, which
+returns its stdout, stderr and exit code. It reads both as they come, at
+most `kListingOutputLimit` (4 MiB) of each: a program that writes more
+(a hostile ssh server, device or extcap writing without end) has its group
+killed at once, and the listing fails with `<name> wrote more than 4 MiB
+to stdout` (or stderr). A listing can be cancelled, which
 kills its group within moments: `cancelListings()` cancels every running
 one (the Capture Sessions' destructor, so that the plugin's shutdown does not wait
 for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the

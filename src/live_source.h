@@ -363,7 +363,9 @@ struct ListingOutput {
  * for it, at most @p timeout: for a kind's listings, on a worker thread; no
  * event loop is needed.  stdin is the null device, so a program that would
  * ask (a password, a host key) fails instead of waiting.  A program still
- * running at the timeout is killed with what it started.
+ * running at the timeout is killed with what it started, and so is one
+ * that writes more than kListingOutputLimit to stdout or to stderr: what
+ * it wrote is read as it comes, so that no more than that is held.
  *
  * A listing can be cancelled, so that closing the live capture UI or
  * shutting the plugin down does not wait for its timeout: by
@@ -372,6 +374,10 @@ struct ListingOutput {
  * "cancelled".
  */
 ListingOutput runListing( const ProcessCommand& command, std::chrono::milliseconds timeout );
+
+/// The most a listing program may write to stdout, and to stderr: past it,
+/// it is killed with what it started and the listing fails.
+constexpr qsizetype kListingOutputLimit = 4 * 1024 * 1024;
 
 /// Cancel every listing running now, on whichever thread (the plugin's
 /// shutdown); listings started afterwards run as usual.

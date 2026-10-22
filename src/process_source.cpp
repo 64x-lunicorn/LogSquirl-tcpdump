@@ -466,6 +466,12 @@ void endProcessGroup( ProcessGroup& group, QProcess* leader, std::chrono::millis
     waitUntilGone( group, leader, Clock::now() + milliseconds( 1000 ) );
 }
 
+void killProcessGroup( ProcessGroup& group )
+{
+    group.ended = true;
+    signalGroup( group, true );
+}
+
 void terminateCaptureProcesses()
 {
     std::vector<std::shared_ptr<ProcessGroup>> running;

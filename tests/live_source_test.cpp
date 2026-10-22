@@ -41,6 +41,11 @@
 #include <memory>
 #include <thread>
 
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <signal.h>
+#endif
+
 using namespace tcpdump;
 using namespace tcpdump_test;
 
@@ -465,6 +470,51 @@ SCENARIO( "A listing program is run with a timeout and nothing to answer a promp
         {
             REQUIRE( took.elapsed() < 1500 );
             REQUIRE( output.error.contains( "cancelled" ) );
+        }
+    }
+
+    for ( const auto* channel : { "stdout", "stderr" } ) {
+        GIVEN( std::string( "a program that writes to " ) + channel
+               + " without end, and starts a child" )
+        {
+            // Without end for the listing: 16 times its limit, then it waits
+            // out the timeout, so that a listing without the limit fails at
+            // the timeout instead of filling the memory.
+            const auto childPid = dir.filePath( "child.pid" );
+            const auto program = listingProgram(
+                dir, "flood",
+                "sleep 60 &\n"
+                "echo $! > '"
+                    + childPid
+                    + "'\n"
+                      "line=$(printf '%01023d' 0)\n"
+                      "i=0\n"
+                      "while [ $i -lt "
+                    + QString::number( 16 * kListingOutputLimit / 1024 ) + " ]; do echo \"$line\""
+                    + ( QString( channel ) == "stderr" ? " >&2" : "" )
+                    + "; i=$((i+1)); done\n"
+                      "sleep 60" );
+            QElapsedTimer took;
+            took.start();
+            const auto output = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) );
+
+            THEN( "it is stopped once it reaches the limit, with what it started, and says so" )
+            {
+                REQUIRE( took.elapsed() < 15000 );
+                REQUIRE( output.error.contains( "flood" ) );
+                REQUIRE( output.error.contains( channel ) );
+                REQUIRE( output.error.contains( "4 MiB" ) );
+                REQUIRE( output.exitCode == -1 );
+                REQUIRE( output.out.size() <= static_cast<qsizetype>( kListingOutputLimit ) );
+                REQUIRE( output.err.size() <= static_cast<qsizetype>( kListingOutputLimit ) );
+                QFile pidFile( childPid );
+                REQUIRE( pidFile.open( QIODevice::ReadOnly ) );
+                const auto child = static_cast<pid_t>( pidFile.readAll().trimmed().toLongLong() );
+                REQUIRE( child > 0 );
+                // Killed with the group; an orphan is reaped by init, not at once.
+                REQUIRE( waitFor( [ child ] { return ::kill( child, 0 ) != 0 && errno == ESRCH; },
+                                  20000 ) );
+            }
         }
     }
 

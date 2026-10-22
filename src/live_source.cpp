@@ -252,6 +252,11 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
         return output;
     }
 
+    // What it wrote, at most kListingOutputLimit of each; declared before
+    // the process, whose slots fill them.
+    QByteArray out;
+    QByteArray err;
+    const char* overflowed = nullptr; // the channel it wrote too much to
     QProcess process;
     // A group of its own, so that a timeout ends what it started too.
     const auto group = newProcessGroup();
@@ -262,15 +267,40 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
         output.error = start.error;
         return output;
     }
+    // Taken in as it comes, while it is waited for, so that QProcess holds
+    // no more than a read: a program writing without end is killed at the
+    // limit, which ends the wait.
+    const auto take = [ & ]( QProcess::ProcessChannel channel ) {
+        const bool isOut = channel == QProcess::StandardOutput;
+        const auto bytes = isOut ? process.readAllStandardOutput() : process.readAllStandardError();
+        auto& into = isOut ? out : err;
+        if ( overflowed ) {
+            return;
+        }
+        if ( into.size() + bytes.size() > kListingOutputLimit ) {
+            into.append( bytes.left( kListingOutputLimit - into.size() ) );
+            overflowed = isOut ? "stdout" : "stderr";
+            killProcessGroup( *group );
+            return;
+        }
+        into.append( bytes );
+    };
+    const auto takingOut = QObject::connect( &process, &QProcess::readyReadStandardOutput,
+                                             [ & ] { take( QProcess::StandardOutput ); } );
+    const auto takingErr = QObject::connect( &process, &QProcess::readyReadStandardError,
+                                             [ & ] { take( QProcess::StandardError ); } );
     // In slices, to see a cancel in time.
     bool finished = false;
-    while ( !finished && !cancelled() && clock.elapsed() < timeout.count() ) {
+    while ( !finished && !overflowed && !cancelled() && clock.elapsed() < timeout.count() ) {
         const auto left = timeout.count() - clock.elapsed();
         finished = process.waitForFinished(
             static_cast<int>( std::min<qint64>( kCancelPollMs, std::max<qint64>( 1, left ) ) ) );
         finished = finished || process.state() == QProcess::NotRunning;
     }
-    if ( !finished ) {
+    if ( overflowed ) {
+        process.waitForFinished( 1000 ); // killed in take(): reaped here
+    }
+    else if ( !finished ) {
         endProcessGroup( *group, &process, std::chrono::milliseconds( 0 ) );
         // Reaped here, whatever the group did.
         process.kill();
@@ -285,8 +315,19 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
     else if ( process.exitStatus() == QProcess::CrashExit ) {
         output.error = QStringLiteral( "%1 crashed" ).arg( command.displayName() );
     }
-    output.out = QString::fromUtf8( process.readAllStandardOutput() );
-    output.err = QString::fromUtf8( process.readAllStandardError() );
+    take( QProcess::StandardOutput );
+    take( QProcess::StandardError );
+    QObject::disconnect( takingOut );
+    QObject::disconnect( takingErr );
+    if ( overflowed ) {
+        output.error = QStringLiteral( "%1 wrote more than %2 MiB to %3, more than any listing: "
+                                       "it was stopped" )
+                           .arg( command.displayName() )
+                           .arg( kListingOutputLimit / ( 1024 * 1024 ) )
+                           .arg( QLatin1String( overflowed ) );
+    }
+    output.out = QString::fromUtf8( out );
+    output.err = QString::fromUtf8( err );
     output.exitCode = output.error.isEmpty() ? process.exitCode() : -1;
     return output;
 }
