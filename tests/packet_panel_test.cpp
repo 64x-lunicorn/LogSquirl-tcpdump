@@ -508,7 +508,9 @@ SCENARIO( "The Packet Panel's hex dump goes back to 16 bytes a line as soon as a
 
         WHEN( "the dump is high enough for its 16-byte lines, but not its 8-byte ones" )
         {
-            setDumpLines( wideLines + 2 );
+            // Lines to spare for the 16-byte dump, too few for the 8-byte one.
+            REQUIRE( wideLines >= 4 );
+            setDumpLines( 2 * wideLines - 2 );
             setDumpWidth( loaded, 60 );
             REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
             REQUIRE( dump->verticalScrollBar()->isVisible() );

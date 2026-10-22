@@ -620,17 +620,24 @@ size_t PacketPanel::fittingBytesPerLine() const
     const auto margin = dump_->document()->documentMargin();
     const auto needed = metrics.horizontalAdvance( line ) + 2 * margin + dump_->cursorWidth();
     auto room = dump_->viewport()->width();
-    // A vertical scroll bar the 8-byte lines brought in is room for the
-    // 16-byte ones, half as many, if they would not need it: a line to
-    // spare, so that the choice cannot flip back and forth.  A transient
+    // A vertical scroll bar is room for the 16-byte lines if they would not
+    // need it: the 8-byte lines, twice as many, brought it in, or the 16-byte
+    // ones, just shown, have not yet let it go.  So is a horizontal bar's
+    // height, which a 16-byte line that fits does not need either.  A line
+    // to spare, so that the choice cannot flip back and forth.  A transient
     // bar, drawn over the text, takes no room to give.
-    const auto* bar = dump_->verticalScrollBar();
-    if ( dumpBytesPerLine_ == kNarrowDumpBytesPerLine && bar->isVisible()
-         && !bar->style()->styleHint( QStyle::SH_ScrollBar_Transient, nullptr, bar ) ) {
+    const auto takesRoom = [ this ]( const QScrollBar* bar ) {
+        return bar->isVisible()
+               && !bar->style()->styleHint( QStyle::SH_ScrollBar_Transient, nullptr, bar );
+    };
+    if ( takesRoom( dump_->verticalScrollBar() ) ) {
+        auto height = dump_->viewport()->height();
+        if ( takesRoom( dump_->horizontalScrollBar() ) ) {
+            height += dump_->horizontalScrollBar()->height();
+        }
         const auto lines = ( bytes_.size() + kDumpBytesPerLine - 1 ) / kDumpBytesPerLine;
-        const auto height = static_cast<double>( lines + 1 ) * metrics.lineSpacing() + 2 * margin;
-        if ( height <= dump_->viewport()->height() ) {
-            room += bar->width();
+        if ( static_cast<double>( lines + 1 ) * metrics.lineSpacing() + 2 * margin <= height ) {
+            room += dump_->verticalScrollBar()->width();
         }
     }
     return needed <= room ? kDumpBytesPerLine : kNarrowDumpBytesPerLine;
