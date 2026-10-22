@@ -2617,7 +2617,8 @@ none for others to query: the plugin menu reaches the sessions without
 it. What its labels say is decided without a widget in `sidebar_text.h`.
 While it lives, it is the sessions' dialog parent; when it goes, the
 sessions run on (the plugin destroys them after it). Qt UI that provides:
-- "Open pcap…" button, `CaptureSessions::chooseAndOpen()`, as the
+- "Open pcap…" button, first, under no title row: the sidebar's tab
+  already names the plugin. It calls `CaptureSessions::chooseAndOpen()`, as the
   `Plugins → tcpdump → Open pcap…` menu entry, which, unlike the disabled
   button, can be chosen during a conversion and then only shows a
   notification
@@ -3173,7 +3174,9 @@ export, conversation statistics):
   `PacketNumbers`, ascending ranges apart from each other, never one entry
   per packet: "1-3000000000" takes a few bytes and is counted at once. The
   `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
-  change, not on every key.
+  change, not on every key. It is at least `kMinimumWidth` (420 px) wide,
+  so that its intro and truncation note do not wrap into a narrow column,
+  and can be made wider.
   Plugins → tcpdump → Export packets… is the Capture Sessions' Export session's
   (see *The Export session*): it takes the packets of the selection from
   Selected Packet Line's `selectedPackets()` and notifies its reason when

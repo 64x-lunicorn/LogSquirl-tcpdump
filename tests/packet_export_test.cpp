@@ -698,3 +698,49 @@ SCENARIO( "The Export dialog shows the packets its text names", "[packet_export]
         }
     }
 }
+
+SCENARIO( "The Export dialog opens wide enough to read, and can be made wider", "[packet_export]" )
+{
+    ExportRequest request;
+    request.captureName = "mixed.pcap";
+    request.packets = 20;
+    request.numbers = { 1, 2, 3, 9 };
+    request.selectedLines = 4;
+    request.truncated = true;
+    ExportDialog dialog( request );
+
+    WHEN( "it is shown at its own size" )
+    {
+        dialog.show();
+        QCoreApplication::processEvents();
+
+        THEN( "it is at least 420 px wide, not a narrow column of wrapped paragraphs" )
+        {
+            REQUIRE( dialog.width() >= 420 );
+            // The intro, the truncation note and the ranges field have the
+            // dialog's width, less its margins.
+            const auto margins = dialog.layout()->contentsMargins();
+            const auto inner = 420 - margins.left() - margins.right();
+            auto* note = dialog.findChild<QLabel*>( "truncatedNote" );
+            REQUIRE( note );
+            REQUIRE( note->width() >= inner );
+            REQUIRE( dialog.findChild<QWidget*>( "packets" )->width() >= inner );
+            for ( const auto* label : dialog.findChildren<QLabel*>() ) {
+                if ( label->wordWrap() ) {
+                    REQUIRE( label->width() >= inner );
+                }
+            }
+        }
+
+        AND_WHEN( "the user makes it wider" )
+        {
+            dialog.resize( 700, dialog.height() );
+            QCoreApplication::processEvents();
+
+            THEN( "it is" )
+            {
+                REQUIRE( dialog.width() == 700 );
+            }
+        }
+    }
+}

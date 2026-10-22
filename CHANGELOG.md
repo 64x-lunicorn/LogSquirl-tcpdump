@@ -575,6 +575,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the two inside the Packet panel (layers and bytes, tabs and
   Conversations), is kept in `settings.ini` (`[sidebar]`) and is back after
   a restart. A sidebar too short for both still scrolls as a whole (#204).
+- **The Export packets dialog opens wide enough to read, and the sidebar
+  has no title row.** The dialog is at least 420 pixels wide, where it
+  opened about 290 wide with its intro and truncation note wrapped into a
+  tall column and the packet ranges field cramped; it can still be made
+  wider. The sidebar no longer starts with a bold *tcpdump / pcap Viewer*
+  line, which repeated its tab's name; it begins with **Open pcap…**,
+  a row more for the summary and the Packet panel (#211).
 - **The live capture form is in the Start live capture dialog only.** The
   sidebar's Live capture section is a **Start live capture…** button,
   which opens the same dialog as the tcpdump menu entry, with the choice

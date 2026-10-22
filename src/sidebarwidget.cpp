@@ -273,11 +273,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     layout->setContentsMargins( 8, 8, 8, 8 );
     layout->setSpacing( 6 );
 
-    // Title
-    auto* title = new QLabel( "<b>tcpdump / pcap Viewer</b>" );
-    layout->addWidget( title );
-
-    // Open button
+    // Open button, first: the sidebar's tab already names the plugin.
     openButton_ = new QPushButton( "Open pcap\xe2\x80\xa6" );
     openButton_->setObjectName( "openButton" );
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );

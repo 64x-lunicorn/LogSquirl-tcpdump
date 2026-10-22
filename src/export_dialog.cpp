@@ -40,6 +40,8 @@ ExportDialog::ExportDialog( const ExportRequest& request, QWidget* parent )
     , packets_( request.packets )
 {
     setWindowTitle( QStringLiteral( "Export Packets" ) );
+    // Its paragraphs would wrap into a narrow column at its own width.
+    setMinimumWidth( kMinimumWidth );
     auto* layout = new QVBoxLayout( this );
 
     auto* intro = new QLabel(

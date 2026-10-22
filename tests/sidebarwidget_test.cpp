@@ -251,6 +251,29 @@ SCENARIO( "a sidebar with nothing loaded says so once", "[sidebar]" )
     }
 }
 
+SCENARIO( "the sidebar begins with Open pcap…, under no title of its own", "[sidebar]" )
+{
+    FakeHost host;
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
+
+    THEN( "the first widget of its content is the Open pcap… button" )
+    {
+        auto* scroll = child<QScrollArea>( widget, "sidebarScroll" );
+        auto* layout = scroll->widget()->layout();
+        REQUIRE( layout );
+        REQUIRE( layout->count() > 0 );
+        REQUIRE( layout->itemAt( 0 )->widget() == child<QPushButton>( widget, "openButton" ) );
+    }
+
+    THEN( "no label repeats the sidebar tab's name" )
+    {
+        for ( const auto* label : widget.findChildren<QLabel*>() ) {
+            REQUIRE_FALSE( label->text().contains( "pcap Viewer" ) );
+        }
+    }
+}
+
 SCENARIO( "the Open and Cancel buttons reach the File Conversion session, and the sidebar shows "
           "it",
           "[sidebar]" )
