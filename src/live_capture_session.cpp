@@ -123,7 +123,7 @@ public:
         auto* capture = capture_.get();
         QObject::connect( capture, &LiveCapture::readyToOpen, capture, listener.readyToOpen );
         QObject::connect( capture, &LiveCapture::snapshotTaken, capture, listener.snapshot );
-        QObject::connect( capture, &LiveCapture::stderrLine, capture, listener.stderrLine );
+        QObject::connect( capture, &LiveCapture::stderrLines, capture, listener.stderrLines );
         QObject::connect( capture, &LiveCapture::finished, capture, listener.finished );
         QObject::connect( capture, &LiveCapture::done, capture, listener.done );
         capture->start();
@@ -307,11 +307,29 @@ void LiveCaptureSession::run( LiveRunRequest request, std::shared_ptr<const Live
     };
     listener.snapshot
         = [ this, number ]( const LiveSnapshot& snapshot ) { takeSnapshot( number, snapshot ); };
-    listener.stderrLine = [ this, number ]( const QString& line ) {
-        if ( number == runs_ ) {
-            hostLog( LOGSQUIRL_LOG_INFO, name_ + ": " + line );
-            emit stderrLine( line );
+    stderrLogged_ = 0;
+    listener.stderrLines = [ this, number ]( const QStringList& lines, quint64 dropped ) {
+        if ( number != runs_ ) {
+            return;
         }
+        // A program that prints without end must not flood the host's log.
+        for ( const auto& line : lines ) {
+            if ( stderrLogged_ < kStderrLogged ) {
+                hostLog( LOGSQUIRL_LOG_INFO, name_ + ": " + line );
+            }
+            else if ( stderrLogged_ == kStderrLogged ) {
+                hostLog( LOGSQUIRL_LOG_INFO,
+                         QString( "%1: more stderr output is not logged (only its first %2 "
+                                  "lines are); the sidebar shows the latest" )
+                             .arg( name_ )
+                             .arg( kStderrLogged ) );
+            }
+            else {
+                break;
+            }
+            ++stderrLogged_;
+        }
+        emit stderrLines( lines, dropped );
     };
     listener.finished
         = [ this, number ]( const ConversionResult& result ) { finish( number, result ); };

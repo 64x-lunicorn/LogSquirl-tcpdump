@@ -77,8 +77,14 @@ public:
     /// Its program wrote @p line to stderr.
     void stderrLine( const QString& line )
     {
-        const auto tell = listener_.stderrLine;
-        tell( line );
+        stderrLines( { line }, 0 );
+    }
+    /// Its program wrote @p lines to stderr, after @p dropped that were not
+    /// handed on.
+    void stderrLines( const QStringList& lines, quint64 dropped )
+    {
+        const auto tell = listener_.stderrLines;
+        tell( lines, dropped );
     }
     /// It ended with @p result.
     void finish( const tcpdump::ConversionResult& result )
@@ -136,7 +142,7 @@ private:
             run_->listener_ = {};
             run_->listener_.readyToOpen = []( const QString&, const QString& ) {};
             run_->listener_.snapshot = []( const tcpdump::LiveSnapshot& ) {};
-            run_->listener_.stderrLine = []( const QString& ) {};
+            run_->listener_.stderrLines = []( const QStringList&, quint64 ) {};
             run_->listener_.finished = []( const tcpdump::ConversionResult& ) {};
             run_->listener_.done = [] {};
         }
@@ -174,8 +180,8 @@ public:
     {
         session.setSources( std::move( sources ) );
         session.setOutputRoot( outputRoot.path() );
-        QObject::connect( &session, &tcpdump::LiveCaptureSession::stderrLine, &session,
-                          [ this ]( const QString& line ) { stderrLines << line; } );
+        QObject::connect( &session, &tcpdump::LiveCaptureSession::stderrLines, &session,
+                          [ this ]( const QStringList& lines, quint64 ) { stderrLines << lines; } );
     }
 
     /// Run the event loop until the capture has ended: outcome() is its.

@@ -205,6 +205,8 @@ private:
     QPushButton* startButton_ = nullptr;       ///< Start live capture…
     QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
     QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
+    QLabel* liveStderrDropped_ = nullptr;      ///< How many earlier ones it no longer shows.
+    quint64 liveStderrLines_ = 0;              ///< The capture's stderr lines, dropped ones too.
     QLabel* liveError_ = nullptr;              ///< Why the last live capture failed.
     /// What the summary label says, drawn by summaryLabelText().
     SummaryStatus summaryStatus_ = SummaryStatus::NothingLoaded;

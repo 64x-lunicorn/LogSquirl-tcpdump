@@ -103,7 +103,8 @@ public:
     struct Listener {
         std::function<void( const QString& logPath, const QString& rawPath )> readyToOpen;
         std::function<void( const LiveSnapshot& snapshot )> snapshot;
-        std::function<void( const QString& line )> stderrLine;
+        /// Stderr lines, the latest last, after @p dropped not handed on.
+        std::function<void( const QStringList& lines, quint64 dropped )> stderrLines;
         std::function<void( const ConversionResult& result )> finished;
         std::function<void()> done;
     };
@@ -170,6 +171,10 @@ public:
         Capturing, ///< A capture runs.
         Stopping,  ///< A capture was told to stop, and has not ended yet.
     };
+
+    /// The most stderr lines of one capture written to the host's log;
+    /// past them, one line says the rest are not.
+    static constexpr quint64 kStderrLogged = 100;
 
     /// A session telling the user on @p host and keeping summaries in, and
     /// opening tabs through, @p catalog, both outliving it.
@@ -291,8 +296,9 @@ signals:
     void fileOpened( const QString& logPath );
     /// A snapshot came: progress(), and the catalog's summaries.
     void progressed();
-    /// A line the capture program wrote to stderr.
-    void stderrLine( const QString& line );
+    /// Lines the capture program wrote to stderr, the latest last, after
+    /// @p dropped lines that were not handed on.
+    void stderrLines( const QStringList& lines, quint64 dropped );
     /// The capture ended with @p outcome (outcome()), after its catalog
     /// entries were final and the user was told.
     void finished( const tcpdump::LiveOutcome& outcome );
@@ -324,8 +330,9 @@ private:
     LiveClock clock_;
 
     State state_ = State::Idle;
-    std::unique_ptr<LiveRun> run_;               ///< Running, or the last: it may still be ending.
-    unsigned runs_ = 0;                          ///< The number of the last run made.
+    quint64 stderrLogged_ = 0;     ///< Of the run's stderr lines, those in the host's log.
+    std::unique_ptr<LiveRun> run_; ///< Running, or the last: it may still be ending.
+    unsigned runs_ = 0;            ///< The number of the last run made.
     std::shared_ptr<const LiveSourceKind> kind_; ///< Explains the run's failure; may be null.
     QString name_;
     std::optional<LiveChoice> choice_;

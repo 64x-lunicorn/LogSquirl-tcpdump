@@ -138,6 +138,101 @@ SCENARIO( "A live capture that a stop condition ended says which", "[live_captur
                     + ", the last one the No. column can number." );
 }
 
+namespace {
+
+/// Hands out its bytes, then, until Stop, writes numbered lines to stderr
+/// as fast as it can: "line 0", "line 1", ...
+class StderrFloodSource : public ScriptedSource {
+public:
+    StderrFloodSource( Bytes bytes, const std::atomic_bool* stop,
+                       std::function<void( const QString& )> onLine )
+        : ScriptedSource( std::move( bytes ), {}, stop )
+        , onLine_( std::move( onLine ) )
+    {
+    }
+
+protected:
+    std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override
+    {
+        const auto got = ScriptedSource::readFor( dst, n, std::chrono::milliseconds( 0 ) );
+        if ( got != -1 ) {
+            return got;
+        }
+        Q_UNUSED( timeout );
+        for ( int i = 0; i < 1000; ++i ) {
+            onLine_( QStringLiteral( "line %1" ).arg( next_++ ) );
+        }
+        return -1;
+    }
+
+private:
+    std::function<void( const QString& )> onLine_;
+    qint64 next_ = 0;
+};
+
+/// What a LiveCapture handed on of its program's stderr: every batch, checked
+/// as it comes for numbered lines ("line N", from 0) in order, none lost
+/// without being counted.
+struct StderrBatches {
+    explicit StderrBatches( LiveCapture& capture )
+    {
+        clock.start();
+        QObject::connect( &capture, &LiveCapture::stderrLines, &capture,
+                          [ this ]( const QStringList& lines, quint64 dropped ) {
+                              ++batches;
+                              largest = std::max( largest, lines.size() );
+                              this->dropped += dropped;
+                              next += static_cast<qint64>( dropped );
+                              for ( const auto& line : lines ) {
+                                  inOrder
+                                      = inOrder && line == QStringLiteral( "line %1" ).arg( next );
+                                  ++next;
+                              }
+                          } );
+    }
+
+    QElapsedTimer clock;
+    int batches = 0;
+    qsizetype largest = 0;
+    quint64 dropped = 0;
+    qint64 next = 0; ///< The lines handed on or dropped.
+    bool inOrder = true;
+};
+
+/// Check what @p capture handed on of a program that writes stderr without
+/// end, until it has written @p lines, then stop it.
+void checkFlood( LiveCapture& capture, StderrBatches& seen, qint64 lines )
+{
+    REQUIRE( waitFor( [ & ] { return seen.next >= lines; } ) );
+    const auto elapsed = seen.clock.elapsed();
+    // At most one batch an interval (the count can only come out lower on
+    // a slow machine), none larger than kept: the UI thread's queue holds
+    // one event for the flood, whatever its rate.
+    REQUIRE( seen.batches <= elapsed / LiveCapture::kStderrBatchInterval.count() + 2 );
+    REQUIRE( seen.largest <= static_cast<qsizetype>( LiveCapture::kStderrBatchLines ) );
+    REQUIRE( seen.dropped > 0 );
+    REQUIRE( seen.inOrder );
+    capture.stop();
+    REQUIRE( waitFor( [ & ] { return capture.isDone(); } ) );
+}
+
+} // namespace
+
+SCENARIO( "A capture program printing stderr without end reaches the UI thread in bounded batches",
+          "[live_capture]" )
+{
+    QTemporaryDir root;
+    LiveCapture capture(
+        "flood", root.path(), {},
+        []( const std::atomic_bool* stop, std::function<void( const QString& )> onLine ) {
+            return std::make_unique<StderrFloodSource>( pcapOf( { datagram( 0 ) } ), stop,
+                                                        std::move( onLine ) );
+        } );
+    StderrBatches seen( capture );
+    capture.start();
+    checkFlood( capture, seen, 200000 );
+}
+
 #ifdef Q_OS_UNIX
 
 namespace {
@@ -205,6 +300,29 @@ SCENARIO( "The UI thread never waits for a live capture's source to end", "[live
     }
     sessions.reset();
     joinLiveCaptures();
+}
+
+SCENARIO( "A real capture program printing stderr without end is batched and ended",
+          "[live_capture]" )
+{
+    QTemporaryDir root;
+    const auto header = root.filePath( "header.pcap" );
+    writeFile( header, pcapOf( {} ) );
+    const auto program = root.filePath( "flood" );
+    {
+        QFile file( program );
+        REQUIRE( file.open( QIODevice::WriteOnly ) );
+        file.write(
+            "#!/bin/sh\ncat \"$1\"\ni=0\nwhile :; do echo \"line $i\" >&2; i=$((i+1)); done\n" );
+        file.close();
+        REQUIRE( file.setPermissions( QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner ) );
+    }
+    LiveCapture capture( "flood", root.path(), {},
+                         LiveCapture::processSource( { program, { header } } ) );
+    StderrBatches seen( capture );
+    capture.start();
+    checkFlood( capture, seen, 20000 );
 }
 
 SCENARIO( "A live capture opens its tab once a packet line is there, and Stop finalises it",

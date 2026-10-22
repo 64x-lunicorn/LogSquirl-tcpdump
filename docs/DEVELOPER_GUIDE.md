@@ -1967,8 +1967,14 @@ their copied headers) for **Save capture…**.
 
 `LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
 own and posts what it is told to its own (the UI) thread as signals:
-`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
-`finished( ConversionResult )`. The source is made on the worker by a
+`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLines( lines,
+dropped )` and `finished( ConversionResult )`. Stderr lines come in
+batches: the worker queues them (the latest `kStderrBatchLines`, 200,
+older ones counted as `dropped`) and posts a flush only when none is on
+its way; a flush emits what is queued and looks again after
+`kStderrBatchInterval` (100 ms), so a program that prints without end
+holds one event in the UI thread's queue, and what it wrote comes before
+`finished`. The source is made on the worker by a
 `SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
 ProcessCommand )` for a capture program), as a `ProcessSource` must be.
 `stop()` sets the source's stop flag; nothing cancels a live capture (its
@@ -2005,7 +2011,7 @@ starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
 summary, index, fileSize )`, `setFileError( logPath, error )`, and
 `endLive()` as it finishes. A capture runs through a `LiveRun` (`start( Listener
 )`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
-stderrLine, finished and done, as `LiveCapture`'s signals) made by a
+stderrLines, finished and done, as `LiveCapture`'s signals) made by a
 `LiveRunFactory` from a `LiveRunRequest` (name, output root, options,
 source factory, limits, clock): `runOnWorker()`, a `LiveCapture` that is
 retired when the run is let go of, in the app; `setRunFactory()` in tests.
@@ -2038,9 +2044,12 @@ retired when the run is let go of, in the app; `setRunFactory()` in tests.
   text files opened in tabs.
 
 The session's signals (`stateChanged`, `started`, `fileOpened`,
-`progressed`, `stderrLine`, `finished`) are what the sidebar renders:
-the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
-the error and Guidance, the summary label. `tests/fake_live_session.h`
+`progressed`, `stderrLines`, `finished`) are what the sidebar renders:
+the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view
+(its last 200 lines, and how many earlier ones it dropped),
+the error and Guidance, the summary label. Of a capture's stderr lines,
+the session writes the first `kStderrLogged` (100) to the host's log, then
+one line that the rest are not logged. `tests/fake_live_session.h`
 uses `FakeSessionHost` (the host, recording, of
 `tests/fake_session_host.h`) and has `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
