@@ -309,7 +309,10 @@ ListingOutput runListing( const ProcessCommand& command, std::chrono::millisecon
         finished = finished || process.state() == QProcess::NotRunning;
     }
     if ( overflowed ) {
-        process.waitForFinished( 1000 ); // killed in take(): reaped here
+        // Its group killed in take(); the program itself too, here, in case
+        // it left the group.  Reaped here.
+        process.kill();
+        process.waitForFinished( 1000 );
     }
     else if ( !finished ) {
         endProcessGroup( *group, &process, std::chrono::milliseconds( 0 ) );

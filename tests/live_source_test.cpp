@@ -35,6 +35,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 #include <atomic>
@@ -514,6 +515,39 @@ SCENARIO( "A listing program is run with a timeout and nothing to answer a promp
                 // Killed with the group; an orphan is reaped by init, not at once.
                 REQUIRE( waitFor( [ child ] { return ::kill( child, 0 ) != 0 && errno == ESRCH; },
                                   20000 ) );
+            }
+        }
+    }
+
+    const auto perl = QStandardPaths::findExecutable( "perl" );
+    if ( !perl.isEmpty() ) {
+        GIVEN( "a program that writes without end after leaving its process group" )
+        {
+            // In LogSquirl's group (the test's), the group's signal misses
+            // it; the same program in its group is the measure of the flood.
+            const auto flood = [ & ]( const QString& name, bool leave ) {
+                const auto program = listingProgram(
+                    dir, name,
+                    "exec '" + perl + "' -e 'use POSIX; "
+                        + ( leave ? "setpgid( 0, getpgrp( getppid() ) ) or die; " : "" )
+                        + "my $l = ( \"0\" x 1023 ) . \"\\n\"; print $l for 1 .. "
+                        + QString::number( 16 * kListingOutputLimit / 1024 ) + "; sleep 60'" );
+                QElapsedTimer took;
+                took.start();
+                const auto output
+                    = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) );
+                REQUIRE( output.error.contains( name ) );
+                REQUIRE( output.error.contains( "4 MiB" ) );
+                return took.elapsed();
+            };
+            const auto inGroup = flood( "flood", false );
+            const auto runaway = flood( "runaway", true );
+
+            THEN( "it is still killed at the limit, not waited for" )
+            {
+                // Waited for, it would take the reaping's full second more.
+                CAPTURE( inGroup, runaway );
+                REQUIRE( runaway < inGroup + 500 );
             }
         }
     }

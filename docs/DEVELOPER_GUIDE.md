@@ -2272,7 +2272,7 @@ own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
 returns its stdout, stderr and exit code. It reads both as they come, at
 most `kListingOutputLimit` (4 MiB) of each: a program that writes more
 (a hostile ssh server, device or extcap writing without end) has its group
-killed at once, and the listing fails with `<name> wrote more than 4 MiB
+killed at once, and itself too, should it have left the group, and the listing fails with `<name> wrote more than 4 MiB
 to stdout` (or stderr). A listing can be cancelled, which
 kills its group within moments: `cancelListings()` cancels every running
 one (the Capture Sessions' destructor, so that the plugin's shutdown does not wait
