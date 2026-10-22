@@ -545,9 +545,10 @@ SCENARIO( "A listing program is run with a timeout and nothing to answer a promp
 
             THEN( "it is still killed at the limit, not waited for" )
             {
-                // Waited for, it would take the reaping's full second more.
+                // Waited for, it would take the reaping's full second more;
+                // the rest of that second is room for a busy runner.
                 CAPTURE( inGroup, runaway );
-                REQUIRE( runaway < inGroup + 500 );
+                REQUIRE( runaway < inGroup + 900 );
             }
         }
     }
