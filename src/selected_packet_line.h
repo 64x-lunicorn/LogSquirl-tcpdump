@@ -23,8 +23,8 @@
  *        the tab in front, or the packets of them all, read through the
  *        host, or why there is none.
  *
- * The Packet Panel shows the selected line's packet, and Show stream
- * content and Stream lines in Regex Lab act on its stream; Export packets
+ * The Packet Panel shows the selected line's packet, and Follow stream
+ * content and Filter stream in Regex Lab act on its stream; Export packets
  * takes the packets of all selected lines.  Each asks here, so that the
  * host's answer and each kind of line turn into the same reason for the
  * user, written once, and a button and the action it starts decide on the
@@ -72,11 +72,11 @@ struct SelectedPacketLine {
     /// no packet has.
     QString reason;
 
-    /// Why Show stream content cannot show the packet's stream, for the
+    /// Why Follow stream content cannot show the packet's stream, for the
     /// user: the reason, or a packet of no stream; empty when it can.
     QString streamContentProblem() const;
 
-    /// Why Stream lines in Regex Lab cannot pick the lines of the packet's
+    /// Why Filter stream in Regex Lab cannot pick the lines of the packet's
     /// stream, as streamContentProblem(), or because the stream has no
     /// number (the capture has more conversations than the plugin
     /// numbers); empty when it can.

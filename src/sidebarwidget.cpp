@@ -33,7 +33,7 @@
  *      the capture catalog
  * and the sidebar shows the session's progress, label and outcome.
  *
- * Its Stream lines in Regex Lab button, on a host that offers it, opens the
+ * Its Filter stream in Regex Lab button, on a host that offers it, opens the
  * Regex Lab on the conversation of the selected packet line (see
  * follow_stream.h); it is enabled only while the Packet Panel finds a
  * packet line of a numbered stream selected in a capture's tab.
@@ -216,11 +216,11 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     connect( openButton_, &QPushButton::clicked, this,
              [ this ] { forward( "Opening a capture", &CaptureSessions::chooseAndOpen ); } );
 
-    // Stream lines in Regex Lab, as in the Plugins menu: only a host that
+    // Filter stream in Regex Lab, as in the Plugins menu: only a host that
     // has the Regex Lab and tells the selected lines gets it.  It is enabled
     // as the Packet Panel finds the selected line, below.
     if ( g_state.hostCapabilities.regexLab && g_state.hostCapabilities.selectedLogLines ) {
-        streamLinesButton_ = new QPushButton( "Stream lines in Regex Lab" );
+        streamLinesButton_ = new QPushButton( "Filter stream in Regex Lab" );
         streamLinesButton_->setObjectName( "streamLinesButton" );
         layout->addWidget( streamLinesButton_ );
         connect( streamLinesButton_, &QPushButton::clicked, this, [ this ] {
@@ -229,7 +229,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
             } catch ( const std::exception& e ) {
                 // An exception must not escape into Qt or the host.
                 hostLog( LOGSQUIRL_LOG_ERROR,
-                         "Stream lines in Regex Lab failed: " + QString::fromUtf8( e.what() ) );
+                         "Filter stream in Regex Lab failed: " + QString::fromUtf8( e.what() ) );
             }
         } );
     }
@@ -509,11 +509,11 @@ void SidebarWidget::followStreamContent()
     packetPanel_->refresh();
     QString why;
     if ( !packetPanel_->followStreamContent( &why ) ) {
-        hostNotify( "Show stream content: " + why );
+        hostNotify( "Follow stream content: " + why );
         return;
     }
     if ( !packetPanel_->isVisible() ) {
-        hostNotify( QString( "Show stream content: the stream of packet %1 is shown in the "
+        hostNotify( QString( "Follow stream content: the stream of packet %1 is shown in the "
                              "tcpdump sidebar tab." )
                         .arg( packetPanel_->selectedPacket() ) );
     }
@@ -525,7 +525,7 @@ void SidebarWidget::openStreamLines()
     // followed is that of the line it read, which its problem is about.
     packetPanel_->refresh();
     if ( const auto problem = packetPanel_->streamLinesProblem(); !problem.isEmpty() ) {
-        hostNotify( "Stream lines in Regex Lab: " + problem );
+        hostNotify( "Filter stream in Regex Lab: " + problem );
         return;
     }
     if ( const auto line = packetPanel_->selectedLine() ) {
@@ -536,8 +536,8 @@ void SidebarWidget::openStreamLines()
 void SidebarWidget::updateStreamLinesButton()
 {
     enableUnlessProblem( streamLinesButton_, packetPanel_->streamLinesProblem(),
-                         QStringLiteral( "Open the Regex Lab with the pattern of the lines of "
-                                         "this packet's conversation" ) );
+                         QStringLiteral( "Filter this packet's conversation in the Regex Lab: "
+                                         "open it with the pattern of the stream's lines" ) );
 }
 
 void SidebarWidget::openLink( const QString& link )

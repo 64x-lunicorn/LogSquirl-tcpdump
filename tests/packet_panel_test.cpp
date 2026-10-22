@@ -558,7 +558,7 @@ QByteArray fileBytes( const QString& path )
 
 } // namespace
 
-SCENARIO( "Show stream content shows a conversation's payload in the Packet Panel",
+SCENARIO( "Follow stream content shows a conversation's payload in the Packet Panel",
           "[packet_panel][stream_content]" )
 {
     GIVEN( "the synthetic reassembly capture in the tab in front" )
@@ -824,7 +824,7 @@ SCENARIO( "A stream of 16 MiB without a line feed is shown in lines of bounded l
     }
 }
 
-SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" )
+SCENARIO( "Follow stream content from the menu", "[packet_panel][stream_content]" )
 {
     GIVEN( "a capture whose sidebar is not in view" )
     {
@@ -832,7 +832,7 @@ SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" 
         auto& host = loaded.host;
         const auto entry
             = std::find_if( host.menuActions.begin(), host.menuActions.end(),
-                            []( const auto& a ) { return a.label == "Show stream content"; } );
+                            []( const auto& a ) { return a.label == "Follow stream content"; } );
         REQUIRE( entry != host.menuActions.end() );
 
         WHEN( "a packet line is selected and the entry chosen" )
@@ -856,14 +856,14 @@ SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" 
             THEN( "the notification says why no stream is followed" )
             {
                 REQUIRE( host.notifications
-                         == QStringList{ "Show stream content: Select a packet line to see "
+                         == QStringList{ "Follow stream content: Select a packet line to see "
                                          "its packet." } );
             }
         }
     }
 }
 
-SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only when they work",
+SCENARIO( "Filter stream in Regex Lab and Follow stream content are enabled only when they work",
           "[packet_panel][followstream]" )
 {
     GIVEN( "a plugin loaded by a host with the Regex Lab, no capture in the tab in front" )
@@ -881,8 +881,8 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
         {
             REQUIRE( lines );
             REQUIRE( content );
-            REQUIRE( lines->text() == "Stream lines in Regex Lab" );
-            REQUIRE( content->text() == "Show stream content" );
+            REQUIRE( lines->text() == "Filter stream in Regex Lab" );
+            REQUIRE( content->text() == "Follow stream content" );
             REQUIRE_FALSE( lines->isEnabled() );
             REQUIRE_FALSE( content->isEnabled() );
             REQUIRE( lines->toolTip() == "No capture in this tab." );
@@ -895,10 +895,11 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
             for ( const auto& action : host.menuActions ) {
                 labels << action.label;
             }
-            REQUIRE( labels.contains( "Stream lines in Regex Lab" ) );
-            REQUIRE( labels.contains( "Show stream content" ) );
+            REQUIRE( labels.contains( "Filter stream in Regex Lab" ) );
+            REQUIRE( labels.contains( "Follow stream content" ) );
             REQUIRE_FALSE( labels.contains( "Follow stream" ) );
-            REQUIRE_FALSE( labels.contains( "Follow stream content" ) );
+            REQUIRE_FALSE( labels.contains( "Stream lines in Regex Lab" ) );
+            REQUIRE_FALSE( labels.contains( "Show stream content" ) );
         }
 
         logsquirl_plugin_shutdown();
@@ -955,7 +956,7 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
                 REQUIRE( content->toolTip().contains( "payload" ) );
             }
 
-            AND_WHEN( "Stream lines in Regex Lab is clicked" )
+            AND_WHEN( "Filter stream in Regex Lab is clicked" )
             {
                 const auto callsBefore = host.selectionCalls;
                 lines->click();

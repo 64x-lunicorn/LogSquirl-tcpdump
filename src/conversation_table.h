@@ -24,7 +24,7 @@
  *
  * A row per numbered TCP and UDP stream of the capture in front, from its
  * Capture Summary, sortable by every column.  A click on a row, or Filter
- * on this conversation in its context menu, opens the Regex Lab with the
+ * conversation in Regex Lab in its context menu, opens the Regex Lab with the
  * pattern of the stream's lines, as the summary's endpoints do.  A summary
  * taken anew (a live capture's next snapshot) replaces the rows and keeps
  * the sort and the selected conversation.

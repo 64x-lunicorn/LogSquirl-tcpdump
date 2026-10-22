@@ -307,7 +307,7 @@ ConversationTable::ConversationTable( QWidget* parent )
     view_->setWordWrap( false );
     layout->addWidget( view_, 1 );
 
-    filterAction_ = new QAction( "Filter on this conversation", view_ );
+    filterAction_ = new QAction( "Filter conversation in Regex Lab", view_ );
     filterAction_->setObjectName( "filterOnConversation" );
     view_->addAction( filterAction_ );
     view_->setContextMenuPolicy( Qt::ActionsContextMenu );
@@ -358,11 +358,11 @@ void ConversationTable::filterOn( int row )
     try {
         const auto* conversation = model_->conversationAt( row );
         if ( !conversation ) {
-            hostNotify( "Filter: the streams past the stream cap show stream \"?\" and cannot "
-                        "be told apart." );
+            hostNotify( "Filter conversation in Regex Lab: the streams past the stream cap show "
+                        "stream \"?\" and cannot be told apart." );
             return;
         }
-        openRegexLab( "Filter",
+        openRegexLab( "Filter conversation in Regex Lab",
                       conversationPattern(
                           conversation->stream, QString::fromStdString( conversation->addressA ),
                           conversation->portA, QString::fromStdString( conversation->addressB ),
@@ -370,7 +370,7 @@ void ConversationTable::filterOn( int row )
     } catch ( const std::exception& e ) {
         // An exception must not escape into Qt or the host.
         hostLog( LOGSQUIRL_LOG_ERROR,
-                 "Filtering on a conversation failed: " + QString::fromUtf8( e.what() ) );
+                 "Filter conversation in Regex Lab failed: " + QString::fromUtf8( e.what() ) );
     }
 }
 

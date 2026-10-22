@@ -165,7 +165,7 @@ StreamContentView::StreamContentView( QWidget* parent )
         setFormat( static_cast<StreamFormat>( formatBox_->currentData().toInt() ) );
     } );
 
-    clear( QStringLiteral( "Select a packet line and choose Show stream content." ) );
+    clear( QStringLiteral( "Select a packet line and choose Follow stream content." ) );
 }
 
 StreamContentView::~StreamContentView()
@@ -280,7 +280,7 @@ void StreamContentView::startRead( uint64_t budget )
                  } catch ( const std::exception& e ) {
                      // An exception must not escape into Qt or the host.
                      hostLog( LOGSQUIRL_LOG_ERROR,
-                              "Show stream content failed: " + QString::fromUtf8( e.what() ) );
+                              "Follow stream content failed: " + QString::fromUtf8( e.what() ) );
                  }
              } );
     const auto reader = reader_;
@@ -523,7 +523,7 @@ void StreamContentView::exportTo( const QString& path, bool raw )
                      break;
                  default:
                      lastError_ = QStringLiteral( "export failed: %1" ).arg( result.error );
-                     hostLog( LOGSQUIRL_LOG_WARNING, "Show stream content: " + lastError_ );
+                     hostLog( LOGSQUIRL_LOG_WARNING, "Follow stream content: " + lastError_ );
                      break;
                  }
                  updateLabels();

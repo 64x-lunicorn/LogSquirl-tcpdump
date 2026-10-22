@@ -195,7 +195,7 @@ PacketPanel::PacketPanel( QWidget* parent )
     dump_->setFont( QFontDatabase::systemFont( QFontDatabase::FixedFont ) );
     splitter->addWidget( dump_ );
 
-    followButton_ = new QPushButton( "Show stream content" );
+    followButton_ = new QPushButton( "Follow stream content" );
     followButton_->setObjectName( "streamContentButton" );
     followButton_->setEnabled( false );
     layout->addWidget( followButton_ );
@@ -205,7 +205,7 @@ PacketPanel::PacketPanel( QWidget* parent )
         } catch ( const std::exception& e ) {
             // An exception must not escape into Qt or the host.
             hostLog( LOGSQUIRL_LOG_ERROR,
-                     "Show stream content failed: " + QString::fromUtf8( e.what() ) );
+                     "Follow stream content failed: " + QString::fromUtf8( e.what() ) );
         }
     } );
 
@@ -278,7 +278,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     cursor_.reset(); // a read of the capture before keeps its own
     last_.reset();
     // The stream shown was one of the capture of the tab before.
-    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Show stream "
+    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Follow stream "
                                                  "content." )
                                : QStringLiteral( "No capture in this tab." ) );
     tabs_->setCurrentIndex( 0 );
@@ -392,8 +392,8 @@ QString PacketPanel::streamLinesProblem() const
 void PacketPanel::updateStreamActions()
 {
     enableUnlessProblem( followButton_, streamContentProblem(),
-                         QStringLiteral( "Show the payload of this packet's conversation, as "
-                                         "text or hex" ) );
+                         QStringLiteral( "Follow the content of this packet's conversation: "
+                                         "its payload, as text or hex" ) );
     emit streamActionsChanged();
 }
 

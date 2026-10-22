@@ -374,7 +374,7 @@ size. A gzip stream read from a live source is not decompressed:
 `findCaptureStart()` names gzip data as such.
 
 A deflate stream cannot be entered in the middle, but the Packet Panel,
-Show stream content and Export Packets read packets by their offset. So
+Follow stream content and Export Packets read packets by their offset. So
 the Converter's `GzipSource` keeps *access points*, the technique of
 zlib's `examples/zran.c`: every `GzipSource::kAccessSpan` (32 MiB, the
 option `gzipAccessSpan` for tests) of output, at the next deflate block
@@ -1026,7 +1026,7 @@ A packet line is read back next to where it is written: `readPacketLine()`
 no stream has), Source, Destination, Protocol,
 the rest of the line from Info on, and the iRTT that Info shows on the ACK
 that completes a handshake (see *TCP analysis markers*), or none for a
-line that is no packet line. The Packet Panel and Stream lines in Regex
+line that is no packet line. The Packet Panel and Filter stream in Regex
 Lab read the selected line with it through Selected Packet Line (see
 *Packet Panel*), Export packets the selected lines through it too, and
 the Export dialog pasted lines; none has a regex of
@@ -1221,7 +1221,7 @@ completed (`ReassembledMessages`), those held over several segments and
 those whole in it alike, in sequence order and never twice, for the TLS
 Decryption. Bytes are taken in sequence order,
 by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
-C++, shared with Show stream content): `place()` says whether a segment
+C++, shared with Follow stream content): `place()` says whether a segment
 is next (and how many of its first bytes were taken), came early or was
 taken already; it holds the early ones (`holdEarly()`), pops them once they
 are next (`popNext()`) and skips a gap (`skipTo()`), and leaves the limits
@@ -1449,7 +1449,7 @@ for byte the same as before.
   none of them. The patterns built from a line or an address,
   `addressPattern()` in `regex_lab.h` (the address and
   `nameSuffixPattern()`), take an address with or without its name:
-  Stream lines in Regex Lab reads the clicked line's columns with `columnAddress()`,
+  Filter stream in Regex Lab reads the clicked line's columns with `columnAddress()`,
   so that it finds a stream's lines from before and after the name was
   learned, the summary's endpoint filters and the display filters'
   `ip.*`/`ipv6.*` tests (`valuesPattern()`) allow the name behind the
@@ -1960,7 +1960,7 @@ records the checkpoint's state names lie there
 interfaces). A packet of a file deleted since, also through an index taken
 before the deletion, fails with *Rotated away: …*, never with another
 packet's bytes. `CapturedPacket::file` is the file it was read from:
-Export packets copies each packet from its own file, Show stream content
+Export packets copies each packet from its own file, Follow stream content
 starts at the first packet kept, and `saveCaptureParts()` writes the files
 kept as one capture (the first whole, the records of the others without
 their copied headers) for **Save capture…**.
@@ -2605,17 +2605,17 @@ sessions run on (the plugin destroys them after it). Qt UI that provides:
   button, can be chosen during a conversion and then only shows a
   notification
 - A progress bar and Cancel button while a capture is converted
-- A "Stream lines in Regex Lab" button, created only when
+- A "Filter stream in Regex Lab" button, created only when
   `g_state.hostCapabilities` has the Regex Lab and the selected lines (see
-  *Stream lines in Regex Lab* below). It is enabled only while
+  *Filter stream in Regex Lab* below). It is enabled only while
   `PacketPanel::streamLinesProblem()` is empty, its tooltip that reason
-  otherwise (`enableUnlessProblem()`, which the panel's Show stream content
+  otherwise (`enableUnlessProblem()`, which the panel's Follow stream content
   button shares); `PacketPanel::streamActionsChanged()` updates it as the
   selection changes. A click and the menu entry both go through
   `SidebarWidget::openStreamLines()`, which refreshes the panel and
   notifies that same reason instead of opening the Lab, or opens it on the
   line the panel read (`PacketPanel::selectedLine()`): the selection is
-  read once for both. Packet details and Show stream content are the
+  read once for both. Packet details and Follow stream content are the
   sidebar's too (`showPacketDetails()`, `followStreamContent()`): they are
   the Packet Panel's
 - Detailed capture summary (`summaryHtml()`): protocol breakdown (count +
@@ -2950,8 +2950,8 @@ export, conversation statistics):
   failure of the host, a line that is no packet line, a packet number no
   packet has. `streamContentProblem()` adds a packet of no stream,
   `streamLinesProblem()` also an unnumbered one. Each reason text is
-  written there once; the Packet Panel shows them, Show stream content
-  and Stream lines in Regex Lab notify them. For Export packets,
+  written there once; the Packet Panel shows them, Follow stream content
+  and Filter stream in Regex Lab notify them. For Export packets,
   `selectedPackets()` reads every selected line and answers with the
   packets of the packet lines as a `PacketSet` (every other line, and a
   number the capture has no packet of, skipped and counted), the line
@@ -2995,22 +2995,22 @@ export, conversation statistics):
   packet is shown, or why not, which Packet details uses for its
   notification; the destructor waits for the read that runs.
 
-- **Show stream content** (`stream_content.h/cpp`,
+- **Follow stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a
   `StreamContentView`, shows the payload of the shown packet's stream when
-  the user asks for it: the panel's *Show stream content* button calls
-  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Show
+  the user asks for it: the panel's *Follow stream content* button calls
+  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
   panel keeps the line selected as Selected Packet Line read it
   (`selected_`, `selectedLine()`), so that a stream can be followed
   while its packet is still read. `streamContentProblem()` and
-  `streamLinesProblem()` say why Show stream content and Stream lines in
+  `streamLinesProblem()` say why Follow stream content and Filter stream in
   Regex Lab cannot work for the line selected now (no capture or a read
   that failed, else what the `SelectedPacketLine` says: no packet line,
   no stream, for the Lab also an unnumbered one); the panel enables
   its button by the first, and `streamActionsChanged()` has the sidebar
-  enable its Stream lines in Regex Lab button by the second, each tooltip
+  enable its Filter stream in Regex Lab button by the second, each tooltip
   saying the reason.
   `StreamContentReader` reads the stream back: `open()` reads the packet
   for its transport, addresses and ports, then `read()` reads the packets
@@ -3086,8 +3086,8 @@ export, conversation statistics):
   `ConversationRows`, chunks of 4,096 a summary shares with the one before
   where their streams had no packet in between; the model orders pointers
   to them.
-  A click or *Filter on this conversation* opens the Regex Lab ("Filter")
-  with `conversationPattern()`, the Stream lines in Regex Lab pattern built from the
+  A click or *Filter conversation in Regex Lab* opens the Regex Lab, logged under that name,
+  with `conversationPattern()`, the Filter stream in Regex Lab pattern built from the
   row's stream number, addresses and ports.
 
 - **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
@@ -3134,7 +3134,7 @@ export, conversation statistics):
   a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details, Export packets or Show stream content entry and no polling; the
+details, Export packets or Follow stream content entry and no polling; the
 panel says what it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
@@ -3159,8 +3159,8 @@ session (`export_session_test.cpp`).
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
 the menu entries (Open pcap…, Start live capture…, Stop live capture, and Packet details, Export packets…, Display
-filter…, Show stream content and
-Stream lines in Regex Lab where the host can serve them) and the active-file callback with the host application. `init()` creates the
+filter…, Follow stream content and
+Filter stream in Regex Lab where the host can serve them) and the active-file callback with the host application. `init()` creates the
 Capture Sessions (`g_state.sessions`) and the sidebar over them;
 Open pcap…, Start and Stop live capture and Export packets… call the
 sessions, the active-file callback their catalog's `setFront()`, and only
@@ -3190,8 +3190,8 @@ nothing that needs it otherwise; it never calls or reads a member the record
 does not report, not even to compare it with null, as an older host's table
 ends before it. Keep the pointer the host passed: never copy `*api`.
 
-#### Stream lines in Regex Lab (`follow_stream.h/cpp`)
-`Plugins → tcpdump → Stream lines in Regex Lab` and the sidebar button call
+#### Filter stream in Regex Lab (`follow_stream.h/cpp`)
+`Plugins → tcpdump → Filter stream in Regex Lab` and the sidebar button call
 `SidebarWidget::openStreamLines()`, offered only on a host with `regexLab`
 and `selectedLogLines`. It has the Packet Panel read the selection
 through Selected Packet Line and asks its `streamLinesProblem()`, so that
@@ -3238,8 +3238,8 @@ require the columns before Info as `packetLineRegex()` reads them, through
 Source, Destination or Protocol column and never Info in every
 `LineLayout`, and escape the name with `literalPattern()`. Only the
 endpoints are links, not the tunnel endpoints: those appear in no column
-(see *Tunnels*). `openRegexLab()`, which Stream
-lines in Regex Lab uses too, opens the Lab with Match case and logs the pattern, then
+(see *Tunnels*). `openRegexLab()`, which Filter stream in
+Regex Lab uses too, opens the Lab with Match case and logs the pattern, then
 the applied one or the cancel, under the feature's name ("Filter: …").
 `regex_lab_test.cpp` checks every endpoint and protocol of the summary of
 each corpus capture, converted in every `LineLayout`, against the columns of
@@ -3273,7 +3273,7 @@ parser; an address is stored as the column shows it (`formatIpv4()`,
 `formatIpv6()`, an IPv4 network masked to its prefix).
 `filterPattern()` makes each test a pattern from the start of the line:
 `upToSourcePattern()` without its `^`, Source and Destination, Protocol
-and Length, and for a port or stream the start of Info as Stream lines in Regex Lab
+and Length, and for a port or stream the start of Info as Filter stream in Regex Lab
 reads it (MAC columns, tunnels, `[TCP …]` markers, then `a → b` followed
 by `[` for TCP or `Len=` for UDP, which tells the transport). A filter of
 one test is `^` and that pattern; otherwise each test is a lookahead,
@@ -3455,8 +3455,8 @@ name a column cannot show and an answer that renames an address, is
 written by `tests/make_names_corpus.py`; its text is converted without host
 names, as every corpus text, and `tests/host_names_test.cpp` checks its
 lines with them. `allLineLayouts()` in `tests/corpus_layouts.h` has every
-layout with and without host names, so the Log Format, preset, Stream
-lines in Regex Lab, summary filter and display filter tests over the corpus run with
+layout with and without host names, so the Log Format, preset, Filter stream in
+Regex Lab, summary filter and display filter tests over the corpus run with
 names too. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their

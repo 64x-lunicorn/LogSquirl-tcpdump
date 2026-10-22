@@ -39,9 +39,9 @@
  *      (capture_sessions.h) and a SidebarWidget that is a view of them,
  *      register it as a sidebar tab, add Plugins > tcpdump >
  *      Open pcap…, Start live capture… and Stop live capture to the menu
- *      (and Stream lines in Regex Lab, on a host with the
+ *      (and Filter stream in Regex Lab, on a host with the
  *      Regex Lab and the selected lines; Packet details, Export packets…
- *      and Show stream content on a host with the selected lines; Display
+ *      and Follow stream content on a host with the selected lines; Display
  *      filter… on a host with the Regex Lab), and register for the host's
  *      active-file notifications, so the sidebar shows the summary and the
  *      Packet Panel the packets of the tab in front.  Open pcap…, Start
@@ -187,7 +187,7 @@ static void stopLiveCaptureFromMenu( void* /* user_data */ )
     } );
 }
 
-/// Plugins > tcpdump > Stream lines in Regex Lab: the same as the sidebar's button.
+/// Plugins > tcpdump > Filter stream in Regex Lab: the same as the sidebar's button.
 static void followStreamFromMenu( void* /* user_data */ )
 {
     guarded( "following a stream from the menu", [] {
@@ -216,7 +216,7 @@ static void packetDetailsFromMenu( void* /* user_data */ )
     } );
 }
 
-/// Plugins > tcpdump > Show stream content: the stream's payload in the panel.
+/// Plugins > tcpdump > Follow stream content: the stream's payload in the panel.
 static void followStreamContentFromMenu( void* /* user_data */ )
 {
     guarded( "following a stream's content", [] {
@@ -312,14 +312,14 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
                                        &displayFilterFromMenu, nullptr );
         }
         if ( tcpdump::g_state.hostCapabilities.selectedLogLines ) {
-            api->register_menu_action( handle, "tcpdump", "Show stream content",
+            api->register_menu_action( handle, "tcpdump", "Follow stream content",
                                        &followStreamContentFromMenu, nullptr );
         }
         // Only a host that has the Regex Lab and tells the selected lines
         // can open the Lab on a stream's lines.
         if ( tcpdump::g_state.hostCapabilities.regexLab
              && tcpdump::g_state.hostCapabilities.selectedLogLines ) {
-            api->register_menu_action( handle, "tcpdump", "Stream lines in Regex Lab",
+            api->register_menu_action( handle, "tcpdump", "Filter stream in Regex Lab",
                                        &followStreamFromMenu, nullptr );
         }
 

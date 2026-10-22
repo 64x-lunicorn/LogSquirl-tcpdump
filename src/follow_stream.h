@@ -19,7 +19,7 @@
 
 /**
  * @file follow_stream.h
- * @brief Stream lines in Regex Lab: a Regex Lab pattern for the
+ * @brief Filter stream in Regex Lab: a Regex Lab pattern for the
  *        conversation of a selected packet line.
  *
  * The packet line's Stream column numbers TCP and UDP conversations each on
@@ -53,7 +53,7 @@ QString conversationPattern( int stream, const QString& addressA, uint16_t portA
 
 /// Open the Regex Lab with the pattern of the lines of @p packet's stream.
 /// The pattern the user applies or the cancel is logged.  Plugins > tcpdump
-/// > Stream lines in Regex Lab and the sidebar's button call it through
+/// > Filter stream in Regex Lab and the sidebar's button call it through
 /// SidebarWidget::openStreamLines() with the packet line the Packet Panel
 /// read from the selection, once its streamLinesProblem() is empty.  Call
 /// only when g_state.hostCapabilities has the Regex Lab, on the UI thread.

@@ -19,7 +19,7 @@
 
 /**
  * @file follow_stream_test.cpp
- * @brief BDD tests for Stream lines in Regex Lab: the pattern for a packet
+ * @brief BDD tests for Filter stream in Regex Lab: the pattern for a packet
  *        line's stream, and the menu entry and sidebar button that open it
  *        in the Regex Lab.
  */
@@ -114,7 +114,7 @@ const QString kArrow = QString::fromUtf8( "\xe2\x86\x92" );
 
 } // namespace
 
-SCENARIO( "Stream lines in Regex Lab matches exactly the lines of a packet's stream",
+SCENARIO( "Filter stream in Regex Lab matches exactly the lines of a packet's stream",
           "[followstream]" )
 {
     GIVEN( "a capture with TCP and UDP streams of the same numbers between the same hosts" )
@@ -254,7 +254,7 @@ SCENARIO( "Stream lines in Regex Lab matches exactly the lines of a packet's str
     }
 }
 
-SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet's stream",
+SCENARIO( "Filter stream in Regex Lab opens the Regex Lab on the selected packet's stream",
           "[followstream]" )
 {
     const auto lines = corpusLines( "mixed.txt" );
@@ -275,7 +275,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
         REQUIRE( host.openedFiles.size() == 1 );
         host.activateFile( host.openedFiles.first() );
 
-        THEN( "Plugins > tcpdump > Stream lines in Regex Lab and the sidebar button are offered" )
+        THEN( "Plugins > tcpdump > Filter stream in Regex Lab and the sidebar button are offered" )
         {
             QStringList labels;
             for ( const auto& action : host.menuActions ) {
@@ -285,7 +285,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
                      == QStringList{ "Open pcap\xe2\x80\xa6", "Start live capture\xe2\x80\xa6",
                                      "Stop live capture", "Packet details",
                                      "Export packets\xe2\x80\xa6", "Display filter\xe2\x80\xa6",
-                                     "Show stream content", "Stream lines in Regex Lab" } );
+                                     "Follow stream content", "Filter stream in Regex Lab" } );
             REQUIRE( host.menuActions.last().menuPath == "tcpdump" );
             REQUIRE( button );
         }
@@ -318,7 +318,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
 
                 THEN( "the applied pattern is logged" )
                 {
-                    REQUIRE( host.logs.contains( "Stream lines in Regex Lab: applied "
+                    REQUIRE( host.logs.contains( "Filter stream in Regex Lab: applied "
                                                  + host.regexLabs.first().pattern ) );
                 }
             }
@@ -329,7 +329,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
 
                 THEN( "the cancel is logged" )
                 {
-                    REQUIRE( host.logs.contains( "Stream lines in Regex Lab: cancelled" ) );
+                    REQUIRE( host.logs.contains( "Filter stream in Regex Lab: cancelled" ) );
                 }
             }
         }
@@ -344,7 +344,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
                 REQUIRE( host.regexLabs.isEmpty() );
                 REQUIRE_FALSE( button->isEnabled() );
                 REQUIRE( host.notifications
-                         == QStringList{ "Stream lines in Regex Lab: " + button->toolTip() } );
+                         == QStringList{ "Filter stream in Regex Lab: " + button->toolTip() } );
             }
         }
 
@@ -360,7 +360,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
                 REQUIRE( button );
                 REQUIRE_FALSE( button->isEnabled() );
                 REQUIRE( host.notifications
-                         == QStringList{ "Stream lines in Regex Lab: " + button->toolTip() } );
+                         == QStringList{ "Filter stream in Regex Lab: " + button->toolTip() } );
                 REQUIRE( button->toolTip() == "No capture in this tab." );
             }
         }
@@ -390,7 +390,7 @@ SCENARIO( "Stream lines in Regex Lab opens the Regex Lab on the selected packet'
         THEN( "neither the entry nor the button is offered" )
         {
             for ( const auto& action : host.menuActions ) {
-                REQUIRE( action.label != "Stream lines in Regex Lab" );
+                REQUIRE( action.label != "Filter stream in Regex Lab" );
             }
             REQUIRE_FALSE(
                 tcpdump::g_state.sidebarWidget->findChild<QPushButton*>( "streamLinesButton" ) );

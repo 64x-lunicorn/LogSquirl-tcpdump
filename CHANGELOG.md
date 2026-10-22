@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output is unchanged) shows an address that a DNS or mDNS answer earlier
   in the capture resolved with its name behind it in Source and
   Destination, `93.184.216.34(www.example.com)`: one word, still starting
-  with the address, so the Log Format, the presets, Follow stream, the
-  summary's filters and the display filters match as before. A and AAAA
+  with the address, so the Log Format, the presets, Filter stream in Regex
+  Lab, the summary's filters and the display filters match as before. A and AAAA
   answers name their address with the name asked for, through CNAMEs; PTR
   answers name the address they spell; over UDP and TCP; an mDNS
   response's additional records too, where a responder puts the addresses
@@ -191,8 +191,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads on, up to 16 MB, with a note. **Export…** writes the whole stream,
   raw bytes per direction or the text as shown, without holding it. Opened
   with the panel's **Follow stream content** button or **Plugins →
-  tcpdump → Follow stream content**; *Follow stream* still filters the
-  stream's lines in the Regex Lab. Needs LogSquirl ≥ 26.11.
+  tcpdump → Follow stream content**; *Filter stream in Regex Lab* still
+  filters the stream's lines in the Regex Lab. Needs LogSquirl ≥ 26.11.
 - **TCP details as Wireshark shows them.** A SYN and a SYN-ACK show their
   options after the window, in the order they were sent: `[SYN] Seq=0
   Win=64240 MSS=1460 SACK_PERM TSval=1000 TSecr=0 WS=128`; unknown options
@@ -275,10 +275,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TCP and UDP stream, as Wireshark's *Statistics → Conversations*: Stream,
   protocol (the Stream Label), address and port of ends A and B, packets
   and bytes (on the wire) in all and each way, start and duration; sortable
-  by every column. A click on a row, or *Filter on this conversation*,
-  opens the Regex Lab with the pattern of the stream's lines, as Follow
-  stream builds it. The counts are taken while converting, for the
-  numbered streams only, so the stream cap bounds them (some 200 bytes a
+  by every column. A click on a row, or *Filter conversation in Regex Lab*,
+  opens the Regex Lab with the pattern of the stream's lines, as Filter
+  stream in Regex Lab builds it. The counts are taken while converting,
+  for the numbered streams only, so the stream cap bounds them (some 200 bytes a
   stream for its counts and row; with the Stream Tracker some 390 MB at the
   default cap of 1,000,000 streams); the packets of streams past it are
   one row, *Other streams*. The table is part of the Capture Summary and
@@ -309,7 +309,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoints apart, under *Tunnel endpoints* and without a filter link, as
   no column shows their addresses. The highlighters and filters in
   `presets/` read a tunnelled packet's Info past the tunnels (a SYN in
-  VXLAN is a *TCP SYN/FIN*), and Follow stream follows the inner
+  VXLAN is a *TCP SYN/FIN*), and Filter stream in Regex Lab picks the inner
   conversation. An Ethernet frame in VXLAN or GRE is dissected as one on
   the wire, a PPPoE session in it unwrapped to its IP packet. At most 4
   tunnels are unwrapped, a
@@ -566,19 +566,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected and copied whole, and its URLs as links; the steps to turn on
   USB debugging are a numbered list. The sidebar's live capture error does
   the same. Notifications show the commands in backticks (#142).
-- **Stream lines in Regex Lab and Show stream content.** *Follow stream*
-  and *Follow stream content* said almost the same for two different
-  things: they are now **Stream lines in Regex Lab** (the sidebar button
-  and tcpdump menu entry that open the Regex Lab with the pattern of the
-  stream's lines) and **Show stream content** (the Packet panel's button
-  and menu entry that show the stream's payload), in the sidebar, the
-  menu, notifications and the README. Each button is enabled only when
-  it works, its tooltip saying why not: no capture in the tab in front, no
-  packet line selected, a packet of no stream, or, for the Regex Lab, a
-  stream past the numbered ones; Stream lines in Regex Lab was enabled
-  with no capture loaded. The menu entry refuses with the same reason,
-  where it opened the Regex Lab on a plain log's line that looked like a
-  packet line (#147).
+- **Filter stream in Regex Lab, Follow stream content and Filter
+  conversation in Regex Lab.** *Follow stream* and *Follow stream content*
+  said almost the same for two different things, and the Conversations
+  table's *Filter on this conversation* was named in a third way: the
+  names now say whether they filter the view or show content. **Filter
+  stream in Regex Lab** (the sidebar button and tcpdump menu entry) opens
+  the Regex Lab with the pattern of the stream's lines, **Follow stream
+  content** (the Packet panel's button and menu entry) shows the stream's
+  payload, as Wireshark's *Follow TCP Stream* window, and **Filter
+  conversation in Regex Lab** (the Conversations table's context menu)
+  opens the Regex Lab on the row's stream; in the sidebar, the menu,
+  tooltips, notifications and the README (#207). Each button is enabled
+  only when it works, its tooltip saying why not: no capture in the tab in
+  front, no packet line selected, a packet of no stream, or, for the Regex
+  Lab, a stream past the numbered ones; Filter stream in Regex Lab was
+  enabled with no capture loaded. The menu entry refuses with the same
+  reason, where it opened the Regex Lab on a plain log's line that looked
+  like a packet line (#147).
 - **The sidebar's display filter says that it opens the Regex Lab.** The
   field showed only a placeholder next to *Open in Regex Lab*; that the
   filter does not filter the tab but opens the Regex Lab was said only in
@@ -713,7 +718,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table instead of copying it (#194).
 - **The TLS key log leaves no copy of its secrets.** The key log file is
   read unbuffered, so the only copy of its bytes is the one wiped (#191).
-- **A long line in Follow stream no longer stalls LogSquirl.** Stream
+- **A long line in Follow stream content no longer stalls LogSquirl.** Stream
   text is broken into lines of at most 4,096 characters, and bidi
   overrides and other invisible format characters are shown escaped, so
   they cannot reorder what the Stream tab shows (#192).

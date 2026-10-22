@@ -56,7 +56,7 @@ class PacketPanel;
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does),
  *     enabled while the Activity rule allows opening a file
- *   - "Stream lines in Regex Lab" button, as in Plugins > tcpdump, only on a
+ *   - "Filter stream in Regex Lab" button, as in Plugins > tcpdump, only on a
  *     host that has the Regex Lab and tells the selected lines:
  *     g_state.hostCapabilities when the widget is created; enabled only when
  *     the Packet Panel can tell the selected line's stream, its tooltip
@@ -117,13 +117,13 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
-    /// Plugins > tcpdump > Show stream content: show the content of the
+    /// Plugins > tcpdump > Follow stream content: show the content of the
     /// selected line's stream in the Packet Panel's Stream tab, or notify
     /// the user why not; if the panel is not in view, a notification says
     /// where it is.
     void followStreamContent();
 
-    /// Plugins > tcpdump > Stream lines in Regex Lab: open the Regex Lab on
+    /// Plugins > tcpdump > Filter stream in Regex Lab: open the Regex Lab on
     /// the lines of the selected line's stream (followStream()), or notify
     /// the user why not, as the sidebar's button says in its tooltip
     /// (PacketPanel::streamLinesProblem()): a line that only looks like a
@@ -181,7 +181,7 @@ private:
     /// Say @p status in the summary label from now on, as summaryLabelText()
     /// decides it (sidebar_text.h), in this widget's palette.
     void showSummary( SummaryStatus status );
-    /// Enable Stream lines in Regex Lab when the Packet Panel can tell the
+    /// Enable Filter stream in Regex Lab when the Packet Panel can tell the
     /// selected line's stream; its tooltip says why not.
     void updateStreamLinesButton();
     /// Run @p action of the sessions for a button, logging what it throws:
@@ -203,7 +203,7 @@ private:
     QPushButton* saveButton_ = nullptr;
     QLabel* liveLabel_ = nullptr;
     QPushButton* startButton_ = nullptr;       ///< Start live capture…
-    QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
+    QPushButton* streamLinesButton_ = nullptr; ///< Filter stream in Regex Lab, if offered.
     QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
     QLabel* liveStderrDropped_ = nullptr;      ///< How many earlier ones it no longer shows.
     quint64 liveStderrLines_ = 0;              ///< The capture's stderr lines, dropped ones too.

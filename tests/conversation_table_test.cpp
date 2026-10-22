@@ -193,15 +193,17 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
                                                           1080 ) );
                 REQUIRE( lab.flags == LOGSQUIRL_REGEX_LAB_MATCH_CASE );
                 REQUIRE( loaded.matched( lab.pattern ) == std::set<int>{ 12, 14, 15 } );
-                REQUIRE( loaded.host.logs.contains( "Filter: " + lab.pattern ) );
+                REQUIRE( loaded.host.logs.contains( "Filter conversation in Regex Lab: "
+                                                    + lab.pattern ) );
             }
         }
 
-        WHEN( "the user chooses Filter on this conversation for a UDP stream" )
+        WHEN( "the user chooses Filter conversation in Regex Lab for a UDP stream" )
         {
             const auto row = model->rowOf( Transport::Udp, 0 );
             loaded.table->view()->setCurrentIndex( model->index( row, 0 ) );
             auto* action = loaded.table->findChild<QAction*>( "filterOnConversation" );
+            REQUIRE( action->text() == "Filter conversation in Regex Lab" );
             REQUIRE( action->isEnabled() );
             action->trigger();
 
@@ -304,10 +306,12 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
         {
             emit loaded.table->view()->clicked( model->index( 2, 0 ) );
 
-            THEN( "no Lab opens, and a notification says why" )
+            THEN( "no Lab opens, and a notification named as the entry says why" )
             {
                 REQUIRE( loaded.host.regexLabs.isEmpty() );
                 REQUIRE( loaded.host.notifications.size() == 1 );
+                REQUIRE( loaded.host.notifications.first().startsWith(
+                    "Filter conversation in Regex Lab: " ) );
                 REQUIRE( loaded.host.notifications.first().contains( "stream cap" ) );
             }
         }
