@@ -3340,8 +3340,10 @@ scripts/format.sh --check            # the CI's Format job, locally
 `dev-asan` (on macOS `dev-asan-homebrew`) builds the tests in Debug with
 AddressSanitizer and UndefinedBehaviorSanitizer into `build-asan/`; its test
 preset runs them offscreen, with leak detection off, and an undefined
-behaviour report ends its test as an ASan report does. The run takes about
-ten minutes; on a small machine, limit the jobs:
+behaviour report ends its test as an ASan report does. The CI runs it on Linux
+(`.github/workflows/ci-sanitizers.yml`, this plugin's own workflow beside the
+shared ones). The build is slow; on a small machine, limit its jobs and
+the tests':
 
 ```bash
 cmake --preset dev-asan-homebrew     # or: dev-asan
