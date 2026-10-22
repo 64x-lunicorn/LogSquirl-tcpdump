@@ -39,6 +39,7 @@
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSplitter>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTextCursor>
 #include <QTextDocument>
@@ -621,9 +622,11 @@ size_t PacketPanel::fittingBytesPerLine() const
     auto room = dump_->viewport()->width();
     // A vertical scroll bar the 8-byte lines brought in is room for the
     // 16-byte ones, half as many, if they would not need it: a line to
-    // spare, so that the choice cannot flip back and forth.
+    // spare, so that the choice cannot flip back and forth.  A transient
+    // bar, drawn over the text, takes no room to give.
     const auto* bar = dump_->verticalScrollBar();
-    if ( dumpBytesPerLine_ == kNarrowDumpBytesPerLine && bar->isVisible() ) {
+    if ( dumpBytesPerLine_ == kNarrowDumpBytesPerLine && bar->isVisible()
+         && !bar->style()->styleHint( QStyle::SH_ScrollBar_Transient, nullptr, bar ) ) {
         const auto lines = ( bytes_.size() + kDumpBytesPerLine - 1 ) / kDumpBytesPerLine;
         const auto height = static_cast<double>( lines + 1 ) * metrics.lineSpacing() + 2 * margin;
         if ( height <= dump_->viewport()->height() ) {

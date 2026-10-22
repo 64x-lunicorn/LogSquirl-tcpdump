@@ -42,6 +42,7 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTreeWidget>
@@ -512,16 +513,29 @@ SCENARIO( "The Packet Panel's hex dump goes back to 16 bytes a line as soon as a
             REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
             REQUIRE( dump->verticalScrollBar()->isVisible() );
             REQUIRE( dump->verticalScrollBar()->width() > 2 );
+            auto* bar = dump->verticalScrollBar();
+            const bool transient
+                = bar->style()->styleHint( QStyle::SH_ScrollBar_Transient, nullptr, bar );
 
             AND_WHEN( "it is widened to where a 16-byte line fits without the scroll bar" )
             {
                 widenToBarHalf();
 
-                THEN( "it shows 16 bytes a line, with no scroll bar and nothing cut off" )
+                THEN( "it shows 16 bytes a line, with no scroll bar and nothing cut off, where "
+                      "the bar takes room" )
                 {
-                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 73 );
-                    REQUIRE_FALSE( dump->verticalScrollBar()->isVisible() );
+                    const auto first = dump->toPlainText().split( '\n' )[ 0 ].size();
+                    CAPTURE( transient, needed, bar->width(), dump->viewport()->width(),
+                             dump->viewport()->height(), metrics.lineSpacing(), wideLines );
+                    // A transient bar, drawn over the text, took no room:
+                    // the line still does not fit.
+                    REQUIRE( first == ( transient ? 40 : 73 ) );
+                    if ( !transient ) {
+                        REQUIRE_FALSE( bar->isVisible() );
+                    }
                     REQUIRE( dump->horizontalScrollBar()->maximum() == 0 );
+                    runFor( 50 );
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == first );
                 }
             }
         }
