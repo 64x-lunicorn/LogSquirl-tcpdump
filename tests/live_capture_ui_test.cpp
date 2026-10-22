@@ -145,9 +145,24 @@ QString commandHtml( const QString& html )
 
 /// Whether @p label, shown in @p window, shows all of its text: its lines,
 /// wrapped at its own width, are no wider than it and no more than it is
-/// tall, and it ends before the window's right edge.
+/// tall, and it ends before the window's right edge.  Where the platform's
+/// font makes a word wider than the label (the Windows runner's offscreen
+/// fallback font, twice as wide as a real one), no wrapping at words can
+/// fit it: only the right edge is checked, with a warning.
 bool fitsWidth( const QLabel* label, const QWidget* window )
 {
+    const auto right = label->mapTo( window, QPoint( label->width(), 0 ) ).x();
+    QTextDocument words;
+    words.setDefaultFont( label->font() );
+    words.setHtml( label->text() );
+    words.setDocumentMargin( 0 );
+    words.setTextWidth( 0 ); // its ideal width is then its widest word's
+    if ( words.idealWidth() > label->contentsRect().width() ) {
+        WARN( "a word is " << words.idealWidth() << " px wide in this platform's font, "
+                           << label->contentsRect().width() << " px fit the label" );
+        return right <= window->width();
+    }
+
     QTextDocument document;
     document.setDefaultFont( label->font() );
     document.setHtml( label->text() );
@@ -157,7 +172,6 @@ bool fitsWidth( const QLabel* label, const QWidget* window )
     option.setWrapMode( QTextOption::WordWrap );
     document.setDefaultTextOption( option );
     document.setTextWidth( label->contentsRect().width() );
-    const auto right = label->mapTo( window, QPoint( label->width(), 0 ) ).x();
     UNSCOPED_INFO( "text " << document.idealWidth() << " x " << document.size().height() << " in "
                            << label->contentsRect().width() << " x "
                            << label->contentsRect().height() << ", right edge " << right << " of "
