@@ -2341,12 +2341,17 @@ running tcpdump in the background with its stderr and pid in
 temporary directory is the shell user's, who could plant a symlink or a pid
 there: the script makes the directory itself with `mkdir` under `umask
 077` and runs nothing if it was there; every script enters it only if it
-is no symlink and, once in it, root's (`[ -O . ]`) and `drwx------` (`ls
--ld .`), then names the files relative to it; the stop and cleanup scripts
+is no symlink and, once in it with `cd -P`, physically the capture's
+directory (`pwd -P`, against the temporary directory's own `pwd -P` and
+the name: the shell user may swap it for a symlink between the test and
+the `cd`, as the temporary directory has no sticky bit), root's
+(`[ -O . ]`) and `drwx------` (`ls -ld .`), then names the files relative
+to it; the stop and cleanup scripts
 kill only a positive integer (`case $p in ''|0*|*[!0-9]*)`), and the stop
 mark `logsquirl-<tag>.stop` is a directory, made with `mkdir`, which never
 writes through a symlink. The scripts use only what Android's mksh and
-toybox have (`[ -O ]`, `set -C`, `umask`, `ls -ld`, `mkdir`, `rmdir`). Every
+toybox have (`[ -O ]`, `set -C`, `umask`, `cd -P`, `pwd -P`, `ls -ld`, `mkdir`,
+`rmdir`). Every
 word in a device command line goes through `shellQuote()` (POSIX single
 quotes). The stream is a Process Source that, as it goes, ends tcpdump on
 the device (through su when it runs as root) and removes its files, and

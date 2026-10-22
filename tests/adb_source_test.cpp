@@ -773,6 +773,19 @@ void captureDirectoryWith( const AdbCaptureFiles& files, const QByteArray& pid )
     writeFile( files.dir + "/" + kAdbPidFile, Bytes( pid.begin(), pid.end() ) );
 }
 
+/// A shell prelude that, at the script's first cd, moves the capture's
+/// directory to @p elsewhere and leaves a symlink to it in its place: what
+/// the device's shell user can do between the script's symlink test and its
+/// cd, the temporary directory being theirs and without a sticky bit.
+QString swappedAtFirstCd( const FakeAdb& adb, const AdbCaptureFiles& files,
+                          const QString& elsewhere )
+{
+    return QString( "cd() { if [ ! -e '%1' ]; then : >'%1'; /bin/mv '%2' '%3' && /bin/ln -s '%3' "
+                    "'%2'; fi; "
+                    "command cd \"$@\"; }; " )
+        .arg( adb.path( "swapped" ), files.dir, elsewhere );
+}
+
 } // namespace
 
 SCENARIO( "The stop and cleanup scripts end only a positive pid in root's own directory",
@@ -832,6 +845,20 @@ SCENARIO( "The stop and cleanup scripts end only a positive pid in root's own di
                 REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
                 REQUIRE( readText( elsewhere.dir + "/" + kAdbPidFile ) == "4242" );
             }
+
+            THEN( "a symlink to another directory of root's alone, put in its place just "
+                  "before the cd, ends nothing" )
+            {
+                clearDevice( adb );
+                QFile::remove( adb.path( "swapped" ) );
+                captureDirectoryWith( files, "4242" );
+                const auto elsewhere = adb.path( "tmp/elsewhere" );
+                runOnDevice( adb, shell, swappedAtFirstCd( adb, files, elsewhere ) + script );
+                REQUIRE( QFileInfo::exists( adb.path( "swapped" ) ) );
+                REQUIRE( QFileInfo( files.dir ).isSymLink() );
+                REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+                REQUIRE( readText( elsewhere + "/" + kAdbPidFile ) == "4242" );
+            }
         }
 
         THEN( "the stop mark is never written through a symlink" )
@@ -885,6 +912,27 @@ SCENARIO( "The capture script leaves its pid only in a directory it made itself"
                          .contains( "listening on wlan0" ) );
             runOnDevice( adb, shell, adbCleanupScript( files ) );
             REQUIRE( adb.deviceFiles().isEmpty() );
+        }
+
+        THEN( "its directory swapped for a symlink to another of root's alone just before "
+              "the cd: it refuses, and the stderr script reads nothing from there" )
+        {
+            reset();
+            QFile::remove( adb.path( "swapped" ) );
+            const auto elsewhere = adb.path( "tmp/elsewhere" );
+            runOnDevice( adb, shell, swappedAtFirstCd( adb, files, elsewhere ) + script );
+            REQUIRE( QFileInfo::exists( adb.path( "swapped" ) ) );
+            REQUIRE( adb.tcpdumpLog().isEmpty() );
+            REQUIRE_FALSE( QFileInfo::exists( elsewhere + "/" + kAdbPidFile ) );
+
+            writeFile( elsewhere + "/" + kAdbErrFile, text( "secret" ) );
+            REQUIRE( QFile::remove( files.dir ) );
+            REQUIRE( QDir().rename( elsewhere, files.dir ) );
+            QFile::remove( adb.path( "swapped" ) );
+            const auto said = runOnDevice(
+                adb, shell, swappedAtFirstCd( adb, files, elsewhere ) + adbStderrScript( files ) );
+            REQUIRE( QFileInfo::exists( adb.path( "swapped" ) ) );
+            REQUIRE_FALSE( said.contains( "secret" ) );
         }
 
         for ( const auto& planted :

@@ -198,15 +198,21 @@ namespace {
  * it is one root made for the capture: no symlink, and, once in it, root's
  * (the user the script runs as) and its alone (drwx------).  The device's
  * temporary directory is the shell user's, who could put anything there,
- * but cannot write into a directory of root's 0700.  What follows names
- * the files relative to it, in the directory entered, whatever is put in
- * its place afterwards.
+ * and swap the directory for a symlink between the test and the cd (it has
+ * no sticky bit), but cannot write into a directory of root's 0700.  So the
+ * directory entered is checked once in it: physically the one in the
+ * temporary directory, by its name.  What follows names the files relative
+ * to it, in the directory entered, whatever is put in its place afterwards.
  */
 QString enterCaptureDir( const AdbCaptureFiles& files )
 {
-    return QStringLiteral( "[ ! -h %1 ] && cd %1 2>/dev/null && [ -O . ] && "
+    const auto slash = files.dir.lastIndexOf( QLatin1Char( '/' ) );
+    const auto parent = slash > 0 ? files.dir.left( slash ) : QStringLiteral( "/" );
+    return QStringLiteral( "[ ! -h %1 ] && cd -P %1 2>/dev/null && "
+                           "[ \"$(pwd -P)\" = \"$(cd -P %2 && pwd -P)\"/%3 ] && [ -O . ] && "
                            "case $(ls -ld .) in drwx------*) ;; *) false ;; esac" )
-        .arg( shellQuote( files.dir ) );
+        .arg( shellQuote( files.dir ), shellQuote( parent ),
+              shellQuote( files.dir.mid( slash + 1 ) ) );
 }
 
 /// The shell test that $p, read from the pid file, is a positive integer:
