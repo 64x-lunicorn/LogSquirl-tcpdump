@@ -229,7 +229,9 @@ QString adbCaptureScript( const QString& tcpdump, const AdbCaptureFiles& files )
     // that came before the pid was there (it leaves the mark first, then
     // reads the pid) is seen either way.  Stopped so, its stderr file goes
     // too, which the Stop could not remove yet, and the directory with it.
-    return QStringLiteral( "umask 077; mkdir %2 || exit 1; %3 || exit 1; set -C; "
+    // Refusing the directory, it removes a mark a Stop left for it.
+    return QStringLiteral( "umask 077; mkdir %2 && %3 || { rmdir %6 2>/dev/null; exit 1; }; "
+                           "set -C; "
                            "%1 2>%5 & p=$!; echo $p >%4; [ -e %6 ] && kill $p; wait $p; "
                            "rm -f %4; [ -e %6 ] && rm -f %5; cd / && rmdir %2 %6" )
         .arg( tcpdump, shellQuote( files.dir ), enterCaptureDir( files ),
@@ -241,10 +243,13 @@ QString adbStopScript( const AdbCaptureFiles& files )
 {
     // The mark is left for a script that has not left its pid yet, which
     // removes it as it ends; once the pid was read, tcpdump is ended here.
+    // A directory there but not root's own the script refuses, never
+    // looking for the mark: it goes here.
     return QStringLiteral( "mkdir %1 2>/dev/null; if %2; then "
                            "if p=$(cat %3 2>/dev/null) && %4; then "
                            "kill $p 2>/dev/null; rm -f %3; rmdir %1; fi; "
-                           "rm -f %5; cd / && rmdir %6; fi" )
+                           "rm -f %5; cd / && rmdir %6; "
+                           "elif [ -e %6 ] || [ -h %6 ]; then rmdir %1; fi" )
         .arg( shellQuote( files.stop ), enterCaptureDir( files ), QLatin1String( kAdbPidFile ),
               kPositivePid, QLatin1String( kAdbErrFile ), shellQuote( files.dir ) );
 }

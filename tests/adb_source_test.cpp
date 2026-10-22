@@ -935,6 +935,41 @@ SCENARIO( "The capture script leaves its pid only in a directory it made itself"
             REQUIRE_FALSE( said.contains( "secret" ) );
         }
 
+        for ( const auto& planted : { QString( "a symlink to a directory" ),
+                                      QString( "a directory others may write" ) } ) {
+            const auto plant = [ & ] {
+                if ( planted == "a symlink to a directory" ) {
+                    REQUIRE( QFile::link( victimDir, files.dir ) );
+                }
+                else {
+                    REQUIRE( QDir().mkpath( files.dir ) );
+                    REQUIRE( QFile::setPermissions(
+                        files.dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                       | QFileDevice::ExeOwner | QFileDevice::WriteGroup
+                                       | QFileDevice::ExeGroup ) );
+                }
+            };
+
+            THEN( ( "its directory there as " + planted
+                    + ": a Stop before or after it leaves no stop mark" )
+                      .toStdString() )
+            {
+                reset();
+                // A Stop before the script: the mark stays for it.
+                runOnDevice( adb, shell, adbStopScript( files ) );
+                REQUIRE( QFileInfo( files.stop ).isDir() );
+                plant();
+                runOnDevice( adb, shell, script );
+                REQUIRE( adb.tcpdumpLog().isEmpty() );
+                REQUIRE_FALSE( QFileInfo::exists( files.stop ) );
+
+                // A Stop after the script refused.
+                runOnDevice( adb, shell, adbStopScript( files ) );
+                REQUIRE_FALSE( QFileInfo::exists( files.stop ) );
+                REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+            }
+        }
+
         for ( const auto& planted :
               { QString( "a symlink to a directory" ), QString( "a symlink to a file" ),
                 QString( "a dangling symlink" ), QString( "a directory" ) } ) {

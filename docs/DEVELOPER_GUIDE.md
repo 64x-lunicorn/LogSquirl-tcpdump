@@ -2362,7 +2362,9 @@ leaves a `.stop` mark first and then kills the pid if the script has left
 it; the script leaves its pid first and then looks for the mark, killing
 its own tcpdump if it is there, so a Stop between `&` and the pid file
 ends tcpdump too (the script removes the mark, the pid and, stopped so,
-the stderr file as it ends). After adb has ended by itself,
+the stderr file as it ends). A directory there that is not root's own
+leaves no mark either: the script removes it as it refuses the directory,
+the stop script when it finds the directory refused. After adb has ended by itself,
 `adbCleanupScript()` kills by the pid if it is still there and removes the
 files. A LogSquirl that crashes leaves tcpdump running until its next
 write to the dead stream, and the directory in `/data/local/tmp`.
