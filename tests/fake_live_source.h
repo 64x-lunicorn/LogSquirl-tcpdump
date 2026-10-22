@@ -30,7 +30,8 @@
  * and snaplen the UI passed.  With a program set, it runs that program
  * instead (the default makeSource(), a Process Source), its arguments
  * `-i <interface> -s <snaplen> <filter>`.  With a listing program set, it
- * lists interfaces by running that (runListing()), as a real kind does.
+ * lists interfaces by running that (runListing()), as a real kind does;
+ * with a listing error set, the listing fails with it.
  * With options on, its options widget is a line edit, "fakeNote", for the
  * option "note"; a note "bad" does not validate.
  */
@@ -179,6 +180,10 @@ public:
         }
         ++interfaceListings;
         tcpdump::LiveListing listing;
+        if ( !listingError.isEmpty() ) {
+            listing.error = listingError;
+            return listing;
+        }
         if ( !listingProgram.isEmpty() ) {
             const auto output = tcpdump::runListing( { listingProgram, {} }, timeout );
             listing.error = output.error;
@@ -256,6 +261,7 @@ public:
     QString hint;             ///< What explainFailure() says to a permission error.
     QString program;          ///< Set: a capture runs this program.
     QString listingProgram;   ///< Set: listing the interfaces runs this program.
+    QString listingError;     ///< Set: listing the interfaces fails with it.
     bool withOptions = false; ///< Whether it has an options widget.
     mutable std::atomic<int> interfaceListings{ 0 };
 

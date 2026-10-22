@@ -87,8 +87,12 @@ QString guidanceHtml( const QString& text )
         for ( auto it = url.globalMatch( part ); it.hasNext(); ) {
             const auto match = it.next();
             html += part.mid( at, match.capturedStart() - at ).toHtmlEscaped();
-            html += QStringLiteral( "<a href=\"%1\">%1</a>" )
-                        .arg( match.captured().toHtmlEscaped() );
+            // Only a page the plugin's own text names is a link: a URL a
+            // program or host wrote (a phishing page) stays text.
+            html += isGuidanceLink( match.captured() )
+                        ? QStringLiteral( "<a href=\"%1\">%1</a>" )
+                              .arg( match.captured().toHtmlEscaped() )
+                        : match.captured().toHtmlEscaped();
             at = match.capturedEnd();
         }
         html += part.mid( at ).toHtmlEscaped();

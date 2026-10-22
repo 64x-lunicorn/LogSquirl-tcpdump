@@ -2307,7 +2307,11 @@ list, or an unreadable BPF device on macOS add
 `capturePermissionGuidance( os, program )` to its error, which the form
 shows as its status, as `explainFailure()` adds it to a failed capture's.
 The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
-downloads; no code path runs them, sudo, or anything that prompts. Tests use
+downloads; no code path runs them, sudo, or anything that prompts. The
+form's status and the sidebar's live error show it with `guidanceHtml()`,
+which links only the pages the kinds' own text names (`isGuidanceLink()`,
+the `k…Url` constants of `live_source.h`): a URL in what a program or host
+wrote, which an error carries, is text to be read, never a link. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
 capture or a program, a failure with a hint, devices on request) through
 `CaptureSessions::setLiveSources()`. The test runner sets

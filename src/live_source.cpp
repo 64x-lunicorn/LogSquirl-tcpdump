@@ -119,6 +119,17 @@ QString liveChoiceProblem( const LiveSourceRegistry* sources, const LiveChoice& 
     return kind->validate( choice );
 }
 
+bool isGuidanceLink( const QString& url )
+{
+    for ( const char* own : { kWiresharkDownloadUrl, kNpcapDownloadUrl, kAndroidDeviceSetupUrl,
+                              kPlatformToolsUrl } ) {
+        if ( url == QLatin1String( own ) ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool isRunnableProgram( const QString& path )
 {
     const QFileInfo file( path );

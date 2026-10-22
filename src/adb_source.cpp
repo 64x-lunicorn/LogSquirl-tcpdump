@@ -252,9 +252,9 @@ std::vector<LiveTarget> parseAdbDevices( const QString& out )
         }
         const auto state = rest.section( QLatin1Char( ' ' ), 0, 0 );
         if ( rest.startsWith( QStringLiteral( "no permissions" ) ) ) {
-            device.problem = QStringLiteral(
-                "no permissions: on Linux, add a udev rule for the device "
-                "(https://developer.android.com/studio/run/device) and reconnect it" );
+            device.problem = QStringLiteral( "no permissions: on Linux, add a udev rule for the "
+                                             "device (%1) and reconnect it" )
+                                 .arg( QLatin1String( kAndroidDeviceSetupUrl ) );
         }
         else if ( state == QStringLiteral( "unauthorized" ) ) {
             device.problem = QStringLiteral(
@@ -328,10 +328,9 @@ QString adbAuthorizeGuidance()
 
 QString adbInstallHint()
 {
-    return QStringLiteral(
-        "adb not found: install the Android SDK Platform-Tools "
-        "(https://developer.android.com/tools/releases/platform-tools) or Android Studio, and "
-        "put adb on PATH or set ANDROID_HOME." );
+    return QStringLiteral( "adb not found: install the Android SDK Platform-Tools (%1) or Android "
+                           "Studio, and put adb on PATH or set ANDROID_HOME." )
+        .arg( QLatin1String( kPlatformToolsUrl ) );
 }
 
 AdbPrograms AdbPrograms::forThisComputer()

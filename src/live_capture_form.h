@@ -79,7 +79,9 @@ namespace tcpdump {
  * A source's text (a reason, a listing's error, a failure's Guidance) as
  * rich text for a label: each `command` in backticks on a line of its own,
  * in a fixed-width font, to be selected and copied whole; each http(s) URL
- * a link; each line break kept.  The rest is escaped.  Backticks that do
+ * of the plugin's own pages (isGuidanceLink()) a link, any other text to be
+ * read but not clicked, as it may be what a program or host wrote; each
+ * line break kept.  The rest is escaped.  Backticks that do
  * not pair are shown as they are.
  */
 QString guidanceHtml( const QString& text );

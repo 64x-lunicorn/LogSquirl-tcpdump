@@ -85,6 +85,19 @@ using LiveOptions = QMap<QString, QString>;
 /// to the kind for this session, but never written to settings.ini.
 inline constexpr QChar kSecretOptionMark = QLatin1Char( '*' );
 
+/// The web pages the kinds' own text (a reason, a hint, Guidance) names.
+/// guidanceHtml() makes these, and no other URL, a link: a URL a program or
+/// host wrote stays text.  A page the guidance comes to name is added here
+/// and to isGuidanceLink().
+inline constexpr char kWiresharkDownloadUrl[] = "https://www.wireshark.org/download.html";
+inline constexpr char kNpcapDownloadUrl[] = "https://npcap.com/#download";
+inline constexpr char kAndroidDeviceSetupUrl[] = "https://developer.android.com/studio/run/device";
+inline constexpr char kPlatformToolsUrl[]
+    = "https://developer.android.com/tools/releases/platform-tools";
+
+/// Whether @p url is one of the pages the kinds' own text names, exactly.
+bool isGuidanceLink( const QString& url );
+
 /// Whether @p path is a program that can be run: a file, executable.
 bool isRunnableProgram( const QString& path );
 

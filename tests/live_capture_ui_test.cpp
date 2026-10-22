@@ -27,6 +27,7 @@
 #include <catch2/catch.hpp>
 
 #include "activity.h"
+#include "adb_source.h"
 #include "fake_live_source.h"
 #include "fakehost.h"
 #include "live_capture_form.h"
@@ -753,15 +754,31 @@ SCENARIO( "A source's text shows its commands on lines of their own and its link
                  == "Restart adb:<pre>adb kill-server</pre>" );
     }
 
-    THEN( "a URL is a link, without the punctuation after it" )
+    THEN( "a URL of the plugin's own guidance is a link, without the punctuation after it" )
     {
-        REQUIRE(
-            guidanceHtml( "Get it (https://example.org/a.html, \"pkg\")." )
-            == "Get it (<a href=\"https://example.org/a.html\">https://example.org/a.html</a>, "
-               "&quot;pkg&quot;)." );
+        REQUIRE( guidanceHtml( "Get it (https://www.wireshark.org/download.html, \"pkg\")." )
+                 == "Get it (<a href=\"https://www.wireshark.org/download.html\">"
+                    "https://www.wireshark.org/download.html</a>, &quot;pkg&quot;)." );
         REQUIRE(
             guidanceHtml( "From https://npcap.com/#download." )
             == "From <a href=\"https://npcap.com/#download\">https://npcap.com/#download</a>." );
+    }
+
+    THEN( "any other URL is text, to be read but not clicked" )
+    {
+        REQUIRE( guidanceHtml( "Sign in at https://example.org/login." )
+                 == "Sign in at https://example.org/login." );
+        REQUIRE( guidanceHtml( "See https://npcap.com/#download.example.org now" )
+                 == "See https://npcap.com/#download.example.org now" );
+    }
+
+    THEN( "the install hints keep their links" )
+    {
+        REQUIRE( guidanceHtml( adbInstallHint() )
+                     .contains( "<a href=\"https://developer.android.com/tools/releases/"
+                                "platform-tools\">" ) );
+        REQUIRE( guidanceHtml( capturePermissionGuidance( CaptureOs::Windows, {} ) )
+                     .contains( "<a href=\"https://npcap.com/#download\">" ) );
     }
 
     THEN( "line breaks are kept, markup is escaped, and a lone backtick is shown as it is" )
@@ -790,6 +807,72 @@ SCENARIO( "A source's text shows its commands on lines of their own and its link
             REQUIRE( fields.status->text()
                      == "fakecap cannot capture: run<pre>fakecap --allow</pre>" );
             REQUIRE( fields.status->openExternalLinks() );
+        }
+    }
+}
+
+SCENARIO( "A URL a program wrote is text in the dialog's status and the section's error, but the "
+          "plugin's own are links",
+          "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir root;
+    auto fake = std::make_shared<FakeSourceKind>();
+    const QString phishing = "https://login.example.org/session";
+
+    GIVEN( "a source whose listing fails with a URL from its program" )
+    {
+        fake->listingError = "fakecap exited with code 1:\nfakecap: sign in at " + phishing;
+        LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+        const Fields fields( &dialog );
+        REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+
+        THEN( "the status shows the URL as text" )
+        {
+            REQUIRE_FALSE( fields.status->isHidden() );
+            REQUIRE( fields.status->text().contains( phishing ) );
+            REQUIRE_FALSE( fields.status->text().contains( "<a " ) );
+        }
+    }
+
+    GIVEN( "a source unavailable for a reason with the plugin's own download link" )
+    {
+        fake->unavailableReason = "Install Npcap from https://npcap.com/#download.";
+        LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+        const Fields fields( &dialog );
+
+        THEN( "the status links to it" )
+        {
+            REQUIRE( fields.status->text().contains( "<a href=\"https://npcap.com/#download\">" ) );
+            REQUIRE( fields.status->openExternalLinks() );
+        }
+    }
+
+    GIVEN( "a capture that fails with a URL on its program's stderr, and Guidance with the "
+           "plugin's own" )
+    {
+        fake->failure
+            = ( "fakecap exited with code 1:\nfakecap: permission denied, see " + phishing )
+                  .toStdString();
+        fake->hint = "Install Npcap from https://npcap.com/#download.";
+        CaptureSessions sessions;
+        SidebarWidget sidebar( sessions );
+        sessions.setTempRoot( root.path() );
+        sessions.setLiveSources( registryOf( fake ) );
+        const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
+        const Fields fields( dialog.get() );
+        REQUIRE( listed( dialog->form(), fields ) );
+        startFrom( sessions, sidebar, *dialog );
+        REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
+
+        THEN( "the section's error shows the program's URL as text, the Guidance's as a link" )
+        {
+            auto* error = sidebar.findChild<QLabel*>( "liveError" );
+            REQUIRE_FALSE( error->isHidden() );
+            REQUIRE( error->text().contains( "see " + phishing ) );
+            REQUIRE_FALSE( error->text().contains( "href=\"" + phishing ) );
+            REQUIRE( error->text().contains( "<a href=\"https://npcap.com/#download\">" ) );
+            REQUIRE( error->openExternalLinks() );
         }
     }
 }
