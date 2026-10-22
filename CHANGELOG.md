@@ -523,6 +523,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each case.
 
 ### Changed
+- **A click on the Conversations table selects; a double click filters.**
+  A single click on a conversation only selects it, so reading its numbers
+  or sorting no longer opens the Regex Lab every time; a double click,
+  Enter on the selected row, or **Filter conversation in Regex Lab** in its
+  context menu opens it, the *Other streams* row notifying instead as
+  before. The packets and bytes each way (A→B, B→A) are hidden at first, so
+  that the table fits a sidebar of ordinary width; the header's context
+  menu shows or hides each column, the choice kept in `settings.ini`
+  (`[conversations] hiddenColumns`). The table's tooltip says how to
+  filter (#209).
 - **The hex dump fits a narrow sidebar.** While the Packet panel's dump is
   too narrow for a line of 16 bytes, it shows 8 bytes a line (the offset,
   8 hex pairs, 8 ASCII characters), and 16 again once it is wide enough,

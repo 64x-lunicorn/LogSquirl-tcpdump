@@ -50,6 +50,9 @@ constexpr const char* kSomeIpPortsKey = "conversion/someIpPorts";
 constexpr const char* kSomeIpNamesFileKey = "conversion/someIpNamesFile";
 constexpr const char* kKeyLogPathKey = "conversion/tlsKeyLogFile";
 
+/// The Conversations table's hidden columns, in the [conversations] group.
+constexpr const char* kHiddenConversationColumnsKey = "conversations/hiddenColumns";
+
 /// The keys of the live capture choice, in the [live] group.
 constexpr const char* kLiveSourceKey = "live/source";
 constexpr const char* kLiveDeviceKey = "live/device";
@@ -184,6 +187,33 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     file.setValue( kSomeIpPortsKey, ports.isEmpty() ? QVariant( QString() ) : QVariant( ports ) );
     file.setValue( kSomeIpNamesFileKey, options.someIpNamesFile );
     file.setValue( kKeyLogPathKey, options.keyLogPath );
+    file.sync();
+    return file.status() == QSettings::NoError;
+}
+
+std::optional<QStringList> loadHiddenConversationColumns( const QString& configDir )
+{
+    if ( configDir.isEmpty() ) {
+        return std::nullopt;
+    }
+    const QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    if ( !file.contains( kHiddenConversationColumnsKey ) ) {
+        return std::nullopt;
+    }
+    // A list in the file, one name, or none (an empty value: all shown).
+    auto columns = file.value( kHiddenConversationColumnsKey ).toStringList();
+    columns.removeAll( QString() );
+    return columns;
+}
+
+bool saveHiddenConversationColumns( const QString& configDir, const QStringList& columns )
+{
+    if ( configDir.isEmpty() || !QDir().mkpath( configDir ) ) {
+        return false;
+    }
+    QSettings file( settingsFilePath( configDir ), QSettings::IniFormat );
+    file.setValue( kHiddenConversationColumnsKey,
+                   columns.isEmpty() ? QVariant( QString() ) : QVariant( columns ) );
     file.sync();
     return file.status() == QSettings::NoError;
 }

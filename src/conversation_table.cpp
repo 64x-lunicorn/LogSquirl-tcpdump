@@ -27,10 +27,12 @@
 #include "follow_stream.h"
 #include "plugin.h"
 #include "regex_lab.h"
+#include "settings.h"
 
 #include <QAction>
 #include <QHeaderView>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QTableView>
 #include <QVBoxLayout>
@@ -47,6 +49,21 @@ const char* const kHeaders[ ConversationModel::ColumnCount ] = {
     "Stream", "Protocol",    "Address A", "Port A",      "Address B", "Port B",    "Packets",
     "Bytes",  "Packets A→B", "Bytes A→B", "Packets B→A", "Bytes B→A", "Rel Start", "Duration",
 };
+
+/// The names of the columns in the settings file, which a later retitled
+/// header does not change.
+const char* const kColumnNames[ ConversationModel::ColumnCount ] = {
+    "stream", "protocol",    "addressA",  "portA",       "addressB",  "portB",    "packets",
+    "bytes",  "packetsAToB", "bytesAToB", "packetsBToA", "bytesBToA", "relStart", "duration",
+};
+
+/// Whether @p column is hidden until the user shows it: the packets and
+/// bytes each way, which would push the rest out of a sidebar's width.
+bool hiddenByDefault( int column )
+{
+    return column >= ConversationModel::PacketsAToBColumn
+           && column <= ConversationModel::BytesBToAColumn;
+}
 
 QString transportName( Transport transport )
 {
@@ -313,10 +330,82 @@ ConversationTable::ConversationTable( QWidget* parent )
     view_->setContextMenuPolicy( Qt::ActionsContextMenu );
     connect( filterAction_, &QAction::triggered, this,
              [ this ] { filterOn( view_->currentIndex().row() ); } );
-    connect( view_, &QTableView::clicked, this,
+    // A click only selects, so that reading or sorting opens nothing; a
+    // double click or Enter filters (not activated, which some styles emit
+    // on a single click).
+    connect( view_, &QTableView::doubleClicked, this,
              [ this ]( const QModelIndex& index ) { filterOn( index.row() ); } );
+    view_->installEventFilter( this );
+
+    // The header's context menu shows or hides each column, as last chosen.
+    auto* header = view_->horizontalHeader();
+    header->setContextMenuPolicy( Qt::ActionsContextMenu );
+    const auto saved = loadHiddenConversationColumns( hostConfigDir() );
+    int shown = 0;
+    for ( int column = 0; column < ConversationModel::ColumnCount; ++column ) {
+        const bool hidden = saved ? saved->contains( QLatin1String( kColumnNames[ column ] ) )
+                                  : hiddenByDefault( column );
+        view_->setColumnHidden( column, hidden );
+        shown += hidden ? 0 : 1;
+    }
+    if ( shown == 0 ) {
+        // A file that hides them all: the header, and its menu, must stay.
+        view_->setColumnHidden( ConversationModel::StreamColumn, false );
+    }
+    for ( int column = 0; column < ConversationModel::ColumnCount; ++column ) {
+        auto* entry = new QAction( QString::fromUtf8( kHeaders[ column ] ), header );
+        entry->setCheckable( true );
+        entry->setChecked( !view_->isColumnHidden( column ) );
+        header->addAction( entry );
+        connect( entry, &QAction::toggled, this,
+                 [ this, column ]( bool checked ) { showColumn( column, checked ); } );
+        columnEntries_[ static_cast<size_t>( column ) ] = entry;
+    }
+    updateColumnEntries();
 
     setSummary( nullptr );
+}
+
+bool ConversationTable::eventFilter( QObject* watched, QEvent* event )
+{
+    if ( watched == view_ && event->type() == QEvent::KeyPress ) {
+        const auto key = static_cast<QKeyEvent*>( event )->key();
+        if ( ( key == Qt::Key_Return || key == Qt::Key_Enter )
+             && view_->currentIndex().isValid() ) {
+            filterOn( view_->currentIndex().row() );
+            return true;
+        }
+    }
+    return QWidget::eventFilter( watched, event );
+}
+
+void ConversationTable::showColumn( int column, bool shown )
+{
+    view_->setColumnHidden( column, !shown );
+    updateColumnEntries();
+
+    QStringList hidden;
+    for ( int each = 0; each < ConversationModel::ColumnCount; ++each ) {
+        if ( view_->isColumnHidden( each ) ) {
+            hidden << QLatin1String( kColumnNames[ each ] );
+        }
+    }
+    const auto configDir = hostConfigDir();
+    if ( !configDir.isEmpty() && !saveHiddenConversationColumns( configDir, hidden ) ) {
+        hostLog( LOGSQUIRL_LOG_WARNING, "The Conversations table's columns could not be saved in "
+                                            + settingsFilePath( configDir ) );
+    }
+}
+
+void ConversationTable::updateColumnEntries()
+{
+    int shown = 0;
+    for ( int column = 0; column < ConversationModel::ColumnCount; ++column ) {
+        shown += view_->isColumnHidden( column ) ? 0 : 1;
+    }
+    for ( auto* entry : columnEntries_ ) {
+        entry->setEnabled( !( entry->isChecked() && shown == 1 ) );
+    }
 }
 
 void ConversationTable::setSummary( const CaptureSummary* summary )
@@ -345,9 +434,13 @@ void ConversationTable::setSummary( const CaptureSummary* summary )
                              : QStringLiteral( "<b>Conversations</b>" ) );
     const bool canFilter = g_state.hostCapabilities.regexLab;
     filterAction_->setEnabled( canFilter );
-    view_->setToolTip( canFilter ? QStringLiteral( "Click a conversation to filter its lines in "
-                                                   "the Regex Lab" )
-                                 : QString() );
+    const auto columnsHint
+        = QStringLiteral( "Right-click a column header to show or hide columns" );
+    view_->setToolTip( canFilter ? QStringLiteral( "Double-click a conversation, or select it and "
+                                                   "press Enter, to filter its lines in the Regex "
+                                                   "Lab.\n" )
+                                       + columnsHint
+                                 : columnsHint );
 }
 
 void ConversationTable::filterOn( int row )

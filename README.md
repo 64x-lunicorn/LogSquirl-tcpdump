@@ -197,10 +197,14 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    ends A (which sent its first packet) and B with their ports, packets and
    bytes in all and each way (bytes on the wire, as the Length column),
    its start in seconds after the capture's first packet and its duration.
-   Click a column header to sort by it. Click a conversation, or choose
-   **Filter conversation in Regex Lab** from its context menu, and the Regex
-   Lab opens with the pattern of that stream's lines, as **Filter stream in
-   Regex Lab** builds it; apply it to filter the view (needs LogSquirl ≥ 26.11). The
+   The packets and bytes each way are hidden at first, so that the table
+   fits the sidebar: right-click a column header for a menu that shows or
+   hides each column, kept across restarts. Click a column header to sort
+   by it. A click on a conversation selects it; double-click it, press
+   Enter, or choose **Filter conversation in Regex Lab** from its context
+   menu, and the Regex Lab opens with the pattern of that stream's lines,
+   as **Filter stream in Regex Lab** builds it; apply it to filter the view
+   (needs LogSquirl ≥ 26.11). The
    table is counted while converting, for the streams that get a number:
    past the stream cap (see [Options](#options)), the packets of all other
    streams are one row, `?` *Other streams*

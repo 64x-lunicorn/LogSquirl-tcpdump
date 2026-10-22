@@ -3125,9 +3125,17 @@ export, conversation statistics):
   `ConversationRows`, chunks of 4,096 a summary shares with the one before
   where their streams had no packet in between; the model orders pointers
   to them.
-  A click or *Filter conversation in Regex Lab* opens the Regex Lab, logged under that name,
+  A click only selects; a double click (`doubleClicked`, not `activated`,
+  which some styles emit on a single click), Enter (an event filter on the
+  view) or *Filter conversation in Regex Lab* opens the Regex Lab, logged under that name,
   with `conversationPattern()`, the Filter stream in Regex Lab pattern built from the
-  row's stream number, addresses and ports.
+  row's stream number, addresses and ports. The header's context menu has
+  a checkable entry per column; the hidden ones are saved by name
+  (`kColumnNames`, not the header text) in `settings.ini` under
+  `conversations/hiddenColumns` (`saveHiddenConversationColumns()`), read
+  when the table is made. Without that key the per-direction packets and
+  bytes are hidden; the entry of the only column shown is disabled, so the
+  header, and the menu with it, never goes.
 
 - **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
   `exportPackets(index, numbers, path, cancel, progress)` reads the

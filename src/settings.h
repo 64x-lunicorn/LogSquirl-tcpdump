@@ -34,6 +34,8 @@
  *
  * And the sidebar's layout (group [sidebar]): the sizes of the panes of each
  * splitter the user dragged, so that the layout is back after a restart.
+ * And the columns the user hid in the Conversations table (group
+ * [conversations]).
  */
 
 #pragma once
@@ -44,8 +46,10 @@
 
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
+#include <optional>
 
 namespace tcpdump {
 
@@ -71,6 +75,15 @@ ConversionOptions loadConversionOptions( const QString& configDir );
 
 /// Save @p options in @p configDir; false if they could not be written.
 bool saveConversionOptions( const QString& configDir, const ConversionOptions& options );
+
+/// The columns of the Conversations table the user last hid, by the names
+/// the table gives them in the file; none saved (std::nullopt), so the
+/// table hides its default ones, without a directory, a file or a choice.
+std::optional<QStringList> loadHiddenConversationColumns( const QString& configDir );
+
+/// Save @p columns, by name, as the hidden columns of the Conversations
+/// table in @p configDir; false if they could not be written.
+bool saveHiddenConversationColumns( const QString& configDir, const QStringList& columns );
 
 /// The live capture choice saved in @p configDir; the snaplen within 1 to
 /// kMaxSnaplen, the limits within theirs (kMaxLimitSeconds, …), none if
