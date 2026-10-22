@@ -469,6 +469,85 @@ SCENARIO( "The Packet Panel's hex dump shows 8 bytes a line where 16 do not fit"
     }
 }
 
+SCENARIO( "The Packet Panel's hex dump goes back to 16 bytes a line as soon as a line fits",
+          "[packet_panel]" )
+{
+    GIVEN( "a packet shown at 8 bytes a line, with a vertical scroll bar" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+        auto* dump = panel->findChild<QPlainTextEdit*>( "packetBytes" );
+        loaded.sidebar->resize( 1200, 800 );
+        loaded.sidebar->show();
+        setDumpWidth( loaded, 100 );
+        host.selectedLines = { loaded.lines[ 3 ] };
+        REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+        const auto wideLines = dump->toPlainText().split( '\n' ).size();
+        const QFontMetricsF metrics( dump->font() );
+        // As fittingBytesPerLine() reckons a 16-byte line.
+        const auto needed = qCeil( metrics.horizontalAdvance( QString( 73, QLatin1Char( '0' ) ) )
+                                   + 2 * dump->document()->documentMargin() + dump->cursorWidth() );
+        const auto frame = dump->height() - dump->viewport()->height();
+        const auto setDumpLines = [ & ]( int lines ) {
+            dump->setFixedHeight(
+                qCeil( metrics.lineSpacing() * lines + 2 * dump->document()->documentMargin() )
+                + frame );
+            runFor( 50 );
+        };
+        const auto widenToBarHalf = [ & ] {
+            // Wide enough for a 16-byte line without the scroll bar, not
+            // with it.
+            const auto bar = dump->verticalScrollBar()->width();
+            loaded.sidebar->resize( loaded.sidebar->width() - dump->viewport()->width() + needed
+                                        - bar / 2,
+                                    loaded.sidebar->height() );
+            runFor( 50 );
+        };
+
+        WHEN( "the dump is high enough for its 16-byte lines, but not its 8-byte ones" )
+        {
+            setDumpLines( wideLines + 2 );
+            setDumpWidth( loaded, 60 );
+            REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+            REQUIRE( dump->verticalScrollBar()->isVisible() );
+            REQUIRE( dump->verticalScrollBar()->width() > 2 );
+
+            AND_WHEN( "it is widened to where a 16-byte line fits without the scroll bar" )
+            {
+                widenToBarHalf();
+
+                THEN( "it shows 16 bytes a line, with no scroll bar and nothing cut off" )
+                {
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 73 );
+                    REQUIRE_FALSE( dump->verticalScrollBar()->isVisible() );
+                    REQUIRE( dump->horizontalScrollBar()->maximum() == 0 );
+                }
+            }
+        }
+
+        WHEN( "the dump is too low for its 16-byte lines too" )
+        {
+            setDumpLines( 2 );
+            setDumpWidth( loaded, 60 );
+            REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+            REQUIRE( dump->verticalScrollBar()->isVisible() );
+
+            AND_WHEN( "it is widened to where a 16-byte line fits only without the scroll bar" )
+            {
+                widenToBarHalf();
+
+                THEN( "it stays at 8 bytes a line, not flipping back and forth" )
+                {
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+                    runFor( 50 );
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+                }
+            }
+        }
+    }
+}
+
 SCENARIO( "The Packet Panel reads a packet off the UI thread", "[packet_panel]" )
 {
     GIVEN( "a converted capture in the tab in front" )
