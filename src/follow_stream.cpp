@@ -19,7 +19,7 @@
 
 /**
  * @file follow_stream.cpp
- * @brief Stream lines in Regex Lab, from the selected packet line.
+ * @brief Filter stream in Regex Lab, from the selected packet line.
  *
  * Builds a pattern for the stream of the packet line the Packet Panel read
  * from the selection (Selected Packet Line) and opens it in LogSquirl's
@@ -110,7 +110,7 @@ void followStream( const PacketLine& packet )
     }
     const auto pattern = followStreamPattern( packet );
     if ( !pattern.isEmpty() ) {
-        openRegexLab( "Stream lines in Regex Lab", pattern );
+        openRegexLab( "Filter stream in Regex Lab", pattern );
     }
 }
 

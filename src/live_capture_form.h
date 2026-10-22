@@ -25,12 +25,15 @@
  *        dialog alike.
  *
  * The form lists the sources of a LiveSourceRegistry.  Choosing one shows
- * why it is unavailable, if it is, or lists its devices (if it has any) and
+ * why it is unavailable, if it is, in a note below it (a panel tinted from
+ * the palette, with an icon), or lists its devices (if it has any) and
  * the interfaces of the device chosen, on a worker thread: a listing that
  * hangs (an adb waiting for a device) neither freezes LogSquirl nor keeps
  * the form from changing; a result for a source or device no longer chosen
  * is dropped.  The interface list can be typed in too, for an interface the
- * source does not list ("any").  Refresh lists anew.
+ * source does not list ("any").  Refresh lists anew.  A listing that finds
+ * the source cannot capture at all (LiveListing::cannotCapture) keeps
+ * problem() saying so until a listing finds otherwise.
  *
  * The listings run on a thread pool the form is given, or one of its own.
  * A listing touches nothing of the form, so a form with a given pool goes
@@ -59,6 +62,7 @@
 #include "live_source.h"
 
 #include <QDialog>
+#include <QLabel>
 #include <QThreadPool>
 #include <QWidget>
 
@@ -68,7 +72,6 @@
 
 class QComboBox;
 class QFormLayout;
-class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
@@ -77,14 +80,36 @@ namespace tcpdump {
 
 /**
  * A source's text (a reason, a listing's error, a failure's Guidance) as
- * rich text for a label: each `command` in backticks on a line of its own,
- * in a fixed-width font, to be selected and copied whole; each http(s) URL
+ * rich text for a GuidanceLabel: each `command` in backticks on a line of its
+ * own, in a fixed-width font, wrapped at the width it gets rather than cut
+ * off, to be selected and copied whole; each http(s) URL
  * of the plugin's own pages (isGuidanceLink()) a link, any other text to be
  * read but not clicked, as it may be what a program or host wrote; each
  * line break kept.  The rest is escaped.  Backticks that do
  * not pair are shown as they are.
  */
 QString guidanceHtml( const QString& text );
+
+/// The family of the fixed-width font guidanceHtml() shows a command in: the
+/// system's, as it is found, since a name such as "monospace" is no font on
+/// macOS; "monospace" only where the platform names none.
+QString fixedFontFamily();
+
+/**
+ * A label for rich text made by guidanceHtml(), in the sidebar and the Start
+ * live capture… dialog alike: it wraps its lines, a command's too, at the
+ * width its layout gives it, and asks for no more than the widest word, so
+ * that a long command neither widens a dialog nor runs past the edge of a
+ * narrow sidebar.  Its text can be selected and copied; its links open.
+ * Hidden until shown.
+ */
+class GuidanceLabel : public QLabel {
+public:
+    explicit GuidanceLabel( const QString& objectName, QWidget* parent = nullptr );
+
+    /// As wide as its widest word, rather than as a line of text would like.
+    QSize sizeHint() const override;
+};
 
 /// The characters shown of a text a program or host wrote, in a list's
 /// entry or a tooltip; the rest is cut off (a description of a megabyte).
@@ -183,8 +208,10 @@ public:
     /// The source chosen, or null if there is none.
     std::shared_ptr<const LiveSourceKind> currentKind() const;
 
-    /// Why choice() cannot be captured (liveChoiceProblem(), as a start
-    /// checks it), else why the form cannot tell yet (its options widget's
+    /// Why the source cannot capture, as its last listing said
+    /// (LiveListing::cannotCapture), whatever the interface; else why
+    /// choice() cannot be captured (liveChoiceProblem(), as a start checks
+    /// it), else why the form cannot tell yet (its options widget's
     /// problem(), an extcap being asked for its arguments); empty if it can.
     QString problem() const;
 
@@ -219,8 +246,10 @@ private:
     static QString currentId( const QComboBox* box );
     /// Show the start of @p box's entry where the field cuts it off.
     static void showStart( QComboBox* box );
-    /// Show the source's state: unavailable, listing, a listing's error.
-    void showStatus( const QString& text );
+    /// Show the source's state as a note: unavailable, listing, a listing's
+    /// error; with a warning's icon if @p warning, else an information's.
+    /// Empty text hides the note.
+    void showStatus( const QString& text, bool warning = false );
     /// Show the capture filter's problem below it.
     void checkFilter();
     /// Keep the options widget's options for its source, and remove it.
@@ -237,7 +266,14 @@ private:
     std::shared_ptr<const LiveSourceRegistry> sources_;
     LiveChoice wanted_; ///< The choice setChoice() was given.
     QComboBox* source_ = nullptr;
+    /// The source's state: a tinted panel, its icon, and the text.
+    QWidget* note_ = nullptr;
+    QLabel* noteIcon_ = nullptr;
     QLabel* status_ = nullptr;
+    /// Why the source cannot capture, as its last listing said
+    /// (LiveListing::cannotCapture): problem() until a listing says otherwise
+    /// or another source is chosen.
+    QString cannotCapture_;
     QLabel* deviceLabel_ = nullptr;
     QComboBox* device_ = nullptr;
     QComboBox* interface_ = nullptr;

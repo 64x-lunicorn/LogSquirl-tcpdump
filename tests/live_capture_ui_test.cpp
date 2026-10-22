@@ -42,14 +42,22 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QFontInfo>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextLayout>
 #include <QTimer>
 
+#include <cstdlib>
 #include <memory>
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
@@ -119,6 +127,61 @@ void startFrom( CaptureSessions& sessions, SidebarWidget& sidebar, const LiveCap
     auto* button = sidebar.findChild<QPushButton*>( "liveCaptureButton" );
     REQUIRE( button );
     button->click();
+}
+
+/// The fixed-width font found for the system's.
+QString fixedFamily()
+{
+    return fixedFontFamily();
+}
+
+/// How guidanceHtml() shows a command, @p html, on a line of its own.
+QString commandHtml( const QString& html )
+{
+    return QString( "<p style=\"white-space:pre-wrap\"><code style=\"font-family:'%1'\">%2</code>"
+                    "</p>" )
+        .arg( fixedFamily(), html );
+}
+
+/// Whether @p label, shown in @p window, shows all of its text: its lines,
+/// wrapped at its own width, are no wider than it and no more than it is
+/// tall, and it ends before the window's right edge.  Where the platform's
+/// font makes a word wider than the label (the Windows runner's offscreen
+/// fallback font, twice as wide as a real one), no wrapping at words can
+/// fit it: only the right edge is checked, with a warning.
+bool fitsWidth( const QLabel* label, const QWidget* window )
+{
+    const auto right = label->mapTo( window, QPoint( label->width(), 0 ) ).x();
+    QTextDocument words;
+    words.setDefaultFont( label->font() );
+    words.setHtml( label->text() );
+    words.setDocumentMargin( 0 );
+    auto wordWrap = words.defaultTextOption();
+    wordWrap.setWrapMode( QTextOption::WordWrap ); // not anywhere, as a document would
+    words.setDefaultTextOption( wordWrap );
+    words.setTextWidth( 0 ); // its ideal width is then its widest word's
+    if ( words.idealWidth() > label->contentsRect().width() ) {
+        WARN( "a word is " << words.idealWidth() << " px wide in this platform's font, "
+                           << label->contentsRect().width() << " px fit the label" );
+        return right <= window->width();
+    }
+
+    QTextDocument document;
+    document.setDefaultFont( label->font() );
+    document.setHtml( label->text() );
+    document.setDocumentMargin( 0 );
+    // As a word-wrapped label wraps: at word boundaries alone.
+    auto option = document.defaultTextOption();
+    option.setWrapMode( QTextOption::WordWrap );
+    document.setDefaultTextOption( option );
+    document.setTextWidth( label->contentsRect().width() );
+    UNSCOPED_INFO( "text " << document.idealWidth() << " x " << document.size().height() << " in "
+                           << label->contentsRect().width() << " x "
+                           << label->contentsRect().height() << ", right edge " << right << " of "
+                           << window->width() << ", font "
+                           << label->font().family().toStdString() );
+    return document.idealWidth() <= label->contentsRect().width() && right <= window->width()
+           && document.size().height() <= label->contentsRect().height();
 }
 
 /// Wait until @p form has listed the fake's two interfaces.
@@ -500,8 +563,8 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
         startFrom( sessions, sidebar, *dialog );
         REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
 
-        THEN( "the section shows the error's lines and the Guidance as text, the summary the "
-              "error" )
+        THEN( "the section shows the error's lines and the Guidance as text, the summary not the "
+              "error again" )
         {
             const auto outcome = sessions.liveSession().outcome();
             REQUIRE( outcome );
@@ -514,9 +577,62 @@ SCENARIO( "An unavailable source says why in the dialog, and a failed capture sh
                         "&lt;eth0&gt; permission denied<br>Run: setcap cap_net_raw=eip "
                         "&lt;fakecap&gt; &amp;&amp; log in again." );
             REQUIRE( sidebar.findChild<QLabel*>( "summary" )->text()
-                     == "Error: " + outcome->error.toHtmlEscaped() );
+                     == "The capture fake0 failed before anything was captured." );
             REQUIRE( host.openedFiles.isEmpty() );
         }
+
+        THEN( "the error is in the sidebar once" )
+        {
+            int shown = 0;
+            for ( const auto* label : sidebar.findChildren<QLabel*>() ) {
+                if ( !label->isHidden() && label->text().contains( "permission denied" ) ) {
+                    ++shown;
+                }
+            }
+            REQUIRE( shown == 1 );
+        }
+    }
+}
+
+SCENARIO( "A failure's commands and links wrap in a narrow sidebar, nothing cut off", "[live_ui]" )
+{
+    FakeHost host;
+    QTemporaryDir root;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->failure = "fakecap exited with code 1:\nfakecap: permission denied";
+    const auto [ os, command ] = GENERATE( table<CaptureOs, QString>(
+        { { CaptureOs::MacOS, "sudo dseditgroup -o edit -a \"$USER\" -t user access_bpf" },
+          { CaptureOs::Linux,
+            "sudo setcap cap_net_raw,cap_net_admin=eip /usr/local/lib/wireshark/dumpcap" } } ) );
+    fake->hint = capturePermissionGuidance( os, "/usr/local/lib/wireshark/dumpcap" );
+    CaptureSessions sessions;
+    SidebarWidget sidebar( sessions );
+    sidebar.resize( 300, 900 );
+    sidebar.show();
+    sessions.setTempRoot( root.path() );
+    sessions.setLiveSources( registryOf( fake ) );
+    const auto dialog = sessions.makeLiveCaptureDialog( nullptr );
+    const Fields fields( dialog.get() );
+    REQUIRE( listed( dialog->form(), fields ) );
+    startFrom( sessions, sidebar, *dialog );
+    REQUIRE( waitFor( [ & ] { return !sessions.liveSession().isBusy(); } ) );
+    QApplication::processEvents();
+
+    THEN( "the section shows every word of the command and the whole link within its width" )
+    {
+        auto* error = sidebar.findChild<QLabel*>( "liveError" );
+        REQUIRE_FALSE( error->isHidden() );
+        REQUIRE( fitsWidth( error, &sidebar ) );
+        QTextDocument document;
+        document.setHtml( error->text() );
+        REQUIRE( document.toPlainText().contains( command ) );
+        if ( os == CaptureOs::MacOS ) {
+            REQUIRE( error->text().contains( "<a href=\"https://www.wireshark.org/download.html\">"
+                                             "https://www.wireshark.org/download.html</a>" ) );
+        }
+        REQUIRE( error->openExternalLinks() );
+        REQUIRE( error->textInteractionFlags().testFlag( Qt::TextSelectableByMouse ) );
+        REQUIRE( error->textInteractionFlags().testFlag( Qt::LinksAccessibleByMouse ) );
     }
 }
 
@@ -749,9 +865,37 @@ SCENARIO( "A source's text shows its commands on lines of their own and its link
     THEN( "a command in backticks is a block, without the punctuation that ended it" )
     {
         REQUIRE( guidanceHtml( "If not, run `sudo x -a \"$USER\"`, then log in again." )
-                 == "If not, run<pre>sudo x -a &quot;$USER&quot;</pre>then log in again." );
+                 == "If not, run" + commandHtml( "sudo x -a &quot;$USER&quot;" )
+                        + "then log in again." );
         REQUIRE( guidanceHtml( "Restart adb: `adb kill-server`." )
-                 == "Restart adb:<pre>adb kill-server</pre>" );
+                 == "Restart adb:" + commandHtml( "adb kill-server" ) );
+    }
+
+    THEN( "a command wraps at the width it gets, in a fixed-width font, and is copied whole" )
+    {
+        const QString command = "sudo dseditgroup -o edit -a \"$USER\" -t user access_bpf";
+        QTextDocument document;
+        document.setHtml( guidanceHtml( "If not, run `" + command + "`, then log in again." ) );
+        const auto oneLine = document.idealWidth();
+        document.setTextWidth( 120 );
+        REQUIRE( document.idealWidth() <= 120 );
+        REQUIRE( document.size().height() > 0 );
+        REQUIRE( document.toPlainText().contains( command ) );
+        const auto at = document.toPlainText().indexOf( command );
+        const auto block = document.findBlock( static_cast<int>( at ) );
+        REQUIRE( block.text() == command );
+        REQUIRE( block.layout()->lineCount() > 1 );
+        // In the system's fixed-width font, which the offscreen platform of
+        // the tests may not have.
+        const bool fixedFound = QFontInfo( QFont( fixedFamily() ) ).fixedPitch();
+        for ( auto fragment = block.begin(); !fragment.atEnd(); ++fragment ) {
+            const auto format = fragment.fragment().charFormat();
+            REQUIRE( format.fontFamilies().toStringList() == QStringList{ fixedFamily() } );
+            REQUIRE( QFontInfo( format.font() ).fixedPitch() == fixedFound );
+        }
+        REQUIRE( oneLine > 120 );
+        const auto prose = document.findBlock( 0 ).begin().fragment().charFormat();
+        REQUIRE_FALSE( prose.fontFamilies().toStringList().contains( fixedFamily() ) );
     }
 
     THEN( "a URL of the plugin's own guidance is a link, without the punctuation after it" )
@@ -790,7 +934,7 @@ SCENARIO( "A source's text shows its commands on lines of their own and its link
     {
         const auto html = guidanceHtml( capturePermissionGuidance( CaptureOs::MacOS, {} ) );
         REQUIRE( html.contains(
-            "<pre>sudo dseditgroup -o edit -a &quot;$USER&quot; -t user access_bpf</pre>" ) );
+            commandHtml( "sudo dseditgroup -o edit -a &quot;$USER&quot; -t user access_bpf" ) ) );
         REQUIRE( html.contains( "<a href=\"https://www.wireshark.org/download.html\">" ) );
     }
 
@@ -805,8 +949,31 @@ SCENARIO( "A source's text shows its commands on lines of their own and its link
         THEN( "the dialog's status shows it so, its links open" )
         {
             REQUIRE( fields.status->text()
-                     == "fakecap cannot capture: run<pre>fakecap --allow</pre>" );
+                     == "fakecap cannot capture: run" + commandHtml( "fakecap --allow" ) );
             REQUIRE( fields.status->openExternalLinks() );
+        }
+    }
+
+    GIVEN( "a source unavailable for a reason with a long command" )
+    {
+        FakeHost host;
+        auto plain = std::make_shared<FakeSourceKind>();
+        plain->unavailableReason = "fakecap cannot capture.";
+        LiveCaptureDialog plainDialog( registryOf( plain ), LiveChoice{ "fake", "", "", "", 100 } );
+        auto fake = std::make_shared<FakeSourceKind>();
+        fake->unavailableReason = "fakecap cannot capture: run `sudo fakecap --allow-capture "
+                                  "--on-every-interface --for-the-group fakecap-users --and-keep-"
+                                  "it-so-after-a-restart --without-asking-again "
+                                  "/usr/local/lib/fakecap/bin/fakecap-helper`.";
+        LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+        const Fields fields( &dialog );
+
+        THEN( "the dialog is no wider than with a short reason, and shows all of the command" )
+        {
+            REQUIRE( dialog.sizeHint().width() <= plainDialog.sizeHint().width() );
+            dialog.show();
+            QApplication::processEvents();
+            REQUIRE( fitsWidth( fields.status, &dialog ) );
         }
     }
 }
@@ -873,6 +1040,164 @@ SCENARIO( "A URL a program wrote is text in the dialog's status and the section'
             REQUIRE_FALSE( error->text().contains( "href=\"" + phishing ) );
             REQUIRE( error->text().contains( "<a href=\"https://npcap.com/#download\">" ) );
             REQUIRE( error->openExternalLinks() );
+        }
+    }
+}
+
+SCENARIO( "A source's status is a note that stands out from the form, in light and dark mode",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->unavailableReason = "fakecap cannot capture: run `fakecap --allow`.";
+    LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    auto* note = dialog.findChild<QWidget*>( "liveSourceNote" );
+    auto* icon = dialog.findChild<QLabel*>( "liveSourceNoteIcon" );
+    REQUIRE( note );
+    REQUIRE( icon );
+
+    THEN( "the status is in the note, beside an icon, and wraps, links and selects as before" )
+    {
+        REQUIRE_FALSE( note->isHidden() );
+        REQUIRE( note->isAncestorOf( fields.status ) );
+        REQUIRE_FALSE( icon->pixmap().isNull() );
+        REQUIRE( fields.status->wordWrap() );
+        REQUIRE( fields.status->openExternalLinks() );
+        REQUIRE( fields.status->textInteractionFlags().testFlag( Qt::TextSelectableByMouse ) );
+        REQUIRE( fields.status->text()
+                 == "fakecap cannot capture: run" + commandHtml( "fakecap --allow" ) );
+    }
+
+    THEN( "its panel is tinted from the palette: apart from the window, its text still legible" )
+    {
+        struct Mode {
+            const char* name;
+            QColor window;
+            QColor text;
+        };
+        for ( const auto& mode :
+              { Mode{ "light", QColor( 0xf0, 0xf0, 0xf0 ), Qt::black },
+                Mode{ "dark", QColor( 0x2b, 0x2b, 0x2b ), QColor( 0xe0, 0xe0, 0xe0 ) } } ) {
+            CAPTURE( mode.name );
+            QPalette palette;
+            palette.setColor( QPalette::Window, mode.window );
+            palette.setColor( QPalette::WindowText, mode.text );
+            palette.setColor( QPalette::Highlight, QColor( 0x38, 0x74, 0xd8 ) );
+            dialog.setPalette( palette );
+            dialog.show();
+            QApplication::processEvents();
+            const auto image = note->grab().toImage();
+            const auto background = image.pixelColor( 3, image.height() / 2 );
+            REQUIRE( background != mode.window );
+            REQUIRE( std::abs( background.lightness() - mode.window.lightness() ) < 64 );
+            REQUIRE( std::abs( background.lightness() - mode.text.lightness() ) > 128 );
+        }
+    }
+
+    WHEN( "the source has nothing to say" )
+    {
+        fake->unavailableReason.clear();
+        dialog.form()->refresh();
+        REQUIRE( listed( dialog.form(), fields ) );
+
+        THEN( "the note is hidden" )
+        {
+            REQUIRE( note->isHidden() );
+            REQUIRE( fields.status->isHidden() );
+        }
+    }
+}
+
+SCENARIO( "Start waits for a source whose listing says it cannot capture, until one says it can",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->cannotCapture = "/dev/bpf0 cannot be read, so fakecap cannot capture.";
+    auto other = std::make_shared<FakeSourceKind>( "other", "Other" );
+    auto registry = registryOf( fake );
+    registry->add( other );
+    LiveCaptureDialog dialog( registry, LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    REQUIRE( listed( dialog.form(), fields ) );
+
+    THEN( "the interfaces are listed, the note says why and what to do, and Start is disabled "
+          "with the reason" )
+    {
+        REQUIRE( dialog.choice().networkInterface == "fake0" );
+        REQUIRE_FALSE( fields.status->isHidden() );
+        REQUIRE( fields.status->text().contains( "/dev/bpf0 cannot be read" ) );
+        REQUIRE( fields.status->text().contains( commandHtml( "fakeperm grant" ) ) );
+        REQUIRE_FALSE( fields.start->isEnabled() );
+        REQUIRE( fields.start->toolTip() == fake->cannotCapture );
+    }
+
+    WHEN( "an interface is typed by hand" )
+    {
+        fields.networkInterface->setEditText( "any" );
+
+        THEN( "Start stays disabled" )
+        {
+            REQUIRE( dialog.choice().networkInterface == "any" );
+            REQUIRE_FALSE( fields.start->isEnabled() );
+        }
+    }
+
+    WHEN( "access is granted and Refresh is pressed" )
+    {
+        fake->cannotCapture.clear();
+        fields.refresh->click();
+
+        THEN( "Start waits for the listing, and is enabled once it says the source can capture" )
+        {
+            REQUIRE( dialog.form()->isListing() );
+            REQUIRE_FALSE( fields.start->isEnabled() );
+            REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+            REQUIRE( fields.start->isEnabled() );
+            REQUIRE( fields.start->toolTip() == "Start capturing" );
+            REQUIRE( fields.status->isHidden() );
+        }
+    }
+
+    WHEN( "another source is chosen" )
+    {
+        fields.source->setCurrentIndex( 1 );
+        emit fields.source->activated( 1 );
+        REQUIRE( listed( dialog.form(), fields ) );
+
+        THEN( "Start is enabled for it" )
+        {
+            REQUIRE( dialog.choice().source == "other" );
+            REQUIRE( fields.start->isEnabled() );
+        }
+    }
+}
+
+SCENARIO( "A listing that only lists nothing leaves Start to an interface typed by hand",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->listingError = "fakecap -D listed no interfaces: it may lack the permission to capture.";
+    LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+
+    THEN( "the note says so, and Start asks for an interface" )
+    {
+        REQUIRE( fields.status->text().contains( "listed no interfaces" ) );
+        REQUIRE_FALSE( fields.start->isEnabled() );
+        REQUIRE( fields.start->toolTip() == "Choose an interface." );
+    }
+
+    WHEN( "an interface is typed by hand" )
+    {
+        fields.networkInterface->setEditText( "any" );
+
+        THEN( "Start is enabled" )
+        {
+            REQUIRE( fields.start->isEnabled() );
         }
     }
 }

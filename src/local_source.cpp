@@ -268,10 +268,12 @@ LiveListing LocalSourceKind::listInterfaces( const QString& device,
             listing.error += QStringLiteral( ":\n" ) + err;
         }
         if ( isCapturePermissionError( err ) ) {
+            listing.cannotCapture = listing.error;
             listing.error += QStringLiteral( "\n\n" ) + guidance();
         }
     }
     else if ( listing.targets.empty() ) {
+        // Not cannotCapture: an interface typed by hand may still capture.
         listing.error
             = QStringLiteral(
                   "%1 -D listed no interfaces: it may lack the permission to capture.\n\n" )
@@ -282,9 +284,9 @@ LiveListing LocalSourceKind::listInterfaces( const QString& device,
         // tcpdump and dumpcap list without it; capturing fails then.
         const QFileInfo bpf( where_.bpfDevice );
         if ( bpf.exists() && !bpf.isReadable() ) {
-            listing.error = QStringLiteral( "%1 cannot be read, so %2 cannot capture.\n\n" )
-                                .arg( where_.bpfDevice, name )
-                            + guidance();
+            listing.cannotCapture = QStringLiteral( "%1 cannot be read, so %2 cannot capture." )
+                                        .arg( where_.bpfDevice, name );
+            listing.error = listing.cannotCapture + QStringLiteral( "\n\n" ) + guidance();
         }
     }
     return listing;

@@ -19,7 +19,7 @@
 
 /**
  * @file stream_content_view.h
- * @brief The Stream tab of the Packet Panel: Show stream content, the
+ * @brief The Stream tab of the Packet Panel: Follow stream content, the
  *        payload of the selected packet's conversation as text or hex.
  *
  * As Wireshark's Follow TCP/UDP Stream shows it: the client's and the

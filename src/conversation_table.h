@@ -23,11 +23,14 @@
  *        Statistics > Conversations shows it.
  *
  * A row per numbered TCP and UDP stream of the capture in front, from its
- * Capture Summary, sortable by every column.  A click on a row, or Filter
- * on this conversation in its context menu, opens the Regex Lab with the
- * pattern of the stream's lines, as the summary's endpoints do.  A summary
- * taken anew (a live capture's next snapshot) replaces the rows and keeps
- * the sort and the selected conversation.
+ * Capture Summary, sortable by every column.  A click selects a row; a
+ * double click, Enter, or Filter conversation in Regex Lab in its context
+ * menu opens the Regex Lab with the pattern of the stream's lines, as the
+ * summary's endpoints do.  The header's context menu shows or hides each
+ * column, the choice kept in the settings file; the per-direction packets
+ * and bytes are hidden until the user shows them.  A summary taken anew (a
+ * live capture's next snapshot) replaces the rows and keeps the sort and
+ * the selected conversation.
  */
 
 #pragma once
@@ -38,6 +41,7 @@
 #include <QAbstractTableModel>
 #include <QWidget>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -137,11 +141,25 @@ public:
         return view_;
     }
 
+protected:
+    /// Enter on the table filters on the selected conversation.
+    bool eventFilter( QObject* watched, QEvent* event ) override;
+
 private:
+    /// Show or hide @p column, as its entry in the header's menu was
+    /// checked, and save which columns are hidden.
+    void showColumn( int column, bool shown );
+
+    /// Disable the entry of the only column shown, so that the header, and
+    /// with it the menu to show the others again, stays.
+    void updateColumnEntries();
+
     QLabel* title_ = nullptr;
     QTableView* view_ = nullptr;
     ConversationModel* model_ = nullptr;
     QAction* filterAction_ = nullptr;
+    /// The header's menu entry of each column.
+    std::array<QAction*, ConversationModel::ColumnCount> columnEntries_{};
 };
 
 } // namespace tcpdump

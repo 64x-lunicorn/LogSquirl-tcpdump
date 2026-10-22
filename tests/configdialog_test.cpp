@@ -35,8 +35,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
-#include <QScreen>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTimer>
 
 #include <functional>
@@ -47,6 +47,9 @@ using tcpdump_test::FakeHost;
 extern "C" void logsquirl_plugin_configure( void* parent_widget );
 
 namespace {
+
+/// The height a dialog fits a 13-inch laptop's screen in, below the menu bar and the dock.
+constexpr int kMaxDialogHeight = 600;
 
 template <typename T>
 T* child( const QWidget& dialog, const char* name )
@@ -158,13 +161,15 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             }
         }
 
-        WHEN( "Restore Defaults is clicked" )
+        WHEN( "Restore Defaults is clicked while the Protocols tab is shown" )
         {
+            auto* tabs = child<QTabWidget>( dialog, "tabs" );
+            tabs->setCurrentIndex( tabs->indexOf( child<QWidget>( dialog, "protocolsTab" ) ) );
             child<QDialogButtonBox>( dialog, "buttons" )
                 ->button( QDialogButtonBox::RestoreDefaults )
                 ->click();
 
-            THEN( "the controls show the defaults" )
+            THEN( "the controls of every tab show the defaults" )
             {
                 const auto restored = dialog.options();
                 const ConversionOptions defaults;
@@ -202,25 +207,86 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
     }
 }
 
-SCENARIO( "The configuration dialog opens tall enough for its notes", "[configdialog]" )
+SCENARIO( "The configuration dialog puts its options on three tabs", "[configdialog]" )
 {
-    GIVEN( "the dialog, taller than 2/3 of the screen, at which Qt stops a window's height" )
+    GIVEN( "a dialog for the defaults" )
     {
         ConfigDialog dialog( ConversionOptions{} );
-        REQUIRE( dialog.sizeHint().height()
-                 > dialog.screen()->availableGeometry().height() * 2 / 3 );
+        auto* tabs = child<QTabWidget>( dialog, "tabs" );
+
+        THEN( "it has the tabs Columns and Info, Protocols and Advanced, the first one shown" )
+        {
+            REQUIRE( tabs->count() == 3 );
+            REQUIRE( tabs->tabText( 0 ) == "Columns and Info" );
+            REQUIRE( tabs->tabText( 1 ) == "Protocols" );
+            REQUIRE( tabs->tabText( 2 ) == "Advanced" );
+            REQUIRE( tabs->currentIndex() == 0 );
+        }
+
+        THEN( "every option, note and Browse… button is on its tab" )
+        {
+            const auto onTab = [ & ]( const char* name, const char* tab ) {
+                INFO( name );
+                REQUIRE(
+                    child<QWidget>( dialog, tab )->isAncestorOf( child<QWidget>( dialog, name ) ) );
+            };
+            for ( const auto* name : { "timeColumns", "macColumns", "hostNames", "layoutNote",
+                                       "preview", "previewChars", "tcpTimestamps" } ) {
+                onTab( name, "columnsTab" );
+            }
+            for ( const auto* name : { "someIpPorts", "someIpNamesFile", "someIpNamesBrowse",
+                                       "someIpNote", "keyLogPath", "keyLogBrowse", "tlsNote" } ) {
+                onTab( name, "protocolsTab" );
+            }
+            for ( const auto* name :
+                  { "maxStreams", "maxEndpoints", "reassemblyMegabytes", "capsNote" } ) {
+                onTab( name, "advancedTab" );
+            }
+        }
+
+        THEN( "the note on the next capture and the buttons are below the tabs, on none of them" )
+        {
+            REQUIRE_FALSE( tabs->isAncestorOf( child<QLabel>( dialog, "note" ) ) );
+            REQUIRE_FALSE( tabs->isAncestorOf( child<QDialogButtonBox>( dialog, "buttons" ) ) );
+        }
+    }
+}
+
+SCENARIO( "The configuration dialog fits a laptop's screen with its notes", "[configdialog]" )
+{
+    GIVEN( "the dialog at the default font" )
+    {
+        ConfigDialog dialog( ConversionOptions{} );
+        auto* tabs = child<QTabWidget>( dialog, "tabs" );
+
+        THEN( "it is at most about 600 pixels high" )
+        {
+            REQUIRE( dialog.sizeHint().height() <= kMaxDialogHeight );
+        }
 
         WHEN( "it is shown" )
         {
             dialog.show();
             QApplication::processEvents();
 
-            THEN( "every note is as high as its wrapped lines, none cut off" )
+            THEN( "it opens at most about 600 pixels high" )
             {
-                for ( const auto* label : dialog.findChildren<QLabel*>() ) {
-                    if ( label->wordWrap() ) {
-                        INFO( label->text().toStdString() );
-                        REQUIRE( label->height() >= label->heightForWidth( label->width() ) );
+                REQUIRE( dialog.height() <= kMaxDialogHeight );
+            }
+
+            THEN( "on every tab, every note is as high as its wrapped lines, none cut off" )
+            {
+                for ( int tab = 0; tab < tabs->count(); ++tab ) {
+                    tabs->setCurrentIndex( tab );
+                    QApplication::processEvents();
+                    INFO( tabs->tabText( tab ).toStdString() );
+                    for ( const auto* label : dialog.findChildren<QLabel*>() ) {
+                        if ( label->wordWrap() && label->isVisible() ) {
+                            INFO( label->text().toStdString() );
+                            REQUIRE( label->height() >= label->heightForWidth( label->width() ) );
+                            REQUIRE( label->mapTo( &dialog, label->rect().bottomLeft() ).y()
+                                     < dialog.height() );
+                        }
                     }
                 }
             }

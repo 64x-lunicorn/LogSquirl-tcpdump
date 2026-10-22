@@ -166,6 +166,13 @@ struct LiveTarget {
 struct LiveListing {
     std::vector<LiveTarget> targets;
     QString error; ///< Why the listing failed; empty if it did not.
+    /// Why the kind cannot capture at all, as the listing found out (macOS's
+    /// /dev/bpf0 unreadable, a capture program denied the permission), for
+    /// the Start button, which waits until a listing finds no such reason;
+    /// error says it too, with what to do.  Empty if it can, or the listing
+    /// could not tell: one that merely lists nothing leaves Start to an
+    /// interface typed by hand.
+    QString cannotCapture;
 };
 
 /// Whether a kind can be used on this computer.

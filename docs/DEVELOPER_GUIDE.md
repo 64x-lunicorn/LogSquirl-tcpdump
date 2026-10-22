@@ -374,7 +374,7 @@ size. A gzip stream read from a live source is not decompressed:
 `findCaptureStart()` names gzip data as such.
 
 A deflate stream cannot be entered in the middle, but the Packet Panel,
-Show stream content and Export Packets read packets by their offset. So
+Follow stream content and Export Packets read packets by their offset. So
 the Converter's `GzipSource` keeps *access points*, the technique of
 zlib's `examples/zran.c`: every `GzipSource::kAccessSpan` (32 MiB, the
 option `gzipAccessSpan` for tests) of output, at the next deflate block
@@ -1026,7 +1026,7 @@ A packet line is read back next to where it is written: `readPacketLine()`
 no stream has), Source, Destination, Protocol,
 the rest of the line from Info on, and the iRTT that Info shows on the ACK
 that completes a handshake (see *TCP analysis markers*), or none for a
-line that is no packet line. The Packet Panel and Stream lines in Regex
+line that is no packet line. The Packet Panel and Filter stream in Regex
 Lab read the selected line with it through Selected Packet Line (see
 *Packet Panel*), Export packets the selected lines through it too, and
 the Export dialog pasted lines; none has a regex of
@@ -1221,7 +1221,7 @@ completed (`ReassembledMessages`), those held over several segments and
 those whole in it alike, in sequence order and never twice, for the TLS
 Decryption. Bytes are taken in sequence order,
 by a `ByteStreamOrderer` per held direction (`byte_stream_orderer.h`, pure
-C++, shared with Show stream content): `place()` says whether a segment
+C++, shared with Follow stream content): `place()` says whether a segment
 is next (and how many of its first bytes were taken), came early or was
 taken already; it holds the early ones (`holdEarly()`), pops them once they
 are next (`popNext()`) and skips a gap (`skipTo()`), and leaves the limits
@@ -1449,7 +1449,7 @@ for byte the same as before.
   none of them. The patterns built from a line or an address,
   `addressPattern()` in `regex_lab.h` (the address and
   `nameSuffixPattern()`), take an address with or without its name:
-  Stream lines in Regex Lab reads the clicked line's columns with `columnAddress()`,
+  Filter stream in Regex Lab reads the clicked line's columns with `columnAddress()`,
   so that it finds a stream's lines from before and after the name was
   learned, the summary's endpoint filters and the display filters'
   `ip.*`/`ipv6.*` tests (`valuesPattern()`) allow the name behind the
@@ -1960,7 +1960,7 @@ records the checkpoint's state names lie there
 interfaces). A packet of a file deleted since, also through an index taken
 before the deletion, fails with *Rotated away: …*, never with another
 packet's bytes. `CapturedPacket::file` is the file it was read from:
-Export packets copies each packet from its own file, Show stream content
+Export packets copies each packet from its own file, Follow stream content
 starts at the first packet kept, and `saveCaptureParts()` writes the files
 kept as one capture (the first whole, the records of the others without
 their copied headers) for **Save capture…**.
@@ -2254,7 +2254,7 @@ knows none of them. A kind answers:
 | `id()`, `displayName()` | UI | Its name in `settings.ini` (never changes) and in the source picker |
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
-| `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
+| `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error`, and `cannotCapture`: why the kind cannot capture at all, as the listing found out (no permission), which keeps the form's Start disabled until a listing finds no such reason; empty for a listing that merely finds nothing |
 | `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
 | `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` whether it can tell yet (an extcap's widget asking for the arguments); whether the options can be captured with is `validate()`'s |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too), the last part of `liveChoiceProblem()`; by default an interface is needed |
@@ -2308,10 +2308,23 @@ a permission error on stderr (`isCapturePermissionError()`), an empty
 list, or an unreadable BPF device on macOS add
 `capturePermissionGuidance( os, program )` to its error, which the form
 shows as its status, as `explainFailure()` adds it to a failed capture's.
+The permission error of a `-D` that fails, and the unreadable BPF device,
+also set the listing's `cannotCapture` (the error without the guidance):
+the form's `problem()` returns it first, whatever the interface, so the
+dialog's Start stays disabled with it as the tooltip until Refresh, or
+another source or device, lists anew (an empty list may still allow an
+interface typed by hand, so it does not). The form shows its status as a
+note: a `NotePanel` that paints a rounded panel of the palette's window
+colour with `kNoteTint` of its highlight mixed in, and a border, from the
+palette it inherits each time (light and dark mode alike), with the
+style's information or warning icon beside the `GuidanceLabel`.
 The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
 downloads; no code path runs them, sudo, or anything that prompts. The
-form's status and the sidebar's live error show it with `guidanceHtml()`,
-which links only the pages the kinds' own text names (`isGuidanceLink()`,
+form's status and the sidebar's live error show it with `guidanceHtml()`
+in a `GuidanceLabel` (`live_capture_form.h`), which wraps each command in
+the system's fixed-width font at the width the label gets and asks for no
+more than its widest word, so a command neither widens the dialog nor runs
+past a narrow sidebar's edge. `guidanceHtml()` links only the pages the kinds' own text names (`isGuidanceLink()`,
 the `k…Url` constants of `live_source.h`): a URL in what a program or host
 wrote, which an error carries, is text to be read, never a link. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
@@ -2571,6 +2584,12 @@ path (`someIpNamesFile`). The host names are a flag (`hostNames`, off
 unless the file says `true`). The key log's path (`tlsKeyLogFile`) is kept as it
 is, its file is not touched until a conversion reads it. `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
+It puts them on three tabs, so that it is at most about 600 pixels high at
+the default font and fits a 13-inch laptop's screen: *Columns and Info*
+(time and MAC columns, host names, payload preview, TCP timestamps),
+*Protocols* (SOME/IP ports and name table, TLS key log) and *Advanced* (the
+caps); the note on the next capture and the buttons stay below the tabs,
+and Restore Defaults resets the controls of every tab.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
 only. `loadLiveChoice()` and `saveLiveChoice()` keep the last
@@ -2582,7 +2601,11 @@ source's, which the sidebar hands the form (`setSourceOptions()`) for every
 kind, so that each source keeps its own options. A secret option (its name
 starts with `kSecretOptionMark`, `*`: an extcap's password) is never
 written (`isSecretLiveOption()`): it lives in the form's options for the
-session only.
+session only. `loadSplitterSizes()` and `saveSplitterSizes()` keep the
+sizes of the panes of each sidebar splitter the user dragged, in pixels,
+under `sidebar/<name>` (`summarySplit`, `layersSplit`,
+`conversationsSplit`, see *Sidebar Widget*); a list with a value that is
+not a number of pixels reads as none saved.
 
 ### 5. Sidebar Widget (`sidebarwidget.h/cpp`)
 The sidebar is a view over the Capture Sessions (see *The Capture
@@ -2594,22 +2617,23 @@ none for others to query: the plugin menu reaches the sessions without
 it. What its labels say is decided without a widget in `sidebar_text.h`.
 While it lives, it is the sessions' dialog parent; when it goes, the
 sessions run on (the plugin destroys them after it). Qt UI that provides:
-- "Open pcap…" button, `CaptureSessions::chooseAndOpen()`, as the
+- "Open pcap…" button, first, under no title row: the sidebar's tab
+  already names the plugin. It calls `CaptureSessions::chooseAndOpen()`, as the
   `Plugins → tcpdump → Open pcap…` menu entry, which, unlike the disabled
   button, can be chosen during a conversion and then only shows a
   notification
 - A progress bar and Cancel button while a capture is converted
-- A "Stream lines in Regex Lab" button, created only when
+- A "Filter stream in Regex Lab" button, created only when
   `g_state.hostCapabilities` has the Regex Lab and the selected lines (see
-  *Stream lines in Regex Lab* below). It is enabled only while
+  *Filter stream in Regex Lab* below). It is enabled only while
   `PacketPanel::streamLinesProblem()` is empty, its tooltip that reason
-  otherwise (`enableUnlessProblem()`, which the panel's Show stream content
+  otherwise (`enableUnlessProblem()`, which the panel's Follow stream content
   button shares); `PacketPanel::streamActionsChanged()` updates it as the
   selection changes. A click and the menu entry both go through
   `SidebarWidget::openStreamLines()`, which refreshes the panel and
   notifies that same reason instead of opening the Lab, or opens it on the
   line the panel read (`PacketPanel::selectedLine()`): the selection is
-  read once for both. Packet details and Show stream content are the
+  read once for both. Packet details and Follow stream content are the
   sidebar's too (`showPacketDetails()`, `followStreamContent()`): they are
   the Packet Panel's
 - Detailed capture summary (`summaryHtml()`): protocol breakdown (count +
@@ -2627,7 +2651,7 @@ sessions run on (the plugin destroys them after it). Qt UI that provides:
   shown once per load; the catalog decides which entry carries it
   (`Entry::withFormatHint`)
 - The summary scrolls in a `SummaryArea`, a `QScrollArea` that asks for
-  the height of its text at its width, up to `kSummaryMaxLines` (24), so
+  the height of its text at its width, up to `kSummaryMaxLines` (30), so
   that a long summary leaves the Packet Panel room in a tall sidebar, and
   gives in down to `kSummaryMinLines` (3) in a short one. The label is top
   aligned and as tall as its text; none of it is cut off or drawn over the
@@ -2640,6 +2664,20 @@ sessions run on (the plugin destroys them after it). Qt UI that provides:
 - The Packet Panel (see *Packet Panel* below), which takes the room left
   and keeps at least `kPacketPanelMinLines` (16) for its tabs and the
   Conversations
+- The summary's pane (the summary and **Save capture…**) and the Packet
+  Panel are the two panes of a `SummarySplitter` ("summarySplitter"), a
+  `QSplitter` whose panes cannot be collapsed. Until the user drags its
+  handle, or a position is restored, it is at the default split: the
+  summary's pane as tall as it asks (`fitSummary()`, on a resize and a
+  pane's `LayoutRequest`), within its minimum and what the Packet Panel's
+  minimum leaves, the Packet Panel the rest. Once dragged it stays where
+  the user left it; on a resize the Packet Panel (stretch 1) takes what is
+  gained or lost. Its sizes and those of the Packet Panel's two splitters
+  (`layersSplitter()`, `conversationsSplitter()`) are restored from
+  `settings.ini` when the sidebar is made (`loadSplitterSizes()`, ignored
+  unless one size per pane), and saved there (`saveLayout()`) for each
+  splitter dragged, `kLayoutSaveDelayMs` after its last `splitterMoved`, or
+  when the sidebar goes before then
 - All of the above in a `ContentArea` ("sidebarScroll"), a `QScrollArea`
   that scrolls the sidebar as a whole only when the sidebar is shorter
   than the content's minimum (the summary's and the Packet Panel's
@@ -2715,7 +2753,9 @@ stops, and the check of a choice before it starts (`liveStateText()`);
 **Stop**, which stops the session (`CaptureSessions::stopLiveCapture()`); the capture program's stderr lines in a
 small read-only view (they go to the host's log too); and a failure's
 error, with its Guidance (`liveErrorHtml()`, `explainFailure()`), a label
-below Stop, cleared when the next capture starts. The summary in front is
+below Stop, cleared when the next capture starts; the summary label does
+not repeat that error, it says only that the capture failed before anything
+was captured (`summaryLabelText()`). The summary in front is
 redrawn when the catalog announces a snapshot or the outcome of the tab in
 front, so the Packet Panel shows the packets captured so far; on
 `fileOpened` the label says the capture goes on, unless the host brought
@@ -2792,6 +2832,12 @@ that its links open the README and the Regex Lab, that it goes and leaves
 the sessions running and no observer of the catalog behind, its layout and scrolling in a `QTabWidget` of fixed
 heights below and above the minimum (the summary's last line and the
 Conversations' bottom), and that a palette change redraws the summary;
+the splitter's default split with a packet selected (the summary's
+Overview and Protocols in view in a 360 × 1000 sidebar), a drag of its
+handle with real mouse events (`dragHandle()`) down to either minimum,
+and the three splitters' sizes saved in and restored from `settings.ini`
+across a sidebar made anew, a file without them or with sizes of another
+number of panes giving the default split;
 `packet_export_test.cpp` that an export's progress dialog shows, as plain
 text, and leaves the label as it was.
 
@@ -2944,8 +2990,8 @@ export, conversation statistics):
   failure of the host, a line that is no packet line, a packet number no
   packet has. `streamContentProblem()` adds a packet of no stream,
   `streamLinesProblem()` also an unnumbered one. Each reason text is
-  written there once; the Packet Panel shows them, Show stream content
-  and Stream lines in Regex Lab notify them. For Export packets,
+  written there once; the Packet Panel shows them, Follow stream content
+  and Filter stream in Regex Lab notify them. For Export packets,
   `selectedPackets()` reads every selected line and answers with the
   packets of the packet lines as a `PacketSet` (every other line, and a
   number the capture has no packet of, skipped and counted), the line
@@ -2976,10 +3022,20 @@ export, conversation statistics):
   `statusText()` still tells it, and the stream buttons' tooltips show it.
   The panel's tabs and the Conversations table below them are in a
   vertical `QSplitter` whose children cannot be collapsed, the table
-  keeping at least `kConversationsMinLines` (5) lines. The tree items keep their layer's or field's
+  keeping at least `kConversationsMinLines` (5) lines
+  (`conversationsSplitter()`); the tree and the dump in another
+  (`layersSplitter()`). The sidebar remembers where the user left both
+  (see *Sidebar Widget*). The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
-  and ASCII on each line. The packet is read off the UI thread, up to
+  and ASCII on each line. The dump is `kDumpBytesPerLine` (16) bytes a
+  line, or `kNarrowDumpBytesPerLine` (8) while its viewport is too narrow
+  for a 16-byte line (`hexDumpLineChars()` in the dump's font, its document
+  margins and cursor): an event filter on the viewport lays the dump out
+  again when a resize crosses that width, keeping the packet's bytes
+  (`bytes_`) for it, and highlights the selected item again. Switching to
+  8 adds lines and switching to 16 removes them, so a vertical scroll bar
+  that comes or goes only confirms the choice. The packet is read off the UI thread, up to
   `kCheckpointInterval` records: `showPacket()` says "Reading packet N…"
   and hands the read (and `dissectLayers()`) to `pool_`, one thread, so
   the reads take turns with the panel's `CaptureCursor`; the result comes
@@ -2989,22 +3045,22 @@ export, conversation statistics):
   packet is shown, or why not, which Packet details uses for its
   notification; the destructor waits for the read that runs.
 
-- **Show stream content** (`stream_content.h/cpp`,
+- **Follow stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a
   `StreamContentView`, shows the payload of the shown packet's stream when
-  the user asks for it: the panel's *Show stream content* button calls
-  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Show
+  the user asks for it: the panel's *Follow stream content* button calls
+  `PacketPanel::followStreamContent()`, as Plugins → tcpdump → Follow
   stream content does through `SidebarWidget::followStreamContent()`
   (which notifies where it is shown when the panel is out of view). The
   panel keeps the line selected as Selected Packet Line read it
   (`selected_`, `selectedLine()`), so that a stream can be followed
   while its packet is still read. `streamContentProblem()` and
-  `streamLinesProblem()` say why Show stream content and Stream lines in
+  `streamLinesProblem()` say why Follow stream content and Filter stream in
   Regex Lab cannot work for the line selected now (no capture or a read
   that failed, else what the `SelectedPacketLine` says: no packet line,
   no stream, for the Lab also an unnumbered one); the panel enables
   its button by the first, and `streamActionsChanged()` has the sidebar
-  enable its Stream lines in Regex Lab button by the second, each tooltip
+  enable its Filter stream in Regex Lab button by the second, each tooltip
   saying the reason.
   `StreamContentReader` reads the stream back: `open()` reads the packet
   for its transport, addresses and ports, then `read()` reads the packets
@@ -3080,9 +3136,17 @@ export, conversation statistics):
   `ConversationRows`, chunks of 4,096 a summary shares with the one before
   where their streams had no packet in between; the model orders pointers
   to them.
-  A click or *Filter on this conversation* opens the Regex Lab ("Filter")
-  with `conversationPattern()`, the Stream lines in Regex Lab pattern built from the
-  row's stream number, addresses and ports.
+  A click only selects; a double click (`doubleClicked`, not `activated`,
+  which some styles emit on a single click), Enter (an event filter on the
+  view) or *Filter conversation in Regex Lab* opens the Regex Lab, logged under that name,
+  with `conversationPattern()`, the Filter stream in Regex Lab pattern built from the
+  row's stream number, addresses and ports. The header's context menu has
+  a checkable entry per column; the hidden ones are saved by name
+  (`kColumnNames`, not the header text) in `settings.ini` under
+  `conversations/hiddenColumns` (`saveHiddenConversationColumns()`), read
+  when the table is made. Without that key the per-direction packets and
+  bytes are hidden; the entry of the only column shown is disabled, so the
+  header, and the menu with it, never goes.
 
 - **Export packets** (`packet_export.h/cpp`, Qt Core; `export_dialog.h/cpp`).
   `exportPackets(index, numbers, path, cancel, progress)` reads the
@@ -3110,7 +3174,9 @@ export, conversation statistics):
   `PacketNumbers`, ascending ranges apart from each other, never one entry
   per packet: "1-3000000000" takes a few bytes and is counted at once. The
   `ExportDialog` reads its text `kUpdateDelayMs` (200 ms) after the last
-  change, not on every key.
+  change, not on every key. It is at least `kMinimumWidth` (420 px) wide,
+  so that its intro and truncation note do not wrap into a narrow column,
+  and can be made wider.
   Plugins → tcpdump → Export packets… is the Capture Sessions' Export session's
   (see *The Export session*): it takes the packets of the selection from
   Selected Packet Line's `selectedPackets()` and notifies its reason when
@@ -3128,7 +3194,7 @@ export, conversation statistics):
   a truncation that limited it.
 
 Without `selectedLogLines` (a host older than 26.11) there is no Packet
-details, Export packets or Show stream content entry and no polling; the
+details, Export packets or Follow stream content entry and no polling; the
 panel says what it needs.
 `capture_index_test.cpp` reads every packet of every corpus capture (pcap
 and pcapng) in shuffled order with a checkpoint every 4 packets and checks
@@ -3153,8 +3219,8 @@ session (`export_session_test.cpp`).
 ### Plugin Entry (`plugin.h/cpp`)
 C ABI entry points (`logsquirl_plugin_*`) that register the sidebar tab,
 the menu entries (Open pcap…, Start live capture…, Stop live capture, and Packet details, Export packets…, Display
-filter…, Show stream content and
-Stream lines in Regex Lab where the host can serve them) and the active-file callback with the host application. `init()` creates the
+filter…, Follow stream content and
+Filter stream in Regex Lab where the host can serve them) and the active-file callback with the host application. `init()` creates the
 Capture Sessions (`g_state.sessions`) and the sidebar over them;
 Open pcap…, Start and Stop live capture and Export packets… call the
 sessions, the active-file callback their catalog's `setFront()`, and only
@@ -3184,8 +3250,8 @@ nothing that needs it otherwise; it never calls or reads a member the record
 does not report, not even to compare it with null, as an older host's table
 ends before it. Keep the pointer the host passed: never copy `*api`.
 
-#### Stream lines in Regex Lab (`follow_stream.h/cpp`)
-`Plugins → tcpdump → Stream lines in Regex Lab` and the sidebar button call
+#### Filter stream in Regex Lab (`follow_stream.h/cpp`)
+`Plugins → tcpdump → Filter stream in Regex Lab` and the sidebar button call
 `SidebarWidget::openStreamLines()`, offered only on a host with `regexLab`
 and `selectedLogLines`. It has the Packet Panel read the selection
 through Selected Packet Line and asks its `streamLinesProblem()`, so that
@@ -3232,8 +3298,8 @@ require the columns before Info as `packetLineRegex()` reads them, through
 Source, Destination or Protocol column and never Info in every
 `LineLayout`, and escape the name with `literalPattern()`. Only the
 endpoints are links, not the tunnel endpoints: those appear in no column
-(see *Tunnels*). `openRegexLab()`, which Stream
-lines in Regex Lab uses too, opens the Lab with Match case and logs the pattern, then
+(see *Tunnels*). `openRegexLab()`, which Filter stream in
+Regex Lab uses too, opens the Lab with Match case and logs the pattern, then
 the applied one or the cancel, under the feature's name ("Filter: …").
 `regex_lab_test.cpp` checks every endpoint and protocol of the summary of
 each corpus capture, converted in every `LineLayout`, against the columns of
@@ -3267,7 +3333,7 @@ parser; an address is stored as the column shows it (`formatIpv4()`,
 `formatIpv6()`, an IPv4 network masked to its prefix).
 `filterPattern()` makes each test a pattern from the start of the line:
 `upToSourcePattern()` without its `^`, Source and Destination, Protocol
-and Length, and for a port or stream the start of Info as Stream lines in Regex Lab
+and Length, and for a port or stream the start of Info as Filter stream in Regex Lab
 reads it (MAC columns, tunnels, `[TCP …]` markers, then `a → b` followed
 by `[` for TCP or `Len=` for UDP, which tells the transport). A filter of
 one test is `^` and that pattern; otherwise each test is a lookahead,
@@ -3449,8 +3515,8 @@ name a column cannot show and an answer that renames an address, is
 written by `tests/make_names_corpus.py`; its text is converted without host
 names, as every corpus text, and `tests/host_names_test.cpp` checks its
 lines with them. `allLineLayouts()` in `tests/corpus_layouts.h` has every
-layout with and without host names, so the Log Format, preset, Stream
-lines in Regex Lab, summary filter and display filter tests over the corpus run with
+layout with and without host names, so the Log Format, preset, Filter stream in
+Regex Lab, summary filter and display filter tests over the corpus run with
 names too. The link layers' tests,
 `tests/link_layers_test.cpp`, build their 802.11, Radiotap, PPP and PPPoE
 frames themselves and end in a fuzz-style run over mutated frames of each. The pcapng unit tests build their

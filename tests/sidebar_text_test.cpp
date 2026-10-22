@@ -394,9 +394,11 @@ SCENARIO( "the summary label says what a live capture comes to", "[sidebar_text]
             failed.error = "no <such> device";
             runs.last().finish( failed );
 
-            THEN( "the label says why" )
+            THEN( "the label says it ended without a file, not the error the Live capture "
+                  "section shows" )
             {
-                REQUIRE( label( SummaryStatus::LiveOutcome ) == "Error: no &lt;such&gt; device" );
+                REQUIRE( label( SummaryStatus::LiveOutcome )
+                         == "The capture eth0 failed before anything was captured." );
                 REQUIRE( paletteKeeps( SummaryStatus::LiveOutcome ) );
             }
         }

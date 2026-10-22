@@ -37,11 +37,11 @@
  * dropped, not started if it has not begun.
  *
  * Its Stream tab shows the content of the shown packet's conversation
- * (Show stream content, StreamContentView) once the user asks for it: by
- * the panel's button or Plugins > tcpdump > Show stream content.  The
+ * (Follow stream content, StreamContentView) once the user asks for it: by
+ * the panel's button or Plugins > tcpdump > Follow stream content.  The
  * button is enabled only when the selected line's stream can be shown, its
  * tooltip says why not; streamActionsChanged() tells the sidebar, whose
- * Stream lines in Regex Lab button follows the selection too.
+ * Filter stream in Regex Lab button follows the selection too.
  *
  * Below the tabs, the Conversations table (conversation_table.h) lists the
  * streams of the capture in front, from its Capture Summary.
@@ -72,6 +72,7 @@
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QSplitter;
 class QTabWidget;
 class QTreeWidgetItem;
 
@@ -80,14 +81,26 @@ namespace tcpdump {
 class StreamContentView;
 class ConversationTable;
 
-/// The hex dump of @p bytes, 16 to a line: the offset, the bytes in hex in
-/// two groups of 8, then as ASCII, '.' for a byte that is not printable.
-QString hexDump( const std::vector<uint8_t>& bytes );
+/// Bytes on a line of the hex dump, as Wireshark shows it.
+constexpr size_t kDumpBytesPerLine = 16;
+/// Bytes on a line of the hex dump where a line of kDumpBytesPerLine does
+/// not fit, as in a narrow sidebar.
+constexpr size_t kNarrowDumpBytesPerLine = 8;
 
-/// Where hexDump() of @p total bytes shows bytes [@p offset, @p offset +
-/// @p length): the character ranges, as {start, length}, of their hex and
-/// their ASCII on each line they are on.
-std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length );
+/// The hex dump of @p bytes, @p bytesPerLine (kDumpBytesPerLine or
+/// kNarrowDumpBytesPerLine) to a line: the offset, the bytes in hex, in
+/// groups of 8, then as ASCII, '.' for a byte that is not printable.
+QString hexDump( const std::vector<uint8_t>& bytes, size_t bytesPerLine = kDumpBytesPerLine );
+
+/// The characters of a full line of hexDump() of @p total bytes, @p
+/// bytesPerLine to a line: what the dump needs to be wide enough for.
+int hexDumpLineChars( size_t total, size_t bytesPerLine = kDumpBytesPerLine );
+
+/// Where hexDump() of @p total bytes, @p bytesPerLine to a line, shows
+/// bytes [@p offset, @p offset + @p length): the character ranges, as
+/// {start, length}, of their hex and their ASCII on each line they are on.
+std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length,
+                                                size_t bytesPerLine = kDumpBytesPerLine );
 
 /// Enable @p button, its tooltip @p whatItDoes, when @p problem is empty;
 /// otherwise disable it, its tooltip @p problem: why it would not work.
@@ -155,7 +168,7 @@ public:
 
     /// The packet line selected, as the panel read it when it last asked,
     /// also while its packet is read; none while selectedPacket() is 0.
-    /// Stream lines in Regex Lab follows its stream, so that the button
+    /// Filter stream in Regex Lab follows its stream, so that the button
     /// and the action decide on the same reading of the selection.
     std::optional<PacketLine> selectedLine() const;
 
@@ -177,18 +190,18 @@ public:
     /// all the same.
     QString statusText() const;
 
-    /// Show stream content: show the content of the selected packet's
+    /// Follow stream content: show the content of the selected packet's
     /// stream in the Stream tab, also while the packet is being read.
     /// False, and the reason in @p why, when no packet line of a TCP or
     /// UDP stream is selected.
     bool followStreamContent( QString* why = nullptr );
 
-    /// Why Show stream content cannot show a stream now, for the user: no
+    /// Why Follow stream content cannot show a stream now, for the user: no
     /// capture in the tab in front, a read that failed, or what
     /// SelectedPacketLine::streamContentProblem() says; empty when it can.
     QString streamContentProblem() const;
 
-    /// Why Stream lines in Regex Lab cannot filter a stream's lines now, as
+    /// Why Filter stream in Regex Lab cannot filter a stream's lines now, as
     /// streamContentProblem(), with SelectedPacketLine::streamLinesProblem();
     /// empty when it can.
     QString streamLinesProblem() const;
@@ -205,6 +218,19 @@ public:
         return conversations_;
     }
 
+    /// The splitter between the layer tree and the hex dump; the sidebar
+    /// remembers where the user left it.
+    QSplitter* layersSplitter() const
+    {
+        return layersSplitter_;
+    }
+
+    /// The splitter between the tabs and the Conversations, as remembered.
+    QSplitter* conversationsSplitter() const
+    {
+        return conversationsSplitter_;
+    }
+
 signals:
     /// The selected line changed what streamContentProblem() and
     /// streamLinesProblem() say (or may have).
@@ -213,6 +239,8 @@ signals:
 protected:
     void showEvent( QShowEvent* event ) override;
     void hideEvent( QHideEvent* event ) override;
+    /// Lays the dump out again when its viewport is resized.
+    bool eventFilter( QObject* watched, QEvent* event ) override;
 
 private:
     /// Ask for the selection; show its packet if it changed (or @p force).
@@ -230,7 +258,13 @@ private:
     void showReason( const QString& reason );
     /// Highlight the bytes of @p item in the dump.
     void highlight( QTreeWidgetItem* item );
-    /// Enable the Show stream content button, or say why not in its
+    /// kDumpBytesPerLine if a full line of it fits the dump's viewport,
+    /// kNarrowDumpBytesPerLine if not.
+    size_t fittingBytesPerLine() const;
+    /// Show the dump of the packet's bytes with fittingBytesPerLine(), if
+    /// not already, the selected item highlighted again.
+    void layOutDump();
+    /// Enable the Follow stream content button, or say why not in its
     /// tooltip, and tell streamActionsChanged().
     void updateStreamActions();
 
@@ -241,6 +275,8 @@ private:
     LayerTree* tree_ = nullptr;
     QPlainTextEdit* dump_ = nullptr;
     ConversationTable* conversations_ = nullptr;
+    QSplitter* layersSplitter_ = nullptr;
+    QSplitter* conversationsSplitter_ = nullptr;
     QTimer timer_;
 
     std::shared_ptr<const CaptureIndex> index_;
@@ -262,7 +298,10 @@ private:
 
     uint32_t selectedPacket_ = 0; ///< The packet of the selected line, read or not.
     uint32_t shownPacket_ = 0;
-    size_t shownBytes_ = 0;
+    /// The bytes of the packet shown, kept to lay its dump out again.
+    std::vector<uint8_t> bytes_;
+    /// The bytes on a line of the dump shown.
+    size_t dumpBytesPerLine_ = kDumpBytesPerLine;
     std::vector<PacketLayer> layers_;
 };
 

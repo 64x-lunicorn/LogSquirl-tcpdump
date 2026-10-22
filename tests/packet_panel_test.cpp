@@ -36,13 +36,17 @@
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFontMetricsF>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollBar>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTreeWidget>
+#include <QtMath>
 
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
                                          size_t api_size );
@@ -149,6 +153,55 @@ SCENARIO( "The hex dump shows each byte in hex and as ASCII", "[packet_panel]" )
     }
 }
 
+SCENARIO( "The hex dump of a narrow sidebar shows 8 bytes a line", "[packet_panel]" )
+{
+    std::vector<uint8_t> bytes;
+    for ( uint8_t i = 0; i < 20; ++i ) {
+        bytes.push_back( static_cast<uint8_t>( 'A' + i ) );
+    }
+    bytes[ 0 ] = 0x00;
+    const auto narrow = tcpdump::kNarrowDumpBytesPerLine;
+    const auto dump = tcpdump::hexDump( bytes, narrow );
+
+    THEN( "8 bytes go on a line, in one group, after their offset, then as text" )
+    {
+        const auto lines = dump.split( '\n' );
+        REQUIRE( lines.size() == 3 );
+        REQUIRE( lines[ 0 ] == "0000  00 42 43 44 45 46 47 48   .BCDEFGH" );
+        REQUIRE( lines[ 1 ] == "0008  49 4a 4b 4c 4d 4e 4f 50   IJKLMNOP" );
+        REQUIRE( lines[ 2 ] == "0010  51 52 53 54" + QString( 15, ' ' ) + "QRST" );
+    }
+
+    THEN( "a full line is as long as the panel reckons, about half a 16-byte line" )
+    {
+        REQUIRE( tcpdump::hexDumpLineChars( bytes.size(), narrow ) == 40 );
+        REQUIRE( tcpdump::hexDumpLineChars( bytes.size(), tcpdump::kDumpBytesPerLine ) == 73 );
+        REQUIRE( dump.split( '\n' )[ 0 ].size() == 40 );
+    }
+
+    THEN( "a byte range is found in the hex and the ASCII of each line it is on" )
+    {
+        const auto ranges = tcpdump::hexDumpRanges( bytes.size(), 6, 4, narrow );
+        QStringList shown;
+        for ( const auto& [ start, length ] : ranges ) {
+            shown << dump.mid( start, length );
+        }
+        REQUIRE( shown == QStringList{ "47 48", "GH", "49 4a", "IJ" } );
+    }
+
+    THEN( "a range over three lines is found on each, the last one short" )
+    {
+        const auto ranges = tcpdump::hexDumpRanges( bytes.size(), 3, 100, narrow );
+        QStringList shown;
+        for ( const auto& [ start, length ] : ranges ) {
+            shown << dump.mid( start, length );
+        }
+        REQUIRE( shown
+                 == QStringList{ "44 45 46 47 48", "DEFGH", "49 4a 4b 4c 4d 4e 4f 50", "IJKLMNOP",
+                                 "51 52 53 54", "QRST" } );
+    }
+}
+
 SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_panel]" )
 {
     GIVEN( "a converted capture in the tab in front, the sidebar in view" )
@@ -203,11 +256,18 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
                 THEN( "its bytes are highlighted in the hex dump, hex and ASCII" )
                 {
                     auto* dump = panel->findChild<QPlainTextEdit*>( "packetBytes" );
+                    // Hex, then ASCII, on each line: one or two, by the layout.
                     const auto selections = dump->extraSelections();
-                    REQUIRE( selections.size() == 2 );
+                    REQUIRE( ( selections.size() == 2 || selections.size() == 4 ) );
+                    QString hex;
+                    QString ascii;
+                    for ( int i = 0; i < selections.size(); i += 2 ) {
+                        hex += selections[ i ].cursor.selectedText();
+                        ascii += selections[ i + 1 ].cursor.selectedText();
+                    }
                     const auto mac = source->text( 0 ).mid( 8 ).remove( ':' );
-                    REQUIRE( selections[ 0 ].cursor.selectedText().remove( ' ' ) == mac );
-                    REQUIRE( selections[ 1 ].cursor.selectedText().size() == 6 );
+                    REQUIRE( hex.remove( ' ' ) == mac );
+                    REQUIRE( ascii.size() == 6 );
                 }
             }
         }
@@ -275,6 +335,229 @@ SCENARIO( "The Packet Panel shows the packet of the selected line", "[packet_pan
                 {
                     REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
                     REQUIRE_FALSE( panel->findChild<QLabel*>( "packetStatus" )->isHidden() );
+                }
+            }
+        }
+    }
+}
+
+namespace {
+
+/// Resize the sidebar of @p loaded so that its hex dump's viewport is about
+/// @p chars characters of the dump's font wide.
+void setDumpWidth( LoadedCapture& loaded, int chars )
+{
+    auto* dump = loaded.panel->findChild<QPlainTextEdit*>( "packetBytes" );
+    const auto pixels = qCeil( QFontMetricsF( dump->font() ).horizontalAdvance( '0' ) * chars );
+    loaded.sidebar->resize( loaded.sidebar->width() - dump->viewport()->width() + pixels,
+                            loaded.sidebar->height() );
+    runFor( 50 ); // the layouts settle, and the scroll bars
+}
+
+/// The Source field of the Ethernet layer in @p tree.
+QTreeWidgetItem* ethernetSource( QTreeWidget* tree )
+{
+    auto* ethernet = tree->topLevelItem( 1 );
+    for ( int i = 0; i < ethernet->childCount(); ++i ) {
+        if ( ethernet->child( i )->text( 0 ).startsWith( "Source: " ) ) {
+            return ethernet->child( i );
+        }
+    }
+    return nullptr;
+}
+
+/// What the highlights of @p dump cover, in order.
+QStringList highlighted( QPlainTextEdit* dump )
+{
+    QStringList shown;
+    for ( const auto& selection : dump->extraSelections() ) {
+        shown << selection.cursor.selectedText();
+    }
+    return shown;
+}
+
+/// Whether the first highlight of @p dump is in view.
+bool firstHighlightInView( QPlainTextEdit* dump )
+{
+    const auto selections = dump->extraSelections();
+    return !selections.isEmpty()
+           && dump->textCursor().position() == selections.first().cursor.selectionStart()
+           && dump->viewport()->rect().intersects( dump->cursorRect() );
+}
+
+} // namespace
+
+SCENARIO( "The Packet Panel's hex dump shows 8 bytes a line where 16 do not fit", "[packet_panel]" )
+{
+    GIVEN( "a packet shown in a sidebar wide enough for 16 bytes a line" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+        auto* dump = panel->findChild<QPlainTextEdit*>( "packetBytes" );
+        auto* tree = panel->findChild<QTreeWidget*>( "packetLayers" );
+        loaded.sidebar->resize( 1200, 800 );
+        loaded.sidebar->show();
+        setDumpWidth( loaded, 100 );
+        host.selectedLines = { loaded.lines[ 3 ] };
+        REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+        const auto wide = dump->toPlainText().split( '\n' );
+        REQUIRE( wide.size() > 2 );
+        REQUIRE( wide[ 0 ].size() == 73 );
+        REQUIRE( wide[ 1 ].startsWith( "0010  " ) );
+
+        WHEN( "the sidebar is narrowed below a 16-byte line" )
+        {
+            setDumpWidth( loaded, 60 );
+
+            THEN( "the dump shows 8 bytes a line and needs no horizontal scrolling" )
+            {
+                const auto lines = dump->toPlainText().split( '\n' );
+                REQUIRE( lines[ 0 ].size() == 40 );
+                REQUIRE( lines[ 1 ].startsWith( "0008  " ) );
+                for ( const auto& line : lines ) {
+                    REQUIRE( line.size() <= 40 );
+                }
+                REQUIRE( dump->horizontalScrollBar()->maximum() == 0 );
+            }
+
+            AND_WHEN( "a field over two lines is selected" )
+            {
+                auto* source = ethernetSource( tree );
+                REQUIRE( source );
+                tree->setCurrentItem( source );
+                const auto mac = source->text( 0 ).mid( 8 ).remove( ':' );
+
+                THEN(
+                    "its bytes are highlighted in hex and ASCII on both lines, the first in view" )
+                {
+                    const auto shown = highlighted( dump );
+                    REQUIRE( shown.size() == 4 );
+                    REQUIRE( ( shown[ 0 ] + shown[ 2 ] ).remove( ' ' ) == mac );
+                    REQUIRE( shown[ 1 ].size() == 2 );
+                    REQUIRE( shown[ 3 ].size() == 4 );
+                    REQUIRE( firstHighlightInView( dump ) );
+                }
+
+                AND_WHEN( "the sidebar is widened past a 16-byte line again" )
+                {
+                    setDumpWidth( loaded, 100 );
+
+                    THEN( "the dump shows 16 bytes a line, the field still highlighted" )
+                    {
+                        const auto lines = dump->toPlainText().split( '\n' );
+                        REQUIRE( lines == wide );
+                        const auto shown = highlighted( dump );
+                        REQUIRE( shown.size() == 2 );
+                        REQUIRE( QString( shown[ 0 ] ).remove( ' ' ) == mac );
+                        REQUIRE( shown[ 1 ].size() == 6 );
+                        REQUIRE( firstHighlightInView( dump ) );
+                    }
+                }
+            }
+
+            AND_WHEN( "the last layer is selected" )
+            {
+                tree->setCurrentItem( tree->topLevelItem( tree->topLevelItemCount() - 1 ) );
+
+                THEN( "its first highlighted line is scrolled into view" )
+                {
+                    REQUIRE_FALSE( highlighted( dump ).isEmpty() );
+                    REQUIRE( firstHighlightInView( dump ) );
+                }
+            }
+        }
+    }
+}
+
+SCENARIO( "The Packet Panel's hex dump goes back to 16 bytes a line as soon as a line fits",
+          "[packet_panel]" )
+{
+    GIVEN( "a packet shown at 8 bytes a line, with a vertical scroll bar" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+        auto* dump = panel->findChild<QPlainTextEdit*>( "packetBytes" );
+        loaded.sidebar->resize( 1200, 800 );
+        loaded.sidebar->show();
+        setDumpWidth( loaded, 100 );
+        host.selectedLines = { loaded.lines[ 3 ] };
+        REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 3; } ) );
+        const auto wideLines = dump->toPlainText().split( '\n' ).size();
+        const QFontMetricsF metrics( dump->font() );
+        // As fittingBytesPerLine() reckons a 16-byte line.
+        const auto needed = qCeil( metrics.horizontalAdvance( QString( 73, QLatin1Char( '0' ) ) )
+                                   + 2 * dump->document()->documentMargin() + dump->cursorWidth() );
+        const auto frame = dump->height() - dump->viewport()->height();
+        const auto setDumpLines = [ & ]( int lines ) {
+            dump->setFixedHeight(
+                qCeil( metrics.lineSpacing() * lines + 2 * dump->document()->documentMargin() )
+                + frame );
+            runFor( 50 );
+        };
+        const auto widenToBarHalf = [ & ] {
+            // Wide enough for a 16-byte line without the scroll bar, not
+            // with it.
+            const auto bar = dump->verticalScrollBar()->width();
+            loaded.sidebar->resize( loaded.sidebar->width() - dump->viewport()->width() + needed
+                                        - bar / 2,
+                                    loaded.sidebar->height() );
+            runFor( 50 );
+        };
+
+        WHEN( "the dump is high enough for its 16-byte lines, but not its 8-byte ones" )
+        {
+            // Lines to spare for the 16-byte dump, too few for the 8-byte one.
+            REQUIRE( wideLines >= 4 );
+            setDumpLines( 2 * wideLines - 2 );
+            setDumpWidth( loaded, 60 );
+            REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+            REQUIRE( dump->verticalScrollBar()->isVisible() );
+            REQUIRE( dump->verticalScrollBar()->width() > 2 );
+            auto* bar = dump->verticalScrollBar();
+            const bool transient
+                = bar->style()->styleHint( QStyle::SH_ScrollBar_Transient, nullptr, bar );
+
+            AND_WHEN( "it is widened to where a 16-byte line fits without the scroll bar" )
+            {
+                widenToBarHalf();
+
+                THEN( "it shows 16 bytes a line, with no scroll bar and nothing cut off, where "
+                      "the bar takes room" )
+                {
+                    const auto first = dump->toPlainText().split( '\n' )[ 0 ].size();
+                    CAPTURE( transient, needed, bar->width(), dump->viewport()->width(),
+                             dump->viewport()->height(), metrics.lineSpacing(), wideLines );
+                    // A transient bar, drawn over the text, took no room:
+                    // the line still does not fit.
+                    REQUIRE( first == ( transient ? 40 : 73 ) );
+                    if ( !transient ) {
+                        REQUIRE_FALSE( bar->isVisible() );
+                    }
+                    REQUIRE( dump->horizontalScrollBar()->maximum() == 0 );
+                    runFor( 50 );
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == first );
+                }
+            }
+        }
+
+        WHEN( "the dump is too low for its 16-byte lines too" )
+        {
+            setDumpLines( 2 );
+            setDumpWidth( loaded, 60 );
+            REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+            REQUIRE( dump->verticalScrollBar()->isVisible() );
+
+            AND_WHEN( "it is widened to where a 16-byte line fits only without the scroll bar" )
+            {
+                widenToBarHalf();
+
+                THEN( "it stays at 8 bytes a line, not flipping back and forth" )
+                {
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
+                    runFor( 50 );
+                    REQUIRE( dump->toPlainText().split( '\n' )[ 0 ].size() == 40 );
                 }
             }
         }
@@ -558,7 +841,7 @@ QByteArray fileBytes( const QString& path )
 
 } // namespace
 
-SCENARIO( "Show stream content shows a conversation's payload in the Packet Panel",
+SCENARIO( "Follow stream content shows a conversation's payload in the Packet Panel",
           "[packet_panel][stream_content]" )
 {
     GIVEN( "the synthetic reassembly capture in the tab in front" )
@@ -824,7 +1107,7 @@ SCENARIO( "A stream of 16 MiB without a line feed is shown in lines of bounded l
     }
 }
 
-SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" )
+SCENARIO( "Follow stream content from the menu", "[packet_panel][stream_content]" )
 {
     GIVEN( "a capture whose sidebar is not in view" )
     {
@@ -832,7 +1115,7 @@ SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" 
         auto& host = loaded.host;
         const auto entry
             = std::find_if( host.menuActions.begin(), host.menuActions.end(),
-                            []( const auto& a ) { return a.label == "Show stream content"; } );
+                            []( const auto& a ) { return a.label == "Follow stream content"; } );
         REQUIRE( entry != host.menuActions.end() );
 
         WHEN( "a packet line is selected and the entry chosen" )
@@ -856,14 +1139,14 @@ SCENARIO( "Show stream content from the menu", "[packet_panel][stream_content]" 
             THEN( "the notification says why no stream is followed" )
             {
                 REQUIRE( host.notifications
-                         == QStringList{ "Show stream content: Select a packet line to see "
+                         == QStringList{ "Follow stream content: Select a packet line to see "
                                          "its packet." } );
             }
         }
     }
 }
 
-SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only when they work",
+SCENARIO( "Filter stream in Regex Lab and Follow stream content are enabled only when they work",
           "[packet_panel][followstream]" )
 {
     GIVEN( "a plugin loaded by a host with the Regex Lab, no capture in the tab in front" )
@@ -881,8 +1164,8 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
         {
             REQUIRE( lines );
             REQUIRE( content );
-            REQUIRE( lines->text() == "Stream lines in Regex Lab" );
-            REQUIRE( content->text() == "Show stream content" );
+            REQUIRE( lines->text() == "Filter stream in Regex Lab" );
+            REQUIRE( content->text() == "Follow stream content" );
             REQUIRE_FALSE( lines->isEnabled() );
             REQUIRE_FALSE( content->isEnabled() );
             REQUIRE( lines->toolTip() == "No capture in this tab." );
@@ -895,10 +1178,11 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
             for ( const auto& action : host.menuActions ) {
                 labels << action.label;
             }
-            REQUIRE( labels.contains( "Stream lines in Regex Lab" ) );
-            REQUIRE( labels.contains( "Show stream content" ) );
+            REQUIRE( labels.contains( "Filter stream in Regex Lab" ) );
+            REQUIRE( labels.contains( "Follow stream content" ) );
             REQUIRE_FALSE( labels.contains( "Follow stream" ) );
-            REQUIRE_FALSE( labels.contains( "Follow stream content" ) );
+            REQUIRE_FALSE( labels.contains( "Stream lines in Regex Lab" ) );
+            REQUIRE_FALSE( labels.contains( "Show stream content" ) );
         }
 
         logsquirl_plugin_shutdown();
@@ -955,7 +1239,7 @@ SCENARIO( "Stream lines in Regex Lab and Show stream content are enabled only wh
                 REQUIRE( content->toolTip().contains( "payload" ) );
             }
 
-            AND_WHEN( "Stream lines in Regex Lab is clicked" )
+            AND_WHEN( "Filter stream in Regex Lab is clicked" )
             {
                 const auto callsBefore = host.selectionCalls;
                 lines->click();

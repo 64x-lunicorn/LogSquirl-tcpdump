@@ -80,6 +80,10 @@ private:
     /// every key: a long paste of packet lines takes a while.
     static constexpr int kUpdateDelayMs = 200;
 
+    /// Wide enough that the intro, the truncation note and the ranges
+    /// field read as lines, not a column; it can be made wider.
+    static constexpr int kMinimumWidth = 420;
+
     uint32_t packets_;
     PacketSet set_;
     QTimer* updateTimer_ = nullptr;

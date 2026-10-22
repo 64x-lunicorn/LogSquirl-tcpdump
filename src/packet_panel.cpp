@@ -28,16 +28,21 @@
 #include "plugin.h"
 #include "stream_content_view.h"
 
+#include <QEvent>
 #include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QFutureWatcher>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSplitter>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTextCursor>
+#include <QTextDocument>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
@@ -49,11 +54,9 @@ namespace tcpdump {
 
 namespace {
 
-constexpr size_t kBytesPerLine = 16;
-/// Characters of a line's hex: 16 bytes of "xx ", one more space after 8, no trailing one.
-constexpr int kHexWidth = 16 * 3;
-constexpr int kOffsetGap = 2; ///< Between the offset and the hex.
-constexpr int kAsciiGap = 3;  ///< Between the hex and the ASCII.
+constexpr size_t kBytesPerGroup = 8; ///< One more space after each group of hex.
+constexpr int kOffsetGap = 2;        ///< Between the offset and the hex.
+constexpr int kAsciiGap = 3;         ///< Between the hex and the ASCII.
 
 /// The tree item's roles holding the bytes of its layer or field.
 constexpr int kOffsetRole = Qt::UserRole;
@@ -69,36 +72,43 @@ int offsetWidth( size_t total )
     return digits;
 }
 
-/// Where the hex of byte @p column (0–15) of a line starts on it.
+/// Where the hex of byte @p column (0 to @p perLine - 1) of a line starts on it.
 int hexColumn( int width, size_t column )
 {
-    return width + kOffsetGap + static_cast<int>( column ) * 3 + ( column >= 8 ? 1 : 0 );
+    return width + kOffsetGap + static_cast<int>( column * 3 + column / kBytesPerGroup );
 }
 
-/// Where the ASCII of byte @p column of a line starts on it.
-int asciiColumn( int width, size_t column )
+/// Characters of a line's hex, @p perLine bytes of "xx " with one more
+/// space after each group but the last, no trailing one.
+int hexWidth( size_t perLine )
 {
-    return width + kOffsetGap + kHexWidth + kAsciiGap + static_cast<int>( column );
+    return hexColumn( 0, perLine - 1 ) + 2 - kOffsetGap;
 }
 
-/// The characters of a full line, its newline included.
-int lineLength( int width )
+/// Where the ASCII of byte @p column of a line of @p perLine starts on it.
+int asciiColumn( int width, size_t perLine, size_t column )
 {
-    return asciiColumn( width, kBytesPerLine ) + 1;
+    return width + kOffsetGap + hexWidth( perLine ) + kAsciiGap + static_cast<int>( column );
+}
+
+/// The characters of a full line of @p perLine, its newline included.
+int lineLength( int width, size_t perLine )
+{
+    return asciiColumn( width, perLine, perLine ) + 1;
 }
 
 } // namespace
 
-QString hexDump( const std::vector<uint8_t>& bytes )
+QString hexDump( const std::vector<uint8_t>& bytes, size_t bytesPerLine )
 {
     static const char* const kDigits = "0123456789abcdef";
     const int width = offsetWidth( bytes.size() );
+    const int length = lineLength( width, bytesPerLine );
     QString dump;
-    dump.reserve(
-        static_cast<qsizetype>( ( bytes.size() / kBytesPerLine + 1 ) * lineLength( width ) ) );
-    for ( size_t line = 0; line < bytes.size(); line += kBytesPerLine ) {
-        const auto count = std::min( kBytesPerLine, bytes.size() - line );
-        QString text( lineLength( width ) - 1, QLatin1Char( ' ' ) );
+    dump.reserve( static_cast<qsizetype>( ( bytes.size() / bytesPerLine + 1 ) * length ) );
+    for ( size_t line = 0; line < bytes.size(); line += bytesPerLine ) {
+        const auto count = std::min( bytesPerLine, bytes.size() - line );
+        QString text( length - 1, QLatin1Char( ' ' ) );
         const auto offset = QString::number( static_cast<qulonglong>( line ), 16 )
                                 .rightJustified( width, QLatin1Char( '0' ) );
         text.replace( 0, width, offset );
@@ -106,11 +116,11 @@ QString hexDump( const std::vector<uint8_t>& bytes )
             const auto byte = bytes[ line + i ];
             text[ hexColumn( width, i ) ] = QLatin1Char( kDigits[ byte >> 4 ] );
             text[ hexColumn( width, i ) + 1 ] = QLatin1Char( kDigits[ byte & 0x0F ] );
-            text[ asciiColumn( width, i ) ] = byte >= 0x20 && byte < 0x7F
-                                                  ? QLatin1Char( static_cast<char>( byte ) )
-                                                  : QLatin1Char( '.' );
+            text[ asciiColumn( width, bytesPerLine, i ) ]
+                = byte >= 0x20 && byte < 0x7F ? QLatin1Char( static_cast<char>( byte ) )
+                                              : QLatin1Char( '.' );
         }
-        text.truncate( asciiColumn( width, count ) );
+        text.truncate( asciiColumn( width, bytesPerLine, count ) );
         if ( !dump.isEmpty() ) {
             dump += QLatin1Char( '\n' );
         }
@@ -119,21 +129,27 @@ QString hexDump( const std::vector<uint8_t>& bytes )
     return dump;
 }
 
-std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length )
+int hexDumpLineChars( size_t total, size_t bytesPerLine )
+{
+    return lineLength( offsetWidth( total ), bytesPerLine ) - 1;
+}
+
+std::vector<std::pair<int, int>> hexDumpRanges( size_t total, size_t offset, size_t length,
+                                                size_t bytesPerLine )
 {
     std::vector<std::pair<int, int>> ranges;
     const auto end = std::min( total, offset + length );
     const int width = offsetWidth( total );
     for ( size_t at = offset; at < end; ) {
-        const auto line = at / kBytesPerLine;
-        const auto first = at % kBytesPerLine;
-        const auto last = std::min( kBytesPerLine, end - line * kBytesPerLine ) - 1;
-        const int start = static_cast<int>( line ) * lineLength( width );
+        const auto line = at / bytesPerLine;
+        const auto first = at % bytesPerLine;
+        const auto last = std::min( bytesPerLine, end - line * bytesPerLine ) - 1;
+        const int start = static_cast<int>( line ) * lineLength( width, bytesPerLine );
         ranges.emplace_back( start + hexColumn( width, first ),
                              hexColumn( width, last ) + 2 - hexColumn( width, first ) );
-        ranges.emplace_back( start + asciiColumn( width, first ),
+        ranges.emplace_back( start + asciiColumn( width, bytesPerLine, first ),
                              static_cast<int>( last - first + 1 ) );
-        at = ( line + 1 ) * kBytesPerLine;
+        at = ( line + 1 ) * bytesPerLine;
     }
     return ranges;
 }
@@ -181,6 +197,8 @@ PacketPanel::PacketPanel( QWidget* parent )
     layout->addWidget( status_ );
 
     auto* splitter = new QSplitter( Qt::Vertical );
+    splitter->setObjectName( "layersSplitter" );
+    layersSplitter_ = splitter;
     tree_ = new LayerTree;
     tree_->setObjectName( "packetLayers" );
     tree_->setHeaderHidden( true );
@@ -193,9 +211,10 @@ PacketPanel::PacketPanel( QWidget* parent )
     dump_->setReadOnly( true );
     dump_->setLineWrapMode( QPlainTextEdit::NoWrap );
     dump_->setFont( QFontDatabase::systemFont( QFontDatabase::FixedFont ) );
+    dump_->viewport()->installEventFilter( this );
     splitter->addWidget( dump_ );
 
-    followButton_ = new QPushButton( "Show stream content" );
+    followButton_ = new QPushButton( "Follow stream content" );
     followButton_->setObjectName( "streamContentButton" );
     followButton_->setEnabled( false );
     layout->addWidget( followButton_ );
@@ -205,7 +224,7 @@ PacketPanel::PacketPanel( QWidget* parent )
         } catch ( const std::exception& e ) {
             // An exception must not escape into Qt or the host.
             hostLog( LOGSQUIRL_LOG_ERROR,
-                     "Show stream content failed: " + QString::fromUtf8( e.what() ) );
+                     "Follow stream content failed: " + QString::fromUtf8( e.what() ) );
         }
     } );
 
@@ -219,6 +238,8 @@ PacketPanel::PacketPanel( QWidget* parent )
     tabs_->addTab( streamView_, "Stream" );
     // Neither can be dragged away: the Conversations keep a few rows.
     auto* outer = new QSplitter( Qt::Vertical );
+    outer->setObjectName( "conversationsSplitter" );
+    conversationsSplitter_ = outer;
     outer->setChildrenCollapsible( false );
     outer->addWidget( tabs_ );
     conversations_ = new ConversationTable;
@@ -278,7 +299,7 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
     cursor_.reset(); // a read of the capture before keeps its own
     last_.reset();
     // The stream shown was one of the capture of the tab before.
-    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Show stream "
+    streamView_->clear( index_ ? QStringLiteral( "Select a packet line and choose Follow stream "
                                                  "content." )
                                : QStringLiteral( "No capture in this tab." ) );
     tabs_->setCurrentIndex( 0 );
@@ -333,6 +354,14 @@ void PacketPanel::hideEvent( QHideEvent* event )
 {
     QWidget::hideEvent( event );
     timer_.stop();
+}
+
+bool PacketPanel::eventFilter( QObject* watched, QEvent* event )
+{
+    if ( watched == dump_->viewport() && event->type() == QEvent::Resize ) {
+        layOutDump();
+    }
+    return QWidget::eventFilter( watched, event );
 }
 
 void PacketPanel::poll( bool force )
@@ -392,8 +421,8 @@ QString PacketPanel::streamLinesProblem() const
 void PacketPanel::updateStreamActions()
 {
     enableUnlessProblem( followButton_, streamContentProblem(),
-                         QStringLiteral( "Show the payload of this packet's conversation, as "
-                                         "text or hex" ) );
+                         QStringLiteral( "Follow the content of this packet's conversation: "
+                                         "its payload, as text or hex" ) );
     emit streamActionsChanged();
 }
 
@@ -497,7 +526,7 @@ void PacketPanel::showRead( const PacketRead& read )
         }
     }
     shownPacket_ = number;
-    shownBytes_ = packet.bytes.size();
+    bytes_ = packet.bytes;
     auto status = QStringLiteral( "Packet %1" ).arg( number );
     if ( packet.record.capturedLen > packet.bytes.size() ) {
         status += QStringLiteral( " (the first %1 bytes)" ).arg( packet.bytes.size() );
@@ -521,7 +550,8 @@ void PacketPanel::showRead( const PacketRead& read )
     for ( int i = 1; i < tree_->topLevelItemCount(); ++i ) {
         tree_->topLevelItem( i )->setExpanded( true );
     }
-    dump_->setPlainText( hexDump( packet.bytes ) );
+    dumpBytesPerLine_ = fittingBytesPerLine();
+    dump_->setPlainText( hexDump( bytes_, dumpBytesPerLine_ ) );
     highlight( nullptr );
 }
 
@@ -537,7 +567,7 @@ void PacketPanel::showReason( const QString& reason )
     }
     selectedPacket_ = 0;
     shownPacket_ = 0;
-    shownBytes_ = 0;
+    bytes_.clear();
     layers_.clear();
     status_->setText( reason );
     // Said once: the sidebar's summary above says the tab holds no capture,
@@ -559,7 +589,8 @@ void PacketPanel::highlight( QTreeWidgetItem* item )
         format.setBackground( palette().highlight() );
         format.setForeground( palette().highlightedText() );
         bool first = true;
-        for ( const auto& [ start, count ] : hexDumpRanges( shownBytes_, offset, length ) ) {
+        for ( const auto& [ start, count ] :
+              hexDumpRanges( bytes_.size(), offset, length, dumpBytesPerLine_ ) ) {
             QTextEdit::ExtraSelection selection;
             selection.cursor = QTextCursor( dump_->document() );
             selection.cursor.setPosition( start );
@@ -577,6 +608,54 @@ void PacketPanel::highlight( QTreeWidgetItem* item )
         }
     }
     dump_->setExtraSelections( selections );
+}
+
+size_t PacketPanel::fittingBytesPerLine() const
+{
+    // As QPlainTextEdit reckons a line's width: its text, the document's
+    // margin on either side, and the cursor after its end.
+    const QFontMetricsF metrics( dump_->font() );
+    const auto line
+        = QString( hexDumpLineChars( bytes_.size(), kDumpBytesPerLine ), QLatin1Char( '0' ) );
+    const auto margin = dump_->document()->documentMargin();
+    const auto needed = metrics.horizontalAdvance( line ) + 2 * margin + dump_->cursorWidth();
+    auto room = dump_->viewport()->width();
+    // A vertical scroll bar is room for the 16-byte lines if they would not
+    // need it: the 8-byte lines, twice as many, brought it in, or the 16-byte
+    // ones, just shown, have not yet let it go.  So is a horizontal bar's
+    // height, which a 16-byte line that fits does not need either.  A line
+    // to spare, so that the choice cannot flip back and forth.  A transient
+    // bar, drawn over the text, takes no room to give.
+    const auto takesRoom = [ this ]( const QScrollBar* bar ) {
+        return bar->isVisible()
+               && !bar->style()->styleHint( QStyle::SH_ScrollBar_Transient, nullptr, bar );
+    };
+    if ( takesRoom( dump_->verticalScrollBar() ) ) {
+        auto height = dump_->viewport()->height();
+        if ( takesRoom( dump_->horizontalScrollBar() ) ) {
+            height += dump_->horizontalScrollBar()->height();
+        }
+        const auto lines = ( bytes_.size() + kDumpBytesPerLine - 1 ) / kDumpBytesPerLine;
+        if ( static_cast<double>( lines + 1 ) * metrics.lineSpacing() + 2 * margin <= height ) {
+            room += dump_->verticalScrollBar()->width();
+        }
+    }
+    return needed <= room ? kDumpBytesPerLine : kNarrowDumpBytesPerLine;
+}
+
+void PacketPanel::layOutDump()
+{
+    const auto bytesPerLine = fittingBytesPerLine();
+    if ( bytesPerLine == dumpBytesPerLine_ ) {
+        return;
+    }
+    // Set first: the new text may resize the viewport again, by a scroll bar.
+    dumpBytesPerLine_ = bytesPerLine;
+    if ( bytes_.empty() ) {
+        return;
+    }
+    dump_->setPlainText( hexDump( bytes_, dumpBytesPerLine_ ) );
+    highlight( tree_->currentItem() );
 }
 
 } // namespace tcpdump

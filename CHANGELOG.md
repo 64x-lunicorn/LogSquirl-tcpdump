@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output is unchanged) shows an address that a DNS or mDNS answer earlier
   in the capture resolved with its name behind it in Source and
   Destination, `93.184.216.34(www.example.com)`: one word, still starting
-  with the address, so the Log Format, the presets, Follow stream, the
-  summary's filters and the display filters match as before. A and AAAA
+  with the address, so the Log Format, the presets, Filter stream in Regex
+  Lab, the summary's filters and the display filters match as before. A and AAAA
   answers name their address with the name asked for, through CNAMEs; PTR
   answers name the address they spell; over UDP and TCP; an mDNS
   response's additional records too, where a responder puts the addresses
@@ -191,8 +191,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads on, up to 16 MB, with a note. **Export…** writes the whole stream,
   raw bytes per direction or the text as shown, without holding it. Opened
   with the panel's **Follow stream content** button or **Plugins →
-  tcpdump → Follow stream content**; *Follow stream* still filters the
-  stream's lines in the Regex Lab. Needs LogSquirl ≥ 26.11.
+  tcpdump → Follow stream content**; *Filter stream in Regex Lab* still
+  filters the stream's lines in the Regex Lab. Needs LogSquirl ≥ 26.11.
 - **TCP details as Wireshark shows them.** A SYN and a SYN-ACK show their
   options after the window, in the order they were sent: `[SYN] Seq=0
   Win=64240 MSS=1460 SACK_PERM TSval=1000 TSecr=0 WS=128`; unknown options
@@ -275,10 +275,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TCP and UDP stream, as Wireshark's *Statistics → Conversations*: Stream,
   protocol (the Stream Label), address and port of ends A and B, packets
   and bytes (on the wire) in all and each way, start and duration; sortable
-  by every column. A click on a row, or *Filter on this conversation*,
-  opens the Regex Lab with the pattern of the stream's lines, as Follow
-  stream builds it. The counts are taken while converting, for the
-  numbered streams only, so the stream cap bounds them (some 200 bytes a
+  by every column. A double click on a row, Enter, or *Filter conversation
+  in Regex Lab* opens the Regex Lab with the pattern of the stream's lines,
+  as Filter stream in Regex Lab builds it. The counts are taken while converting,
+  for the numbered streams only, so the stream cap bounds them (some 200 bytes a
   stream for its counts and row; with the Stream Tracker some 390 MB at the
   default cap of 1,000,000 streams); the packets of streams past it are
   one row, *Other streams*. The table is part of the Capture Summary and
@@ -309,7 +309,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoints apart, under *Tunnel endpoints* and without a filter link, as
   no column shows their addresses. The highlighters and filters in
   `presets/` read a tunnelled packet's Info past the tunnels (a SYN in
-  VXLAN is a *TCP SYN/FIN*), and Follow stream follows the inner
+  VXLAN is a *TCP SYN/FIN*), and Filter stream in Regex Lab picks the inner
   conversation. An Ethernet frame in VXLAN or GRE is dissected as one on
   the wire, a PPPoE session in it unwrapped to its IP packet. At most 4
   tunnels are unwrapped, a
@@ -523,6 +523,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each case.
 
 ### Changed
+- **A click on the Conversations table selects; a double click filters.**
+  A single click on a conversation only selects it, so reading its numbers
+  or sorting no longer opens the Regex Lab every time; a double click,
+  Enter on the selected row, or **Filter conversation in Regex Lab** in its
+  context menu opens it, the *Other streams* row notifying instead as
+  before. The packets and bytes each way (A→B, B→A) are hidden at first, so
+  that the table fits a sidebar of ordinary width; the header's context
+  menu shows or hides each column, the choice kept in `settings.ini`
+  (`[conversations] hiddenColumns`). The table's tooltip says how to
+  filter (#209).
+- **Start live capture waits for a source that can capture.** In the
+  Start live capture dialog, what the source says (why it cannot be used,
+  what listing its interfaces found, what to install or run) is a note: a
+  panel tinted from the palette, with an information or warning icon, in
+  light and dark mode, its commands and links as before. When listing the
+  interfaces finds that capturing is impossible (on macOS `/dev/bpf0`
+  cannot be read; dumpcap or tcpdump is denied the permission), Start stays
+  disabled with that reason as its tooltip until Refresh, or another source
+  or device, lists anew and finds it can, rather than starting a capture
+  that fails with the same message. A listing that merely finds no
+  interfaces, or an interface typed by hand, leaves Start enabled as
+  before (#210).
+- **The hex dump fits a narrow sidebar.** While the Packet panel's dump is
+  too narrow for a line of 16 bytes, it shows 8 bytes a line (the offset,
+  8 hex pairs, 8 ASCII characters), and 16 again once it is wide enough,
+  so it needs no horizontal scrolling and a field's highlighted bytes are
+  not out of view to the right. Selecting a layer or field highlights its
+  bytes in either layout, also across a switch (#208).
 - A segment that ends inside a TLS record, an HTTP header section or a
   DNS-over-TCP message no longer names the message as far as it goes
   (`Client Hello` without its server name, `Standard query response … (2
@@ -530,6 +558,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first says `[TCP segment of a reassembled PDU]`, the last describes
   the whole message (see *TCP reassembly*). A message the capture never
   completes is described by none of its segments.
+- **The options dialog is on tabs, so that it fits a laptop's screen.**
+  The plugin's options, opened by **Configure…** in Plugin Management, are
+  on three tabs: *Columns and Info* (time columns, MAC columns, names from
+  DNS answers, payload preview, TCP timestamps), *Protocols* (SOME/IP
+  ports and name table, TLS key log file) and *Advanced* (the caps).
+  The dialog is at most about 600 pixels high, where it was about 800
+  and cut off on a 13-inch screen; every option and note stays, and
+  **Restore Defaults** resets the options of all tabs (#206).
+- **The sidebar's panes can be resized, and are remembered.** The capture
+  summary and the Packet panel share the sidebar through a handle you
+  drag; the summary no longer shrinks to three lines once a packet line is
+  selected, but keeps its Overview and Protocols in view (it asks for up to
+  30 lines, then scrolls in itself), and the Packet panel always keeps room
+  for its tabs and a few Conversations rows. Where you leave that handle,
+  and the two inside the Packet panel (layers and bytes, tabs and
+  Conversations), is kept in `settings.ini` (`[sidebar]`) and is back after
+  a restart. A sidebar too short for both still scrolls as a whole (#204).
+- **The Export packets dialog opens wide enough to read, and the sidebar
+  has no title row.** The dialog is at least 420 pixels wide, where it
+  opened about 290 wide with its intro and truncation note wrapped into a
+  tall column and the packet ranges field cramped; it can still be made
+  wider. The sidebar no longer starts with a bold *tcpdump / pcap Viewer*
+  line, which repeated its tab's name; it begins with **Open pcap…**,
+  a row more for the summary and the Packet panel (#211).
 - **The live capture form is in the Start live capture dialog only.** The
   sidebar's Live capture section is a **Start live capture…** button,
   which opens the same dialog as the tcpdump menu entry, with the choice
@@ -558,19 +610,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected and copied whole, and its URLs as links; the steps to turn on
   USB debugging are a numbered list. The sidebar's live capture error does
   the same. Notifications show the commands in backticks (#142).
-- **Stream lines in Regex Lab and Show stream content.** *Follow stream*
-  and *Follow stream content* said almost the same for two different
-  things: they are now **Stream lines in Regex Lab** (the sidebar button
-  and tcpdump menu entry that open the Regex Lab with the pattern of the
-  stream's lines) and **Show stream content** (the Packet panel's button
-  and menu entry that show the stream's payload), in the sidebar, the
-  menu, notifications and the README. Each button is enabled only when
-  it works, its tooltip saying why not: no capture in the tab in front, no
-  packet line selected, a packet of no stream, or, for the Regex Lab, a
-  stream past the numbered ones; Stream lines in Regex Lab was enabled
-  with no capture loaded. The menu entry refuses with the same reason,
-  where it opened the Regex Lab on a plain log's line that looked like a
-  packet line (#147).
+- **Filter stream in Regex Lab, Follow stream content and Filter
+  conversation in Regex Lab.** *Follow stream* and *Follow stream content*
+  said almost the same for two different things, and the Conversations
+  table's *Filter on this conversation* was named in a third way: the
+  names now say whether they filter the view or show content. **Filter
+  stream in Regex Lab** (the sidebar button and tcpdump menu entry) opens
+  the Regex Lab with the pattern of the stream's lines, **Follow stream
+  content** (the Packet panel's button and menu entry) shows the stream's
+  payload, as Wireshark's *Follow TCP Stream* window, and **Filter
+  conversation in Regex Lab** (the Conversations table's context menu)
+  opens the Regex Lab on the row's stream; in the sidebar, the menu,
+  tooltips, notifications and the README (#207). Each button is enabled
+  only when it works, its tooltip saying why not: no capture in the tab in
+  front, no packet line selected, a packet of no stream, or, for the Regex
+  Lab, a stream past the numbered ones; Filter stream in Regex Lab was
+  enabled with no capture loaded. The menu entry refuses with the same
+  reason, where it opened the Regex Lab on a plain log's line that looked
+  like a packet line (#147).
 - **The sidebar's display filter says that it opens the Regex Lab.** The
   field showed only a placeholder next to *Open in Regex Lab*; that the
   filter does not filter the tab but opens the Regex Lab was said only in
@@ -705,10 +762,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table instead of copying it (#194).
 - **The TLS key log leaves no copy of its secrets.** The key log file is
   read unbuffered, so the only copy of its bytes is the one wiped (#191).
-- **A long line in Follow stream no longer stalls LogSquirl.** Stream
+- **A long line in Follow stream content no longer stalls LogSquirl.** Stream
   text is broken into lines of at most 4,096 characters, and bidi
   overrides and other invisible format characters are shown escaped, so
   they cannot reorder what the Stream tab shows (#192).
+- **A failed live capture's commands are no longer cut off, and its error
+  is shown once.** The command in a source's guidance (the macOS
+  `sudo dseditgroup …`, the Linux `setcap`) did not wrap: in a sidebar of
+  ordinary width it ran past the edge, cutting off the link after it, and
+  in the Start live capture dialog it widened the dialog. Commands now
+  wrap at the width they get, still in a fixed-width font and selectable
+  to copy. The summary no longer repeats the error the Live capture
+  section shows: it says the capture failed before anything was captured
+  (#205).
 
 ## [0.3.0] — 2026-10-09
 

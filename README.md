@@ -121,13 +121,21 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    switching tabs switches it, and a tab that is not a converted capture
    shows none. Under *Analysis* it gives the median initial round-trip time
    (iRTT) of the TCP handshakes captured whole, and the segments per TCP
-   analysis marker
+   analysis marker. The summary and the **Packet** panel below it (step 10)
+   share the sidebar: drag the handle between them, or the handles inside
+   the Packet panel (between the layers and the bytes, and above the
+   Conversations), to resize the panes. Where you leave them is kept in the
+   plugin's `settings.ini` and is back after a restart; until you drag it,
+   the summary is as tall as it needs (up to 30 lines, then it scrolls)
+   and the Packet panel takes the rest, always keeping room for its tabs and
+   a few Conversations rows
 7. Use LogSquirl's built-in search, filters, and highlighters on the
    packet data; the plugin's [highlighter set and filter
    group](#highlighters-and-filters) colour and filter it as Wireshark does
-8. To follow a conversation, as Wireshark's *Follow TCP Stream* does, select
-   one of its packet lines and click **Stream lines in Regex Lab** in the
-   sidebar, or choose **Plugins → tcpdump → Stream lines in Regex Lab**.
+8. To filter the view to a conversation's lines, as the `tcp.stream eq N`
+   filter that Wireshark's *Follow TCP Stream* applies does, select one of
+   its packet lines and click **Filter stream in Regex Lab** in the
+   sidebar, or choose **Plugins → tcpdump → Filter stream in Regex Lab**.
    LogSquirl's Regex Lab opens
    with a pattern that matches that TCP or UDP stream's lines: its number in
    the Stream column, its two addresses and its two ports, in either
@@ -150,8 +158,9 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    the **Packet** panel below the sidebar summary shows its layers as a
    tree (Frame, Ethernet, IP, TCP/UDP/ICMP, tunnels, the application
    protocol the payload was recognised as) with every field named, and its
-   bytes as a hex and ASCII dump; selecting a layer or field highlights its
-   bytes. The ACK that completes a TCP handshake has the handshake's
+   bytes as a hex and ASCII dump, 16 bytes a line, or 8 while the sidebar
+   is too narrow for 16, so the dump needs no scrolling sideways; selecting a
+   layer or field highlights its bytes, in either layout. The ACK that completes a TCP handshake has the handshake's
    `iRTT` in its TCP layer. The panel follows the selection while the tcpdump tab is in view
    (it asks LogSquirl at most every 250 ms, and not at all while hidden),
    and **Plugins → tcpdump → Packet details** shows the selected line's
@@ -161,9 +170,9 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    was changed, moved or removed after it was opened is reported, not
    misread; open it again. Needs LogSquirl ≥ 26.11
 11. To see what a conversation carried, as Wireshark's *Follow TCP/UDP
-   Stream* window does, select one of its packet lines and click **Show
+   Stream* window does, select one of its packet lines and click **Follow
    stream content** in the Packet panel, or choose **Plugins → tcpdump →
-   Show stream content**. The button is disabled, its tooltip saying why,
+   Follow stream content**. The button is disabled, its tooltip saying why,
    while the tab in front shows no capture, no packet line is selected, or
    the selected one belongs to no stream (`-`). The panel's **Stream** tab shows the payload of
    the whole TCP or UDP stream, the client's bytes (the side that sent the
@@ -188,10 +197,14 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    ends A (which sent its first packet) and B with their ports, packets and
    bytes in all and each way (bytes on the wire, as the Length column),
    its start in seconds after the capture's first packet and its duration.
-   Click a column header to sort by it. Click a conversation, or choose
-   **Filter on this conversation** from its context menu, and the Regex
-   Lab opens with the pattern of that stream's lines, as **Stream lines in
-   Regex Lab** builds it; apply it to filter the view (needs LogSquirl ≥ 26.11). The
+   The packets and bytes each way are hidden at first, so that the table
+   fits the sidebar: right-click a column header for a menu that shows or
+   hides each column, kept across restarts. Click a column header to sort
+   by it. A click on a conversation selects it; double-click it, press
+   Enter, or choose **Filter conversation in Regex Lab** from its context
+   menu, and the Regex Lab opens with the pattern of that stream's lines,
+   as **Filter stream in Regex Lab** builds it; apply it to filter the view
+   (needs LogSquirl ≥ 26.11). The
    table is counted while converting, for the streams that get a number:
    past the stream cap (see [Options](#options)), the packets of all other
    streams are one row, `?` *Other streams*
@@ -231,7 +244,9 @@ these fields:
 
 - **Source**: where to capture. Each source the plugin offers is listed;
   one that cannot be used on this computer shows why, e.g. that a program
-  it needs is not installed
+  it needs is not installed. What the source says (why it cannot be used,
+  what listing its interfaces found, what to install or run) is a note
+  below it, a tinted panel with an icon
 - **Device**, for a source that has devices (a phone, a host), and
   **Interface**: listed by the source in the background, with a
   description where the source has one; **Refresh** lists them anew. An
@@ -254,7 +269,12 @@ these fields:
   files of the size or duration given, and only the newest N are kept;
   see *Ring buffer* below. *Off* by default
 - **Start**, disabled with the reason as its tooltip while a field is
-  wrong. While the capture runs, the sidebar's Live capture section shows
+  wrong, and while the source cannot capture: Start waits for a source
+  that can. When listing the interfaces finds that capturing is impossible
+  (on macOS `/dev/bpf0` cannot be read; dumpcap or tcpdump is denied the
+  permission), Start stays disabled until **Refresh**, or another source or
+  device, lists anew and finds it can. A listing that merely finds no
+  interfaces leaves Start to an interface typed by hand. While the capture runs, the sidebar's Live capture section shows
   its counters and **Stop** (also **Plugins → tcpdump → Stop live
   capture**). **Start live capture…** is disabled while a capture file is
   read; one live capture runs at a time, and the menu entry offers to stop
@@ -287,7 +307,9 @@ The plugin **never runs sudo and never asks for a password**: the capture
 program must be allowed to capture as you. When it is not (it says
 "permission denied" or "You don't have permission", lists no interfaces,
 or, on macOS, `/dev/bpf0` cannot be read), the section says what to do on
-your OS; run the command yourself, once:
+your OS, and when listing the interfaces already finds it so, the dialog
+says it and keeps Start disabled; run the command yourself, once, then
+press **Refresh**:
 
 - **macOS**: capturing needs read access to `/dev/bpf*`. Install
   **ChmodBPF** from the [Wireshark](https://www.wireshark.org/download.html)
@@ -570,7 +592,7 @@ gone). The packet numbers in the No. column go on across the files, up
 to 4,294,967,295: a capture that gets to that packet stops with it, saying
 so in a notification (some 12 hours at 100,000 packets/s); a capture file
 with more packets is converted up to it, the summary saying so.
-Show stream content starts at the first packet kept. The `.log` files
+Follow stream content starts at the first packet kept. The `.log` files
 stay in the private temporary directory until LogSquirl quits; close the
 tabs of old files to let LogSquirl forget them. **Save capture…** writes the files kept as one capture
 (packets of the deleted files are gone); **Export packets…** copies the
@@ -579,21 +601,22 @@ selected packets from the files they are in.
 ### Options
 
 **Plugins → Plugin Management…**, **Configure…** on the plugin's card,
-opens its options:
+opens its options, on three tabs: *Columns and Info*, *Protocols* and
+*Advanced*. **Restore Defaults** resets the options of all three tabs.
 
-| Option | Default | Choices |
-|--------|---------|---------|
-| Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
-| Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet or Wi-Fi |
-| Show names from the capture's DNS answers with the addresses | off | on: Source and Destination show an address a DNS answer earlier in the capture named as `93.184.216.34(www.example.com)`, see [Names from DNS answers](#names-from-dns-answers) |
-| Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
-| Show TCP timestamps (TSval, TSecr) on every segment | off: on SYNs only, among their options | on: every segment with the option, as Wireshark shows it |
-| SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
-| SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
-| TLS decryption: key log file | none | an `SSLKEYLOGFILE` to decrypt TLS sessions with, see [TLS decryption](#tls-decryption) |
-| Streams numbered at most (Advanced) | 1,000,000 | 1 to 10,000,000; later streams show `?` |
-| Endpoints counted at most (Advanced) | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
-| TCP reassembly memory at most (Advanced) | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]`, and the segments after it up to its announced end are labelled `[continuation of a message past the reassembly limit]` |
+| Tab | Option | Default | Choices |
+|-----|--------|---------|---------|
+| Columns and Info | Time | UTC time and time since the first packet | UTC time only; time since the first packet only |
+| Columns and Info | Show MAC addresses as columns | off | `Source MAC` and `Destination MAC` before Info, `-` for a packet that is not on Ethernet or Wi-Fi |
+| Columns and Info | Show names from the capture's DNS answers with the addresses | off | on: Source and Destination show an address a DNS answer earlier in the capture named as `93.184.216.34(www.example.com)`, see [Names from DNS answers](#names-from-dns-answers) |
+| Columns and Info | Preview payloads no protocol is recognised in | on, 200 characters | off; 1 to 200 characters |
+| Columns and Info | Show TCP timestamps (TSval, TSecr) on every segment | off: on SYNs only, among their options | on: every segment with the option, as Wireshark shows it |
+| Protocols | SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
+| Protocols | SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
+| Protocols | TLS decryption: key log file | none | an `SSLKEYLOGFILE` to decrypt TLS sessions with, see [TLS decryption](#tls-decryption) |
+| Advanced | Streams numbered at most | 1,000,000 | 1 to 10,000,000; later streams show `?` |
+| Advanced | Endpoints counted at most | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
+| Advanced | TCP reassembly memory at most | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]`, and the segments after it up to its announced end are labelled `[continuation of a message past the reassembly limit]` |
 
 They are kept in `settings.ini` in the plugin's configuration directory
 (`plugin_config/io.github.logsquirl.tcpdump` beside LogSquirl's plugin
@@ -602,7 +625,7 @@ the options it was converted with; open it again to apply new ones.
 
 The defaults write the packet list shown under [Example Output](#example-output),
 which the Log Format and every highlighter and filter written for it expect.
-The plugin's own patterns, those of [Stream lines in Regex Lab](#usage), the summary's
+The plugin's own patterns, those of [Filter stream in Regex Lab](#usage), the summary's
 filters, the [display filters](#display-filters) and the [highlighter set
 and filter group](#highlighters-and-filters),
 read every layout. Three options change the column layout:
@@ -660,7 +683,7 @@ Wireshark's name resolution does when it is fed from the capture:
   that, the one named longest ago loses its name
 - **Everything else works on the address**: stream numbers, the summary's
   endpoint counts and the Conversations table are the same as without
-  names. Stream lines in Regex Lab, the summary's endpoint filters and the [display
+  names. Filter stream in Regex Lab, the summary's endpoint filters and the [display
   filters](#display-filters) (`ip.addr == 93.184.216.34`) match a line
   with or without the name. The sidebar summary lists an endpoint with the
   name it had last: `93.184.216.34 (www.example.com): 7 pkts`
@@ -943,7 +966,7 @@ graph TD
     L -->|selected line's No.| P[Packet Panel]
     X --> P
     P -->|re-read from the nearest checkpoint| D
-    P -->|Show stream content: the stream's packets, in order| D
+    P -->|Follow stream content: the stream's packets, in order| D
     L -->|selected lines' No.| Q[Export packets]
     X --> Q
     Q -->|records copied as they are| R[new .pcap / .pcapng]

@@ -33,9 +33,14 @@
 #include "sidebarwidget.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QFile>
+#include <QHeaderView>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QMouseEvent>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QTableView>
 #include <QTemporaryDir>
 
@@ -117,6 +122,57 @@ QVariant cellOf( const ConversationModel* model, int row, int column )
     return model->data( model->index( row, column ) );
 }
 
+/// Click the left button on @p index of @p view, twice in a row if @p twice.
+void clickOn( QTableView* view, const QModelIndex& index, bool twice = false )
+{
+    const QPointF at = view->visualRect( index ).center();
+    const auto send = [ & ]( QEvent::Type type ) {
+        QMouseEvent event( type, at, view->viewport()->mapToGlobal( at ), Qt::LeftButton,
+                           type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                           Qt::NoModifier );
+        QApplication::sendEvent( view->viewport(), &event );
+    };
+    send( QEvent::MouseButtonPress );
+    send( QEvent::MouseButtonRelease );
+    if ( twice ) {
+        send( QEvent::MouseButtonDblClick );
+        send( QEvent::MouseButtonRelease );
+    }
+}
+
+/// Press @p key on @p view.
+void press( QTableView* view, int key )
+{
+    QKeyEvent event( QEvent::KeyPress, key, Qt::NoModifier );
+    QApplication::sendEvent( view, &event );
+}
+
+/// The header's context menu entry of the column headed @p header.
+QAction* columnEntry( const ConversationTable* table, const QString& header )
+{
+    QAction* entry = nullptr;
+    for ( auto* action : table->view()->horizontalHeader()->actions() ) {
+        if ( action->text() == header ) {
+            entry = action;
+        }
+    }
+    INFO( header.toStdString() );
+    REQUIRE( entry );
+    return entry;
+}
+
+/// The columns @p table shows, by header.
+QStringList shownColumns( const ConversationTable* table )
+{
+    QStringList headers;
+    for ( int column = 0; column < ConversationModel::ColumnCount; ++column ) {
+        if ( !table->view()->isColumnHidden( column ) ) {
+            headers << table->model()->headerData( column, Qt::Horizontal ).toString();
+        }
+    }
+    return headers;
+}
+
 /// Whether row @p a of @p model may come before row @p b, sorted by @p column ascending.
 bool inOrder( const ConversationModel* model, int a, int b, int column )
 {
@@ -177,12 +233,43 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
 
         WHEN( "the user clicks a conversation" )
         {
+            clickOn( loaded.table->view(), model->index( 1, 0 ) );
+
+            THEN( "it is selected, and nothing opens; the tooltip says how to filter" )
+            {
+                REQUIRE( loaded.table->view()->toolTip().contains( "Double-click" ) );
+                REQUIRE( loaded.table->view()->toolTip().contains( "Enter" ) );
+                REQUIRE( loaded.table->view()->currentIndex().row() == 1 );
+                REQUIRE( loaded.table->view()->selectionModel()->isRowSelected( 1 ) );
+                REQUIRE( loaded.host.regexLabs.isEmpty() );
+                REQUIRE( loaded.host.notifications.isEmpty() );
+            }
+
+            AND_WHEN( "presses Enter" )
+            {
+                press( loaded.table->view(), Qt::Key_Return );
+
+                THEN( "the Regex Lab opens on the selected conversation" )
+                {
+                    REQUIRE( loaded.host.regexLabs.size() == 1 );
+                    const auto* selected = model->conversationAt( 1 );
+                    REQUIRE( loaded.host.regexLabs.first().pattern
+                             == tcpdump::conversationPattern(
+                                 selected->stream, QString::fromStdString( selected->addressA ),
+                                 selected->portA, QString::fromStdString( selected->addressB ),
+                                 selected->portB ) );
+                }
+            }
+        }
+
+        WHEN( "the user double-clicks a conversation" )
+        {
             loaded.table->view()->sortByColumn( ConversationModel::BytesColumn,
                                                 Qt::DescendingOrder );
             // The SOCKS stream from 50003, the biggest after TCP 6.
             const auto* socks = model->conversationAt( 1 );
             REQUIRE( socks->stream == 4 );
-            emit loaded.table->view()->clicked( model->index( 1, 3 ) );
+            clickOn( loaded.table->view(), model->index( 1, 3 ), true );
 
             THEN( "the Regex Lab opens with the pattern of its lines, matching case" )
             {
@@ -193,15 +280,17 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
                                                           1080 ) );
                 REQUIRE( lab.flags == LOGSQUIRL_REGEX_LAB_MATCH_CASE );
                 REQUIRE( loaded.matched( lab.pattern ) == std::set<int>{ 12, 14, 15 } );
-                REQUIRE( loaded.host.logs.contains( "Filter: " + lab.pattern ) );
+                REQUIRE( loaded.host.logs.contains( "Filter conversation in Regex Lab: "
+                                                    + lab.pattern ) );
             }
         }
 
-        WHEN( "the user chooses Filter on this conversation for a UDP stream" )
+        WHEN( "the user chooses Filter conversation in Regex Lab for a UDP stream" )
         {
             const auto row = model->rowOf( Transport::Udp, 0 );
             loaded.table->view()->setCurrentIndex( model->index( row, 0 ) );
             auto* action = loaded.table->findChild<QAction*>( "filterOnConversation" );
+            REQUIRE( action->text() == "Filter conversation in Regex Lab" );
             REQUIRE( action->isEnabled() );
             action->trigger();
 
@@ -302,12 +391,26 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
 
         WHEN( "the user clicks the other streams' row" )
         {
-            emit loaded.table->view()->clicked( model->index( 2, 0 ) );
+            clickOn( loaded.table->view(), model->index( 2, 0 ) );
 
-            THEN( "no Lab opens, and a notification says why" )
+            THEN( "it is selected, and nothing opens or notifies" )
+            {
+                REQUIRE( loaded.table->view()->currentIndex().row() == 2 );
+                REQUIRE( loaded.host.regexLabs.isEmpty() );
+                REQUIRE( loaded.host.notifications.isEmpty() );
+            }
+        }
+
+        WHEN( "the user double-clicks the other streams' row" )
+        {
+            clickOn( loaded.table->view(), model->index( 2, 0 ), true );
+
+            THEN( "no Lab opens, and a notification named as the entry says why" )
             {
                 REQUIRE( loaded.host.regexLabs.isEmpty() );
                 REQUIRE( loaded.host.notifications.size() == 1 );
+                REQUIRE( loaded.host.notifications.first().startsWith(
+                    "Filter conversation in Regex Lab: " ) );
                 REQUIRE( loaded.host.notifications.first().contains( "stream cap" ) );
             }
         }
@@ -317,9 +420,9 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
     {
         LoadedCapture loaded( kMixed, {}, LOGSQUIRL_HOST_API_BASE_SIZE );
 
-        WHEN( "the user clicks a conversation" )
+        WHEN( "the user double-clicks a conversation" )
         {
-            emit loaded.table->view()->clicked( loaded.model->index( 0, 0 ) );
+            clickOn( loaded.table->view(), loaded.model->index( 0, 0 ), true );
 
             THEN( "nothing opens, and the context menu entry is disabled" )
             {
@@ -328,6 +431,124 @@ SCENARIO( "The Conversations table lists the streams of the capture in front", "
                 REQUIRE_FALSE(
                     loaded.table->findChild<QAction*>( "filterOnConversation" )->isEnabled() );
             }
+        }
+    }
+}
+
+SCENARIO( "The Conversations table shows the columns the user chose, also after a restart",
+          "[conversations]" )
+{
+    GIVEN( "the plugin loaded with no column choice saved" )
+    {
+        QTemporaryDir tempRoot;
+        REQUIRE( tempRoot.isValid() );
+        tcpdump::g_state.tempRoot = tempRoot.path();
+        FakeHost host;
+        REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+        const auto table
+            = [] { return tcpdump::g_state.sidebarWidget->packetPanel()->conversationTable(); };
+        const QStringList defaults{ "Stream", "Protocol", "Address A", "Port A",    "Address B",
+                                    "Port B", "Packets",  "Bytes",     "Rel Start", "Duration" };
+
+        THEN( "the per-direction columns are hidden, the others shown" )
+        {
+            REQUIRE( shownColumns( table() ) == defaults );
+        }
+
+        THEN( "the header's context menu lists every column, checked if shown" )
+        {
+            auto* header = table()->view()->horizontalHeader();
+            REQUIRE( header->contextMenuPolicy() == Qt::ActionsContextMenu );
+            REQUIRE( header->actions().size() == ConversationModel::ColumnCount );
+            for ( int column = 0; column < ConversationModel::ColumnCount; ++column ) {
+                const auto name = table()->model()->headerData( column, Qt::Horizontal ).toString();
+                INFO( name.toStdString() );
+                auto* entry = columnEntry( table(), name );
+                REQUIRE( entry );
+                REQUIRE( entry->isCheckable() );
+                REQUIRE( entry->isChecked() == !table()->view()->isColumnHidden( column ) );
+            }
+        }
+
+        WHEN( "the user shows Bytes A→B and hides Port A from the header's menu" )
+        {
+            columnEntry( table(), "Bytes A→B" )->trigger();
+            columnEntry( table(), "Port A" )->trigger();
+            auto chosen = defaults;
+            chosen.removeOne( "Port A" );
+            chosen.insert( chosen.indexOf( "Rel Start" ), "Bytes A→B" );
+
+            THEN( "the table shows those columns, the entries checked to match" )
+            {
+                REQUIRE( shownColumns( table() ) == chosen );
+                REQUIRE( columnEntry( table(), "Bytes A→B" )->isChecked() );
+                REQUIRE_FALSE( columnEntry( table(), "Port A" )->isChecked() );
+            }
+
+            AND_WHEN( "LogSquirl is restarted" )
+            {
+                logsquirl_plugin_shutdown();
+                REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+
+                THEN( "the table shows the columns chosen" )
+                {
+                    REQUIRE( shownColumns( table() ) == chosen );
+                    REQUIRE_FALSE( columnEntry( table(), "Port A" )->isChecked() );
+                }
+            }
+        }
+
+        WHEN( "the user hides all columns but one" )
+        {
+            for ( const auto& name : defaults.mid( 1 ) ) {
+                columnEntry( table(), name )->trigger();
+            }
+
+            THEN( "its entry is disabled, so that the header stays to bring the others back" )
+            {
+                REQUIRE( shownColumns( table() ) == QStringList{ "Stream" } );
+                REQUIRE_FALSE( columnEntry( table(), "Stream" )->isEnabled() );
+                REQUIRE( columnEntry( table(), "Port A" )->isEnabled() );
+            }
+
+            AND_WHEN( "shows another again" )
+            {
+                columnEntry( table(), "Port A" )->trigger();
+
+                THEN( "the entry can be unchecked again" )
+                {
+                    REQUIRE( columnEntry( table(), "Stream" )->isEnabled() );
+                }
+            }
+        }
+
+        logsquirl_plugin_shutdown();
+    }
+
+    GIVEN( "a settings file with an unknown column among the hidden ones" )
+    {
+        QTemporaryDir tempRoot;
+        REQUIRE( tempRoot.isValid() );
+        tcpdump::g_state.tempRoot = tempRoot.path();
+        FakeHost host;
+        QSettings file( tcpdump::settingsFilePath( host.configDir() ), QSettings::IniFormat );
+        file.setValue( "conversations/hiddenColumns", QStringList{ "duration", "nonsense" } );
+        file.sync();
+
+        WHEN( "the plugin is loaded" )
+        {
+            REQUIRE( logsquirl_plugin_init_ex( host.api(), &host, host.apiSize() ) == 0 );
+            auto* loaded = tcpdump::g_state.sidebarWidget->packetPanel()->conversationTable();
+
+            THEN( "the known columns are hidden, the unknown ignored, the others shown" )
+            {
+                REQUIRE( loaded->view()->isColumnHidden( ConversationModel::DurationColumn ) );
+                REQUIRE_FALSE(
+                    loaded->view()->isColumnHidden( ConversationModel::BytesAToBColumn ) );
+                REQUIRE( shownColumns( loaded ).size() == ConversationModel::ColumnCount - 1 );
+            }
+
+            logsquirl_plugin_shutdown();
         }
     }
 }

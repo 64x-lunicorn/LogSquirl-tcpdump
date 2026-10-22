@@ -33,7 +33,7 @@
  *      the capture catalog
  * and the sidebar shows the session's progress, label and outcome.
  *
- * Its Stream lines in Regex Lab button, on a host that offers it, opens the
+ * Its Filter stream in Regex Lab button, on a host that offers it, opens the
  * Regex Lab on the conversation of the selected packet line (see
  * follow_stream.h); it is enabled only while the Packet Panel finds a
  * packet line of a numbered stream selected in a capture's tab.
@@ -65,9 +65,11 @@
 #include "conversation_table.h"
 #include "display_filter_dialog.h"
 #include "follow_stream.h"
+#include "live_capture_form.h"
 #include "packet_panel.h"
 #include "plugin.h"
 #include "regex_lab.h"
+#include "settings.h"
 
 #include <QDesktopServices>
 #include <QGroupBox>
@@ -75,6 +77,7 @@
 #include <QPointer>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QSplitter>
 #include <QStringList>
 #include <QStyle>
 #include <QUrl>
@@ -134,6 +137,73 @@ protected:
             updateGeometry();
         }
     }
+};
+
+/// The splitter between the summary and the Packet panel.  Until the user
+/// drags its handle, or a position is restored, it is at the default split:
+/// the summary as tall as it asks (SummaryArea, up to
+/// SidebarWidget::kSummaryMaxLines), the Packet panel the rest, as a new
+/// summary or a resize ask anew.  Neither pane can be dragged below its
+/// minimum, and on a resize the Packet panel takes what is gained or lost.
+class SummarySplitter : public QSplitter {
+public:
+    SummarySplitter( QWidget* summary, QWidget* panel )
+        : QSplitter( Qt::Vertical )
+    {
+        setChildrenCollapsible( false );
+        addWidget( summary );
+        addWidget( panel );
+        setStretchFactor( 0, 0 );
+        setStretchFactor( 1, 1 );
+        // Only the user's drag moves the splitter, not setSizes().
+        connect( this, &QSplitter::splitterMoved, this, [ this ] { atDefault_ = false; } );
+    }
+
+    /// Put the panes at @p sizes, as saved; the default split if they are
+    /// not one size per pane.
+    void restore( const QList<int>& sizes )
+    {
+        if ( sizes.size() == count() ) {
+            atDefault_ = false;
+            setSizes( sizes );
+        }
+    }
+
+protected:
+    bool event( QEvent* event ) override
+    {
+        const auto handled = QSplitter::event( event );
+        // A pane asks for another height: a new summary, Save capture… shown.
+        if ( event->type() == QEvent::LayoutRequest ) {
+            fitSummary();
+        }
+        return handled;
+    }
+
+    void resizeEvent( QResizeEvent* event ) override
+    {
+        QSplitter::resizeEvent( event );
+        fitSummary();
+    }
+
+private:
+    /// At the default split, give the summary the height it asks for.
+    void fitSummary()
+    {
+        const auto room = height() - handleWidth();
+        if ( !atDefault_ || room <= 0 ) {
+            return;
+        }
+        const auto* summary = widget( 0 );
+        const auto least = summary->minimumSizeHint().height();
+        const auto most = std::max( least, room - widget( 1 )->minimumHeight() );
+        const auto top = std::clamp( summary->sizeHint().height(), least, most );
+        if ( sizes().value( 0 ) != top ) {
+            setSizes( { top, room - top } );
+        }
+    }
+
+    bool atDefault_ = true;
 };
 
 /// The sidebar's content, scrolled as a whole only when the sidebar is
@@ -203,11 +273,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     layout->setContentsMargins( 8, 8, 8, 8 );
     layout->setSpacing( 6 );
 
-    // Title
-    auto* title = new QLabel( "<b>tcpdump / pcap Viewer</b>" );
-    layout->addWidget( title );
-
-    // Open button
+    // Open button, first: the sidebar's tab already names the plugin.
     openButton_ = new QPushButton( "Open pcap\xe2\x80\xa6" );
     openButton_->setObjectName( "openButton" );
     openButton_->setToolTip( "Open a pcap capture file and display it as text" );
@@ -216,11 +282,11 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     connect( openButton_, &QPushButton::clicked, this,
              [ this ] { forward( "Opening a capture", &CaptureSessions::chooseAndOpen ); } );
 
-    // Stream lines in Regex Lab, as in the Plugins menu: only a host that
+    // Filter stream in Regex Lab, as in the Plugins menu: only a host that
     // has the Regex Lab and tells the selected lines gets it.  It is enabled
     // as the Packet Panel finds the selected line, below.
     if ( g_state.hostCapabilities.regexLab && g_state.hostCapabilities.selectedLogLines ) {
-        streamLinesButton_ = new QPushButton( "Stream lines in Regex Lab" );
+        streamLinesButton_ = new QPushButton( "Filter stream in Regex Lab" );
         streamLinesButton_->setObjectName( "streamLinesButton" );
         layout->addWidget( streamLinesButton_ );
         connect( streamLinesButton_, &QPushButton::clicked, this, [ this ] {
@@ -229,7 +295,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
             } catch ( const std::exception& e ) {
                 // An exception must not escape into Qt or the host.
                 hostLog( LOGSQUIRL_LOG_ERROR,
-                         "Stream lines in Regex Lab failed: " + QString::fromUtf8( e.what() ) );
+                         "Filter stream in Regex Lab failed: " + QString::fromUtf8( e.what() ) );
             }
         } );
     }
@@ -284,13 +350,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
         forward( "Stopping a live capture", &CaptureSessions::stopLiveCapture );
     } );
 
-    liveError_ = new QLabel;
-    liveError_->setObjectName( "liveError" );
-    liveError_->setWordWrap( true );
-    liveError_->setTextFormat( Qt::RichText );
-    liveError_->setTextInteractionFlags( Qt::TextBrowserInteraction );
-    liveError_->setOpenExternalLinks( true );
-    liveError_->setHidden( true );
+    liveError_ = new GuidanceLabel( "liveError" );
     liveLayout->addWidget( liveError_ );
 
     // The capture program's stderr, the latest lines; also in the host's log.
@@ -324,7 +384,13 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     connect( summaryLabel_, &QLabel::linkActivated, this, &SidebarWidget::openLink );
     auto* summaryArea = new SummaryArea( summaryLabel_ );
     summaryArea->setObjectName( "summaryArea" );
-    layout->addWidget( summaryArea );
+    // The summary's pane of the splitter below: the summary and Save capture….
+    auto* summaryPane = new QWidget;
+    summaryPane->setObjectName( "summaryPane" );
+    auto* summaryLayout = new QVBoxLayout( summaryPane );
+    summaryLayout->setContentsMargins( 0, 0, 0, 0 );
+    summaryLayout->setSpacing( layout->spacing() );
+    summaryLayout->addWidget( summaryArea, 1 );
 
     // A live capture's raw file is in the temporary directory, which goes
     // when LogSquirl quits: this keeps it.
@@ -333,7 +399,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     saveButton_->setToolTip( "Save the raw capture of this tab as a pcap file; a ring buffer's "
                              "files kept as one" );
     saveButton_->setHidden( true );
-    layout->addWidget( saveButton_ );
+    summaryLayout->addWidget( saveButton_ );
     connect( saveButton_, &QPushButton::clicked, this,
              [ this ] { forward( "Saving a capture", &CaptureSessions::saveCapture ); } );
 
@@ -342,7 +408,34 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     packetPanel_ = new PacketPanel;
     packetPanel_->setObjectName( "packetPanel" );
     packetPanel_->setMinimumHeight( kPacketPanelMinLines * fontMetrics().lineSpacing() );
-    layout->addWidget( packetPanel_, 1 );
+
+    // The user drags the handle between the two; where it and the panel's
+    // own handles were left is restored from settings.ini, and saved there.
+    auto* summarySplitter = new SummarySplitter( summaryPane, packetPanel_ );
+    summarySplitter->setObjectName( "summarySplitter" );
+    layout->addWidget( summarySplitter, 1 );
+    splitters_ = { { kSummarySplitName, summarySplitter },
+                   { kLayersSplitName, packetPanel_->layersSplitter() },
+                   { kConversationsSplitName, packetPanel_->conversationsSplitter() } };
+    const auto configDir = hostConfigDir();
+    summarySplitter->restore( loadSplitterSizes( configDir, kSummarySplitName ) );
+    for ( const auto& [ name, splitter ] : splitters_ ) {
+        if ( splitter != summarySplitter ) {
+            if ( const auto sizes = loadSplitterSizes( configDir, name );
+                 sizes.size() == splitter->count() ) {
+                splitter->setSizes( sizes );
+            }
+        }
+        // A drag sends many moves: the sizes are saved once it rests.
+        connect( splitter, &QSplitter::splitterMoved, this, [ this, name = name ] {
+            movedSplitters_.insert( name );
+            layoutSaver_.start();
+        } );
+    }
+    layoutSaver_.setSingleShot( true );
+    layoutSaver_.setInterval( kLayoutSaveDelayMs );
+    connect( &layoutSaver_, &QTimer::timeout, this, &SidebarWidget::saveLayout );
+
     auto* contentArea = new ContentArea( content );
     contentArea->setObjectName( "sidebarScroll" );
     auto* outer = new QVBoxLayout( this );
@@ -421,6 +514,25 @@ SidebarWidget::~SidebarWidget()
         exportProgress_->disconnect( this );
         delete exportProgress_;
     }
+    // A drag not saved yet is saved now, while the splitters are still here.
+    if ( layoutSaver_.isActive() ) {
+        layoutSaver_.stop();
+        saveLayout();
+    }
+}
+
+void SidebarWidget::saveLayout()
+{
+    const auto configDir = hostConfigDir();
+    for ( const auto& [ name, splitter ] : splitters_ ) {
+        if ( movedSplitters_.contains( name )
+             && !saveSplitterSizes( configDir, name, splitter->sizes() ) ) {
+            hostLog( LOGSQUIRL_LOG_WARNING, "The sidebar's layout could not be saved in "
+                                                + settingsFilePath( configDir ) );
+            return;
+        }
+    }
+    movedSplitters_.clear();
 }
 
 void SidebarWidget::forward( const char* what, void ( CaptureSessions::*action )() )
@@ -509,11 +621,11 @@ void SidebarWidget::followStreamContent()
     packetPanel_->refresh();
     QString why;
     if ( !packetPanel_->followStreamContent( &why ) ) {
-        hostNotify( "Show stream content: " + why );
+        hostNotify( "Follow stream content: " + why );
         return;
     }
     if ( !packetPanel_->isVisible() ) {
-        hostNotify( QString( "Show stream content: the stream of packet %1 is shown in the "
+        hostNotify( QString( "Follow stream content: the stream of packet %1 is shown in the "
                              "tcpdump sidebar tab." )
                         .arg( packetPanel_->selectedPacket() ) );
     }
@@ -525,7 +637,7 @@ void SidebarWidget::openStreamLines()
     // followed is that of the line it read, which its problem is about.
     packetPanel_->refresh();
     if ( const auto problem = packetPanel_->streamLinesProblem(); !problem.isEmpty() ) {
-        hostNotify( "Stream lines in Regex Lab: " + problem );
+        hostNotify( "Filter stream in Regex Lab: " + problem );
         return;
     }
     if ( const auto line = packetPanel_->selectedLine() ) {
@@ -536,8 +648,8 @@ void SidebarWidget::openStreamLines()
 void SidebarWidget::updateStreamLinesButton()
 {
     enableUnlessProblem( streamLinesButton_, packetPanel_->streamLinesProblem(),
-                         QStringLiteral( "Open the Regex Lab with the pattern of the lines of "
-                                         "this packet's conversation" ) );
+                         QStringLiteral( "Filter this packet's conversation in the Regex Lab: "
+                                         "open it with the pattern of the stream's lines" ) );
 }
 
 void SidebarWidget::openLink( const QString& link )

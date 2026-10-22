@@ -31,7 +31,8 @@
  * instead (the default makeSource(), a Process Source), its arguments
  * `-i <interface> -s <snaplen> <filter>`.  With a listing program set, it
  * lists interfaces by running that (runListing()), as a real kind does;
- * with a listing error set, the listing fails with it.
+ * with a listing error set, the listing fails with it; with a cannot-capture
+ * reason set, it lists both interfaces but says it cannot capture.
  * With options on, its options widget is a line edit, "fakeNote", for the
  * option "note"; a note "bad" does not validate.
  */
@@ -190,6 +191,10 @@ public:
             return listing;
         }
         listing.targets = { { "fake0", firstDescription, {} }, { "fake1", "Fake Wi-Fi", {} } };
+        if ( !cannotCapture.isEmpty() ) {
+            listing.cannotCapture = cannotCapture;
+            listing.error = cannotCapture + "\n\nRun `fakeperm grant` yourself.";
+        }
         return listing;
     }
     tcpdump::ProcessCommand command( const tcpdump::LiveChoice& choice ) const override
@@ -258,10 +263,13 @@ public:
     QString unavailableReason;                  ///< Set: the kind is unavailable, for this reason.
     Bytes capture;                              ///< What a capture hands out.
     std::string failure;                        ///< Set: a capture breaks off with it afterwards.
-    QString hint;             ///< What explainFailure() says to a permission error.
-    QString program;          ///< Set: a capture runs this program.
-    QString listingProgram;   ///< Set: listing the interfaces runs this program.
-    QString listingError;     ///< Set: listing the interfaces fails with it.
+    QString hint;           ///< What explainFailure() says to a permission error.
+    QString program;        ///< Set: a capture runs this program.
+    QString listingProgram; ///< Set: listing the interfaces runs this program.
+    QString listingError;   ///< Set: listing the interfaces fails with it.
+    /// Set: the interfaces are listed, but the listing says the kind cannot
+    /// capture, for this reason (as macOS's unreadable /dev/bpf0).
+    QString cannotCapture;
     bool withOptions = false; ///< Whether it has an options widget.
     mutable std::atomic<int> interfaceListings{ 0 };
 

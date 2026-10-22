@@ -31,6 +31,11 @@
  * options of each source (live/options/<source>/<name>).  Never a
  * password: a secret option (isSecretLiveOption(), an extcap's password
  * argument) is left out.
+ *
+ * And the sidebar's layout (group [sidebar]): the sizes of the panes of each
+ * splitter the user dragged, so that the layout is back after a restart.
+ * And the columns the user hid in the Conversations table (group
+ * [conversations]).
  */
 
 #pragma once
@@ -39,9 +44,12 @@
 #include "pcap_converter.h"
 #include "someip.h"
 
+#include <QList>
 #include <QString>
+#include <QStringList>
 
 #include <cstddef>
+#include <optional>
 
 namespace tcpdump {
 
@@ -68,6 +76,15 @@ ConversionOptions loadConversionOptions( const QString& configDir );
 /// Save @p options in @p configDir; false if they could not be written.
 bool saveConversionOptions( const QString& configDir, const ConversionOptions& options );
 
+/// The columns of the Conversations table the user last hid, by the names
+/// the table gives them in the file; none saved (std::nullopt), so the
+/// table hides its default ones, without a directory, a file or a choice.
+std::optional<QStringList> loadHiddenConversationColumns( const QString& configDir );
+
+/// Save @p columns, by name, as the hidden columns of the Conversations
+/// table in @p configDir; false if they could not be written.
+bool saveHiddenConversationColumns( const QString& configDir, const QStringList& columns );
+
 /// The live capture choice saved in @p configDir; the snaplen within 1 to
 /// kMaxSnaplen, the limits within theirs (kMaxLimitSeconds, …), none if
 /// none were saved.  Without a directory, or a file, an empty choice.
@@ -87,5 +104,14 @@ LiveOptions loadLiveOptions( const QString& configDir, const QString& source );
 /// false if it could not be written.
 bool saveLiveOption( const QString& configDir, const QString& source, const QString& name,
                      const QString& value );
+
+/// The sizes of the panes of the sidebar's splitter @p name saved in
+/// @p configDir, in pixels, first pane first; none without a directory, a
+/// file, or sizes saved for it, or if one of them is not a number of pixels.
+QList<int> loadSplitterSizes( const QString& configDir, const QString& name );
+
+/// Save @p sizes as those of the sidebar's splitter @p name in @p configDir,
+/// the other settings as they are; false if they could not be written.
+bool saveSplitterSizes( const QString& configDir, const QString& name, const QList<int>& sizes );
 
 } // namespace tcpdump

@@ -26,15 +26,19 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QStyle>
 #include <QTextDocument>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
@@ -68,6 +72,48 @@ QString targetText( const LiveTarget& target )
     return more.isEmpty() ? target.id : target.id + QString::fromUtf8( " \xe2\x80\x94 " ) + more;
 }
 
+/// How much of the palette's highlight a note's panel mixes into the window
+/// colour: enough to stand out from the form, in light and dark mode alike,
+/// little enough that its text, in the window's text colour, stays legible.
+constexpr qreal kNoteTint = 0.15;
+/// How much of the highlight the panel's border mixes in.
+constexpr qreal kNoteBorderTint = 0.5;
+/// The radius of the panel's corners, in pixels.
+constexpr qreal kNoteCornerRadius = 4;
+/// The room between the panel's edge and its icon and text, in pixels.
+constexpr int kNoteMargin = 6;
+
+/// @p base with the share @p tint of @p tinge mixed in.
+QColor mixed( const QColor& base, const QColor& tinge, qreal tint )
+{
+    const auto mix = [ tint ]( float from, float to ) {
+        return static_cast<float>( from + ( to - from ) * tint );
+    };
+    return QColor::fromRgbF( mix( base.redF(), tinge.redF() ), mix( base.greenF(), tinge.greenF() ),
+                             mix( base.blueF(), tinge.blueF() ) );
+}
+
+/// The panel of the form's note: painted from the palette it inherits each
+/// time, so it follows a switch between light and dark mode.
+class NotePanel : public QWidget {
+public:
+    using QWidget::QWidget;
+
+protected:
+    void paintEvent( QPaintEvent* event ) override
+    {
+        (void)event;
+        QPainter painter( this );
+        painter.setRenderHint( QPainter::Antialiasing );
+        const auto window = palette().color( QPalette::Window );
+        const auto highlight = palette().color( QPalette::Highlight );
+        painter.setPen( mixed( window, highlight, kNoteBorderTint ) );
+        painter.setBrush( mixed( window, highlight, kNoteTint ) );
+        painter.drawRoundedRect( QRectF( rect() ).adjusted( 0.5, 0.5, -0.5, -0.5 ),
+                                 kNoteCornerRadius, kNoteCornerRadius );
+    }
+};
+
 } // namespace
 
 QString plainToolTip( const QString& text )
@@ -75,6 +121,16 @@ QString plainToolTip( const QString& text )
     const auto shown = cut( text );
     // Text a tooltip would take for HTML is made HTML that shows it.
     return Qt::mightBeRichText( shown ) ? Qt::convertFromPlainText( shown ) : shown;
+}
+
+QString fixedFontFamily()
+{
+    auto font = QFontDatabase::systemFont( QFontDatabase::FixedFont );
+    font.setStyleHint( QFont::TypeWriter );
+    const auto family = QFontInfo( font ).family();
+    // A platform without a font database names none: the generic name is
+    // better than an empty one, which Qt reads as the default font.
+    return family.isEmpty() ? QStringLiteral( "monospace" ) : family;
 }
 
 QString guidanceHtml( const QString& text )
@@ -102,11 +158,15 @@ QString guidanceHtml( const QString& text )
     if ( parts.size() % 2 == 0 ) {
         return prose( text );
     }
+    const auto fixedFamily = fixedFontFamily().remove( QLatin1Char( '\'' ) ).toHtmlEscaped();
     QString html;
     for ( qsizetype i = 0; i < parts.size(); ++i ) {
         if ( i % 2 == 1 ) {
-            html += QStringLiteral( "<pre>" ) + parts[ i ].toHtmlEscaped()
-                    + QStringLiteral( "</pre>" );
+            // Not a <pre>, which does not wrap and is cut off at the edge
+            // of a narrow sidebar: its blanks are kept, but it wraps.
+            html += QStringLiteral( "<p style=\"white-space:pre-wrap\"><code "
+                                    "style=\"font-family:'%1'\">%2</code></p>" )
+                        .arg( fixedFamily, parts[ i ].toHtmlEscaped() );
             continue;
         }
         auto part = parts[ i ];
@@ -128,6 +188,25 @@ QString guidanceHtml( const QString& text )
         html += prose( part );
     }
     return html;
+}
+
+GuidanceLabel::GuidanceLabel( const QString& objectName, QWidget* parent )
+    : QLabel( parent )
+{
+    setObjectName( objectName );
+    setWordWrap( true );
+    setTextFormat( Qt::RichText );
+    setTextInteractionFlags( Qt::TextBrowserInteraction );
+    setOpenExternalLinks( true );
+    setHidden( true );
+}
+
+QSize GuidanceLabel::sizeHint() const
+{
+    // A word-wrapped label would like the width of 80 characters, and of
+    // its longest command: its layout gives it what the rest takes, and as
+    // many lines as it needs at that width (heightForWidth()).
+    return { minimumSizeHint().width(), QLabel::sizeHint().height() };
 }
 
 LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
@@ -159,14 +238,18 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     narrow( source_ );
     layout->addRow( "Source:", source_ );
 
-    status_ = new QLabel;
-    status_->setObjectName( "liveSourceStatus" );
-    status_->setWordWrap( true );
-    status_->setTextFormat( Qt::RichText );
-    status_->setTextInteractionFlags( Qt::TextBrowserInteraction );
-    status_->setOpenExternalLinks( true );
-    status_->setHidden( true );
-    layout->addRow( status_ );
+    note_ = new NotePanel;
+    note_->setObjectName( "liveSourceNote" );
+    note_->setHidden( true );
+    auto* noteRow = new QHBoxLayout( note_ );
+    noteRow->setContentsMargins( kNoteMargin, kNoteMargin, kNoteMargin, kNoteMargin );
+    noteRow->setSpacing( kNoteMargin );
+    noteIcon_ = new QLabel;
+    noteIcon_->setObjectName( "liveSourceNoteIcon" );
+    noteRow->addWidget( noteIcon_, 0, Qt::AlignTop );
+    status_ = new GuidanceLabel( "liveSourceStatus" );
+    noteRow->addWidget( status_, 1 );
+    layout->addRow( note_ );
 
     deviceLabel_ = new QLabel( "Device:" );
     device_ = new QComboBox;
@@ -381,6 +464,9 @@ std::shared_ptr<const LiveSourceKind> LiveCaptureForm::currentKind() const
 
 QString LiveCaptureForm::problem() const
 {
+    if ( !cannotCapture_.isEmpty() ) {
+        return cannotCapture_;
+    }
     if ( auto invalid = liveChoiceProblem( sources_.get(), choice() ); !invalid.isEmpty() ) {
         return invalid;
     }
@@ -410,6 +496,7 @@ void LiveCaptureForm::refresh()
 void LiveCaptureForm::sourceChanged()
 {
     ++generation_;
+    cannotCapture_.clear(); // until this source's listing says so
     dropOptionsWidget();
     showOptionsWidget();
     device_->clear();
@@ -441,7 +528,7 @@ void LiveCaptureForm::sourceChanged()
         showStatus( QStringLiteral( "No live capture source is available." ) );
     }
     else if ( !usable ) {
-        showStatus( availability.reason );
+        showStatus( availability.reason, true );
     }
     else {
         showStatus( {} );
@@ -474,12 +561,12 @@ void LiveCaptureForm::listDevices()
                     else {
                         fill( device_, listing, wanted );
                     }
-                    if ( !listing.error.isEmpty() ) {
-                        showStatus( listing.error );
-                        return;
-                    }
-                    if ( currentId( device_ ).isEmpty() ) {
-                        showStatus( kind->noDevicesText() );
+                    if ( !listing.error.isEmpty() || currentId( device_ ).isEmpty() ) {
+                        // No interfaces are listed after it: it says.
+                        cannotCapture_ = listing.cannotCapture;
+                        showStatus( listing.error.isEmpty() ? kind->noDevicesText() : listing.error,
+                                    !listing.error.isEmpty() );
+                        emit changed();
                         return;
                     }
                     listInterfaces();
@@ -511,8 +598,9 @@ void LiveCaptureForm::listInterfaces()
             else if ( listing.targets.empty() && !typed.isEmpty() ) {
                 interface_->setEditText( typed );
             }
+            cannotCapture_ = listing.cannotCapture;
             if ( !listing.error.isEmpty() ) {
-                showStatus( listing.error );
+                showStatus( listing.error, true );
             }
             else if ( listing.targets.empty() ) {
                 showStatus( QStringLiteral( "No interfaces found." ) );
@@ -614,10 +702,17 @@ QString LiveCaptureForm::currentId( const QComboBox* box )
     return box->isEditable() ? box->currentText().trimmed() : QString();
 }
 
-void LiveCaptureForm::showStatus( const QString& text )
+void LiveCaptureForm::showStatus( const QString& text, bool warning )
 {
     status_->setText( guidanceHtml( text ) );
     status_->setHidden( text.isEmpty() );
+    note_->setHidden( text.isEmpty() );
+    const int size = style()->pixelMetric( QStyle::PM_SmallIconSize, nullptr, this );
+    noteIcon_->setPixmap( style()
+                              ->standardIcon( warning ? QStyle::SP_MessageBoxWarning
+                                                      : QStyle::SP_MessageBoxInformation,
+                                              nullptr, this )
+                              .pixmap( size, size ) );
 }
 
 void LiveCaptureForm::dropOptionsWidget()
@@ -646,9 +741,9 @@ void LiveCaptureForm::showOptionsWidget()
     }
     auto* layout = static_cast<QFormLayout*>( this->layout() );
     if ( options_->comesFirst() ) {
-        int statusRow = 0;
-        layout->getWidgetPosition( status_, &statusRow, nullptr );
-        layout->insertRow( statusRow + 1, options_ );
+        int noteRow = 0;
+        layout->getWidgetPosition( note_, &noteRow, nullptr );
+        layout->insertRow( noteRow + 1, options_ );
     }
     else {
         layout->addRow( options_ );

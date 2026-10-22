@@ -58,8 +58,8 @@ struct Row {
     int stream;          ///< Its Stream column.
     QString irtt;        ///< Its iRTT.
     QString reason;      ///< Why there is no packet.
-    QString content;     ///< Why Show stream content cannot show its stream.
-    QString streamLines; ///< Why Stream lines in Regex Lab cannot pick its lines.
+    QString content;     ///< Why Follow stream content cannot show its stream.
+    QString streamLines; ///< Why Filter stream in Regex Lab cannot pick its lines.
 };
 
 } // namespace

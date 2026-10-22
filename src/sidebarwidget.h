@@ -37,9 +37,14 @@
 #include <QProgressBar>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QSet>
+#include <QSplitter>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <utility>
+#include <vector>
 
 namespace tcpdump {
 
@@ -56,7 +61,7 @@ class PacketPanel;
  * Contains:
  *   - "Open pcap…" button (opens a file dialog, as Plugins > tcpdump does),
  *     enabled while the Activity rule allows opening a file
- *   - "Stream lines in Regex Lab" button, as in Plugins > tcpdump, only on a
+ *   - "Filter stream in Regex Lab" button, as in Plugins > tcpdump, only on a
  *     host that has the Regex Lab and tells the selected lines:
  *     g_state.hostCapabilities when the widget is created; enabled only when
  *     the Packet Panel can tell the selected line's stream, its tooltip
@@ -85,10 +90,16 @@ class PacketPanel;
  *     Conversations table of the capture in front
  *   - while the Export session exports, a progress dialog with Cancel
  *
- * A long summary scrolls in itself, up to kSummaryMaxLines tall, so that
- * the Packet Panel keeps kPacketPanelMinLines.  A sidebar shorter than the
- * minimum of all of it scrolls as a whole ("sidebarScroll"), rather than
- * squeeze its widgets over one another or cut off its bottom.
+ * The summary (with Save capture…) and the Packet Panel share the room
+ * below the buttons by a splitter ("summarySplitter") the user drags; at
+ * its default split the summary is as tall as it asks, up to
+ * kSummaryMaxLines, and the Packet Panel takes the rest.  The summary
+ * scrolls in itself when it is longer than its pane; the Packet Panel keeps
+ * kPacketPanelMinLines.  Where the user left that splitter and the Packet
+ * Panel's two is saved in settings.ini once a drag rests, and restored when
+ * a sidebar is made.  A sidebar shorter than the minimum of all of it
+ * scrolls as a whole ("sidebarScroll"), rather than squeeze its widgets
+ * over one another or cut off its bottom.
  *
  * The sidebar is the sessions' dialog parent while it lives.  Destroying it
  * leaves the sessions running; the plugin destroys them after it.  The
@@ -100,13 +111,22 @@ class SidebarWidget : public QWidget {
 
 public:
     /// The height the summary asks for at most, in lines of text: a longer
-    /// one scrolls and leaves the Packet panel room in a tall sidebar.
-    static constexpr int kSummaryMaxLines = 24;
+    /// one scrolls and leaves the Packet panel room in a tall sidebar.  A
+    /// capture's Overview and a handful of Protocols fit.
+    static constexpr int kSummaryMaxLines = 30;
     /// The height the summary gives in to in a short sidebar, in lines.
     static constexpr int kSummaryMinLines = 3;
     /// The height the Packet panel keeps for its tabs and the
     /// Conversations, however long the summary, in lines.
     static constexpr int kPacketPanelMinLines = 16;
+    /// How long a dragged splitter rests before its sizes are saved.
+    static constexpr int kLayoutSaveDelayMs = 500;
+    /// The name in settings.ini of the sizes of the summary and the Packet panel.
+    static constexpr const char* kSummarySplitName = "summarySplit";
+    /// The name in settings.ini of the sizes of the layer tree and the hex dump.
+    static constexpr const char* kLayersSplitName = "layersSplit";
+    /// The name in settings.ini of the sizes of the tabs and the Conversations table.
+    static constexpr const char* kConversationsSplitName = "conversationsSplit";
 
     /// A view of @p sessions, which must outlive it, with an optional parent.
     explicit SidebarWidget( CaptureSessions& sessions, QWidget* parent = nullptr );
@@ -117,13 +137,13 @@ public:
     /// notification names the packet's layers.
     void showPacketDetails();
 
-    /// Plugins > tcpdump > Show stream content: show the content of the
+    /// Plugins > tcpdump > Follow stream content: show the content of the
     /// selected line's stream in the Packet Panel's Stream tab, or notify
     /// the user why not; if the panel is not in view, a notification says
     /// where it is.
     void followStreamContent();
 
-    /// Plugins > tcpdump > Stream lines in Regex Lab: open the Regex Lab on
+    /// Plugins > tcpdump > Filter stream in Regex Lab: open the Regex Lab on
     /// the lines of the selected line's stream (followStream()), or notify
     /// the user why not, as the sidebar's button says in its tooltip
     /// (PacketPanel::streamLinesProblem()): a line that only looks like a
@@ -181,12 +201,14 @@ private:
     /// Say @p status in the summary label from now on, as summaryLabelText()
     /// decides it (sidebar_text.h), in this widget's palette.
     void showSummary( SummaryStatus status );
-    /// Enable Stream lines in Regex Lab when the Packet Panel can tell the
+    /// Enable Filter stream in Regex Lab when the Packet Panel can tell the
     /// selected line's stream; its tooltip says why not.
     void updateStreamLinesButton();
     /// Run @p action of the sessions for a button, logging what it throws:
     /// an exception must not escape into Qt or the host.
     void forward( const char* what, void ( CaptureSessions::*action )() );
+    /// Save the sizes of the splitters the user dragged in settings.ini.
+    void saveLayout();
 
     /// What this sidebar shows, and its buttons start.
     CaptureSessions& sessions_;
@@ -203,7 +225,7 @@ private:
     QPushButton* saveButton_ = nullptr;
     QLabel* liveLabel_ = nullptr;
     QPushButton* startButton_ = nullptr;       ///< Start live capture…
-    QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
+    QPushButton* streamLinesButton_ = nullptr; ///< Filter stream in Regex Lab, if offered.
     QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
     QLabel* liveStderrDropped_ = nullptr;      ///< How many earlier ones it no longer shows.
     quint64 liveStderrLines_ = 0;              ///< The capture's stderr lines, dropped ones too.
@@ -212,6 +234,10 @@ private:
     SummaryStatus summaryStatus_ = SummaryStatus::NothingLoaded;
     QTimer liveTicker_;                        ///< Moves the elapsed time on.
     QPointer<QProgressDialog> exportProgress_; ///< The export's progress, and Cancel.
+    /// The splitters whose sizes are remembered, by their names in settings.ini.
+    std::vector<std::pair<QString, QSplitter*>> splitters_;
+    QSet<QString> movedSplitters_; ///< Those dragged since the layout was saved.
+    QTimer layoutSaver_;           ///< Saves the layout once a drag rests.
 };
 
 } // namespace tcpdump

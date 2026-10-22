@@ -150,3 +150,69 @@ SCENARIO( "The conversion options are kept in the plugin's configuration directo
         }
     }
 }
+
+SCENARIO( "The sizes of the sidebar's splitters are kept in the settings file", "[settings]" )
+{
+    QTemporaryDir configDir;
+    REQUIRE( configDir.isValid() );
+
+    GIVEN( "a configuration directory without a settings file" )
+    {
+        THEN( "no sizes are saved" )
+        {
+            REQUIRE( loadSplitterSizes( configDir.path(), "summarySplit" ).isEmpty() );
+        }
+    }
+
+    GIVEN( "no configuration directory, as without a host" )
+    {
+        THEN( "no sizes are saved, and none can be" )
+        {
+            REQUIRE( loadSplitterSizes( {}, "summarySplit" ).isEmpty() );
+            REQUIRE_FALSE( saveSplitterSizes( {}, "summarySplit", { 200, 600 } ) );
+        }
+    }
+
+    GIVEN( "the sizes of two splitters saved, and conversion options" )
+    {
+        ConversionOptions options;
+        options.previewChars = 64;
+        REQUIRE( saveConversionOptions( configDir.path(), options ) );
+        REQUIRE( saveSplitterSizes( configDir.path(), "summarySplit", { 200, 600 } ) );
+        REQUIRE( saveSplitterSizes( configDir.path(), "layersSplit", { 150, 90 } ) );
+
+        THEN( "each splitter's sizes are read back, and the options are kept" )
+        {
+            REQUIRE( loadSplitterSizes( configDir.path(), "summarySplit" )
+                     == QList<int>{ 200, 600 } );
+            REQUIRE( loadSplitterSizes( configDir.path(), "layersSplit" )
+                     == QList<int>{ 150, 90 } );
+            REQUIRE( loadSplitterSizes( configDir.path(), "conversationsSplit" ).isEmpty() );
+            REQUIRE( loadConversionOptions( configDir.path() ).previewChars == 64 );
+        }
+
+        THEN( "they are in the [sidebar] group of settings.ini" )
+        {
+            const QSettings file( settingsFilePath( configDir.path() ), QSettings::IniFormat );
+            REQUIRE( file.value( "sidebar/summarySplit" ).toStringList()
+                     == QStringList{ "200", "600" } );
+        }
+    }
+
+    GIVEN( "a settings file with sizes that are not numbers of pixels" )
+    {
+        {
+            QSettings file( settingsFilePath( configDir.path() ), QSettings::IniFormat );
+            file.setValue( "sidebar/summarySplit", "200, tall" );
+            file.setValue( "sidebar/layersSplit", "-5, 100" );
+            file.setValue( "sidebar/conversationsSplit", "" );
+        }
+
+        THEN( "they read as none saved" )
+        {
+            REQUIRE( loadSplitterSizes( configDir.path(), "summarySplit" ).isEmpty() );
+            REQUIRE( loadSplitterSizes( configDir.path(), "layersSplit" ).isEmpty() );
+            REQUIRE( loadSplitterSizes( configDir.path(), "conversationsSplit" ).isEmpty() );
+        }
+    }
+}

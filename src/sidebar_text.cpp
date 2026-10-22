@@ -146,8 +146,11 @@ QString summaryLabelText( SummaryStatus status, const CaptureSessions& sessions,
         case LiveOutcome::Status::Empty:
             return liveOutcomeText( *outcome ).toHtmlEscaped();
         case LiveOutcome::Status::Failed:
+            // The Live capture section shows the error and its Guidance:
+            // the label does not say it again.
             if ( outcome->files.isEmpty() ) {
-                return "Error: " + outcome->error.toHtmlEscaped();
+                return QString( "The capture %1 failed before anything was captured." )
+                    .arg( outcome->name.toHtmlEscaped() );
             }
             break;
         case LiveOutcome::Status::Captured:

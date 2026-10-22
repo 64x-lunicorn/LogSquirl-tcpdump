@@ -37,11 +37,13 @@ class QSpinBox;
 namespace tcpdump {
 
 /**
- * Edits the ConversionOptions: the time columns, the MAC columns, the
- * payload preview and its length, the TCP timestamps on every segment, the
- * SOME/IP ports and name table, and, for advanced users, the stream and
- * endpoint caps.  Says that a capture already open keeps the options it was
- * converted with.  Saving them is the caller's (settings.h).
+ * Edits the ConversionOptions, on three tabs so that it fits a laptop's
+ * screen: Columns and Info (the time columns, the MAC columns, the names
+ * from DNS answers, the payload preview and its length, the TCP timestamps
+ * on every segment), Protocols (the SOME/IP ports and name table, the TLS
+ * key log) and Advanced (the stream, endpoint and reassembly caps).  Says
+ * that a capture already open keeps the options it was converted with.
+ * Saving them is the caller's (settings.h).
  */
 class ConfigDialog : public QDialog {
     Q_OBJECT

@@ -23,7 +23,7 @@
  *        (packet_formatter.h) wrote.
  *
  * The plugin acts on the lines it wrote: the Packet Panel shows the
- * selected line's packet, Stream lines in Regex Lab picks the lines of its
+ * selected line's packet, Filter stream in Regex Lab picks the lines of its
  * stream, Export packets takes the packets of the selected lines.  Each
  * reads the line here, in any Line Layout, so that the grammar that writes
  * a line and the one that reads it sit side by side, and
