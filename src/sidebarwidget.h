@@ -121,10 +121,11 @@ public:
     static constexpr int kPacketPanelMinLines = 16;
     /// How long a dragged splitter rests before its sizes are saved.
     static constexpr int kLayoutSaveDelayMs = 500;
-    /// The names of the splitters' sizes in settings.ini: summary and
-    /// Packet panel, layer tree and hex dump, tabs and Conversations.
+    /// The name in settings.ini of the sizes of the summary and the Packet panel.
     static constexpr const char* kSummarySplitName = "summarySplit";
+    /// The name in settings.ini of the sizes of the layer tree and the hex dump.
     static constexpr const char* kLayersSplitName = "layersSplit";
+    /// The name in settings.ini of the sizes of the tabs and the Conversations table.
     static constexpr const char* kConversationsSplitName = "conversationsSplit";
 
     /// A view of @p sessions, which must outlive it, with an optional parent.

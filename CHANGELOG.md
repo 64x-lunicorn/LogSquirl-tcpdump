@@ -275,9 +275,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TCP and UDP stream, as Wireshark's *Statistics → Conversations*: Stream,
   protocol (the Stream Label), address and port of ends A and B, packets
   and bytes (on the wire) in all and each way, start and duration; sortable
-  by every column. A click on a row, or *Filter conversation in Regex Lab*,
-  opens the Regex Lab with the pattern of the stream's lines, as Filter
-  stream in Regex Lab builds it. The counts are taken while converting,
+  by every column. A double click on a row, Enter, or *Filter conversation
+  in Regex Lab* opens the Regex Lab with the pattern of the stream's lines,
+  as Filter stream in Regex Lab builds it. The counts are taken while converting,
   for the numbered streams only, so the stream cap bounds them (some 200 bytes a
   stream for its counts and row; with the Stream Tracker some 390 MB at the
   default cap of 1,000,000 streams); the packets of streams past it are
@@ -565,7 +565,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ports and name table, TLS key log file) and *Advanced* (the caps).
   The dialog is at most about 600 pixels high, where it was about 800
   and cut off on a 13-inch screen; every option and note stays, and
-  **Restore Defaults** resets the options of all tabs (#206)
+  **Restore Defaults** resets the options of all tabs (#206).
 - **The sidebar's panes can be resized, and are remembered.** The capture
   summary and the Packet panel share the sidebar through a handle you
   drag; the summary no longer shrinks to three lines once a packet line is
