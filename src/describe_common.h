@@ -422,11 +422,18 @@ std::string describeRtcp( const uint8_t* payload, size_t len, size_t wireLen );
 std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
 /// A DNS message behind its 2-byte length (describe_dns.cpp).
 std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
-/// An HTTP/1.x header section (describe_http.cpp).
-std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len );
+/// An HTTP/1.x header section (describe_http.cpp); with @p look, read on
+/// from where the last call stopped (FramerLook).
+std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len,
+                                       FramerLook* look = nullptr );
 /// A SIP message, its body as long as its Content-Length says, and the
-/// line ends before it (describe_sip.cpp).
-std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len );
+/// line ends before it (describe_sip.cpp); with @p look, read on from where
+/// the last call stopped (FramerLook).
+std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len,
+                                       FramerLook* look = nullptr );
+/// Count @p bytes a framer that reads a header section looked at
+/// (headerBytesLooked()).
+void lookedAt( size_t bytes );
 /// An MQTT control packet, by its Remaining Length (describe_mqtt.cpp).
 std::optional<size_t> frameMqttPacket( const uint8_t* payload, size_t len );
 /// A SOME/IP message, by its Length: on SOME/IP's port whatever its header

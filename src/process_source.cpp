@@ -136,7 +136,13 @@ QString batchArgumentProblem( const ProcessCommand& command )
     if ( command.viaShell ) {
         return {}; // the user's own command line for the shell
     }
-    const auto suffix = QFileInfo( command.program ).suffix().toLower();
+    // Win32 strips trailing spaces and dots from the name before it looks
+    // for the file: "dump.bat. " runs dump.bat.
+    auto program = command.program;
+    while ( program.endsWith( QLatin1Char( ' ' ) ) || program.endsWith( QLatin1Char( '.' ) ) ) {
+        program.chop( 1 );
+    }
+    const auto suffix = QFileInfo( program ).suffix().toLower();
     if ( suffix != QLatin1String( "bat" ) && suffix != QLatin1String( "cmd" ) ) {
         return {};
     }
@@ -159,7 +165,7 @@ QString batchArgumentProblem( const ProcessCommand& command )
 
 // ── Process groups ───────────────────────────────────────────────────────
 
-struct ProcessGroup {
+struct ProcessGroup : std::enable_shared_from_this<ProcessGroup> {
 #ifdef Q_OS_WIN
     HANDLE job = nullptr;
     /// The program, for alive() and ending its tree without a job.
@@ -180,6 +186,10 @@ struct ProcessGroup {
     }
 #else
     pid_t id = 0;
+    /// The program has been reaped: its pid, the group's id, is free and
+    /// may be another process's, so the group is signalled no more.  Set
+    /// as QProcess reaps it, on the thread the program belongs to.
+    std::atomic_bool reaped{ false };
 #endif
     std::atomic_bool ended{ false };
 };
@@ -190,16 +200,21 @@ namespace {
 std::mutex registryMutex;
 std::vector<std::shared_ptr<ProcessGroup>> registry;
 
+std::atomic<std::size_t> signalsSent{ 0 };
+
 void enroll( const std::shared_ptr<ProcessGroup>& group )
 {
     const std::lock_guard<std::mutex> lock( registryMutex );
     registry.push_back( group );
 }
 
-void withdraw( const std::shared_ptr<ProcessGroup>& group )
+void withdraw( const ProcessGroup* group )
 {
     const std::lock_guard<std::mutex> lock( registryMutex );
-    registry.erase( std::remove( registry.begin(), registry.end(), group ), registry.end() );
+    registry.erase(
+        std::remove_if( registry.begin(), registry.end(),
+                        [ group ]( const auto& known ) { return known.get() == group; } ),
+        registry.end() );
 }
 
 #ifdef Q_OS_WIN
@@ -256,8 +271,9 @@ bool alive( const ProcessGroup& group )
     // Without a job: the program itself.
     return group.process && WaitForSingleObject( group.process, 0 ) == WAIT_TIMEOUT;
 #else
-    // EPERM: there is one, run by another user (behind sudo).
-    return group.id > 0 && ( ::kill( -group.id, 0 ) == 0 || errno == EPERM );
+    // Once the program is reaped its id is free: what answers to it may be
+    // another's group.  EPERM: there is one, run by another user (behind sudo).
+    return group.id > 0 && !group.reaped && ( ::kill( -group.id, 0 ) == 0 || errno == EPERM );
 #endif
 }
 
@@ -268,6 +284,7 @@ void signalGroup( const ProcessGroup& group, bool hard )
     Q_UNUSED( hard ); // a console program has no request to end
     if ( group.job ) {
         TerminateJobObject( group.job, 1 );
+        ++signalsSent;
         return;
     }
     if ( group.pid == 0 ) {
@@ -284,10 +301,13 @@ void signalGroup( const ProcessGroup& group, bool hard )
     if ( group.process ) {
         TerminateProcess( group.process, 1 );
     }
+    ++signalsSent;
 #else
-    // Never 0 or less: kill(-0) would signal LogSquirl's own group.
-    if ( group.id > 0 ) {
+    // Never 0 or less: kill(-0) would signal LogSquirl's own group.  Never
+    // once the program is reaped: its id may be another's group by then.
+    if ( group.id > 0 && !group.reaped ) {
         ::kill( -group.id, hard ? SIGKILL : SIGTERM );
+        ++signalsSent;
     }
 #endif
 }
@@ -372,6 +392,15 @@ ProcessStart startProcess( QProcess& process, const ProcessCommand& command, Pro
     // A group of its own, which ending it ends as a whole.  setpgid() is
     // async-signal-safe, as the child requires.
     process.setChildProcessModifier( [] { ::setpgid( 0, 0 ); } );
+    // QProcess reaps the program as it sees it end, and says so at once,
+    // on the program's thread: from then on its id may be another's.
+    QObject::connect( &process, &QProcess::finished,
+                      [ weak = group.weak_from_this() ]( int, QProcess::ExitStatus ) {
+                          if ( const auto ended = weak.lock() ) {
+                              ended->reaped = true;
+                              withdraw( ended.get() );
+                          }
+                      } );
     if ( command.viaShell ) {
         process.setProgram( QStringLiteral( "/bin/sh" ) );
         process.setArguments( { QStringLiteral( "-c" ), command.program } );
@@ -437,6 +466,12 @@ void endProcessGroup( ProcessGroup& group, QProcess* leader, std::chrono::millis
     waitUntilGone( group, leader, Clock::now() + milliseconds( 1000 ) );
 }
 
+void killProcessGroup( ProcessGroup& group )
+{
+    group.ended = true;
+    signalGroup( group, true );
+}
+
 void terminateCaptureProcesses()
 {
     std::vector<std::shared_ptr<ProcessGroup>> running;
@@ -453,6 +488,17 @@ void terminateCaptureProcesses()
     for ( const auto& group : running ) {
         endProcessGroup( *group, nullptr, ProcessSource::kTerminateGrace );
     }
+}
+
+std::size_t processGroupSignalsSent()
+{
+    return signalsSent;
+}
+
+std::size_t registeredProcessGroups()
+{
+    const std::lock_guard<std::mutex> lock( registryMutex );
+    return registry.size();
 }
 
 // ── ProcessSource ────────────────────────────────────────────────────────
@@ -483,7 +529,7 @@ ProcessSource::ProcessSource( const ProcessCommand& command, const std::atomic_b
 ProcessSource::~ProcessSource()
 {
     terminate();
-    withdraw( group_ );
+    withdraw( group_.get() );
 }
 
 bool ProcessSource::started() const

@@ -288,6 +288,8 @@ ExportResult exportPackets( std::shared_ptr<const CaptureIndex> index, const Pac
     }
 
     // Replacing the capture with some of its packets would lose the others.
+    // Both sides are canonical: the index keeps its parts' canonical paths,
+    // so a path through a symbolic link (macOS's temp directory) matches.
     const auto target = QFileInfo( outputPath ).canonicalFilePath();
     for ( const auto& part : index->parts() ) {
         if ( !target.isEmpty() && target == part.path ) {

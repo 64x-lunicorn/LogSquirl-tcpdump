@@ -70,6 +70,19 @@ constexpr size_t kGzipWindow = 32768;
  */
 bool findGzipStart( const uint8_t* data, size_t size, size_t& offset );
 
+/**
+ * How far a GzipSource decompresses at most, so that a gzip bomb, a small
+ * file of a huge run of zeros, is not converted into gigabytes of
+ * zero-length records: the decompressed size, and, once ratioFrom bytes
+ * are out, how many times the compressed bytes consumed it may come to.
+ * Deflate packs at most some 1032 times; real captures 2 to 20 times.
+ */
+struct GzipLimits {
+    uint64_t maxBytes = 64ull * 1024 * 1024 * 1024;
+    uint64_t maxRatio = 200;
+    uint64_t ratioFrom = 256ull * 1024 * 1024;
+};
+
 /// A place in a gzip stream to go on decompressing from: see the file comment.
 struct GzipAccessPoint {
     uint64_t out = 0; ///< Where it lies in the decompressed bytes.
@@ -123,6 +136,12 @@ public:
     /// which seeks then use too.  Call before the first read.
     void keepAccessPoints( uint64_t span = kAccessSpan );
 
+    /// Decompress no further than @p limits allow (the defaults otherwise).
+    void setLimits( const GzipLimits& limits )
+    {
+        limits_ = limits;
+    }
+
     /// Seek by @p points, which a GzipSource of the same file kept.
     void useAccessPoints( std::shared_ptr<const GzipAccessPoints> points );
 
@@ -151,6 +170,12 @@ public:
         return cutOff_;
     }
 
+    /// Whether it ended because it went beyond its limits (cutOff() too).
+    bool overLimit() const
+    {
+        return overLimit_;
+    }
+
     /// Why it did, for the user; empty if it did not.
     const std::string& error() const
     {
@@ -172,6 +197,7 @@ private:
     bool startOver();
     bool resumeAt( const GzipAccessPoint& point );
     bool discard( uint64_t n );
+    bool beyondLimits();
     void keepPoint( int bits );
     void end( const std::string& error );
 
@@ -192,7 +218,9 @@ private:
     std::shared_ptr<GzipAccessPoints> keeping_; ///< Being kept, or null.
     std::shared_ptr<const GzipAccessPoints> points_;
     uint64_t span_ = kAccessSpan;
+    GzipLimits limits_;
     bool cutOff_ = false;
+    bool overLimit_ = false;
     std::string error_;
 };
 

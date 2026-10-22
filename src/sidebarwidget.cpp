@@ -71,6 +71,7 @@
 
 #include <QDesktopServices>
 #include <QGroupBox>
+#include <QLocale>
 #include <QPointer>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -302,6 +303,10 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     liveStderr_->setToolTip( "What the capture program wrote to stderr" );
     liveStderr_->setHidden( true );
     liveLayout->addWidget( liveStderr_ );
+    liveStderrDropped_ = new QLabel;
+    liveStderrDropped_->setObjectName( "liveStderrDropped" );
+    liveStderrDropped_->setHidden( true );
+    liveLayout->addWidget( liveStderrDropped_ );
 
     layout->addWidget( liveSection );
 
@@ -369,10 +374,22 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
     connect( live, &LiveCaptureSession::fileOpened, this, &SidebarWidget::showLiveFile );
     // The catalog's snapshot of the tab in front redraws its summary.
     connect( live, &LiveCaptureSession::progressed, this, &SidebarWidget::showLiveProgress );
-    connect( live, &LiveCaptureSession::stderrLine, this, [ this ]( const QString& line ) {
-        liveStderr_->appendPlainText( line );
-        liveStderr_->setHidden( false );
-    } );
+    connect( live, &LiveCaptureSession::stderrLines, this,
+             [ this ]( const QStringList& lines, quint64 dropped ) {
+                 // The view keeps the latest lines (its block count) and says
+                 // how many came before them.
+                 liveStderr_->appendPlainText( lines.join( QLatin1Char( '\n' ) ) );
+                 liveStderr_->setHidden( false );
+                 liveStderrLines_ += dropped + static_cast<quint64>( lines.size() );
+                 const auto shown = static_cast<quint64>( liveStderr_->maximumBlockCount() );
+                 if ( liveStderrLines_ > shown ) {
+                     liveStderrDropped_->setText(
+                         QString( "%1 earlier lines dropped" )
+                             .arg( QLocale().toString(
+                                 static_cast<qulonglong>( liveStderrLines_ - shown ) ) ) );
+                     liveStderrDropped_->setHidden( false );
+                 }
+             } );
     connect( live, &LiveCaptureSession::finished, this, &SidebarWidget::showLiveOutcome );
 
     // The Export session asks and tells the outcome itself; the sidebar
@@ -626,6 +643,9 @@ void SidebarWidget::showLiveStart()
 {
     liveStderr_->clear();
     liveStderr_->setHidden( true );
+    liveStderrLines_ = 0;
+    liveStderrDropped_->clear();
+    liveStderrDropped_->setHidden( true );
     liveError_->clear();
     liveError_->setHidden( true );
     showSummary( SummaryStatus::LiveStarted );

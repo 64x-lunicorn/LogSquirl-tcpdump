@@ -79,10 +79,24 @@ namespace tcpdump {
  * A source's text (a reason, a listing's error, a failure's Guidance) as
  * rich text for a label: each `command` in backticks on a line of its own,
  * in a fixed-width font, to be selected and copied whole; each http(s) URL
- * a link; each line break kept.  The rest is escaped.  Backticks that do
+ * of the plugin's own pages (isGuidanceLink()) a link, any other text to be
+ * read but not clicked, as it may be what a program or host wrote; each
+ * line break kept.  The rest is escaped.  Backticks that do
  * not pair are shown as they are.
  */
 QString guidanceHtml( const QString& text );
+
+/// The characters shown of a text a program or host wrote, in a list's
+/// entry or a tooltip; the rest is cut off (a description of a megabyte).
+constexpr qsizetype kMaxShownTextChars = 300;
+
+/**
+ * @p text, which a program or host may have written, as a tooltip that
+ * shows its characters as they are: markup is escaped, not rendered (a
+ * tooltip takes text that starts like HTML for HTML).  Longer than
+ * kMaxShownTextChars, it is cut, with an ellipsis.
+ */
+QString plainToolTip( const QString& text );
 
 /**
  * The fields of a Live Source Kind's own options, below the form's while

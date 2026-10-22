@@ -488,6 +488,13 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         stoppedBy = StopCondition::Duration;
     }
 
+    if ( gzip && gzip->overLimit() ) {
+        // A gzip bomb is no capture cut off: nothing of it is kept.
+        return applyCancelRequest(
+            failed( QStringLiteral( "Cannot read the gzip-compressed capture: %1" )
+                        .arg( QString::fromStdString( gzip->error() ) ) ),
+            cancel );
+    }
     auto broken = streamFailure( input );
     // A live capture that broke off keeps what was captured, once there is
     // a packet to show.
@@ -569,6 +576,7 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
         if ( auto* gzip = file.gzip() ) {
             // For the Packet Panel and Export Packets to reach any packet.
             gzip->keepAccessPoints( options.gzipAccessSpan );
+            gzip->setLimits( options.gzipLimits );
         }
         return convertOrThrow( file.source(), &file, inputPath, captureBaseName( inputPath ),
                                outputRoot, cancel, progress, options, nullptr );

@@ -28,6 +28,7 @@
 #pragma once
 
 #include "byte_stream_orderer.h"
+#include "payload_describer.h"
 #include "pcap_parser.h"
 #include "stream_tracker.h"
 
@@ -162,6 +163,9 @@ private:
         uint32_t skipEnd = 0;
         /// The protocol that frames the messages (MessageExtent::framer).
         uint8_t framer = 0;
+        /// What the framer found in the held bytes so far, so that it
+        /// reads each segment's once.
+        FramerLook look;
         const char* label = nullptr;
         size_t cost = 0;                   ///< Counted in used_.
         std::list<uint64_t>::iterator lru; ///< Its place in lru_.

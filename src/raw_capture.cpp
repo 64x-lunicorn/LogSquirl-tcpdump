@@ -157,6 +157,17 @@ bool RawCapture::rotate( uint64_t cut, uint32_t packetsBefore, const CaptureHead
         return fail( QStringLiteral( "The raw capture cannot be split there" ) );
     }
 
+    // Held in memory while copied: never more than real headers come to.
+    uint64_t headerBytes = 0;
+    for ( const auto& record : headers.records ) {
+        headerBytes += record.length;
+    }
+    if ( headerBytes > kMaxHeaderBytes ) {
+        return fail( QStringLiteral( "The capture's headers are longer than the %1 MiB a file "
+                                     "of the ring buffer can repeat" )
+                         .arg( kMaxHeaderBytes / ( 1024 * 1024 ) ) );
+    }
+
     // The headers the new file needs, from where they lie in this one: its
     // records, or the headers copied ahead of them.
     CapturePart next;

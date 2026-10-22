@@ -600,3 +600,53 @@ SCENARIO( "A payload preview is cut to the length chosen, or left out", "[descri
         }
     }
 }
+
+SCENARIO( "A framer that reads on from where it stopped frames as it does afresh", "[describer]" )
+{
+    std::string manyLines = "OPTIONS sip:bob@example.com SIP/2.0\r\n";
+    for ( int i = 0; i < 140; ++i ) {
+        manyLines += "X: " + std::to_string( i ) + "\r\n";
+    }
+    const std::string sdp = "v=0\r\no=alice 1 1 IN IP4 192.0.2.10\r\ns=-\r\n";
+    const std::vector<std::pair<std::string, Bytes>> messages = {
+        { "an HTTP request",
+          text( "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\nGET / HTTP/1.1\r\n\r\n" ) },
+        { "an HTTP response with bare line feeds", text( "HTTP/1.1 200 OK\nServer: x\n\n" ) },
+        { "a SIP INVITE with a body, after keep-alives",
+          text( "\r\n\r\nINVITE sip:bob@example.com SIP/2.0\r\nCall-ID: a@b\r\n"
+                "Content-Type: application/sdp\r\nContent-Length: "
+                + std::to_string( sdp.size() ) + "\r\nCSeq: 1 INVITE\r\n\r\n" + sdp ) },
+        { "a SIP message with a malformed header line",
+          text( "BYE sip:bob@example.com SIP/2.0\r\nCall-ID: a@b\r\nno colon\r\n\r\n" ) },
+        { "a SIP message with too many header lines", text( manyLines + "\r\n" ) },
+    };
+
+    for ( const auto& [ name, message ] : messages ) {
+        GIVEN( name )
+        {
+            THEN( "each prefix, framed reading on from the one before, frames as it does afresh" )
+            {
+                // The framer as the describer chooses it for the first prefix it frames.
+                uint8_t framer = 0;
+                for ( size_t len = 1; framer == 0 && len <= message.size(); ++len ) {
+                    framer = tcpMessageExtent( message.data(), len, 50000, 5060 ).framer;
+                }
+                REQUIRE( framer != 0 );
+                FramerLook look;
+                for ( size_t len = 1; len <= message.size(); ++len ) {
+                    const auto afresh
+                        = tcpMessageExtent( message.data(), len, 50000, 5060, framer );
+                    const auto readOn = tcpMessageExtent( message.data(), len, 50000, 5060, framer,
+                                                          nullptr, &look );
+                    INFO( "prefix of " << len << " bytes" );
+                    REQUIRE( readOn.framer == afresh.framer );
+                    REQUIRE( readOn.length == afresh.length );
+                    REQUIRE( readOn.needsMore == afresh.needsMore );
+                    if ( afresh.framer == 0 || !afresh.needsMore ) {
+                        look = {}; // the reassembly lets go, or the message is whole
+                    }
+                }
+            }
+        }
+    }
+}

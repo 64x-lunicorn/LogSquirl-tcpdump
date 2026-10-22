@@ -91,6 +91,8 @@ struct Payload {
     /// For a framer: a message of its protocol came before the payload in
     /// its direction of the stream.
     bool continuing = false;
+    /// For a framer: what it found in the first bytes before, if it keeps that.
+    FramerLook* look = nullptr;
 };
 
 /// A detector: the description of the payload if it recognises it.
@@ -428,12 +430,12 @@ std::optional<size_t> tlsFrame( const Payload& p )
 
 std::optional<size_t> sipFrame( const Payload& p )
 {
-    return frameSipMessage( p.data, p.len );
+    return frameSipMessage( p.data, p.len, p.look );
 }
 
 std::optional<size_t> httpFrame( const Payload& p )
 {
-    return frameHttpHeader( p.data, p.len );
+    return frameHttpHeader( p.data, p.len, p.look );
 }
 
 std::optional<size_t> someIpFrame( const Payload& p )
@@ -586,9 +588,10 @@ void redescribe( PacketRecord& pkt, const char* label, const std::string& descri
 }
 
 MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
-                                uint8_t framer, const Stream* stream )
+                                uint8_t framer, const Stream* stream, FramerLook* look )
 {
     Payload p{ data, len, srcPort, dstPort, Transport::Tcp, stream };
+    p.look = framer != 0 ? look : nullptr; // what one framer found is of no use to another
     for ( size_t i = 0; i < std::size( kTcpFramers ); ++i ) {
         const auto number = static_cast<uint8_t>( i + 1 );
         if ( framer != 0 && framer != number ) {
@@ -610,6 +613,28 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
         }
     }
     return {};
+}
+
+namespace {
+
+/// Bytes the framers that read a header section looked at, per thread, as
+/// each pipeline runs on its own.
+thread_local uint64_t headerBytes = 0;
+
+} // namespace
+
+namespace describer {
+
+void lookedAt( size_t bytes )
+{
+    headerBytes += bytes;
+}
+
+} // namespace describer
+
+uint64_t headerBytesLooked()
+{
+    return headerBytes;
 }
 
 PayloadDescription describeTcpMessages( const uint8_t* data, size_t len, uint16_t srcPort,

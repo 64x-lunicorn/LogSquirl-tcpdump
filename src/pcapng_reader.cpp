@@ -135,6 +135,11 @@ bool PcapngReader::readBlockHeader( BlockHeader& block )
     if ( block.length % 4 != 0 || block.length < minimumLength( block.type ) ) {
         return fail( "bad block length" );
     }
+    // Headers are kept and copied ahead of each file of a ring buffer.
+    if ( ( block.type == kSectionHeaderBlock || block.type == kInterfaceBlock )
+         && block.length > kMaxHeaderBlock ) {
+        return fail( "header block too long" );
+    }
     return true;
 }
 
@@ -165,7 +170,9 @@ bool PcapngReader::readSectionHeader( BlockHeader& block )
                    + std::to_string( read16( fields + 2, swap_ ) );
         return false;
     }
-    interfaces_.clear();
+    interfaces_.reset();
+    interfaceCount_ = 0;
+    ownTable_ = nullptr;
     sectionState_.reset();
     sectionHeader_ = { block.start, block.length };
     return finishBlock( block );
@@ -174,7 +181,7 @@ bool PcapngReader::readSectionHeader( BlockHeader& block )
 /// Read an interface's link-layer type, snaplen and if_tsresol option.
 bool PcapngReader::readInterface( BlockHeader& block )
 {
-    if ( interfaces_.size() >= kMaxInterfaces ) {
+    if ( interfaceCount_ >= kMaxInterfaces ) {
         return fail( "too many interfaces" );
     }
     uint8_t fields[ 8 ]; // link type, reserved, snaplen
@@ -230,8 +237,7 @@ bool PcapngReader::readInterface( BlockHeader& block )
     }
 
     iface.block = { block.start, block.length };
-    interfaces_.push_back( iface );
-    sectionState_.reset();
+    addInterface( iface );
     if ( !precisionAnnounced_ ) {
         precision_ = std::max( precision_, iface.precision );
     }
@@ -239,6 +245,30 @@ bool PcapngReader::readInterface( BlockHeader& block )
         linkTypes_.push_back( iface.linkType );
     }
     return true;
+}
+
+void PcapngReader::addInterface( const Interface& iface )
+{
+    if ( !ownTable_ ) {
+        copyInterfaces();
+    }
+    ownTable_->set( interfaceCount_, iface );
+    ++interfaceCount_;
+    sectionState_.reset();
+}
+
+void PcapngReader::copyInterfaces( const std::function<void( Interface& )>& change )
+{
+    auto table = std::make_shared<InterfaceTable>();
+    for ( size_t i = 0; i < interfaceCount_; ++i ) {
+        auto iface = ( *interfaces_ )[ i ];
+        if ( change ) {
+            change( iface );
+        }
+        table->set( i, iface );
+    }
+    ownTable_ = table.get();
+    interfaces_ = std::move( table );
 }
 
 /// Read an enhanced or simple packet block into @p pkt.
@@ -255,10 +285,10 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
             return fail( "cut off inside a packet block" );
         }
         const auto interfaceId = read32( fields, swap_ );
-        if ( interfaceId >= interfaces_.size() ) {
+        if ( interfaceId >= interfaceCount_ ) {
             return fail( "packet of an undeclared interface" );
         }
-        iface = &interfaces_[ interfaceId ];
+        iface = &( *interfaces_ )[ interfaceId ];
         timestamp = ( static_cast<uint64_t>( read32( fields + 4, swap_ ) ) << 32 )
                     | read32( fields + 8, swap_ );
         capturedLen = read32( fields + 12, swap_ );
@@ -272,13 +302,13 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
         // A simple packet block belongs to the section's first interface,
         // has no timestamp, and is as long as the packet or the snaplen.
         uint8_t fields[ 4 ]; // original length
-        if ( interfaces_.empty() ) {
+        if ( interfaceCount_ == 0 ) {
             return fail( "packet of an undeclared interface" );
         }
         if ( read( fields, sizeof( fields ) ) < sizeof( fields ) ) {
             return fail( "cut off inside a packet block" );
         }
-        iface = &interfaces_.front();
+        iface = &( *interfaces_ )[ 0 ];
         originalLen = read32( fields, swap_ );
         capturedLen = std::min( originalLen, room );
         if ( iface->snaplen != 0 ) {
@@ -337,7 +367,7 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
 bool PcapngReader::readBlocksUpToPacket( bool untilWaiting )
 {
     for ( ;; ) {
-        if ( untilWaiting && !interfaces_.empty() && !ready() ) {
+        if ( untilWaiting && interfaceCount_ > 0 && !ready() ) {
             return true;
         }
         BlockHeader block;
@@ -394,6 +424,7 @@ ReaderCheckpoint PcapngReader::checkpoint() const
         state->swap = swap_;
         state->sectionHeader = sectionHeader_;
         state->interfaces = interfaces_;
+        state->interfaceCount = interfaceCount_;
         sectionState_ = std::move( state );
     }
     // Right after open(), the first packet block's header was read already.
@@ -423,6 +454,8 @@ bool PcapngReader::resume( const ReaderCheckpoint& checkpoint )
     swap_ = state->swap;
     sectionHeader_ = state->sectionHeader;
     interfaces_ = state->interfaces;
+    interfaceCount_ = state->interfaceCount;
+    ownTable_ = nullptr; // shared: a declaration after it copies the table first
     sectionState_ = std::static_pointer_cast<const SectionState>( checkpoint.state );
     return true;
 }
@@ -438,8 +471,15 @@ bool PcapngReader::relocateHeaders(
         return here.has_value();
     };
     bool all = relocate( sectionHeader_ );
-    for ( auto& iface : interfaces_ ) {
-        all = relocate( iface.block ) && all;
+    bool moved = false;
+    for ( size_t i = 0; i < interfaceCount_; ++i ) {
+        auto block = ( *interfaces_ )[ i ].block;
+        all = relocate( block ) && all;
+        moved = moved || block.offset != ( *interfaces_ )[ i ].block.offset;
+    }
+    if ( moved ) {
+        // The checkpoints' table stays as it is: this reader's copy moves.
+        copyInterfaces( [ & ]( Interface& iface ) { relocate( iface.block ); } );
     }
     sectionState_.reset(); // the next checkpoint keeps them as they are now
     return all;
@@ -452,10 +492,10 @@ CaptureHeaders PcapngReader::headers() const
     if ( sectionHeader_.length == 0 ) {
         return headers; // not open
     }
-    headers.records.reserve( interfaces_.size() + 1 );
+    headers.records.reserve( interfaceCount_ + 1 );
     headers.records.push_back( sectionHeader_ );
-    for ( const auto& iface : interfaces_ ) {
-        headers.records.push_back( iface.block );
+    for ( size_t i = 0; i < interfaceCount_; ++i ) {
+        headers.records.push_back( ( *interfaces_ )[ i ].block );
     }
     return headers;
 }

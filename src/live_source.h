@@ -85,6 +85,19 @@ using LiveOptions = QMap<QString, QString>;
 /// to the kind for this session, but never written to settings.ini.
 inline constexpr QChar kSecretOptionMark = QLatin1Char( '*' );
 
+/// The web pages the kinds' own text (a reason, a hint, Guidance) names.
+/// guidanceHtml() makes these, and no other URL, a link: a URL a program or
+/// host wrote stays text.  A page the guidance comes to name is added here
+/// and to isGuidanceLink().
+inline constexpr char kWiresharkDownloadUrl[] = "https://www.wireshark.org/download.html";
+inline constexpr char kNpcapDownloadUrl[] = "https://npcap.com/#download";
+inline constexpr char kAndroidDeviceSetupUrl[] = "https://developer.android.com/studio/run/device";
+inline constexpr char kPlatformToolsUrl[]
+    = "https://developer.android.com/tools/releases/platform-tools";
+
+/// Whether @p url is one of the pages the kinds' own text names, exactly.
+bool isGuidanceLink( const QString& url );
+
 /// Whether @p path is a program that can be run: a file, executable.
 bool isRunnableProgram( const QString& path );
 
@@ -363,7 +376,9 @@ struct ListingOutput {
  * for it, at most @p timeout: for a kind's listings, on a worker thread; no
  * event loop is needed.  stdin is the null device, so a program that would
  * ask (a password, a host key) fails instead of waiting.  A program still
- * running at the timeout is killed with what it started.
+ * running at the timeout is killed with what it started, and so is one
+ * that writes more than kListingOutputLimit to stdout or to stderr: what
+ * it wrote is read as it comes, so that no more than that is held.
  *
  * A listing can be cancelled, so that closing the live capture UI or
  * shutting the plugin down does not wait for its timeout: by
@@ -372,6 +387,10 @@ struct ListingOutput {
  * "cancelled".
  */
 ListingOutput runListing( const ProcessCommand& command, std::chrono::milliseconds timeout );
+
+/// The most a listing program may write to stdout, and to stderr: past it,
+/// it is killed with what it started and the listing fails.
+constexpr qsizetype kListingOutputLimit = 4 * 1024 * 1024;
 
 /// Cancel every listing running now, on whichever thread (the plugin's
 /// shutdown); listings started afterwards run as usual.

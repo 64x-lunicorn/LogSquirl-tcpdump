@@ -34,12 +34,15 @@
 
 #include <QFile>
 
+#include <mbedtls/aes.h>
 #include <mbedtls/gcm.h>
 
+#include <array>
 #include <cstring>
 #include <memory>
 #include <random>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace tcpdump;
@@ -301,6 +304,171 @@ private:
     tls::SessionSecrets secrets_;
     Keys keys_[ 2 ];
     StreamState state_;
+};
+
+/// A TLS 1.2 session with @p suite, TLS_RSA_WITH_AES_128_CBC_SHA (0x002F)
+/// or TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 (0xC02F), between the client
+/// and the server of a Tls13Session, its master secret in the key log.
+class Tls12Session {
+public:
+    explicit Tls12Session( uint16_t suite )
+        : suite_( suite )
+    {
+        for ( size_t i = 0; i < clientRandom_.size(); ++i ) {
+            clientRandom_[ i ] = static_cast<uint8_t>( 0x10 + i );
+            serverRandom_[ i ] = static_cast<uint8_t>( 0x70 + i );
+        }
+        const Bytes master( 48, 0x5A );
+        secrets_.masterSecret = tls::SecretBytes( master.data(), master.size() );
+        // RFC 5246, 6.3: the client's MAC key, the server's, the client's
+        // key, the server's, the client's IV, the server's.
+        const size_t macBytes = cbc() ? 20 : 0;
+        const size_t ivBytes = cbc() ? 0 : 4;
+        Bytes seed( serverRandom_.begin(), serverRandom_.end() );
+        seed.insert( seed.end(), clientRandom_.begin(), clientRandom_.end() );
+        const auto block
+            = tls::tls12Prf( tls::Hash::Sha256, secrets_.masterSecret, "key expansion",
+                             { seed.data(), seed.size() }, 2 * ( macBytes + 16 + ivBytes ) );
+        REQUIRE( block.size() == 2 * ( macBytes + 16 + ivBytes ) );
+        const auto* p = block.data();
+        for ( unsigned d = 0; d < 2; ++d ) {
+            keys_[ d ].macKey = tls::SecretBytes( p + d * macBytes, macBytes );
+            keys_[ d ].key = Bytes( p + 2 * macBytes + d * 16, p + 2 * macBytes + d * 16 + 16 );
+            keys_[ d ].iv = Bytes( p + 2 * ( macBytes + 16 ) + d * ivBytes,
+                                   p + 2 * ( macBytes + 16 ) + d * ivBytes + ivBytes );
+        }
+    }
+
+    TlsDecryption::Lookup lookup() const
+    {
+        return [ this ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+            return std::memcmp( random, clientRandom_.data(), clientRandom_.size() ) == 0
+                       ? &secrets_
+                       : nullptr;
+        };
+    }
+
+    Bytes clientHello() const
+    {
+        Bytes body{ 0x03, 0x03 };
+        body.insert( body.end(), clientRandom_.begin(), clientRandom_.end() );
+        body = body + Bytes{ 0x00,
+                             0x00,
+                             0x02,
+                             static_cast<uint8_t>( suite_ >> 8 ),
+                             static_cast<uint8_t>( suite_ ),
+                             0x01,
+                             0x00,
+                             0x00,
+                             0x00 };
+        return Tls13Session::record( 0x16, Tls13Session::handshakeMessage( 1, body ) );
+    }
+    Bytes serverHello() const
+    {
+        return tls12ServerHello( serverRandom_.data(), suite_ );
+    }
+
+    /// A TLS 1.2 ServerHello with @p suite and the 32 bytes at @p random.
+    static Bytes tls12ServerHello( const uint8_t* random, uint16_t suite )
+    {
+        Bytes body{ 0x03, 0x03 };
+        body.insert( body.end(), random, random + 32 );
+        body = body + Bytes{ 0x00,
+                             static_cast<uint8_t>( suite >> 8 ),
+                             static_cast<uint8_t>( suite ),
+                             0x00,
+                             0x00,
+                             0x00 };
+        return Tls13Session::record( 0x16, Tls13Session::handshakeMessage( 2, body ) );
+    }
+
+    /// The ChangeCipherSpec of a direction: its records are protected from
+    /// here on.
+    static Bytes changeCipherSpec()
+    {
+        return Tls13Session::record( 0x14, Bytes{ 0x01 } );
+    }
+
+    /// A protected record of direction @p d, of content type @p type.
+    Bytes seal( unsigned d, uint8_t type, const Bytes& plain )
+    {
+        auto& keys = keys_[ d ];
+        const auto seq = keys.seq++;
+        auto additional = [ & ]( size_t length ) {
+            Bytes aad( 8 );
+            for ( int i = 0; i < 8; ++i ) {
+                aad[ 7 - i ] = static_cast<uint8_t>( seq >> ( 8 * i ) );
+            }
+            return aad
+                   + Bytes{ type, 0x03, 0x03, static_cast<uint8_t>( length >> 8 ),
+                            static_cast<uint8_t>( length ) };
+        };
+        if ( !cbc() ) {
+            // RFC 5288, 3: the salt, then the explicit nonce the record
+            // begins with.
+            const Bytes explicitNonce( 8, static_cast<uint8_t>( 0xE0 + seq ) );
+            const auto nonce = keys.iv + explicitNonce;
+            const auto aad = additional( plain.size() );
+            Bytes cipher( plain.size() );
+            uint8_t tag[ 16 ];
+            mbedtls_gcm_context gcm;
+            mbedtls_gcm_init( &gcm );
+            REQUIRE( mbedtls_gcm_setkey( &gcm, MBEDTLS_CIPHER_ID_AES, keys.key.data(), 128 ) == 0 );
+            REQUIRE( mbedtls_gcm_crypt_and_tag( &gcm, MBEDTLS_GCM_ENCRYPT, plain.size(),
+                                                nonce.data(), nonce.size(), aad.data(), aad.size(),
+                                                plain.data(), cipher.data(), sizeof( tag ), tag )
+                     == 0 );
+            mbedtls_gcm_free( &gcm );
+            return Tls13Session::record( type, explicitNonce + cipher
+                                                   + Bytes( tag, tag + sizeof( tag ) ) );
+        }
+        // RFC 5246, 6.2.3.2: the MAC over the plaintext, then padding, its
+        // length in each of its bytes, encrypted behind an explicit IV.
+        const auto aad = additional( plain.size() );
+        uint8_t mac[ 20 ];
+        REQUIRE( tls::hmac( tls::Hash::Sha1, keys.macKey,
+                            { { aad.data(), aad.size() }, { plain.data(), plain.size() } }, mac ) );
+        auto inside = plain + Bytes( mac, mac + sizeof( mac ) );
+        const auto padding = static_cast<uint8_t>( 15 - inside.size() % 16 );
+        inside.insert( inside.end(), padding + 1u, padding );
+        Bytes iv( 16, static_cast<uint8_t>( 0xC0 + seq ) );
+        Bytes chain = iv;
+        Bytes cipher( inside.size() );
+        mbedtls_aes_context aes;
+        mbedtls_aes_init( &aes );
+        REQUIRE( mbedtls_aes_setkey_enc( &aes, keys.key.data(), 128 ) == 0 );
+        REQUIRE( mbedtls_aes_crypt_cbc( &aes, MBEDTLS_AES_ENCRYPT, inside.size(), chain.data(),
+                                        inside.data(), cipher.data() )
+                 == 0 );
+        mbedtls_aes_free( &aes );
+        return Tls13Session::record( type, iv + cipher );
+    }
+
+    /// The Info of a segment of direction @p d with @p bytes, whole records.
+    std::string feed( TlsDecryption& decryption, unsigned d, const Bytes& bytes )
+    {
+        return endpoints_.feed( decryption, d, bytes );
+    }
+
+private:
+    struct Keys {
+        tls::SecretBytes macKey;
+        Bytes key;
+        Bytes iv;
+        uint64_t seq = 0;
+    };
+
+    bool cbc() const
+    {
+        return suite_ == 0x002F;
+    }
+
+    uint16_t suite_;
+    tls::ClientRandom clientRandom_{};
+    std::array<uint8_t, 32> serverRandom_{};
+    tls::SessionSecrets secrets_;
+    Keys keys_[ 2 ];
+    Tls13Session endpoints_; ///< Only its feed(): the stream and ports.
 };
 
 } // namespace
@@ -737,6 +905,80 @@ SCENARIO( "TLS sessions past the most followed take the place of the least recen
                 REQUIRE( contains( respond( 2 ), "TLS (decrypted) | HTTP/1.1 200 OK" ) );
                 REQUIRE( contains( respond( 0 ), "TLS (decrypted) | HTTP/1.1 200 OK" ) );
                 REQUIRE_FALSE( contains( respond( 1 ), kDecryptedMarker ) );
+            }
+        }
+    }
+}
+
+SCENARIO( "A second ServerHello does not change a TLS session", "[tls_decryption]" )
+{
+    const std::string get = "GET / HTTP/1.1\r\n\r\n";
+    const std::string next = "GET /next HTTP/1.1\r\n\r\n";
+
+    const std::pair<uint16_t, std::string> suites[]
+        = { { 0x002F, "AES-CBC" }, { 0xC02F, "AES-GCM" } };
+    for ( const auto& suite : suites ) {
+        GIVEN( "a TLS 1.2 " + suite.second + " session, keyed by its master secret" )
+        {
+            Tls12Session session( suite.first );
+            TlsDecryption decryption( session.lookup() );
+            session.feed( decryption, 0, session.clientHello() );
+            session.feed( decryption, 1, session.serverHello() );
+            const auto first
+                = session.feed( decryption, 0,
+                                Tls12Session::changeCipherSpec()
+                                    + session.seal( 0, 0x17, Bytes( get.begin(), get.end() ) ) );
+            REQUIRE( contains( first, kDecryptedMarker ) );
+
+            WHEN( "the server sends a TLS 1.3 ServerHello, then application data" )
+            {
+                session.feed( decryption, 1, Tls13Session().serverHello() );
+                const auto server = session.feed( decryption, 1,
+                                                  Tls13Session::record( 0x17, Bytes( 40, 0x33 ) ) );
+                const auto client = session.feed(
+                    decryption, 0, session.seal( 0, 0x17, Bytes( next.begin(), next.end() ) ) );
+
+                THEN( "the session keeps its suite and keys" )
+                {
+                    REQUIRE_FALSE( contains( server, kDecryptedMarker ) );
+                    REQUIRE( contains( client, kDecryptedMarker ) );
+                    REQUIRE( contains( client, "GET /next" ) );
+                }
+            }
+        }
+    }
+
+    GIVEN( "a TLS 1.3 session whose key log holds only the client handshake secret" )
+    {
+        Tls13Session session;
+        const auto all = session.lookup();
+        tls::SessionSecrets partial;
+        TlsDecryption decryption(
+            [ &all, &partial ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+                const auto* secrets = all( random );
+                if ( secrets == nullptr ) {
+                    return nullptr;
+                }
+                partial.clientHandshakeTraffic = secrets->clientHandshakeTraffic;
+                return &partial;
+            } );
+        session.feed( decryption, 0, session.clientHello() );
+        session.feed( decryption, 1, session.serverHello() );
+        const auto finished = session.feed(
+            decryption, 0,
+            session.seal( 0, 0x16, Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF2 ) ) ) );
+        REQUIRE( contains( finished, "TLS (decrypted) | Finished" ) );
+
+        WHEN( "the server sends a TLS 1.2 ServerHello, then application data" )
+        {
+            const Bytes random( 32, 0x77 );
+            session.feed( decryption, 1, Tls12Session::tls12ServerHello( random.data(), 0xC02F ) );
+            const auto server
+                = session.feed( decryption, 1, Tls13Session::record( 0x17, Bytes( 40, 0x33 ) ) );
+
+            THEN( "the record is left as it was described" )
+            {
+                REQUIRE( server == "segment" );
             }
         }
     }

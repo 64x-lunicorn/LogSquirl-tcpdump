@@ -140,6 +140,9 @@ struct ConversionOptions {
     /// Decompressed bytes between two access points of a gzip-compressed
     /// capture (GzipSource::kAccessSpan).
     uint64_t gzipAccessSpan = GzipSource::kAccessSpan;
+    /// How far a gzip-compressed capture is decompressed at most; beyond,
+    /// the conversion fails.
+    GzipLimits gzipLimits;
     /// Whether every TCP segment shows its timestamps option in Info, as
     /// Wireshark does, rather than the SYNs only (showTcpTimestamps()).
     bool tcpTimestamps = false;

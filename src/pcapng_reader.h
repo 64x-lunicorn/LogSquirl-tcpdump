@@ -33,8 +33,12 @@
 
 #include "pcap_parser.h"
 
+#include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace tcpdump {
@@ -71,6 +75,10 @@ public:
     /// Interfaces a section may declare at most; a further one ends the
     /// capture as unreadable, so that the interface table stays small.
     static constexpr size_t kMaxInterfaces = 65536;
+    /// The longest section header or interface description block read;
+    /// a longer one ends the capture as unreadable.  A real one is a few
+    /// hundred bytes; a ring buffer copies them ahead of each file.
+    static constexpr uint32_t kMaxHeaderBlock = 256 * 1024;
 
     /// @param start  Where the first section header starts, as
     ///               findCaptureStart() found it for a pcapng.
@@ -96,7 +104,8 @@ public:
     }
 
     /// Also keeps the section's byte order and interfaces, shared with the
-    /// checkpoint before as long as no interface was declared between them.
+    /// checkpoint before as long as no interface was declared between them;
+    /// its interfaces are the section's InterfaceTable, never a copy.
     ReaderCheckpoint checkpoint() const override;
 
     bool resume( const ReaderCheckpoint& checkpoint ) override;
@@ -131,11 +140,78 @@ private:
         uint64_t start = 0;    ///< Where the block starts in the source.
     };
 
+    /**
+     * A section's interfaces, in segments of 8, 8, 16, 32, … that never
+     * move once made: the checkpoints share one table, each seeing the
+     * interfaces declared before it, while the reader that made it goes on
+     * setting those declared after, which no checkpoint before them reads.
+     */
+    class InterfaceTable {
+    public:
+        const Interface& operator[]( size_t i ) const
+        {
+            const auto [ segment, at ] = locate( i );
+            return segments_[ segment ][ at ];
+        }
+
+        /// Set interface @p i, the first one not set yet.
+        void set( size_t i, const Interface& iface )
+        {
+            const auto [ segment, at ] = locate( i );
+            if ( !segments_[ segment ] ) {
+                segments_[ segment ] = std::make_unique<Interface[]>( segmentSize( segment ) );
+            }
+            segments_[ segment ][ at ] = iface;
+        }
+
+        /// Bytes of memory it holds.
+        size_t bytes() const
+        {
+            size_t bytes = sizeof( *this );
+            for ( size_t segment = 0; segment < kSegments; ++segment ) {
+                bytes += segments_[ segment ] ? segmentSize( segment ) * sizeof( Interface ) : 0;
+            }
+            return bytes;
+        }
+
+    private:
+        static constexpr size_t kFirst = 8;
+        static constexpr size_t kSegments = 14;
+        static_assert( kFirst << ( kSegments - 1 ) == kMaxInterfaces );
+
+        static size_t segmentSize( size_t segment )
+        {
+            return segment == 0 ? kFirst : kFirst << ( segment - 1 );
+        }
+        /// The segment interface @p i is in, and where in it.
+        static std::pair<size_t, size_t> locate( size_t i )
+        {
+            size_t segment = 0;
+            for ( auto n = i / kFirst; n > 0; n >>= 1 ) {
+                ++segment;
+            }
+            return { segment, segment == 0 ? i : i - ( kFirst << ( segment - 1 ) ) };
+        }
+
+        std::array<std::unique_ptr<Interface[]>, kSegments> segments_;
+    };
+
     /// What a checkpoint keeps of the section it lies in.
     struct SectionState : ReaderState {
         bool swap = false;
         RecordSpan sectionHeader;
-        std::vector<Interface> interfaces;
+        /// The section's first interfaceCount interfaces; null for none.
+        std::shared_ptr<const InterfaceTable> interfaces;
+        size_t interfaceCount = 0;
+
+        size_t bytes( std::unordered_set<const void*>& counted ) const override
+        {
+            size_t bytes = counted.insert( this ).second ? sizeof( *this ) : 0;
+            if ( interfaces && counted.insert( interfaces.get() ).second ) {
+                bytes += interfaces->bytes();
+            }
+            return bytes;
+        }
     };
 
     bool fail( const char* problem );
@@ -147,9 +223,20 @@ private:
     bool readInterface( BlockHeader& block );
     bool readPacket( BlockHeader& block, PacketRecord& pkt );
     bool readBlocksUpToPacket( bool untilWaiting = false );
+    /// Declare @p iface, the section's next interface.
+    void addInterface( const Interface& iface );
+    /// Make the table this reader's own, a copy of its interfaces, each
+    /// as @p change makes it.
+    void copyInterfaces( const std::function<void( Interface& )>& change = {} );
 
-    RecordSpan sectionHeader_;          ///< The current section's header block.
-    std::vector<Interface> interfaces_; ///< The current section's.
+    RecordSpan sectionHeader_; ///< The current section's header block.
+    /// The current section's interfaces, the first interfaceCount_ of the
+    /// table; null for none.
+    std::shared_ptr<const InterfaceTable> interfaces_;
+    size_t interfaceCount_ = 0;
+    /// interfaces_, when this reader made it and so sets the interfaces
+    /// declared next in it; null for a checkpoint's.
+    InterfaceTable* ownTable_ = nullptr;
     /// The section state the last checkpoint kept, while it is still current.
     mutable std::shared_ptr<const SectionState> sectionState_;
     std::vector<uint32_t> linkTypes_;

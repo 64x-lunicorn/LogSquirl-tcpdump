@@ -662,9 +662,9 @@ std::string sdText( FieldReader sd )
 struct Message {
     std::string text;
     bool sd = false;
-    bool valid = false; ///< Whole and plausible: what a heuristic accepts
-    bool last = false;  ///< No message can follow it in these bytes
-    size_t length = 0;  ///< The bytes it takes, header and all
+    bool valid = false;  ///< Whole and plausible: what a heuristic accepts
+    bool last = false;   ///< No message can follow it in these bytes
+    uint64_t length = 0; ///< The bytes it takes, header and all
 };
 
 /// The message at @p p, of which @p len bytes were captured.
@@ -679,7 +679,7 @@ Message readMessage( const uint8_t* p, size_t len )
     const auto length = readBE32( p + 4 );
     const uint16_t service = readBE16( p );
     const uint16_t method = readBE16( p + 2 );
-    m.length = kUncountedBytes + static_cast<size_t>( length );
+    m.length = kUncountedBytes + uint64_t{ length };
     m.sd = service == kSdService && method == kSdMethod;
     if ( len < kHeaderBytes ) {
         // The header itself is cut: what it begins with.
@@ -713,8 +713,9 @@ Message readMessage( const uint8_t* p, size_t len )
     }
 
     const bool whole = len >= m.length;
-    FieldReader body( p + kHeaderBytes, std::min( len, m.length ) - kHeaderBytes, whole );
-    size_t payloadBytes = m.length - kHeaderBytes;
+    const size_t captured = whole ? static_cast<size_t>( m.length ) : len; // < m.length if cut
+    FieldReader body( p + kHeaderBytes, captured - kHeaderBytes, whole );
+    uint64_t payloadBytes = m.length - kHeaderBytes;
     if ( h.type & kTpFlag ) {
         uint32_t tp = 0;
         if ( body.u32( tp ) ) {
@@ -760,7 +761,7 @@ SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heurist
             const auto h = readHeader( payload + at );
             if ( !isMagicCookie( h )
                  && ( !plausible( h ) || h.length > kMaxHeuristicLength
-                      || len - at < kUncountedBytes + static_cast<size_t>( h.length ) ) ) {
+                      || len - at < kUncountedBytes + uint64_t{ h.length } ) ) {
                 return {};
             }
             const auto message = readMessage( payload + at, len - at );
@@ -770,7 +771,7 @@ SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heurist
             if ( message.last ) {
                 break;
             }
-            at += message.length;
+            at += static_cast<size_t>( message.length ); // whole, so within len
         }
     }
     result.text = nameMessages( len, kMaxMessages, "; ", [ & ]( size_t at ) {
@@ -778,7 +779,9 @@ SomeIpDescription detectSomeIp( const uint8_t* payload, size_t len, bool heurist
         if ( at == 0 ) {
             result.sd = message.sd;
         }
-        return NamedMessage{ std::move( message.text ), message.length, message.last };
+        // Whole unless last, so within len.
+        return NamedMessage{ std::move( message.text ), static_cast<size_t>( message.length ),
+                             message.last };
     } );
     return result;
 }
@@ -819,7 +822,11 @@ std::optional<size_t> frameSomeIpMessage( const uint8_t* payload, size_t len, bo
             return std::nullopt;
         }
     }
-    return kUncountedBytes + static_cast<size_t>( length );
+    const uint64_t bytes = kUncountedBytes + uint64_t{ length };
+    if ( bytes > SIZE_MAX ) {
+        return SIZE_MAX;
+    }
+    return static_cast<size_t>( bytes );
 }
 
 } // namespace tcpdump::describer

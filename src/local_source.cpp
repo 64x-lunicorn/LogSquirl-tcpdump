@@ -33,8 +33,6 @@ namespace tcpdump {
 
 namespace {
 
-const QString kWiresharkDownload = QStringLiteral( "https://www.wireshark.org/download.html" );
-
 /// The program @p name on @p where's PATH, else at its install locations
 /// @p installed; empty if it is nowhere.
 QString find( const LocalPrograms& where, const QString& name, const QStringList& installed )
@@ -107,7 +105,7 @@ QString capturePermissionGuidance( CaptureOs os, const QString& program )
                                "/dev/bpf* and adds you to it.\n\nIf ChmodBPF is installed but "
                                "you are not in the group, run `sudo dseditgroup -o edit -a "
                                "\"$USER\" -t user access_bpf`, then log out and log in again." )
-                   .arg( kWiresharkDownload )
+                   .arg( QLatin1String( kWiresharkDownloadUrl ) )
                + never;
     case CaptureOs::Linux: {
         const auto path = program.isEmpty() ? QStringLiteral( "/usr/bin/dumpcap" ) : program;
@@ -132,9 +130,10 @@ QString capturePermissionGuidance( CaptureOs os, const QString& program )
     }
     case CaptureOs::Windows:
         return QStringLiteral(
-            "Capturing on Windows needs Npcap: install it from https://npcap.com/#download "
-            "(Wireshark's installer offers it too), leaving \"Restrict Npcap driver's access to "
-            "Administrators only\" unchecked, so that LogSquirl need not run as administrator." );
+                   "Capturing on Windows needs Npcap: install it from %1 (Wireshark's installer "
+                   "offers it too), leaving \"Restrict Npcap driver's access to Administrators "
+                   "only\" unchecked, so that LogSquirl need not run as administrator." )
+            .arg( QLatin1String( kNpcapDownloadUrl ) );
     }
     return {};
 }
@@ -145,14 +144,14 @@ QString captureInstallHint( CaptureOs os )
     case CaptureOs::MacOS:
         return QStringLiteral( "Neither dumpcap nor tcpdump was found: install Wireshark (%1) for "
                                "dumpcap; tcpdump comes with macOS, in /usr/sbin." )
-            .arg( kWiresharkDownload );
+            .arg( QLatin1String( kWiresharkDownloadUrl ) );
     case CaptureOs::Linux:
         return QStringLiteral( "Neither dumpcap nor tcpdump was found: install your "
                                "distribution's tcpdump, or Wireshark's dumpcap (Debian and "
                                "Ubuntu: wireshark-common, Fedora: wireshark-cli)." );
     case CaptureOs::Windows:
         return QStringLiteral( "dumpcap was not found: install Wireshark (%1), with Npcap." )
-            .arg( kWiresharkDownload );
+            .arg( QLatin1String( kWiresharkDownloadUrl ) );
     }
     return {};
 }

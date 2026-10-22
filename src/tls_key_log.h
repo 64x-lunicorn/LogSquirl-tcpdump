@@ -33,6 +33,7 @@
 
 #include "tls_crypto.h"
 
+#include <QIODevice>
 #include <QString>
 
 #include <array>
@@ -99,6 +100,10 @@ public:
     static constexpr int64_t kMaxBytes = 64 * 1024 * 1024;
     /// How often at most the file is read again for a session's secrets.
     static constexpr std::chrono::milliseconds kRereadInterval{ 500 };
+    /// How the file is opened: unbuffered, so that no buffer of the
+    /// device's holds a copy of the secrets, freed unwiped when it closes;
+    /// the bytes read are the only copy, and wiped.
+    static constexpr QIODevice::OpenMode kOpenMode = QIODevice::ReadOnly | QIODevice::Unbuffered;
 
     /// The clock kRereadInterval is measured by; empty: the steady clock.
     using Clock = std::function<std::chrono::steady_clock::time_point()>;

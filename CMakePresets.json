@@ -24,11 +24,45 @@
         "lhs": "${hostSystemName}",
         "rhs": "Darwin"
       }
+    },
+    {
+      "name": "dev-asan",
+      "displayName": "Debug with tests under AddressSanitizer and UndefinedBehaviorSanitizer",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_SHARED_LINKER_FLAGS": "-fsanitize=address,undefined",
+        "CMAKE_MODULE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      },
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "dev-asan-homebrew",
+      "displayName": "dev-asan, with Homebrew's Qt 6",
+      "inherits": "dev-asan",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "/opt/homebrew/opt/qt6"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
     }
   ],
   "buildPresets": [
     { "name": "dev", "configurePreset": "dev" },
-    { "name": "dev-homebrew", "configurePreset": "dev-homebrew" }
+    { "name": "dev-homebrew", "configurePreset": "dev-homebrew" },
+    { "name": "dev-asan", "configurePreset": "dev-asan" },
+    { "name": "dev-asan-homebrew", "configurePreset": "dev-asan-homebrew" }
   ],
   "testPresets": [
     {
@@ -41,6 +75,25 @@
       "name": "dev-homebrew",
       "inherits": "dev",
       "configurePreset": "dev-homebrew"
+    },
+    {
+      "name": "dev-asan",
+      "inherits": "dev",
+      "configurePreset": "dev-asan",
+      "execution": {
+        "noTestsAction": "error",
+        "jobs": 4
+      },
+      "environment": {
+        "QT_QPA_PLATFORM": "offscreen",
+        "ASAN_OPTIONS": "detect_leaks=0",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "dev-asan-homebrew",
+      "inherits": "dev-asan",
+      "configurePreset": "dev-asan-homebrew"
     }
   ]
 }

@@ -165,7 +165,7 @@ KeyLogFile::KeyLogFile( const QString& path, Clock clock )
 void KeyLogFile::read()
 {
     QFile file( path_ );
-    if ( !file.open( QIODevice::ReadOnly ) ) {
+    if ( !file.open( kOpenMode ) ) {
         error_ = QStringLiteral( "Cannot read the TLS key log: %1" ).arg( file.errorString() );
         return;
     }

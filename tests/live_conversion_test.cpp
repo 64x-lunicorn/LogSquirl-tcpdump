@@ -32,6 +32,7 @@
 
 #include "capture_index.h"
 #include "capture_source.h"
+#include "packet_export.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
 #include "stream_capture.h"
@@ -395,6 +396,18 @@ SCENARIO( "A live capture's packets can be read back while it runs and after", "
                     return !snapshots.empty() && snapshots.back().summary.packets == 5;
                 } ) );
                 const auto index = run.snapshots().back().index;
+
+                THEN( "an export onto the raw file, by the path the capture reports, is refused" )
+                {
+                    // On macOS the temp directory is reached through a symlink.
+                    const auto before = fileBytes( run.rawPath() );
+                    const auto result = exportPackets( index, { 1 }, run.rawPath() );
+                    REQUIRE( result.status == ExportResult::Status::Failed );
+                    REQUIRE( result.error.contains( "cannot replace the capture" ) );
+                    REQUIRE( fileBytes( run.rawPath() ) == before );
+                    run.pipe.closeWrite();
+                    run.finish();
+                }
 
                 THEN( "its index reads them from the raw file, also once that has grown" )
                 {

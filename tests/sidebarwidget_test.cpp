@@ -46,6 +46,7 @@
 #include <QDesktopServices>
 #include <QFile>
 #include <QLabel>
+#include <QLocale>
 #include <QPalette>
 #include <QPlainTextEdit>
 #include <QProgressBar>
@@ -57,6 +58,7 @@
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -404,6 +406,122 @@ SCENARIO( "the sidebar shows the Live Capture Session, and its Stop reaches it",
     }
 }
 
+SCENARIO( "a capture program's stderr flood keeps the last lines shown and the host log bounded",
+          "[sidebar]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+    FakeHost host;
+    CaptureSessions sessions;
+    SidebarWidget widget( sessions );
+    sessions.setTempRoot( dir.path() );
+    ScriptedRuns runs;
+    auto& live = sessions.liveSession();
+    live.setRunFactory( runs.factory() );
+    auto* stderrView = child<QPlainTextEdit>( widget, "liveStderr" );
+    auto* dropped = child<QLabel>( widget, "liveStderrDropped" );
+    const auto shown = stderrView->maximumBlockCount();
+    REQUIRE( shown > 0 );
+    const auto logged = [ &host ] {
+        return static_cast<int>(
+            std::count_if( host.logs.begin(), host.logs.end(),
+                           []( const QString& line ) { return line.startsWith( "eth0: " ); } ) );
+    };
+
+    WHEN( "a capture's program writes a few lines" )
+    {
+        REQUIRE( live.start( "eth0", {} ) );
+        runs.last().stderrLines( { "eth0: listening", "second" }, 0 );
+
+        THEN( "they are shown and logged, and nothing is said to be dropped" )
+        {
+            REQUIRE( stderrView->toPlainText() == "eth0: listening\nsecond" );
+            REQUIRE( dropped->isHidden() );
+            REQUIRE( logged() == 2 );
+        }
+    }
+
+    WHEN( "a capture's program writes more lines than are logged, none dropped" )
+    {
+        REQUIRE( live.start( "eth0", {} ) );
+        QStringList lines;
+        for ( int i = 0; i < 150; ++i ) {
+            lines << QString( "line %1" ).arg( i );
+        }
+        runs.last().stderrLines( lines, 0 );
+
+        THEN( "the host log took the first ones, and says so" )
+        {
+            REQUIRE( logged()
+                     == static_cast<int>( tcpdump::LiveCaptureSession::kStderrLogged ) + 1 );
+            REQUIRE( host.logs.contains( "eth0: line 0" ) );
+            REQUIRE( host.logs.last().contains( "only its first 100 lines are" ) );
+        }
+    }
+
+    WHEN( "a capture's program writes far more lines than are shown, some dropped on the way" )
+    {
+        REQUIRE( live.start( "eth0", {} ) );
+        int next = 0;
+        quint64 sent = 0;
+        QStringList handedOn;
+        for ( int batch = 0; batch < 20; ++batch ) {
+            QStringList lines;
+            next += 7; // dropped before they were handed on
+            for ( int i = 0; i < 100; ++i ) {
+                lines << QString( "line %1" ).arg( next++ );
+            }
+            runs.last().stderrLines( lines, 7 );
+            handedOn << lines;
+            sent += 107;
+        }
+
+        THEN( "the view keeps the last lines and says how many earlier ones were dropped" )
+        {
+            const auto text = stderrView->toPlainText().split( '\n' );
+            REQUIRE( text == handedOn.mid( handedOn.size() - shown ) );
+            REQUIRE_FALSE( dropped->isHidden() );
+            REQUIRE( dropped->text()
+                     == QString( "%1 earlier lines dropped" )
+                            .arg( QLocale().toString( static_cast<qulonglong>( sent - shown ) ) ) );
+        }
+
+        THEN(
+            "the host log took a bounded number of them, then one line that more were not logged" )
+        {
+            REQUIRE( logged()
+                     == static_cast<int>( tcpdump::LiveCaptureSession::kStderrLogged ) + 1 );
+            REQUIRE( host.logs.last().startsWith( "eth0: " ) );
+            REQUIRE( host.logs.last().contains( "not logged" ) );
+        }
+
+        THEN( "that line does not claim the first lines were logged, as some were dropped" )
+        {
+            // 7 dropped before each batch of 100: the first batch and the
+            // second's 7 before the notice.
+            REQUIRE_FALSE( host.logs.last().contains( "its first" ) );
+            REQUIRE( host.logs.last().contains( "not the first: 14 were dropped" ) );
+        }
+
+        AND_WHEN( "the next capture starts and writes a line" )
+        {
+            runs.last().finish( {} );
+            runs.last().end();
+            REQUIRE( live.start( "eth0", {} ) );
+            runs.last().stderrLines( { "again" }, 0 );
+
+            THEN( "the view starts afresh, and the host log takes its lines again" )
+            {
+                REQUIRE( stderrView->toPlainText() == "again" );
+                REQUIRE( dropped->isHidden() );
+                REQUIRE( host.logs.last() == "eth0: again" );
+            }
+        }
+    }
+
+    logsquirl_plugin_shutdown();
+}
+
 SCENARIO( "the summary's links open the README in the browser and filters in the Regex Lab",
           "[sidebar]" )
 {
@@ -524,9 +642,10 @@ SCENARIO( "a long summary in a short sidebar can be scrolled to its end", "[side
     {
         FakeHost host;
         // As the host's sidebar holds it: a page of a QTabWidget, which a
-        // splitter may make shorter than the sidebar's minimum.
-        QTabWidget tabs;
+        // splitter may make shorter than the sidebar's minimum.  The sessions
+        // come first, so that they outlive the sidebar the tabs delete.
         CaptureSessions sessions;
+        QTabWidget tabs;
         auto* widget = new SidebarWidget( sessions );
         tabs.addTab( widget, "tcpdump" );
         const auto height = GENERATE( 250, 400, 600, 900 );

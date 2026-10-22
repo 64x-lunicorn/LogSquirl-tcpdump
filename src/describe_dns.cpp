@@ -43,7 +43,8 @@ namespace {
 constexpr size_t kMaxDnsNameBytes = 255;
 
 /// Most compression pointers followed in one name.  Each must point before
-/// itself, so a chain of them ends anyway; this bounds its length.
+/// itself, but that does not end a chain: a label followed by a pointer back
+/// to that label loops.  This cap and kMaxDnsNameBytes are what end it.
 constexpr size_t kMaxDnsPointers = 64;
 
 /// Most answers listed in one message, and messages in one TCP segment.

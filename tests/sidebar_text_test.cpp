@@ -529,13 +529,10 @@ SCENARIO( "the line under the capture's name takes the palette's colours", "[sid
 {
     GIVEN( "a light and a dark palette" )
     {
-        QPalette light;
-        light.setColor( QPalette::Window, QColor( 0xf0, 0xf0, 0xf0 ) );
-        light.setColor( QPalette::WindowText, QColor( 0x10, 0x10, 0x10 ) );
-        QPalette dark;
-        dark.setColor( QPalette::Window, QColor( 0x20, 0x20, 0x20 ) );
-        dark.setColor( QPalette::WindowText, QColor( 0xf0, 0xf0, 0xf0 ) );
-        const auto palette = GENERATE_COPY( light, dark );
+        // Which palette, not the palette: of named values Catch2 v2's
+        // generator keeps a reference, to a copy gone by the time it is read.
+        const bool isDark = GENERATE( false, true );
+        const auto palette = isDark ? darkPalette() : lightPalette();
 
         WHEN( "a summary is shown in a label of that palette" )
         {

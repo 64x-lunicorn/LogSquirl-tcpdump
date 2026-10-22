@@ -558,26 +558,19 @@ struct Message {
     const uint8_t* end = nullptr; ///< Where the next message would begin
 };
 
-/// The message at the start of @p bytes, whose start line has been checked.
-/// Over TCP, a body without Content-Length is none; over UDP, it is the
-/// rest of the datagram.
-Message readMessage( Text bytes, const StartLine& start, bool overTcp )
+/// Read the header lines of message @p m from @p lines, @p count of them
+/// read before, up to the empty line that ends them: true if it came, false
+/// if the bytes end before it, or a line is malformed (Message::malformed).
+bool readHeaderLines( Lines& lines, Message& m, size_t& count )
 {
-    Message m;
-    m.start = start;
-    Lines lines( bytes, false );
     Text line;
-    lines.next( line ); // the start line
-    size_t count = 0;
-    bool ended = false;
     while ( lines.next( line ) ) {
         if ( line.empty() ) {
-            ended = true;
-            break;
+            return true;
         }
         if ( ++count > kMaxSipHeaderLines ) {
             m.malformed = true;
-            break;
+            return false;
         }
         if ( isBlank( line.data[ 0 ] ) ) {
             continue; // a folded line goes on with the header before it
@@ -585,7 +578,7 @@ Message readMessage( Text bytes, const StartLine& start, bool overTcp )
         const auto* colon = static_cast<const uint8_t*>( std::memchr( line.data, ':', line.len ) );
         if ( colon == nullptr ) {
             m.malformed = true;
-            break;
+            return false;
         }
         const Text name = trimmed( { line.data, static_cast<size_t>( colon - line.data ) } );
         const Text value = trimmed( after( line, static_cast<size_t>( colon - line.data ) + 1 ) );
@@ -604,11 +597,26 @@ Message readMessage( Text bytes, const StartLine& start, bool overTcp )
             const auto length = number( value, 9 );
             if ( !length || *length > kMaxContentLength ) {
                 m.malformed = true;
-                break;
+                return false;
             }
             m.contentLength = *length;
         }
     }
+    return false;
+}
+
+/// The message at the start of @p bytes, whose start line has been checked.
+/// Over TCP, a body without Content-Length is none; over UDP, it is the
+/// rest of the datagram.
+Message readMessage( Text bytes, const StartLine& start, bool overTcp )
+{
+    Message m;
+    m.start = start;
+    Lines lines( bytes, false );
+    Text line;
+    lines.next( line ); // the start line
+    size_t count = 0;
+    const bool ended = readHeaderLines( lines, m, count );
     const uint8_t* const bytesEnd = bytes.data + bytes.len;
     if ( m.malformed ) {
         m.end = bytesEnd;
@@ -779,25 +787,54 @@ std::string detectSipKeepAlive( const uint8_t* payload, size_t len )
     return {};
 }
 
-std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len )
+std::optional<size_t> frameSipMessage( const uint8_t* payload, size_t len, FramerLook* look )
 {
-    // The keep-alives before a message go with it.
-    const auto* at = skipLineEnds( payload, payload + len );
-    const Text bytes{ at, static_cast<size_t>( payload + len - at ) };
-    const auto start = startLineOf( bytes );
-    if ( !start ) {
+    FramerLook fresh;
+    auto& seen = look ? *look : fresh;
+    if ( seen.length > 0 ) {
+        return seen.length; // its header section told it, and more bytes change nothing
+    }
+    const uint8_t* const end = payload + len;
+    if ( seen.read == 0 ) {
+        // The keep-alives before a message go with it.
+        const auto* at = skipLineEnds( payload, end );
+        if ( !startLineOf( { at, static_cast<size_t>( end - at ) } ) ) {
+            return std::nullopt;
+        }
+        const auto* lf = static_cast<const uint8_t*>(
+            std::memchr( at, '\n', static_cast<size_t>( end - at ) ) );
+        seen.read = static_cast<size_t>( lf + 1 - payload );
+        lookedAt( seen.read );
+    }
+    else {
+        // Without a line feed after where the last call stopped, no header
+        // line is whole that was not.
+        const size_t from = std::min( seen.searched, len );
+        lookedAt( len - from );
+        if ( std::memchr( payload + from, '\n', len - from ) == nullptr ) {
+            seen.searched = len;
+            return len + 1;
+        }
+    }
+    const size_t read = std::min( seen.read, len );
+    lookedAt( len - read );
+    Lines lines( { payload + read, len - read }, false );
+    Message m;
+    m.contentLength = seen.contentLength;
+    const bool ended = readHeaderLines( lines, m, seen.headerLines );
+    if ( m.malformed ) {
         return std::nullopt;
     }
-    const auto message = readMessage( bytes, *start, true );
-    if ( message.malformed ) {
-        return std::nullopt;
-    }
-    if ( message.headersCut ) {
+    seen.read = static_cast<size_t>( lines.here() - payload );
+    seen.searched = len;
+    seen.contentLength = m.contentLength;
+    if ( !ended ) {
         return len + 1;
     }
     // Over TCP, Content-Length is mandatory (RFC 3261, 18.3): without it,
     // the body is none.
-    return static_cast<size_t>( message.body.data - payload ) + message.contentLength.value_or( 0 );
+    seen.length = seen.read + m.contentLength.value_or( 0 );
+    return seen.length;
 }
 
 } // namespace tcpdump::describer

@@ -35,11 +35,17 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 
 #include <atomic>
 #include <memory>
 #include <thread>
+
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <signal.h>
+#endif
 
 using namespace tcpdump;
 using namespace tcpdump_test;
@@ -465,6 +471,85 @@ SCENARIO( "A listing program is run with a timeout and nothing to answer a promp
         {
             REQUIRE( took.elapsed() < 1500 );
             REQUIRE( output.error.contains( "cancelled" ) );
+        }
+    }
+
+    for ( const auto* channel : { "stdout", "stderr" } ) {
+        GIVEN( std::string( "a program that writes to " ) + channel
+               + " without end, and starts a child" )
+        {
+            // Without end for the listing: 16 times its limit, then it waits
+            // out the timeout, so that a listing without the limit fails at
+            // the timeout instead of filling the memory.
+            const auto childPid = dir.filePath( "child.pid" );
+            const auto program = listingProgram(
+                dir, "flood",
+                "sleep 60 &\n"
+                "echo $! > '"
+                    + childPid
+                    + "'\n"
+                      "line=$(printf '%01023d' 0)\n"
+                      "i=0\n"
+                      "while [ $i -lt "
+                    + QString::number( 16 * kListingOutputLimit / 1024 ) + " ]; do echo \"$line\""
+                    + ( QString( channel ) == "stderr" ? " >&2" : "" )
+                    + "; i=$((i+1)); done\n"
+                      "sleep 60" );
+            QElapsedTimer took;
+            took.start();
+            const auto output = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) );
+
+            THEN( "it is stopped once it reaches the limit, with what it started, and says so" )
+            {
+                REQUIRE( took.elapsed() < 15000 );
+                REQUIRE( output.error.contains( "flood" ) );
+                REQUIRE( output.error.contains( channel ) );
+                REQUIRE( output.error.contains( "4 MiB" ) );
+                REQUIRE( output.exitCode == -1 );
+                REQUIRE( output.out.size() <= static_cast<qsizetype>( kListingOutputLimit ) );
+                REQUIRE( output.err.size() <= static_cast<qsizetype>( kListingOutputLimit ) );
+                QFile pidFile( childPid );
+                REQUIRE( pidFile.open( QIODevice::ReadOnly ) );
+                const auto child = static_cast<pid_t>( pidFile.readAll().trimmed().toLongLong() );
+                REQUIRE( child > 0 );
+                // Killed with the group; an orphan is reaped by init, not at once.
+                REQUIRE( waitFor( [ child ] { return ::kill( child, 0 ) != 0 && errno == ESRCH; },
+                                  20000 ) );
+            }
+        }
+    }
+
+    const auto perl = QStandardPaths::findExecutable( "perl" );
+    if ( !perl.isEmpty() ) {
+        GIVEN( "a program that writes without end after leaving its process group" )
+        {
+            // In LogSquirl's group (the test's), the group's signal misses
+            // it; the same program in its group is the measure of the flood.
+            const auto flood = [ & ]( const QString& name, bool leave ) {
+                const auto program = listingProgram(
+                    dir, name,
+                    "exec '" + perl + "' -e 'use POSIX; "
+                        + ( leave ? "setpgid( 0, getpgrp( getppid() ) ) or die; " : "" )
+                        + "my $l = ( \"0\" x 1023 ) . \"\\n\"; print $l for 1 .. "
+                        + QString::number( 16 * kListingOutputLimit / 1024 ) + "; sleep 60'" );
+                QElapsedTimer took;
+                took.start();
+                const auto output
+                    = runListing( { program, {} }, std::chrono::milliseconds( 20000 ) );
+                REQUIRE( output.error.contains( name ) );
+                REQUIRE( output.error.contains( "4 MiB" ) );
+                return took.elapsed();
+            };
+            const auto inGroup = flood( "flood", false );
+            const auto runaway = flood( "runaway", true );
+
+            THEN( "it is still killed at the limit, not waited for" )
+            {
+                // Waited for, it would take the reaping's full second more;
+                // the rest of that second is room for a busy runner.
+                CAPTURE( inGroup, runaway );
+                REQUIRE( runaway < inGroup + 900 );
+            }
         }
     }
 

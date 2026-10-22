@@ -322,6 +322,82 @@ SCENARIO( "A gzip stream that is cut off or corrupt ends there", "[gzip]" )
     }
 }
 
+SCENARIO( "A gzip stream ends at its decompressed size or ratio limit", "[gzip]" )
+{
+    constexpr uint64_t kMiB = 1024 * 1024;
+    GzipLimits limits;
+    limits.maxBytes = 4 * kMiB;
+    limits.maxRatio = 200;
+    limits.ratioFrom = kMiB;
+
+    GIVEN( "a crafted gzip member of 8 MiB of zeros, some 1000 times smaller" )
+    {
+        const auto bomb = gzipped( QByteArray( static_cast<int>( 8 * kMiB ), '\0' ) );
+        REQUIRE( bomb.size() * 500 < 8 * kMiB );
+        CountingSource input( bomb );
+        GzipSource gzip( input );
+        gzip.setLimits( limits );
+        const auto all = readAll( gzip, 4096 );
+
+        THEN( "it ends soon after the ratio is first looked at, naming the limit" )
+        {
+            REQUIRE( static_cast<uint64_t>( all.size() ) >= kMiB );
+            REQUIRE( static_cast<uint64_t>( all.size() ) <= kMiB + kGzipWindow );
+            REQUIRE( gzip.cutOff() );
+            REQUIRE( gzip.overLimit() );
+            REQUIRE( gzip.error()
+                     == "the capture decompresses to more than 200 times its compressed size" );
+        }
+    }
+
+    GIVEN( "a stream of data that compresses as a capture's does, larger than the size limit" )
+    {
+        const auto data = sampleData( static_cast<int>( 5 * kMiB ) );
+        const auto compressed = gzipped( data );
+        CountingSource input( compressed );
+        GzipSource gzip( input );
+        gzip.setLimits( limits );
+        const auto all = readAll( gzip, 4096 );
+
+        THEN( "it ends at the limit, naming it" )
+        {
+            REQUIRE( static_cast<uint64_t>( all.size() ) >= limits.maxBytes );
+            REQUIRE( static_cast<uint64_t>( all.size() ) <= limits.maxBytes + kGzipWindow );
+            REQUIRE( data.startsWith( all ) );
+            REQUIRE( gzip.overLimit() );
+            REQUIRE( gzip.error() == "the decompressed capture is larger than 4 MiB" );
+        }
+    }
+
+    GIVEN( "a stream below both limits" )
+    {
+        const auto data = sampleData( static_cast<int>( 3 * kMiB ) );
+        const auto compressed = gzipped( data, 2 );
+        CountingSource input( compressed );
+        GzipSource gzip( input );
+        gzip.setLimits( limits );
+
+        THEN( "it reads whole" )
+        {
+            REQUIRE( readAll( gzip, 4096 ) == data );
+            REQUIRE_FALSE( gzip.cutOff() );
+            REQUIRE_FALSE( gzip.overLimit() );
+        }
+    }
+
+    GIVEN( "the default limits" )
+    {
+        const GzipLimits defaults;
+
+        THEN( "they are 64 GiB and 200 times, the ratio looked at from 256 MiB on" )
+        {
+            REQUIRE( defaults.maxBytes == 64 * 1024 * kMiB );
+            REQUIRE( defaults.maxRatio == 200 );
+            REQUIRE( defaults.ratioFrom == 256 * kMiB );
+        }
+    }
+}
+
 SCENARIO( "Mangled gzip never breaks the source", "[gzip][fuzz]" )
 {
     const auto data = sampleData( 20 * 1000 );
@@ -571,6 +647,51 @@ SCENARIO( "A gzip-compressed capture that is cut off or corrupt ends as cut off"
             REQUIRE( result.status == ConversionResult::Status::Failed );
             REQUIRE( result.error
                      == "Cannot read the gzip-compressed capture: the gzip stream is cut off" );
+        }
+    }
+}
+
+SCENARIO( "A gzip bomb ends the conversion with a message naming the limit", "[gzip][converter]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+    constexpr uint64_t kMiB = 1024 * 1024;
+    ConversionOptions options;
+    options.gzipLimits.maxRatio = 200;
+    options.gzipLimits.ratioFrom = kMiB;
+
+    GIVEN( "a pcap's global header and 8 MiB of zeros, zero-length records, gzip-compressed" )
+    {
+        const auto header = fileBytes( corpus( "sip.pcap" ) ).left( 24 );
+        const auto path = dir.filePath( "bomb.pcap.gz" );
+        writeFile( path, gzipped( header + QByteArray( static_cast<int>( 8 * kMiB ), '\0' ) ) );
+        const auto result = convert( path, dir.path(), options );
+
+        THEN( "the conversion fails, saying the capture decompresses beyond the limit" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error
+                     == "Cannot read the gzip-compressed capture: the capture decompresses to "
+                        "more than 200 times its compressed size" );
+            // Nothing is left behind.
+            REQUIRE( QDir( dir.path() ).entryList( QDir::Dirs | QDir::NoDotAndDotDot ).isEmpty() );
+        }
+    }
+
+    GIVEN( "a gzip-compressed capture just below a lowered size limit" )
+    {
+        const auto bytes = fileBytes( corpus( "sip.pcap" ) );
+        const auto path = dir.filePath( "sip.pcap.gz" );
+        writeFile( path, gzipped( bytes ) );
+        options.gzipLimits.maxBytes = static_cast<uint64_t>( bytes.size() );
+        const auto plain = convert( corpus( "sip.pcap" ), dir.path() );
+        const auto gz = convert( path, dir.path(), options );
+
+        THEN( "it converts as before" )
+        {
+            REQUIRE( gz.status == ConversionResult::Status::Converted );
+            REQUIRE( fileBytes( gz.outputPath ) == fileBytes( plain.outputPath ) );
+            REQUIRE( gz.summary.compressionProblem.empty() );
         }
     }
 }

@@ -195,6 +195,10 @@ public:
         return checkpoints_;
     }
 
+    /// Bytes of memory the checkpoints hold, what several share counted
+    /// once: for the tests.
+    size_t checkpointBytes() const;
+
     uint32_t interval() const
     {
         return interval_;

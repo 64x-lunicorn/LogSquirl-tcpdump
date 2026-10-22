@@ -56,6 +56,10 @@ namespace tcpdump {
 
 class RawCapture {
 public:
+    /// The most bytes of headers rotate() copies ahead of a file: some
+    /// 65536 interfaces of a few hundred bytes each.  Longer ones are refused.
+    static constexpr uint64_t kMaxHeaderBytes = 16 * 1024 * 1024;
+
     /// The raw capture of the capture @p baseName in @p dir, in @p format.
     /// With @p ringFiles, a ring buffer that keeps that many files; without
     /// (0), one file.

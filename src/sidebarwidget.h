@@ -91,7 +91,9 @@ class PacketPanel;
  * squeeze its widgets over one another or cut off its bottom.
  *
  * The sidebar is the sessions' dialog parent while it lives.  Destroying it
- * leaves the sessions running; the plugin destroys them after it.
+ * leaves the sessions running; the plugin destroys them after it.  The
+ * sessions must outlive the sidebar, whoever deletes it: its destructor
+ * tells the sessions and the Capture Catalog to stop telling it.
  */
 class SidebarWidget : public QWidget {
     Q_OBJECT
@@ -203,6 +205,8 @@ private:
     QPushButton* startButton_ = nullptr;       ///< Start live capture…
     QPushButton* streamLinesButton_ = nullptr; ///< Stream lines in Regex Lab, if offered.
     QPlainTextEdit* liveStderr_ = nullptr;     ///< The capture program's stderr lines.
+    QLabel* liveStderrDropped_ = nullptr;      ///< How many earlier ones it no longer shows.
+    quint64 liveStderrLines_ = 0;              ///< The capture's stderr lines, dropped ones too.
     QLabel* liveError_ = nullptr;              ///< Why the last live capture failed.
     /// What the summary label says, drawn by summaryLabelText().
     SummaryStatus summaryStatus_ = SummaryStatus::NothingLoaded;

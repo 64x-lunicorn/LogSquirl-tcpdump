@@ -37,6 +37,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -184,7 +185,7 @@ Bytes crlfCapture()
  * A fake adb in a directory of its own, and its "device": `shell` and
  * `exec-out` run their command line with this computer's /bin/sh, with
  * PATH the device's directory alone (fake id, ip, su and tcpdump, and the
- * cat, rm and sleep of this computer), as adbd runs it with the device's
+ * cat, ls, mkdir, rm, rmdir and sleep of this computer), as adbd runs it with the device's
  * shell.  exec-out runs it in a process group of its own, as a device's
  * tcpdump is not ended with the local adb.  adb logs each call, the
  * device's tcpdump its arguments and a kill.
@@ -226,7 +227,7 @@ struct FakeAdb {
                    text( "List of devices attached\n" + serial.toStdString()
                          + "\tdevice product:sdk model:Pixel_Emu device:emu64a\n" ) );
         writeFile( path( "serial-" + serial ), {} );
-        for ( const auto* tool : { "cat", "rm", "sleep" } ) {
+        for ( const auto* tool : { "cat", "ls", "mkdir", "rm", "rmdir", "sleep" } ) {
             const auto found = QStandardPaths::findExecutable( tool );
             REQUIRE_FALSE( found.isEmpty() );
             REQUIRE( QFile::link( found, path( QString( "device/" ) + tool ) ) );
@@ -316,10 +317,22 @@ struct FakeAdb {
         return readText( path( "tcpdump.log" ) );
     }
 
-    /// The capture's files left on the device.
+    /// The capture's directories, marks and files left on the device, those
+    /// in a directory as "<directory>/<file>".
     QStringList deviceFiles() const
     {
-        return QDir( path( "tmp" ) ).entryList( QDir::Files );
+        const auto all = QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System;
+        const QDir tmp( path( "tmp" ) );
+        QStringList files;
+        for ( const auto& entry : tmp.entryInfoList( all, QDir::Name ) ) {
+            files << entry.fileName();
+            if ( entry.isDir() && !entry.isSymLink() ) {
+                for ( const auto& inside : QDir( entry.filePath() ).entryList( all, QDir::Name ) ) {
+                    files << entry.fileName() + "/" + inside;
+                }
+            }
+        }
+        return files;
     }
 };
 
@@ -650,13 +663,14 @@ SCENARIO( "Stop ends tcpdump on the device, not only the local adb", "[adb_sourc
             [ & ] { return !live->host.openedTabs.isEmpty() || live->session.outcome(); } ) );
         INFO( ( live->session.outcome() ? live->outcome().error : QString() ).toStdString() );
         REQUIRE( live->host.openedTabs.size() == 1 );
-        REQUIRE( waitFor( [ & ] { return adb.deviceFiles().size() == 2; } ) ); // pid, stderr
+        // The directory, and the pid and stderr in it.
+        REQUIRE( waitFor( [ & ] { return adb.deviceFiles().size() == 3; } ) );
 
         live->session.stop();
         REQUIRE( live->waitForOutcome() );
         REQUIRE( waitFor( [ & ] { return adb.tcpdumpLog().contains( "killed" ); } ) );
         REQUIRE( adb.adbLog().contains( "kill $p" ) );
-        REQUIRE( adb.adbLog().contains( "su -c ': >" ) == viaSu );
+        REQUIRE( adb.adbLog().contains( "su -c 'mkdir" ) == viaSu );
         REQUIRE( waitFor( [ & ] { return adb.deviceFiles().isEmpty(); } ) );
         INFO( live->outcome().error.toStdString() );
         REQUIRE( live->outcome().status == LiveOutcome::Status::Captured );
@@ -706,7 +720,294 @@ SCENARIO( "A Stop before tcpdump has left its pid still ends it", "[adb_source]"
     THEN( "a capture that ended by itself is cleaned up without a stop mark" )
     {
         REQUIRE( adbCleanupScript( files ).contains( "rm -f" ) );
-        REQUIRE_FALSE( adbCleanupScript( files ).contains( ": >" ) );
+        REQUIRE_FALSE( adbCleanupScript( files ).contains( "mkdir" ) );
+    }
+}
+
+namespace {
+
+/// The shells the device's scripts run with here: this computer's /bin/sh
+/// and, where it is, dash, which like Android's mksh has little beyond POSIX.
+QStringList deviceShells()
+{
+    QStringList shells{ "/bin/sh" };
+    if ( QFileInfo( "/bin/dash" ).isExecutable() ) {
+        shells << "/bin/dash";
+    }
+    return shells;
+}
+
+/// What @p script, run by the device shell @p shell of @p adb (PATH its
+/// directory), wrote to stdout; `kill` is a function logging its arguments
+/// to kill.log and sending nothing, so that a planted -1 cannot reach the
+/// real one.  The script must end before the deadline.
+QString runOnDevice( const FakeAdb& adb, const QString& shell, const QString& script )
+{
+    QProcess process;
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert( "PATH", adb.path( "device" ) );
+    process.setProcessEnvironment( environment );
+    process.start( shell,
+                   { "-c", QString( "kill() { printf '[%s]' \"$@\" >>'%1'; echo >>'%1'; }; " )
+                                   .arg( adb.path( "kill.log" ) )
+                               + script } );
+    REQUIRE( process.waitForStarted( 5000 ) );
+    REQUIRE( process.waitForFinished( 10000 ) );
+    return QString::fromUtf8( process.readAllStandardOutput() );
+}
+
+/// Empty the device's temporary directory and the kill log.
+void clearDevice( const FakeAdb& adb )
+{
+    REQUIRE( QDir( adb.path( "tmp" ) ).removeRecursively() );
+    REQUIRE( QDir( adb.path( "" ) ).mkpath( "tmp" ) );
+    QFile::remove( adb.path( "kill.log" ) );
+}
+
+/// A capture's directory as root leaves it, the pid file holding @p pid.
+void captureDirectoryWith( const AdbCaptureFiles& files, const QByteArray& pid )
+{
+    REQUIRE( QDir().mkpath( files.dir ) );
+    REQUIRE( QFile::setPermissions( files.dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                   | QFileDevice::ExeOwner ) );
+    writeFile( files.dir + "/" + kAdbPidFile, Bytes( pid.begin(), pid.end() ) );
+}
+
+/// A shell prelude that, at the script's first cd, moves the capture's
+/// directory to @p elsewhere and leaves a symlink to it in its place: what
+/// the device's shell user can do between the script's symlink test and its
+/// cd, the temporary directory being theirs and without a sticky bit.
+QString swappedAtFirstCd( const FakeAdb& adb, const AdbCaptureFiles& files,
+                          const QString& elsewhere )
+{
+    return QString( "cd() { if [ ! -e '%1' ]; then : >'%1'; /bin/mv '%2' '%3' && /bin/ln -s '%3' "
+                    "'%2'; fi; "
+                    "command cd \"$@\"; }; " )
+        .arg( adb.path( "swapped" ), files.dir, elsewhere );
+}
+
+} // namespace
+
+SCENARIO( "The stop and cleanup scripts end only a positive pid in root's own directory",
+          "[adb_source]" )
+{
+    FakeAdb adb;
+    const auto files = AdbCaptureFiles::of( adb.path( "tmp" ), "planted" );
+    const auto marker = adb.path( "pwned" );
+
+    for ( const auto& shell : deviceShells() ) {
+        CAPTURE( shell );
+        for ( const auto& script : { adbStopScript( files ), adbCleanupScript( files ) } ) {
+            CAPTURE( script );
+
+            THEN( "a pid file holding anything but a positive integer ends nothing" )
+            {
+                for ( const QByteArray pid :
+                      { QByteArray( "-1" ), QByteArray( "-1\n" ), QByteArray( "0" ),
+                        QByteArray( "" ), QByteArray( "\n" ), QByteArray( "1 2" ),
+                        QByteArray( "-9 1" ), QByteArray( "12x" ), QByteArray( "1\n2" ),
+                        QByteArray( "+5" ), QByteArray( "-- -1" ),
+                        ( "$(touch " + marker + ")" ).toUtf8() } ) {
+                    CAPTURE( pid.toStdString() );
+                    clearDevice( adb );
+                    captureDirectoryWith( files, pid );
+                    runOnDevice( adb, shell, script );
+                    REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+                    REQUIRE_FALSE( QFileInfo::exists( marker ) );
+                }
+            }
+
+            THEN( "the pid tcpdump left in it is ended, and the directory goes" )
+            {
+                clearDevice( adb );
+                captureDirectoryWith( files, "4242\n" );
+                runOnDevice( adb, shell, script );
+                REQUIRE( readText( adb.path( "kill.log" ) ) == "[4242]\n" );
+                REQUIRE_FALSE( QFileInfo::exists( files.dir ) );
+            }
+
+            THEN( "a pid in a directory others may write, or behind a symlink, ends nothing" )
+            {
+                clearDevice( adb );
+                captureDirectoryWith( files, "4242" );
+                REQUIRE( QFile::setPermissions(
+                    files.dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                   | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+                                   | QFileDevice::WriteGroup | QFileDevice::ExeGroup ) );
+                runOnDevice( adb, shell, script );
+                REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+                REQUIRE( readText( files.dir + "/" + kAdbPidFile ) == "4242" );
+
+                const auto elsewhere = AdbCaptureFiles::of( adb.path( "tmp" ), "elsewhere" );
+                REQUIRE( QDir().rename( files.dir, elsewhere.dir ) );
+                REQUIRE( QFile::link( elsewhere.dir, files.dir ) );
+                runOnDevice( adb, shell, script );
+                REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+                REQUIRE( readText( elsewhere.dir + "/" + kAdbPidFile ) == "4242" );
+            }
+
+            THEN( "a symlink to another directory of root's alone, put in its place just "
+                  "before the cd, ends nothing" )
+            {
+                clearDevice( adb );
+                QFile::remove( adb.path( "swapped" ) );
+                captureDirectoryWith( files, "4242" );
+                const auto elsewhere = adb.path( "tmp/elsewhere" );
+                runOnDevice( adb, shell, swappedAtFirstCd( adb, files, elsewhere ) + script );
+                REQUIRE( QFileInfo::exists( adb.path( "swapped" ) ) );
+                REQUIRE( QFileInfo( files.dir ).isSymLink() );
+                REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+                REQUIRE( readText( elsewhere + "/" + kAdbPidFile ) == "4242" );
+            }
+        }
+
+        THEN( "the stop mark is never written through a symlink" )
+        {
+            clearDevice( adb );
+            writeFile( adb.path( "victim.txt" ), text( "precious" ) );
+            REQUIRE( QFile::link( adb.path( "victim.txt" ), files.stop ) );
+            runOnDevice( adb, shell, adbStopScript( files ) );
+            REQUIRE( readText( adb.path( "victim.txt" ) ) == "precious" );
+        }
+    }
+}
+
+SCENARIO( "The capture script leaves its pid only in a directory it made itself", "[adb_source]" )
+{
+    FakeAdb adb;
+    adb.tcpdump();
+    const auto files = AdbCaptureFiles::of( adb.path( "tmp" ), "planted" );
+    const auto script = adbCaptureScript( "tcpdump -i any -U -w -", files );
+    const auto victimFile = adb.path( "victim.txt" );
+    const auto victimDir = adb.path( "victim" );
+
+    for ( const auto& shell : deviceShells() ) {
+        CAPTURE( shell );
+        const auto reset = [ & ] {
+            clearDevice( adb );
+            QFile::remove( adb.path( "tcpdump.log" ) );
+            QFile::remove( victimFile );
+            writeFile( victimFile, text( "precious" ) );
+            REQUIRE( QDir( victimDir ).removeRecursively() );
+            REQUIRE( QDir().mkpath( victimDir ) );
+            REQUIRE( QFile::setPermissions( victimDir, QFileDevice::ReadOwner
+                                                           | QFileDevice::WriteOwner
+                                                           | QFileDevice::ExeOwner ) );
+        };
+
+        THEN( "nothing there before it: tcpdump runs, its directory root's alone" )
+        {
+            reset();
+            runOnDevice( adb, shell, script );
+            REQUIRE( adb.tcpdumpLog().contains( "run uid=" ) );
+            REQUIRE( QFileInfo( files.dir ).permissions()
+                     == ( QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                          | QFileDevice::ReadUser | QFileDevice::WriteUser
+                          | QFileDevice::ExeUser ) );
+            // Ended by itself: its stderr stays for the error, the pid goes.
+            REQUIRE( adb.deviceFiles()
+                     == QStringList{ "logsquirl-planted",
+                                     QString( "logsquirl-planted/" ) + kAdbErrFile } );
+            REQUIRE( runOnDevice( adb, shell, adbStderrScript( files ) )
+                         .contains( "listening on wlan0" ) );
+            runOnDevice( adb, shell, adbCleanupScript( files ) );
+            REQUIRE( adb.deviceFiles().isEmpty() );
+        }
+
+        THEN( "its directory swapped for a symlink to another of root's alone just before "
+              "the cd: it refuses, and the stderr script reads nothing from there" )
+        {
+            reset();
+            QFile::remove( adb.path( "swapped" ) );
+            const auto elsewhere = adb.path( "tmp/elsewhere" );
+            runOnDevice( adb, shell, swappedAtFirstCd( adb, files, elsewhere ) + script );
+            REQUIRE( QFileInfo::exists( adb.path( "swapped" ) ) );
+            REQUIRE( adb.tcpdumpLog().isEmpty() );
+            REQUIRE_FALSE( QFileInfo::exists( elsewhere + "/" + kAdbPidFile ) );
+
+            writeFile( elsewhere + "/" + kAdbErrFile, text( "secret" ) );
+            REQUIRE( QFile::remove( files.dir ) );
+            REQUIRE( QDir().rename( elsewhere, files.dir ) );
+            QFile::remove( adb.path( "swapped" ) );
+            const auto said = runOnDevice(
+                adb, shell, swappedAtFirstCd( adb, files, elsewhere ) + adbStderrScript( files ) );
+            REQUIRE( QFileInfo::exists( adb.path( "swapped" ) ) );
+            REQUIRE_FALSE( said.contains( "secret" ) );
+        }
+
+        for ( const auto& planted : { QString( "a symlink to a directory" ),
+                                      QString( "a directory others may write" ) } ) {
+            const auto plant = [ & ] {
+                if ( planted == "a symlink to a directory" ) {
+                    REQUIRE( QFile::link( victimDir, files.dir ) );
+                }
+                else {
+                    REQUIRE( QDir().mkpath( files.dir ) );
+                    REQUIRE( QFile::setPermissions(
+                        files.dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                       | QFileDevice::ExeOwner | QFileDevice::WriteGroup
+                                       | QFileDevice::ExeGroup ) );
+                }
+            };
+
+            THEN( ( "its directory there as " + planted
+                    + ": a Stop before or after it leaves no stop mark" )
+                      .toStdString() )
+            {
+                reset();
+                // A Stop before the script: the mark stays for it.
+                runOnDevice( adb, shell, adbStopScript( files ) );
+                REQUIRE( QFileInfo( files.stop ).isDir() );
+                plant();
+                runOnDevice( adb, shell, script );
+                REQUIRE( adb.tcpdumpLog().isEmpty() );
+                REQUIRE_FALSE( QFileInfo::exists( files.stop ) );
+
+                // A Stop after the script refused.
+                runOnDevice( adb, shell, adbStopScript( files ) );
+                REQUIRE_FALSE( QFileInfo::exists( files.stop ) );
+                REQUIRE( readText( adb.path( "kill.log" ) ).isEmpty() );
+            }
+        }
+
+        for ( const auto& planted :
+              { QString( "a symlink to a directory" ), QString( "a symlink to a file" ),
+                QString( "a dangling symlink" ), QString( "a directory" ) } ) {
+            THEN( ( "its directory already there as " + planted
+                    + ": it refuses, writing nothing, and says why" )
+                      .toStdString() )
+            {
+                reset();
+                if ( planted == "a symlink to a directory" ) {
+                    REQUIRE( QFile::link( victimDir, files.dir ) );
+                }
+                else if ( planted == "a symlink to a file" ) {
+                    REQUIRE( QFile::link( victimFile, files.dir ) );
+                }
+                else if ( planted == "a dangling symlink" ) {
+                    REQUIRE( QFile::link( adb.path( "nowhere" ), files.dir ) );
+                }
+                else {
+                    REQUIRE( QDir().mkpath( files.dir ) );
+                    REQUIRE( QFile::setPermissions( files.dir, QFileDevice::ReadOwner
+                                                                   | QFileDevice::WriteOwner
+                                                                   | QFileDevice::ExeOwner ) );
+                    REQUIRE( QFile::link( victimFile, files.dir + "/" + kAdbPidFile ) );
+                    REQUIRE( QFile::link( victimFile, files.dir + "/" + kAdbErrFile ) );
+                }
+                runOnDevice( adb, shell, script );
+                REQUIRE( adb.tcpdumpLog().isEmpty() );
+                REQUIRE( readText( victimFile ) == "precious" );
+                REQUIRE( QDir( victimDir )
+                             .isEmpty( QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden
+                                       | QDir::System ) );
+                REQUIRE_FALSE( QFileInfo::exists( adb.path( "nowhere" ) ) );
+                if ( planted != "a directory" ) {
+                    REQUIRE( runOnDevice( adb, shell, adbStderrScript( files ) )
+                                 .contains( "was on the device before" ) );
+                }
+            }
+        }
     }
 }
 

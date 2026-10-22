@@ -46,6 +46,7 @@
 #include <QList>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QTextDocument>
 #include <QThread>
 
 #include <cstddef>
@@ -320,6 +321,22 @@ inline bool waitFor( const std::function<bool()>& condition, int hangGuardMs = 1
         QThread::msleep( 1 );
     }
     return true;
+}
+
+/**
+ * What a label or tooltip in Qt's AutoText shows of @p text, as plain text:
+ * rendered as HTML if Qt takes it for rich text (Qt::mightBeRichText()),
+ * else as it is.  Markup a program wrote is shown as typed only if this
+ * gives back its characters.
+ */
+inline QString asShown( const QString& text )
+{
+    if ( !Qt::mightBeRichText( text ) ) {
+        return text;
+    }
+    QTextDocument document;
+    document.setHtml( text );
+    return document.toPlainText();
 }
 
 } // namespace tcpdump_test

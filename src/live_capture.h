@@ -26,8 +26,13 @@
  * own thread; LogSquirl and Qt widgets may only be called on the UI thread.
  * A LiveCapture runs the conversion on a worker thread of its own and posts
  * everything it is told to the thread the LiveCapture belongs to, as
- * signals: the text file is ready to open, a snapshot of the summary, a line
- * the capture program wrote to stderr, the outcome.
+ * signals: the text file is ready to open, a snapshot of the summary, the
+ * lines the capture program wrote to stderr, the outcome.
+ *
+ * Stderr lines come in batches, at most one each kStderrBatchInterval and
+ * of at most kStderrBatchLines (the latest; older ones are counted as
+ * dropped): a program that prints without end holds one event in the UI
+ * thread's queue, not one a line.
  *
  * The source is made on the worker thread by a SourceFactory, as a
  * ProcessSource must be (its QProcess belongs to the thread that reads it).
@@ -56,9 +61,14 @@
 #include <QString>
 #include <QThreadPool>
 
+#include <QStringList>
+
 #include <atomic>
+#include <chrono>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 
 namespace tcpdump {
 
@@ -66,6 +76,11 @@ class LiveCapture : public QObject {
     Q_OBJECT
 
 public:
+    /// The most stderr lines a batch holds: the latest, older ones dropped.
+    static constexpr size_t kStderrBatchLines = 200;
+    /// The least time between two batches of stderr lines.
+    static constexpr std::chrono::milliseconds kStderrBatchInterval{ 100 };
+
     /// Makes the capture's stream, on the worker thread.  @p stop ends it
     /// (StreamSource's stop flag); @p onStderrLine, if the source has one,
     /// takes each line its program writes to stderr.  Null: the source
@@ -136,8 +151,9 @@ signals:
     void readyToOpen( const QString& logPath, const QString& rawPath );
     /// What was converted so far (LiveObserver::snapshot).
     void snapshotTaken( const tcpdump::LiveSnapshot& snapshot );
-    /// A line the capture program wrote to stderr.
-    void stderrLine( const QString& line );
+    /// Lines the capture program wrote to stderr, the latest last, after
+    /// @p dropped lines it wrote since the last batch that are not handed on.
+    void stderrLines( const QStringList& lines, quint64 dropped );
     /// The capture ended: Converted (stopped, or its stream closed), Failed
     /// (keeping what was captured, if a packet came), or Stopped before its
     /// capture header had come (nothing was captured).  Never Cancelled.
@@ -148,6 +164,14 @@ signals:
 private:
     /// Run @p work on this object's thread, unless it is gone by then.
     void post( std::function<void()> work );
+    /// Take a stderr line, on the worker thread: a batch is posted unless
+    /// one is on its way.
+    void takeStderrLine( const QString& line );
+    /// Emit the pending stderr lines, if any; on this object's thread.
+    bool emitStderrLines();
+    /// Emit the pending stderr lines, and look again after an interval; or
+    /// let the next line post a batch, if there are none.
+    void flushStderrLines();
 
     QString name_;
     QString outputRoot_;
@@ -162,6 +186,13 @@ private:
     std::shared_ptr<std::atomic_bool> stop_ = std::make_shared<std::atomic_bool>( false );
     /// One worker thread, owned here so that it can be waited for.
     QThreadPool pool_;
+    /// The stderr lines not handed on yet, shared with the worker.
+    struct PendingStderr {
+        std::mutex mutex;
+        std::deque<QString> lines;
+        quint64 dropped = 0;
+        bool posted = false; ///< A flush is queued or timed: no need to post one.
+    } pendingStderr_;
 };
 
 /// Stop @p capture and keep it until its worker is done, then let it go:

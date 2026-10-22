@@ -423,6 +423,109 @@ SCENARIO( "Stream text keeps UTF-8 and escapes control bytes", "[stream_content]
     REQUIRE( text == QString::fromUtf8( "a\nb\\x01\\xff \xc3\xa9\xe2\x82\xac\\xc2\\x85\tz\\x0d" ) );
 }
 
+SCENARIO( "Stream text escapes bidi and other invisible format characters", "[stream_content]" )
+{
+    // RLO, LRI, ZWSP, BOM, soft hyphen, line separator, a tag character.
+    const std::string bytes = "a\xe2\x80\xae"
+                              "b\xe2\x81\xa6"
+                              "c\xe2\x80\x8b"
+                              "d\xef\xbb\xbf"
+                              "e\xc2\xad"
+                              "f\xe2\x80\xa8"
+                              "g\xf3\xa0\x80\x81"
+                              "h";
+    const auto text = streamText( reinterpret_cast<const uint8_t*>( bytes.data() ), bytes.size() );
+
+    THEN( "each is shown as the bytes of its UTF-8, escaped, and reorders nothing" )
+    {
+        REQUIRE( text
+                 == "a\\xe2\\x80\\xae"
+                    "b\\xe2\\x81\\xa6"
+                    "c\\xe2\\x80\\x8b"
+                    "d\\xef\\xbb\\xbf"
+                    "e\\xc2\\xad"
+                    "f\\xe2\\x80\\xa8"
+                    "g\\xf3\\xa0\\x80\\x81"
+                    "h" );
+        for ( const auto c : text ) {
+            REQUIRE( c.unicode() < 0x7F );
+        }
+    }
+
+    THEN( "letters of a right-to-left script are kept" )
+    {
+        const std::string hebrew = "\xd7\xa9\xd7\x9c\xd7\x95\xd7\x9d";
+        REQUIRE( streamText( reinterpret_cast<const uint8_t*>( hebrew.data() ), hebrew.size() )
+                 == QString::fromUtf8( hebrew.c_str() ) );
+    }
+}
+
+SCENARIO( "Stream text breaks a line at a bounded length", "[stream_content]" )
+{
+    constexpr auto kMax = static_cast<size_t>( kMaxStreamLineChars );
+
+    GIVEN( "a run of bytes without a line feed, longer than a line" )
+    {
+        const std::string bytes( kMax * 2 + 10, 'a' );
+        const auto text
+            = streamText( reinterpret_cast<const uint8_t*>( bytes.data() ), bytes.size() );
+
+        THEN( "it is broken into lines of the length, nothing lost" )
+        {
+            const auto lines = text.split( '\n' );
+            REQUIRE( lines.size() == 3 );
+            REQUIRE( lines[ 0 ].size() == kMaxStreamLineChars );
+            REQUIRE( lines[ 1 ].size() == kMaxStreamLineChars );
+            REQUIRE( lines[ 2 ].size() == 10 );
+        }
+    }
+
+    GIVEN( "lines that end before the length" )
+    {
+        std::string bytes;
+        for ( int i = 0; i < 3; ++i ) {
+            bytes += std::string( kMax - 1, 'b' ) + "\n";
+        }
+
+        THEN( "they are not broken" )
+        {
+            REQUIRE( streamText( reinterpret_cast<const uint8_t*>( bytes.data() ), bytes.size() )
+                     == QString::fromStdString( bytes ) );
+        }
+    }
+
+    GIVEN( "an escape and a character beyond the BMP where the line is full" )
+    {
+        const std::string bytes = std::string( kMax - 2, 'c' ) + "\x01"
+                                  + std::string( kMax - 5, 'd' ) + "\xf0\x9f\x98\x80";
+        const auto text
+            = streamText( reinterpret_cast<const uint8_t*>( bytes.data() ), bytes.size() );
+
+        THEN( "neither is split: each begins the next line" )
+        {
+            const auto lines = text.split( '\n' );
+            REQUIRE( lines.size() == 3 );
+            REQUIRE( lines[ 0 ] == QString( kMaxStreamLineChars - 2, 'c' ) );
+            REQUIRE( lines[ 1 ] == "\\x01" + QString( kMaxStreamLineChars - 5, 'd' ) );
+            REQUIRE( lines[ 2 ] == QString::fromUtf8( "\xf0\x9f\x98\x80" ) );
+        }
+    }
+
+    GIVEN( "a direction's run in chunks, longer than a line together" )
+    {
+        StreamChunk first{ 0, 4, 0, std::vector<uint8_t>( kMax - 5, 'e' ) };
+        StreamChunk second{ 0, 5, 0, std::vector<uint8_t>( 10, 'f' ) };
+        const auto text = render( { first, second }, StreamFormat::Text );
+
+        THEN( "the line is broken where the run reaches the length" )
+        {
+            REQUIRE( text
+                     == QString( kMaxStreamLineChars - 5, 'e' ) + QString( 5, 'f' ) + "\n"
+                            + QString( 5, 'f' ) );
+        }
+    }
+}
+
 SCENARIO( "A stream's content is exported whole", "[stream_content]" )
 {
     auto packets = handshake();

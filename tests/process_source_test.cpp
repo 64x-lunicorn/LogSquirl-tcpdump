@@ -89,18 +89,26 @@ SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[proc
 {
     GIVEN( "a batch file, as Windows runs it through cmd.exe" )
     {
-        for ( const auto* program : { "C:/extcap/dump.bat", "C:/extcap/DUMP.CMD" } ) {
-            CAPTURE( program );
+        // Win32 strips trailing spaces and dots from a program name and
+        // still runs the batch file they would hide the suffix of.
+        const auto programs
+            = { "C:/extcap/dump.bat",  "C:/extcap/DUMP.CMD",     "C:/extcap/dump.bat ",
+                "C:/extcap/dump.bat.", "C:/extcap/dump.cmd . .", "dump.Bat.. " };
 
-            THEN( "a plain argument passes" )
-            {
+        THEN( "a plain argument passes" )
+        {
+            for ( const auto* program : programs ) {
+                CAPTURE( program );
                 REQUIRE( batchArgumentProblem(
                              { program, { "--capture", "host 10.0.0.1 and port 443" } } )
                              .isEmpty() );
             }
+        }
 
-            THEN( "every character cmd.exe reads in an argument, quoted or not, is refused" )
-            {
+        THEN( "every character cmd.exe reads in an argument, quoted or not, is refused" )
+        {
+            for ( const auto* program : programs ) {
+                CAPTURE( program );
                 for ( const auto* hostile : { "x & calc", "x | calc", "x > out", "x < in", "%PATH%",
                                               "!x!", "a^b", "(x)", "\"x\" & calc", "x\r\ncalc" } ) {
                     CAPTURE( hostile );
@@ -115,6 +123,8 @@ SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[proc
     THEN( "a program that is no batch file, or a command for the shell, is not checked" )
     {
         REQUIRE( batchArgumentProblem( { "C:/extcap/dump.exe", { "x & calc" } } ).isEmpty() );
+        REQUIRE( batchArgumentProblem( { "C:/extcap/dump.exe. ", { "x & calc" } } ).isEmpty() );
+        REQUIRE( batchArgumentProblem( { "C:/extcap/dump.bat.exe", { "x & calc" } } ).isEmpty() );
         REQUIRE( batchArgumentProblem( ProcessCommand::shell( "dump.bat x & calc" ) ).isEmpty() );
     }
 }
@@ -567,11 +577,13 @@ SCENARIO( "Shutting the plugin down ends every capture program", "[process_sourc
 
             WHEN( "the plugin is shut down (LogSquirl quits or the plugin is disabled)" )
             {
+                const auto sent = processGroupSignalsSent();
                 logsquirl_plugin_shutdown();
                 worker.join();
 
                 THEN( "the program and its child are gone, and the capture ends without failing" )
                 {
+                    REQUIRE( processGroupSignalsSent() > sent );
                     REQUIRE( gone( pid ) );
                     REQUIRE( gone( child ) );
                     REQUIRE( result.status == c.status );
@@ -617,10 +629,58 @@ SCENARIO( "Ending a group never signals LogSquirl's own", "[process_source]" )
         REQUIRE( process.waitForFinished( 5000 ) );
         REQUIRE( process.processId() == 0 ); // reaped: what a kill would have used
 
-        THEN( "ending its group signals nothing of LogSquirl's" )
+        THEN( "ending its group signals nothing at all: its id may be another's by now" )
         {
+            const auto sent = processGroupSignalsSent();
             endProcessGroup( *group, &process, milliseconds( 0 ) );
             REQUIRE( ::kill( ::getpid(), 0 ) == 0 );
+            REQUIRE( processGroupSignalsSent() == sent );
+        }
+    }
+}
+
+SCENARIO( "A capture program that has ended is signalled no more", "[process_source]" )
+{
+    QTemporaryDir dir;
+    writeFile( dir.filePath( "header.pcap" ), pcapOf( {} ) );
+    const auto program = fakeProgram( dir, "quick", "cat \"$1\"" );
+    const auto registered = registeredProcessGroups();
+
+    GIVEN( "a capture whose program wrote its header and exited, its source still there" )
+    {
+        ProcessSource source( { program, { dir.filePath( "header.pcap" ) } }, nullptr );
+        REQUIRE( source.started() );
+        REQUIRE( registeredProcessGroups() == registered + 1 );
+        QTemporaryDir out;
+        const auto result = convertStream( source, "live", out.path() );
+        REQUIRE( result.status == ConversionResult::Status::Converted );
+        REQUIRE( result.error.isEmpty() );
+
+        THEN( "its group is out of the registry the plugin's shutdown ends" )
+        {
+            REQUIRE( registeredProcessGroups() == registered );
+        }
+
+        WHEN( "the source is ended" )
+        {
+            const auto sent = processGroupSignalsSent();
+            source.terminate();
+
+            THEN( "no signal is sent: its id may be another's by now" )
+            {
+                REQUIRE( processGroupSignalsSent() == sent );
+            }
+        }
+
+        WHEN( "the plugin is shut down" )
+        {
+            const auto sent = processGroupSignalsSent();
+            terminateCaptureProcesses();
+
+            THEN( "no signal is sent" )
+            {
+                REQUIRE( processGroupSignalsSent() == sent );
+            }
         }
     }
 }

@@ -356,6 +356,29 @@ SCENARIO( "Several SMB commands in a segment are all named", "[smb]" )
         }
     }
 
+    GIVEN( "a segment of thousands of NBSS keep-alives or empty session messages" )
+    {
+        // Each 4 bytes, so that unbounded names would be several times the
+        // payload's size.
+        const auto [ header, name ] = GENERATE(
+            std::pair<Bytes, std::string>{ { 0x85, 0, 0, 0 }, "Session keep-alive" },
+            std::pair<Bytes, std::string>{ { 0x00, 0, 0, 0 }, "Session message, 0 bytes" } );
+        Bytes segment;
+        for ( int i = 0; i < 4000; ++i ) {
+            segment = segment + header;
+        }
+        THEN( "the first eight messages are named, then an ellipsis" )
+        {
+            std::string eight;
+            for ( int i = 0; i < 8; ++i ) {
+                eight += ( eight.empty() ? "" : "; " ) + name;
+            }
+            REQUIRE( onPort( segment, kNbssPort ).description == eight + "; " + kEllipsis );
+            REQUIRE( onPort( header + nbss( create( "x" ) ), kNbssPort ).description
+                     == name + "; Create Request File: x" );
+        }
+    }
+
     GIVEN( "encrypted, compressed and SMB1 messages" )
     {
         Bytes encrypted{ 0xFD, 'S', 'M', 'B' };

@@ -104,7 +104,11 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    its content, not its name). A compressed capture is decompressed while
    it is read, never as a whole, and the progress bar counts its compressed
    bytes; one whose gzip stream is cut off or corrupt shows its packets up
-   to there and says so in the summary. zstd and xz are not read:
+   to there and says so in the summary. A gzip bomb is refused: the
+   conversion fails with a message once a capture decompresses to more
+   than 64 GiB, or, past its first 256 MiB, to more than 200 times the
+   compressed bytes read (real captures compress 2 to 20 times). zstd and
+   xz are not read:
    decompress such a file first. The
    same dialog opens from **Plugins → tcpdump → Open pcap…**, and so from
    the Command Palette (`Ctrl+Shift+P`, `Cmd+Shift+P` on macOS); while a
@@ -164,7 +168,8 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    the selected one belongs to no stream (`-`). The panel's **Stream** tab shows the payload of
    the whole TCP or UDP stream, the client's bytes (the side that sent the
    first packet) in red and the server's in blue, as **Text** (UTF-8 kept,
-   other control bytes as `\xNN`) or **Hex** (Wireshark's dump, the
+   other control bytes, bidi controls and other invisible characters as
+   `\xNN`, a line longer than 4,096 characters broken) or **Hex** (Wireshark's dump, the
    offset counted per direction, the server's lines indented), both
    directions or one. TCP bytes are put in sequence order as the
    reassembly orders them: a segment captured early waits for those before
@@ -260,7 +265,9 @@ shown again after a restart, and so are each source's own options, for a
 source that has any. The plugin never stores a password: one a source's
 options ask for (an extcap's password argument) is kept in memory for the
 session only. While the capture runs, the section shows what the capture
-program writes to stderr (also in LogSquirl's log); if it fails, the
+program writes to stderr, its last 200 lines and how many earlier ones
+were dropped (up to 100 of its lines are also in LogSquirl's log, the first
+ones unless some were dropped before); if it fails, the
 section shows why, with what the source says to do about it.
 
 #### Local: this computer, with dumpcap or tcpdump
@@ -334,13 +341,18 @@ CR/LF translation) running `tcpdump -i <interface> -s <snaplen> -U -w -
 The interface and the filter are single-quoted for the device's shell, so
 a filter is always one argument of tcpdump and never shell syntax.
 tcpdump's stderr is kept in a file on the device and shown if the capture
-fails. **Stop** ends tcpdump on the device too, not only the local `adb`,
-also when it comes before tcpdump has fully started, and removes its files.
+fails. Its pid and stderr files are in a directory of its own in
+`/data/local/tmp`, which root makes for the capture and only root can
+write into: a capture whose directory is already there, put there by an
+app, a symlink, or anything else, does not start, and Stop ends only a
+positive process number from such a directory. **Stop** ends tcpdump on
+the device too, not only the local `adb`, also when it comes before
+tcpdump has fully started, and removes its files.
 If LogSquirl crashes or is killed during a capture, nothing tells the
 device: tcpdump runs on until it next writes to the closed stream (its
-next captured packet), and its `logsquirl-*.pid`/`.err` files stay in
-`/data/local/tmp`, which `adb shell rm /data/local/tmp/logsquirl-*` (through
-`su -c` for a root capture) removes.
+next captured packet), and its `logsquirl-*` directory stays in
+`/data/local/tmp`, which `adb shell rm -r /data/local/tmp/logsquirl-*`
+(through `su -c` for a capture through su) removes.
 
 #### Remote capture over SSH
 
@@ -444,8 +456,11 @@ stderr is shown as a capture program's, and **Stop** ends it with what it
 started. An extcap's toolbar controls (`--extcap-control-in`/`-out`) are
 not used: extcaps capture without them. Note that, as with Wireshark, a
 password argument is on the extcap's command line, which other users of
-the computer may see in its process list while it runs. The snaplen is not
-passed: an extcap has its own option for that, if any.
+the computer can see in its process list while it runs; the form says so
+below a password field. Where the extcap offers one, log in with a key
+instead: sshdump takes an SSH key file (its private key option) or uses
+your SSH agent. The snaplen is not passed: an extcap has its own option for
+that, if any.
 
 On Windows an extcap that is a batch file (`.bat`, `.cmd`) is run by
 `cmd.exe`, which reads its arguments again, quoted or not. For such an
@@ -540,7 +555,9 @@ when the next packet comes: so no file is empty, a file may be one packet
 bigger than the size given, and one may cover more than its duration when
 no packet came for a while. Every file is a capture of its own: a pcap's
 header, or a pcapng's section header and interfaces, are repeated at its
-start, so Wireshark opens any of them. When the N+1st file starts, the
+start, so Wireshark opens any of them. A capture whose headers come to
+more than 16 MiB, far more than any real one's, ends at the next file with
+a message instead of copying them. When the N+1st file starts, the
 oldest is deleted.
 
 Each file has a text of its own, `<name>_00001_<time>.log`, …: when a new

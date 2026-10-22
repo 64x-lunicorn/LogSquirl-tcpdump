@@ -39,6 +39,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -114,6 +115,27 @@ struct MessageExtent {
 };
 
 /**
+ * What a framer that reads a header section line by line (HTTP's, SIP's)
+ * found in the first bytes of a message that goes on past them, kept by
+ * the TCP Reassembly while it holds the message, so that, given the bytes
+ * again with more after them, the framer reads the new ones only
+ * (tcpMessageExtent()'s @p look).  Empty for a message not framed yet.
+ */
+struct FramerLook {
+    /// Bytes searched already for the end of a line, or of the header
+    /// section.
+    size_t searched = 0;
+    /// Bytes of whole lines read already: the start line and header lines.
+    size_t read = 0;
+    /// Header lines read already.
+    size_t headerLines = 0;
+    /// The Content-Length one of them told, if any did.
+    std::optional<size_t> contentLength;
+    /// The message's length, once its header section told it; 0 before.
+    size_t length = 0;
+};
+
+/**
  * The extent of the message the @p len bytes at @p data begin with, sent
  * from @p srcPort to @p dstPort over TCP: a TLS record, a DNS message
  * behind its length (port 53), an SSH banner or binary packet, a SIP message
@@ -122,10 +144,17 @@ struct MessageExtent {
  * a stream's later messages are of the protocol of its first.  With
  * @p stream, the payload's stream and direction, what its state knows
  * (SSH's phase, a WebSocket upgrade, after which only WebSocket frames
- * are framed) is kept to.
+ * are framed) is kept to.  With @p look, what @p framer found in the
+ * first of the bytes before, the framer reads on from where it stopped,
+ * and keeps it for the next call.
  */
 MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
-                                uint8_t framer = 0, const Stream* stream = nullptr );
+                                uint8_t framer = 0, const Stream* stream = nullptr,
+                                FramerLook* look = nullptr );
+
+/// Bytes the framers that read a header section (HTTP's, SIP's) looked at
+/// on this thread so far: a measure of their work, for tests to bound.
+uint64_t headerBytesLooked();
 
 /**
  * Describe the @p len bytes at @p data, whole messages of the protocol

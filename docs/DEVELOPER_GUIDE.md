@@ -58,7 +58,8 @@ to the same dissection (`dissectPacket()`):
   sections, each with its own byte order and interfaces (major version 1)
 - Interface description blocks: link-layer type, snaplen and `if_tsresol`,
   in its power-of-ten and power-of-two forms (microseconds by default); at
-  most 65,536 interfaces per section
+  most 65,536 interfaces per section; a section header or interface block
+  longer than 256 KiB (`kMaxHeaderBlock`) ends the capture as unreadable
 - Enhanced packet blocks, and simple packet blocks, which belong to the
   section's first interface, are cut to its snaplen and have no timestamp
   (time 0)
@@ -236,7 +237,16 @@ gives a `ReaderCheckpoint`: the packets before it, where the next record
 starts in the source, and a `ReaderState` the reader needs to go on there
 (none for a pcap, whose global header `open()` reads again; the section's
 byte order and interfaces for a pcapng, shared between checkpoints until an
-interface is declared). `resume()`, called on a newly opened reader of the
+interface is declared). The pcapng interfaces are an `InterfaceTable` of
+segments that never move (8, 8, 16, 32, … interfaces): every checkpoint of
+a section shares the one table and the number of interfaces it sees,
+while the reader that made it sets the ones declared after; a reader
+resumed at a checkpoint, or moving the headers (`relocateHeaders()`),
+copies the table once before it changes it. So a checkpoint costs a
+pointer and a count, and the interfaces' memory grows with the
+declarations, not with the checkpoints after them
+(`CaptureIndex::checkpointBytes()` measures it for the tests).
+`resume()`, called on a newly opened reader of the
 same file, skips to the checkpoint and goes on numbering from it. After
 each packet the reader also tells where its record lies (`recordOffset()`,
 `recordLength()`: the pcap record header or the pcapng block, header and
@@ -351,7 +361,14 @@ gzip stream is cut off", "the gzip data is corrupt (…)"). The Converter
 then ends Converted with what it read, and the summary is cut off
 (`endsInsideRecord`, with the reason in `compressionProblem`, which the
 sidebar shows); a stream cut off before the capture header fails the
-conversion ("Cannot read the gzip-compressed capture: …"). Progress counts
+conversion ("Cannot read the gzip-compressed capture: …"). Against a gzip
+bomb, the output stops at `GzipLimits` (`setLimits()`, the option
+`gzipLimits` for tests): beyond 64 GiB (`maxBytes`), or, once 256 MiB are
+out (`ratioFrom`), beyond 200 times the compressed bytes consumed
+(`maxRatio`; deflate packs at most some 1032 times). The stream then ends
+cut off with `overLimit()`, and the Converter fails the conversion with
+that message, keeping nothing: the zero-length records of a run of zeros
+are no capture to show. Progress counts
 compressed bytes consumed (`CaptureFile::consumed()`) against the file
 size. A gzip stream read from a live source is not decompressed:
 `findCaptureStart()` names gzip data as such.
@@ -435,7 +452,10 @@ read through a `DeviceSource`:
   (2 s), and returns when the group is gone (a second more at most, for a
   process of another user, as behind sudo, that cannot be killed). A
   group is never signalled with a pid of 0 or less (`kill(-0)` would
-  signal LogSquirl's own group). On Windows the program is started
+  signal LogSquirl's own group), nor once the program has been reaped:
+  its pid is free then and may be another process's group (QProcess's
+  `finished`, emitted on the program's thread as it reaps it, marks the
+  group so). On Windows the program is started
   suspended (`CREATE_SUSPENDED`, through the CreateProcess modifier, which
   also hands over Qt's `PROCESS_INFORMATION`), put in a job object with
   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and only then resumed, so that
@@ -453,7 +473,8 @@ read through a `DeviceSource`:
   conversion finalises (Converted), then the caller terminates the source,
   or destroys it. A Stop, or a shutdown, before the capture header has come
   ends Stopped: nothing was captured, nothing went wrong.
-- **No orphans.** Every started source's group is enrolled in a registry;
+- **No orphans.** Every started source's group is enrolled in a registry,
+  and leaves it as its program is reaped (on Unix);
   `terminateCaptureProcesses()` ends them all, from any thread, and
   `logsquirl_plugin_shutdown()` calls it after deleting the sidebar
   widget, so no capture program outlives LogSquirl or a disabled plugin.
@@ -647,7 +668,8 @@ the declarations of the detectors and in-stream passes the tables use.
   and SMB 3, as Wireshark labels both), `SMB` (SMB1) or `NBSS` (`Session
   request`, `Positive session response`, … on port 139). An SMB2 message
   names every command, compounded ones by their NextCommand too, up to
-  eight in a segment, joined by `; `, then `…`: the command as Wireshark
+  eight commands and other messages in a segment, joined by `; `, then
+  `…`: the command as Wireshark
   names it (`Negotiate Protocol`, `Session Setup`, `Tree Connect`,
   `Create`, `Read`, `Write`, `Ioctl`, `Find`, `Notify`, `GetInfo`, …,
   `Unknown command 0xNNNN`), `Request` or `Response` by the header's
@@ -1178,6 +1200,12 @@ later segments are not read as frames from their first byte. A framer answers mo
 than it was given while the message is incomplete (one more when its header
 does not say how many) and nothing when no message of its protocol begins
 there; once a stream's first message is framed, only its protocol is tried.
+The HTTP and SIP framers, which read a header section line by line, keep
+what they found in a held message's first bytes (`FramerLook`, in the held
+direction's entry) and read on from there when a segment adds to them, so
+that a header section in many small segments is read once, not again from
+its start on each (`headerBytesLooked()` counts the bytes they look at, for
+the tests to bound).
 
 Per direction, a segment of whole messages, or of none a framer knows, keeps
 its own description and costs nothing. A segment that ends in the first
@@ -1283,12 +1311,15 @@ it runs, and the text is the same as before.
   log had no secrets for again only once `KeyLogFile::bytesRead()` grew,
   not on each of its records. The
   secrets live in `tls::SecretBytes`, which wipe themselves
-  (`mbedtls_platform_zeroize`); the bytes read are wiped too. Nothing logs
+  (`mbedtls_platform_zeroize`); the file is opened unbuffered, so the
+  bytes read are the only copy of it, and they are wiped too. Nothing logs
   or shows a secret; `error()` says only why the file could not be read.
 - **Sessions**: per TCP stream, from its plaintext ClientHello (client
   random, the client's direction) and ServerHello (server random, cipher
   suite, version from `supported_versions`, encrypt-then-MAC, ALPN; a
-  HelloRetryRequest is passed over). The keys are set up from the key log
+  HelloRetryRequest is passed over, and so is any ServerHello after the
+  one that set the suite, so keys are never read by another suite's
+  record layout). The keys are set up from the key log
   at the first protected record (`ensureKeys()`): TLS 1.2's key block from
   the master secret with the PRF (`tls::tls12Prf`, P_hash over HMAC);
   TLS 1.3's key and IV from each traffic secret with HKDF-Expand-Label
@@ -1897,7 +1928,8 @@ past the cut into the new file, behind a copy of the headers the reader
 held after that packet (`CaptureReader::headers()`: a pcap's global
 header; a pcapng's section header, its section length set to -1, and the
 interfaces declared so far), and deletes the oldest files beyond
-`ringFiles`. A file is therefore never empty, and a duration is the least
+`ringFiles`. Headers longer than 16 MiB in all (`kMaxHeaderBytes`) are
+not copied: the rotation fails and ends the capture with that message. A file is therefore never empty, and a duration is the least
 a file covers, not the most. Each file is a `CapturePart`
 (`capture_index.h`): its path, the packets before it, where its records
 start in the stream, the header bytes ahead of them, and where each copied
@@ -1935,8 +1967,14 @@ their copied headers) for **Save capture…**.
 
 `LiveCapture` (`live_capture.h/cpp`) runs this on a worker thread of its
 own and posts what it is told to its own (the UI) thread as signals:
-`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLine` and
-`finished( ConversionResult )`. The source is made on the worker by a
+`readyToOpen( logPath, rawPath )`, `snapshotTaken`, `stderrLines( lines,
+dropped )` and `finished( ConversionResult )`. Stderr lines come in
+batches: the worker queues them (the latest `kStderrBatchLines`, 200,
+older ones counted as `dropped`) and posts a flush only when none is on
+its way; a flush emits what is queued and looks again after
+`kStderrBatchInterval` (100 ms), so a program that prints without end
+holds one event in the UI thread's queue, and what it wrote comes before
+`finished`. The source is made on the worker by a
 `SourceFactory( stop, onStderrLine )` (`LiveCapture::processSource(
 ProcessCommand )` for a capture program), as a `ProcessSource` must be.
 `stop()` sets the source's stop flag; nothing cancels a live capture (its
@@ -1973,7 +2011,7 @@ starts, `openLiveFile( logPath, rawPath, name )`, `updateFile( logPath,
 summary, index, fileSize )`, `setFileError( logPath, error )`, and
 `endLive()` as it finishes. A capture runs through a `LiveRun` (`start( Listener
 )`, `stop()`, `isDone()`; the listener is told readyToOpen, snapshot,
-stderrLine, finished and done, as `LiveCapture`'s signals) made by a
+stderrLines, finished and done, as `LiveCapture`'s signals) made by a
 `LiveRunFactory` from a `LiveRunRequest` (name, output root, options,
 source factory, limits, clock): `runOnWorker()`, a `LiveCapture` that is
 retired when the run is let go of, in the app; `setRunFactory()` in tests.
@@ -2006,9 +2044,14 @@ retired when the run is let go of, in the app; `setRunFactory()` in tests.
   text files opened in tabs.
 
 The session's signals (`stateChanged`, `started`, `fileOpened`,
-`progressed`, `stderrLine`, `finished`) are what the sidebar renders:
-the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view,
-the error and Guidance, the summary label. `tests/fake_live_session.h`
+`progressed`, `stderrLines`, `finished`) are what the sidebar renders:
+the progress (`progress()`, `elapsedMs()`, `limits()`), the stderr view
+(its last 200 lines, and how many earlier ones it dropped),
+the error and Guidance, the summary label. Of a capture's stderr lines,
+the session writes the first `kStderrLogged` (100) it gets to the host's log,
+then one line that the rest are not logged, which says how many were
+dropped before they reached the session, if any (those logged are then not
+the first). `tests/fake_live_session.h`
 uses `FakeSessionHost` (the host, recording, of
 `tests/fake_session_host.h`) and has `ScriptedRuns` (runs the
 test tells what happens, on its own thread), so that
@@ -2226,7 +2269,11 @@ listing was told, for `validate()`, behind a mutex). `runListing( command, timeo
 listing program (`tcpdump -D`, `adb devices -l`) with stdin the null
 device, so one that would prompt fails at once, in a process group of its
 own killed at the timeout (`LiveSourceKind::kListTimeout`, 10 s), and
-returns its stdout, stderr and exit code. A listing can be cancelled, which
+returns its stdout, stderr and exit code. It reads both as they come, at
+most `kListingOutputLimit` (4 MiB) of each: a program that writes more
+(a hostile ssh server, device or extcap writing without end) has its group
+killed at once, and itself too, should it have left the group, and the listing fails with `<name> wrote more than 4 MiB
+to stdout` (or stderr). A listing can be cancelled, which
 kills its group within moments: `cancelListings()` cancels every running
 one (the Capture Sessions' destructor, so that the plugin's shutdown does not wait
 for a hanging `adb` or `ssh`), and a `ListingCancelScope( flag )` on the
@@ -2262,7 +2309,11 @@ list, or an unreadable BPF device on macOS add
 `capturePermissionGuidance( os, program )` to its error, which the form
 shows as its status, as `explainFailure()` adds it to a failed capture's.
 The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
-downloads; no code path runs them, sudo, or anything that prompts. Tests use
+downloads; no code path runs them, sudo, or anything that prompts. The
+form's status and the sidebar's live error show it with `guidanceHtml()`,
+which links only the pages the kinds' own text names (`isGuidanceLink()`,
+the `k…Url` constants of `live_source.h`): a URL in what a program or host
+wrote, which an error carries, is text to be read, never a link. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
 capture or a program, a failure with a hint, devices on request) through
 `CaptureSessions::setLiveSources()`. The test runner sets
@@ -2287,20 +2338,38 @@ capture's worker thread (throwing, as a failed capture, without root or
 tcpdump) and runs `captureCommand()`: `adb -s <serial> exec-out 'exec
 2>/dev/null; [su -c] <script>'`, the script (`adbCaptureScript()`)
 running tcpdump in the background with its stderr and pid in
-`logsquirl-<tag>.err`/`.pid` (`AdbCaptureFiles`) and waiting for it. Every
+`tcpdump.err`/`tcpdump.pid` (`kAdbErrFile`, `kAdbPidFile`) in the directory
+`logsquirl-<tag>` (`AdbCaptureFiles`) and waiting for it. The device's
+temporary directory is the shell user's, who could plant a symlink or a pid
+there: the script makes the directory itself with `mkdir` under `umask
+077` and runs nothing if it was there; every script enters it only if it
+is no symlink and, once in it with `cd -P`, physically the capture's
+directory (`pwd -P`, against the temporary directory's own `pwd -P` and
+the name: the shell user may swap it for a symlink between the test and
+the `cd`, as the temporary directory has no sticky bit), root's
+(`[ -O . ]`) and `drwx------` (`ls -ld .`), then names the files relative
+to it; the stop and cleanup scripts
+kill only a positive integer (`case $p in ''|0*|*[!0-9]*)`), and the stop
+mark `logsquirl-<tag>.stop` is a directory, made with `mkdir`, which never
+writes through a symlink. The scripts use only what Android's mksh and
+toybox have (`[ -O ]`, `set -C`, `umask`, `cd -P`, `pwd -P`, `ls -ld`, `mkdir`,
+`rmdir`). Every
 word in a device command line goes through `shellQuote()` (POSIX single
 quotes). The stream is a Process Source that, as it goes, ends tcpdump on
 the device (through su when it runs as root) and removes its files, and
 that reads the `.err` file for the error of a capture that ended before
-any byte came. While adb still runs, Stop runs `adbStopScript()`: it
+any byte came (`adbStderrScript()`, which says so when the directory was
+not the capture's own). While adb still runs, Stop runs `adbStopScript()`: it
 leaves a `.stop` mark first and then kills the pid if the script has left
 it; the script leaves its pid first and then looks for the mark, killing
 its own tcpdump if it is there, so a Stop between `&` and the pid file
 ends tcpdump too (the script removes the mark, the pid and, stopped so,
-the stderr file as it ends). After adb has ended by itself,
+the stderr file as it ends). A directory there that is not root's own
+leaves no mark either: the script removes it as it refuses the directory,
+the stop script when it finds the directory refused. After adb has ended by itself,
 `adbCleanupScript()` kills by the pid if it is still there and removes the
 files. A LogSquirl that crashes leaves tcpdump running until its next
-write to the dead stream, and the files in `/data/local/tmp`.
+write to the dead stream, and the directory in `/data/local/tmp`.
 `explainFailure()` maps adb's and tcpdump's errors to
 `adbAuthorizeGuidance()`, `adbConnectGuidance()`, `adbRootGuidance()`,
 `adbTcpdumpGuidance()`. `tests/adb_source_test.cpp` uses a fake `adb`
@@ -2308,7 +2377,10 @@ script whose "device" is this computer's `/bin/sh` with a `PATH` of fake
 `id`, `su`, `ip` and `tcpdump` (exec-out in a process group of its own, as
 a device's tcpdump is not ended with the local adb), so that quoting,
 root through `adb root` and su, binary-clean streams and the kill on Stop
-are tested end to end.
+are tested end to end. The device scripts are also run on their own with
+`/bin/sh` and, where it is, `dash` (`kill` a function that only logs), with
+planted pids, symlinks and directories in the device's temporary
+directory.
 
 The **SSH** kind (`ssh_source.h/cpp`, id `ssh`) is `SshSourceKind(
 SshPrograms )`: `SshPrograms::forThisComputer()` holds the paths tried first
@@ -2393,7 +2465,9 @@ The form of an interface's arguments is `ExtcapOptionsWidget`
 `kSettleMs`) it runs `config()` on a thread pool of its own under a
 `ListingCancelScope` (cancelled when another interface is chosen or it
 goes; its destructor waits), and makes a field per argument: `QLineEdit`
-(string, password with `QLineEdit::Password`, numbers), `QCheckBox`
+(string, password with `QLineEdit::Password` and a note, below it and in
+its tooltip, that the value is visible in the process list while the
+capture runs, numbers), `QCheckBox`
 (boolean, boolflag), `QComboBox` (selector; editable for editselector),
 radio buttons, a checkable `QListWidget` (multicheck, children indented
 under their parent), a path with Browse… (fileselect). Fields start with the
@@ -2666,6 +2740,13 @@ widget is made anew whenever the kind is chosen, and its options are kept
 per source when another is chosen. `problem()` (`liveChoiceProblem()`,
 then an options widget that cannot tell yet) keeps the dialog's **Start**
 disabled, with the reason as its tooltip.
+
+What a program or host wrote (a listing's descriptions and problems, an
+extcap's argument names, tooltips, link types and stderr) is shown as
+typed, never as markup: the labels it fills are plain text, and its
+tooltips, Start's among them, go through `plainToolTip()`, which escapes
+text Qt would take for HTML (`Qt::mightBeRichText()`) and cuts it, as the
+list entries are cut, at `kMaxShownTextChars`.
 
 The File Conversion session (see *The File Conversion session*) runs
 `convertPcap()` as its Background Job (see *The Background Job* below), on
@@ -2949,8 +3030,13 @@ export, conversation statistics):
   and reports progress; it goes on where it stopped. `StreamRenderer`
   turns chunks into text: `streamText()` keeps printable ASCII, tab, line
   breaks (CR LF as one) and valid UTF-8 beyond the C1 controls, and escapes
-  every other byte as `\xNN`; each direction's run, each datagram and
-  each gap begin a line; the hex dump is Wireshark's, 16 bytes a line,
+  every other byte as `\xNN`, and the bytes of an invisible format
+  character (category Cf, such as the bidi overrides and isolates, Zl, Zp)
+  too, so they cannot reorder or hide what is shown. It breaks a line at
+  `kMaxStreamLineChars` (4,096), never inside an escape or a character,
+  the renderer carrying the column across chunks: a stream without a line
+  feed is no single paragraph the plain text edit lays out anew on each
+  resize. Each direction's run, each datagram and each gap begin a line; the hex dump is Wireshark's, 16 bytes a line,
   the offset counted per direction (gaps included), the server's lines
   indented by 4. `exportStreamContent()` reads the whole stream with a
   fresh reader, a budget at a time, writing raw bytes of the directions
@@ -3258,6 +3344,21 @@ ctest --preset dev-homebrew -R "Scenario: A Stop before"   # by name
 ctest --preset dev-homebrew -R "<name>" --repeat until-fail:30   # chase a flaky test
 scripts/format.sh main               # the CI's pinned clang-format over what changed
 scripts/format.sh --check            # the CI's Format job, locally
+```
+
+`dev-asan` (on macOS `dev-asan-homebrew`) builds the tests in Debug with
+AddressSanitizer and UndefinedBehaviorSanitizer into `build-asan/`; its test
+preset runs them offscreen, with leak detection off, and an undefined
+behaviour report ends its test as an ASan report does. The CI runs it on Linux
+(`.github/workflows/ci-sanitizers.yml`, this plugin's own workflow beside the
+shared ones). Its test preset runs 4 tests at a time, not the `dev` preset's
+unbounded `jobs: 0`: every sanitized test started at once exhausts a CI
+runner. The build is slow; on a small machine, limit its jobs:
+
+```bash
+cmake --preset dev-asan-homebrew     # or: dev-asan
+cmake --build build-asan -j 6
+ctest --preset dev-asan-homebrew
 ```
 
 Each Catch2 test case is a CTest test of its own, named as Catch2 names it: a

@@ -171,9 +171,9 @@ private:
     /// What tcpdump wrote to stderr on the device.
     QString deviceStderr() const
     {
-        const auto script = QStringLiteral( "cat %1" ).arg( shellQuote( device_.files.err ) );
         const auto output
-            = runListing( adbShell( device_.adb, device_.serial, asRoot( script, device_.viaSu ) ),
+            = runListing( adbShell( device_.adb, device_.serial,
+                                    asRoot( adbStderrScript( device_.files ), device_.viaSu ) ),
                           kCleanupTimeout );
         return output.error.isEmpty() ? output.out.trimmed() : QString();
     }
@@ -188,34 +188,87 @@ private:
 AdbCaptureFiles AdbCaptureFiles::of( const QString& tempDir, const QString& tag )
 {
     const auto base = tempDir + QStringLiteral( "/logsquirl-" ) + tag;
-    return { base + QStringLiteral( ".pid" ), base + QStringLiteral( ".err" ),
-             base + QStringLiteral( ".stop" ) };
+    return { base, base + QStringLiteral( ".stop" ) };
 }
+
+namespace {
+
+/**
+ * The shell test entering @p dir, a capture's directory, that holds only if
+ * it is one root made for the capture: no symlink, and, once in it, root's
+ * (the user the script runs as) and its alone (drwx------).  The device's
+ * temporary directory is the shell user's, who could put anything there,
+ * and swap the directory for a symlink between the test and the cd (it has
+ * no sticky bit), but cannot write into a directory of root's 0700.  So the
+ * directory entered is checked once in it: physically the one in the
+ * temporary directory, by its name.  What follows names the files relative
+ * to it, in the directory entered, whatever is put in its place afterwards.
+ */
+QString enterCaptureDir( const AdbCaptureFiles& files )
+{
+    const auto slash = files.dir.lastIndexOf( QLatin1Char( '/' ) );
+    const auto parent = slash > 0 ? files.dir.left( slash ) : QStringLiteral( "/" );
+    return QStringLiteral( "[ ! -h %1 ] && cd -P %1 2>/dev/null && "
+                           "[ \"$(pwd -P)\" = \"$(cd -P %2 && pwd -P)\"/%3 ] && [ -O . ] && "
+                           "case $(ls -ld .) in drwx------*) ;; *) false ;; esac" )
+        .arg( shellQuote( files.dir ), shellQuote( parent ),
+              shellQuote( files.dir.mid( slash + 1 ) ) );
+}
+
+/// The shell test that $p, read from the pid file, is a positive integer:
+/// never -1 (every process), 0 (the group), an option or several words.
+const QString kPositivePid = QStringLiteral( "case $p in ''|0*|*[!0-9]*) false ;; esac" );
+
+} // namespace
 
 QString adbCaptureScript( const QString& tcpdump, const AdbCaptureFiles& files )
 {
-    // The pid is left after tcpdump has started, and the stop mark looked
-    // for after that: a Stop that came before the pid was there (it leaves
-    // the mark first, then reads the pid) is seen either way.  Stopped so,
-    // its stderr file goes too, which the Stop could not remove yet.
-    return QStringLiteral( "%1 2>%2 & p=$!; echo $p >%3; [ -e %4 ] && kill $p; wait $p; "
-                           "[ -e %4 ] && rm -f %2; rm -f %3 %4" )
-        .arg( tcpdump, shellQuote( files.err ), shellQuote( files.pid ), shellQuote( files.stop ) );
+    // The directory is made here (mkdir makes nothing where anything is,
+    // a symlink too), and the files fresh in it.  The pid is left after
+    // tcpdump has started, and the stop mark looked for after that: a Stop
+    // that came before the pid was there (it leaves the mark first, then
+    // reads the pid) is seen either way.  Stopped so, its stderr file goes
+    // too, which the Stop could not remove yet, and the directory with it.
+    // Refusing the directory, it removes a mark a Stop left for it.
+    return QStringLiteral( "umask 077; mkdir %2 && %3 || { rmdir %6 2>/dev/null; exit 1; }; "
+                           "set -C; "
+                           "%1 2>%5 & p=$!; echo $p >%4; [ -e %6 ] && kill $p; wait $p; "
+                           "rm -f %4; [ -e %6 ] && rm -f %5; cd / && rmdir %2 %6" )
+        .arg( tcpdump, shellQuote( files.dir ), enterCaptureDir( files ),
+              QLatin1String( kAdbPidFile ), QLatin1String( kAdbErrFile ),
+              shellQuote( files.stop ) );
 }
 
 QString adbStopScript( const AdbCaptureFiles& files )
 {
     // The mark is left for a script that has not left its pid yet, which
     // removes it as it ends; once the pid was read, tcpdump is ended here.
-    return QStringLiteral( ": >%1; if p=$(cat %2 2>/dev/null) && [ -n \"$p\" ]; then "
-                           "kill $p 2>/dev/null; rm -f %1 %2; fi; rm -f %3" )
-        .arg( shellQuote( files.stop ), shellQuote( files.pid ), shellQuote( files.err ) );
+    // A directory there but not root's own the script refuses, never
+    // looking for the mark: it goes here.
+    return QStringLiteral( "mkdir %1 2>/dev/null; if %2; then "
+                           "if p=$(cat %3 2>/dev/null) && %4; then "
+                           "kill $p 2>/dev/null; rm -f %3; rmdir %1; fi; "
+                           "rm -f %5; cd / && rmdir %6; "
+                           "elif [ -e %6 ] || [ -h %6 ]; then rmdir %1; fi" )
+        .arg( shellQuote( files.stop ), enterCaptureDir( files ), QLatin1String( kAdbPidFile ),
+              kPositivePid, QLatin1String( kAdbErrFile ), shellQuote( files.dir ) );
 }
 
 QString adbCleanupScript( const AdbCaptureFiles& files )
 {
-    return QStringLiteral( "p=$(cat %1 2>/dev/null) && kill $p 2>/dev/null; rm -f %1 %2 %3" )
-        .arg( shellQuote( files.pid ), shellQuote( files.err ), shellQuote( files.stop ) );
+    return QStringLiteral( "if %1; then p=$(cat %2 2>/dev/null) && %3 && kill $p 2>/dev/null; "
+                           "rm -f %2 %4; cd / && rmdir %5; fi; rmdir %6 2>/dev/null" )
+        .arg( enterCaptureDir( files ), QLatin1String( kAdbPidFile ), kPositivePid,
+              QLatin1String( kAdbErrFile ), shellQuote( files.dir ), shellQuote( files.stop ) );
+}
+
+QString adbStderrScript( const AdbCaptureFiles& files )
+{
+    return QStringLiteral( "if %1; then cat %2; elif [ -e %3 ] || [ -h %3 ]; then echo %4; fi" )
+        .arg( enterCaptureDir( files ), QLatin1String( kAdbErrFile ), shellQuote( files.dir ),
+              shellQuote( QStringLiteral( "%1 was on the device before the capture, or is not "
+                                          "root's alone: tcpdump was not started" )
+                              .arg( files.dir ) ) );
 }
 
 std::vector<LiveTarget> parseAdbDevices( const QString& out )
@@ -252,9 +305,9 @@ std::vector<LiveTarget> parseAdbDevices( const QString& out )
         }
         const auto state = rest.section( QLatin1Char( ' ' ), 0, 0 );
         if ( rest.startsWith( QStringLiteral( "no permissions" ) ) ) {
-            device.problem = QStringLiteral(
-                "no permissions: on Linux, add a udev rule for the device "
-                "(https://developer.android.com/studio/run/device) and reconnect it" );
+            device.problem = QStringLiteral( "no permissions: on Linux, add a udev rule for the "
+                                             "device (%1) and reconnect it" )
+                                 .arg( QLatin1String( kAndroidDeviceSetupUrl ) );
         }
         else if ( state == QStringLiteral( "unauthorized" ) ) {
             device.problem = QStringLiteral(
@@ -328,10 +381,9 @@ QString adbAuthorizeGuidance()
 
 QString adbInstallHint()
 {
-    return QStringLiteral(
-        "adb not found: install the Android SDK Platform-Tools "
-        "(https://developer.android.com/tools/releases/platform-tools) or Android Studio, and "
-        "put adb on PATH or set ANDROID_HOME." );
+    return QStringLiteral( "adb not found: install the Android SDK Platform-Tools (%1) or Android "
+                           "Studio, and put adb on PATH or set ANDROID_HOME." )
+        .arg( QLatin1String( kPlatformToolsUrl ) );
 }
 
 AdbPrograms AdbPrograms::forThisComputer()

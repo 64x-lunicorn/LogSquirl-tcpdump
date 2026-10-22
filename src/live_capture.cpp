@@ -25,6 +25,7 @@
 #include "live_capture.h"
 
 #include <QMetaObject>
+#include <QTimer>
 
 #include <algorithm>
 #include <exception>
@@ -81,9 +82,8 @@ void LiveCapture::start()
         ConversionResult result;
         std::unique_ptr<ByteSource> source;
         try {
-            source = makeSource( stop.get(), [ this ]( const QString& line ) {
-                post( [ this, line ] { emit stderrLine( line ); } );
-            } );
+            source = makeSource( stop.get(),
+                                 [ this ]( const QString& line ) { takeStderrLine( line ); } );
         } catch ( const std::exception& e ) {
             result.error = QString::fromUtf8( e.what() );
         }
@@ -105,6 +105,7 @@ void LiveCapture::start()
         }
         post( [ this, result ] {
             running_ = false;
+            emitStderrLines(); // what it wrote comes before how it ended
             emit finished( result );
         } );
         // May take a while: a capture program is ended here.
@@ -119,6 +120,56 @@ void LiveCapture::start()
 void LiveCapture::stop()
 {
     stop_->store( true );
+}
+
+void LiveCapture::takeStderrLine( const QString& line )
+{
+    bool postFlush = false;
+    {
+        const std::lock_guard<std::mutex> lock( pendingStderr_.mutex );
+        pendingStderr_.lines.push_back( line );
+        if ( pendingStderr_.lines.size() > kStderrBatchLines ) {
+            pendingStderr_.lines.pop_front();
+            ++pendingStderr_.dropped;
+        }
+        postFlush = !pendingStderr_.posted;
+        pendingStderr_.posted = true;
+    }
+    if ( postFlush ) {
+        post( [ this ] { flushStderrLines(); } );
+    }
+}
+
+bool LiveCapture::emitStderrLines()
+{
+    QStringList lines;
+    quint64 dropped = 0;
+    {
+        const std::lock_guard<std::mutex> lock( pendingStderr_.mutex );
+        if ( pendingStderr_.lines.empty() && pendingStderr_.dropped == 0 ) {
+            return false;
+        }
+        lines = QStringList( pendingStderr_.lines.begin(), pendingStderr_.lines.end() );
+        dropped = pendingStderr_.dropped;
+        pendingStderr_.lines.clear();
+        pendingStderr_.dropped = 0;
+    }
+    emit stderrLines( lines, dropped );
+    return true;
+}
+
+void LiveCapture::flushStderrLines()
+{
+    if ( !emitStderrLines() ) {
+        const std::lock_guard<std::mutex> lock( pendingStderr_.mutex );
+        if ( pendingStderr_.lines.empty() ) {
+            pendingStderr_.posted = false; // the next line posts a flush
+            return;
+        }
+    }
+    // Lines that come meanwhile wait for the next look: at most one batch
+    // an interval, whatever the program's rate.
+    QTimer::singleShot( kStderrBatchInterval, this, [ this ] { flushStderrLines(); } );
 }
 
 namespace {

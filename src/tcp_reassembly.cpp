@@ -66,14 +66,16 @@ struct Walk {
 
 /// Walk the messages of protocol @p framer in the @p len bytes at @p data,
 /// one after the other from the first; after one that upgrades the stream,
-/// those of the protocol it upgrades to.
+/// those of the protocol it upgrades to.  @p look is what the framer found
+/// in the first message before, and is left with what it found in the
+/// incomplete one.
 Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, const Stream& stream,
-                   uint8_t framer )
+                   uint8_t framer, FramerLook& look )
 {
     Walk walk;
     while ( walk.end < len ) {
         const auto extent = tcpMessageExtent( data + walk.end, len - walk.end, pkt.srcPort,
-                                              pkt.dstPort, framer, &stream );
+                                              pkt.dstPort, framer, &stream, &look );
         if ( extent.framer == 0 ) {
             walk.end = len; // the rest is none of the protocol's: described as it is
             break;
@@ -82,6 +84,7 @@ Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, con
             walk.incomplete = extent;
             break;
         }
+        look = {}; // the next message is not looked at yet
         walk.end += extent.length;
         if ( extent.upgradesTo != 0 ) {
             framer = extent.upgradesTo;
@@ -310,8 +313,9 @@ std::optional<ReassembledMessages> TcpReassembly::skipSegment( PacketRecord& pkt
 ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Stream& stream,
                                                     Entry& entry )
 {
-    const auto walk
-        = walkMessages( entry.held.data(), entry.held.size(), pkt, stream, entry.framer );
+    // The held bytes begin with the message the framer looked at before.
+    const auto walk = walkMessages( entry.held.data(), entry.held.size(), pkt, stream, entry.framer,
+                                    entry.look );
     const auto rest = entry.held.size() - walk.end;
     if ( announcedPast( walk.incomplete, rest, streamLimit_ ) ) {
         // The message being held turns out longer than the limit: its rest
@@ -351,9 +355,11 @@ ReassembledMessages TcpReassembly::continueMessage( PacketRecord& pkt, const Str
     else {
         // The buffer went to completed_: the entry is counted without it,
         // and the next message's is made room for, as much as it announces
-        // if there is room, else its bytes at hand.
+        // if there is room, else its bytes at hand; with the segments that
+        // came early, within the direction's limit.
         recharge( entry );
-        auto room = std::max( rest, std::min( walk.incomplete.length, streamLimit_ ) );
+        const auto early = entry.order.earlyBytes();
+        auto room = std::max( rest, std::min( walk.incomplete.length, streamLimit_ - early ) );
         if ( !makeRoom( room, key ) ) {
             room = rest;
         }
@@ -390,7 +396,8 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
         }
         return {}; // no message the describer frames: described as it is
     }
-    const auto walk = walkMessages( payload.data, payload.size, pkt, stream, first.framer );
+    FramerLook look;
+    const auto walk = walkMessages( payload.data, payload.size, pkt, stream, first.framer, look );
     if ( walk.incomplete.framer == 0 ) {
         if ( ( first.describedInStream || walk.upgraded || after ) && walk.end > 0 ) {
             // Whole messages the parser could not tell: described from all
@@ -427,6 +434,7 @@ ReassembledMessages TcpReassembly::startMessage( PacketRecord& pkt, const Stream
     entry.segments = 1;
     entry.held.reserve( std::max( rest, expected ) );
     entry.held.assign( payload.data + walk.end, payload.data + payload.size );
+    entry.look = look;
     entry.lru = lru_.insert( lru_.end(), key );
     recharge( entry );
     stream.state->reassembly |= heldBit( stream.direction );

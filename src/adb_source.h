@@ -46,24 +46,32 @@
  * The script, run by the device's shell (through `su -c` when that is how
  * root is had), is (adbCaptureScript())
  *
- *     tcpdump -i '<if>' -s <snaplen> -U -w - '<filter>' 2>'<err>' & p=$!;
- *     echo $p >'<pid>'; [ -e '<stop>' ] && kill $p; wait $p;
- *     [ -e '<stop>' ] && rm -f '<err>'; rm -f '<pid>' '<stop>'
+ *     umask 077; mkdir '<dir>' || exit 1; <enter '<dir>'> || exit 1; set -C;
+ *     tcpdump -i '<if>' -s <snaplen> -U -w - '<filter>' 2>tcpdump.err & p=$!;
+ *     echo $p >tcpdump.pid; [ -e '<stop>' ] && kill $p; wait $p; rm -f tcpdump.pid;
+ *     [ -e '<stop>' ] && rm -f tcpdump.err; cd / && rmdir '<dir>' '<stop>'
  *
  * every word from the user single-quoted for that shell (shellQuote()), so
- * that a filter is one argument of tcpdump and never shell syntax.  Stop
- * ends tcpdump on the device, not only the local adb (adbStopScript(),
- * through su if it runs as root): it leaves the stop mark, then kills the
- * pid the script left, if it is there yet; a script that leaves its pid
- * only after that finds the mark and ends its tcpdump itself.  The files go
- * on every path: the script removes the pid and the mark as it ends, Stop
- * or the end of the capture the stderr file (adbCleanupScript()).
+ * that a filter is one argument of tcpdump and never shell syntax.  The
+ * device's temporary directory is the shell user's, so any app or adb
+ * shell could put a symlink or a pid of its choice there for root to
+ * follow: the capture's files are in a directory root makes for it (mkdir,
+ * which makes nothing where anything is), 0700, entered only if it is no
+ * symlink, root's and its alone, and named relative to it from there.  A
+ * capture whose directory was there before runs nothing.  Stop ends
+ * tcpdump on the device, not only the local adb (adbStopScript(), through
+ * su if it runs as root): it leaves the stop mark (a directory, made with
+ * mkdir too), then kills the pid the script left, if it is there yet and a
+ * positive integer; a script that leaves its pid only after that finds the
+ * mark and ends its tcpdump itself.  The files go on every path: the
+ * script removes the pid and the mark as it ends, Stop or the end of the
+ * capture the stderr file and the directory (adbCleanupScript()).
  *
  * If LogSquirl crashes or is killed during a capture, nothing on the device
  * is told: tcpdump runs on until it next writes to the closed adb stream
- * (a packet it captures), and the capture's .pid and .err files stay in
- * the device's temporary directory (/data/local/tmp/logsquirl-*), to be
- * removed by hand.
+ * (a packet it captures), and the capture's directory with its pid and
+ * stderr stays in the device's temporary directory
+ * (/data/local/tmp/logsquirl-*), to be removed by hand, as root.
  */
 
 #pragma once
@@ -88,12 +96,17 @@ std::vector<LiveTarget> parseAdbDevices( const QString& out );
 /// line (/sys/class/net).
 std::vector<LiveTarget> parseDeviceInterfaces( const QString& out );
 
-/// The files on the device of a capture tagged @p tag: its tcpdump's pid and
-/// stderr, and the mark a Stop leaves for a script that has not left the pid
-/// yet; in the device's temporary directory.
+/// The names of tcpdump's pid and stderr files in a capture's directory.
+inline constexpr char kAdbPidFile[] = "tcpdump.pid";
+inline constexpr char kAdbErrFile[] = "tcpdump.err";
+
+/// Where a capture tagged @p tag keeps its files on the device, in the
+/// device's temporary directory: a directory root makes for it (mkdir, mode
+/// 0700) holding tcpdump's pid and stderr, which no other user can write
+/// into, and the mark a Stop leaves for a script that has not left the pid
+/// yet, a directory too, so that making it never writes through a symlink.
 struct AdbCaptureFiles {
-    QString pid;
-    QString err;
+    QString dir;
     QString stop;
 
     static AdbCaptureFiles of( const QString& tempDir, const QString& tag );
@@ -101,16 +114,22 @@ struct AdbCaptureFiles {
 
 /// The device script running @p tcpdump, a command line, in the background
 /// with its stderr in a file, leaving its pid, ending it if a Stop came
-/// first, and removing the pid and the stop mark as it ends.
+/// first, and removing the pid and the stop mark as it ends.  It makes the
+/// capture's directory itself, and runs nothing if that is already there.
 QString adbCaptureScript( const QString& tcpdump, const AdbCaptureFiles& files );
 
 /// The device script a Stop runs while the capture runs: leave the stop
-/// mark, kill tcpdump by its pid if it is there, remove the files.
+/// mark, kill tcpdump by its pid if it is there, remove the files.  It
+/// kills only a positive integer from a directory that is root's alone.
 QString adbStopScript( const AdbCaptureFiles& files );
 
 /// The device script run after the capture has ended: kill tcpdump if it
-/// still runs, remove the files.
+/// still runs (as adbStopScript() does), remove the files.
 QString adbCleanupScript( const AdbCaptureFiles& files );
+
+/// The device script printing what tcpdump wrote to stderr, or why the
+/// capture's directory was not its own.
+QString adbStderrScript( const AdbCaptureFiles& files );
 
 /// What the device's shell said about capturing there (AdbSourceKind::probe()).
 struct AdbDeviceAccess {

@@ -261,3 +261,62 @@ SCENARIO( "A key log file is read again as it grows", "[tls][keylog]" )
         }
     }
 }
+
+SCENARIO( "A key log file is read without a buffer that would keep its secrets", "[tls][keylog]" )
+{
+    QTemporaryDir dir;
+    REQUIRE( dir.isValid() );
+    const auto path = dir.filePath( "keys.log" );
+    const auto line = "CLIENT_RANDOM " + kRandom + " " + kMaster + "\n";
+
+    THEN( "the file is opened unbuffered, so the only copy of its bytes is the one wiped" )
+    {
+        REQUIRE( KeyLogFile::kOpenMode.testFlag( QIODevice::Unbuffered ) );
+        REQUIRE( KeyLogFile::kOpenMode.testFlag( QIODevice::ReadOnly ) );
+        REQUIRE_FALSE( KeyLogFile::kOpenMode.testFlag( QIODevice::WriteOnly ) );
+    }
+
+    // Smaller than a QFile's own buffer, larger than it, and up to the cap.
+    for ( const int64_t padding :
+          { int64_t{ 0 }, int64_t{ 100 }, int64_t{ 64 * 1024 },
+            KeyLogFile::kMaxBytes - static_cast<int64_t>( line.size() ) } ) {
+        GIVEN( "a file whose secret ends " + std::to_string( padding + line.size() )
+               + " bytes into it" )
+        {
+            QFile file( path );
+            REQUIRE( file.open( QIODevice::WriteOnly ) );
+            // Comment lines, passed over, ahead of the secret.
+            std::string comment( static_cast<size_t>( padding ), '#' );
+            for ( size_t at = 99; at < comment.size(); at += 100 ) {
+                comment[ at ] = '\n';
+            }
+            if ( !comment.empty() ) {
+                comment.back() = '\n';
+            }
+            REQUIRE( file.write( comment.data(), static_cast<qint64>( comment.size() ) )
+                     == static_cast<qint64>( comment.size() ) );
+            file.write( line.c_str() );
+            // A secret beyond the cap is never read.
+            file.write( ( "CLIENT_RANDOM " + kRandom2 + " " + kMaster + "\n" ).c_str() );
+            file.close();
+
+            KeyLogFile keyLog( path );
+
+            THEN( "the secret is read, whole, and nothing past the cap" )
+            {
+                REQUIRE( keyLog.readable() );
+                const auto* secrets = keyLog.keys().find( randomOf( 0xAA ).data() );
+                REQUIRE( secrets );
+                REQUIRE( secrets->masterSecret.size() == 48 );
+                const auto read = padding + static_cast<int64_t>( line.size() );
+                if ( read == KeyLogFile::kMaxBytes ) {
+                    REQUIRE( keyLog.bytesRead() == KeyLogFile::kMaxBytes );
+                    REQUIRE_FALSE( keyLog.keys().find( randomOf( 0xBB ).data() ) );
+                }
+                else {
+                    REQUIRE( keyLog.keys().find( randomOf( 0xBB ).data() ) );
+                }
+            }
+        }
+    }
+}

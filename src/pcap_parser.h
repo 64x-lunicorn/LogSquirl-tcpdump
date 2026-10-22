@@ -45,6 +45,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace tcpdump {
@@ -533,6 +534,10 @@ struct CaptureHeaders {
  */
 struct ReaderState {
     virtual ~ReaderState() = default;
+
+    /// Bytes of memory it holds, itself included; storage it shares that
+    /// is in @p counted is not counted again, and what it counts is added.
+    virtual size_t bytes( std::unordered_set<const void*>& counted ) const = 0;
 };
 
 /**
