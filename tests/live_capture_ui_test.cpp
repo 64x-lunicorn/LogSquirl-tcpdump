@@ -132,9 +132,7 @@ void startFrom( CaptureSessions& sessions, SidebarWidget& sidebar, const LiveCap
 /// The fixed-width font found for the system's.
 QString fixedFamily()
 {
-    auto font = QFontDatabase::systemFont( QFontDatabase::FixedFont );
-    font.setStyleHint( QFont::TypeWriter );
-    return QFontInfo( font ).family();
+    return fixedFontFamily();
 }
 
 /// How guidanceHtml() shows a command, @p html, on a line of its own.
@@ -160,6 +158,11 @@ bool fitsWidth( const QLabel* label, const QWidget* window )
     document.setDefaultTextOption( option );
     document.setTextWidth( label->contentsRect().width() );
     const auto right = label->mapTo( window, QPoint( label->width(), 0 ) ).x();
+    UNSCOPED_INFO( "text " << document.idealWidth() << " x " << document.size().height() << " in "
+                           << label->contentsRect().width() << " x "
+                           << label->contentsRect().height() << ", right edge " << right << " of "
+                           << window->width() << ", font "
+                           << label->font().family().toStdString() );
     return document.idealWidth() <= label->contentsRect().width() && right <= window->width()
            && document.size().height() <= label->contentsRect().height();
 }

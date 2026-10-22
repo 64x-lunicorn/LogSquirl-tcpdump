@@ -72,15 +72,6 @@ QString targetText( const LiveTarget& target )
     return more.isEmpty() ? target.id : target.id + QString::fromUtf8( " \xe2\x80\x94 " ) + more;
 }
 
-/// The family of the fixed-width font a command is shown in: the system's,
-/// as it is found, since a name such as "monospace" is no font on macOS.
-QString fixedFontFamily()
-{
-    auto font = QFontDatabase::systemFont( QFontDatabase::FixedFont );
-    font.setStyleHint( QFont::TypeWriter );
-    return QFontInfo( font ).family();
-}
-
 /// How much of the palette's highlight a note's panel mixes into the window
 /// colour: enough to stand out from the form, in light and dark mode alike,
 /// little enough that its text, in the window's text colour, stays legible.
@@ -130,6 +121,16 @@ QString plainToolTip( const QString& text )
     const auto shown = cut( text );
     // Text a tooltip would take for HTML is made HTML that shows it.
     return Qt::mightBeRichText( shown ) ? Qt::convertFromPlainText( shown ) : shown;
+}
+
+QString fixedFontFamily()
+{
+    auto font = QFontDatabase::systemFont( QFontDatabase::FixedFont );
+    font.setStyleHint( QFont::TypeWriter );
+    const auto family = QFontInfo( font ).family();
+    // A platform without a font database names none: the generic name is
+    // better than an empty one, which Qt reads as the default font.
+    return family.isEmpty() ? QStringLiteral( "monospace" ) : family;
 }
 
 QString guidanceHtml( const QString& text )

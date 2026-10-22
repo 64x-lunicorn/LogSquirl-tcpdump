@@ -90,6 +90,11 @@ namespace tcpdump {
  */
 QString guidanceHtml( const QString& text );
 
+/// The family of the fixed-width font guidanceHtml() shows a command in: the
+/// system's, as it is found, since a name such as "monospace" is no font on
+/// macOS; "monospace" only where the platform names none.
+QString fixedFontFamily();
+
 /**
  * A label for rich text made by guidanceHtml(), in the sidebar and the Start
  * live capture… dialog alike: it wraps its lines, a command's too, at the
