@@ -3337,6 +3337,18 @@ scripts/format.sh main               # the CI's pinned clang-format over what ch
 scripts/format.sh --check            # the CI's Format job, locally
 ```
 
+`dev-asan` (on macOS `dev-asan-homebrew`) builds the tests in Debug with
+AddressSanitizer and UndefinedBehaviorSanitizer into `build-asan/`; its test
+preset runs them offscreen, with leak detection off, and an undefined
+behaviour report ends its test as an ASan report does. The run takes about
+ten minutes; on a small machine, limit the jobs:
+
+```bash
+cmake --preset dev-asan-homebrew     # or: dev-asan
+cmake --build build-asan -j 6
+ctest --preset dev-asan-homebrew -j 4
+```
+
 Each Catch2 test case is a CTest test of its own, named as Catch2 names it: a
 `SCENARIO( "X" )` is `Scenario: X`. A name filter that matches nothing fails.
 The tests that run programs (fake adb, ssh, extcap, tcpdump; label
