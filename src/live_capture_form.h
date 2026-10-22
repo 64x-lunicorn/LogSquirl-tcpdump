@@ -25,12 +25,15 @@
  *        dialog alike.
  *
  * The form lists the sources of a LiveSourceRegistry.  Choosing one shows
- * why it is unavailable, if it is, or lists its devices (if it has any) and
+ * why it is unavailable, if it is, in a note below it (a panel tinted from
+ * the palette, with an icon), or lists its devices (if it has any) and
  * the interfaces of the device chosen, on a worker thread: a listing that
  * hangs (an adb waiting for a device) neither freezes LogSquirl nor keeps
  * the form from changing; a result for a source or device no longer chosen
  * is dropped.  The interface list can be typed in too, for an interface the
- * source does not list ("any").  Refresh lists anew.
+ * source does not list ("any").  Refresh lists anew.  A listing that finds
+ * the source cannot capture at all (LiveListing::cannotCapture) keeps
+ * problem() saying so until a listing finds otherwise.
  *
  * The listings run on a thread pool the form is given, or one of its own.
  * A listing touches nothing of the form, so a form with a given pool goes
@@ -200,8 +203,10 @@ public:
     /// The source chosen, or null if there is none.
     std::shared_ptr<const LiveSourceKind> currentKind() const;
 
-    /// Why choice() cannot be captured (liveChoiceProblem(), as a start
-    /// checks it), else why the form cannot tell yet (its options widget's
+    /// Why the source cannot capture, as its last listing said
+    /// (LiveListing::cannotCapture), whatever the interface; else why
+    /// choice() cannot be captured (liveChoiceProblem(), as a start checks
+    /// it), else why the form cannot tell yet (its options widget's
     /// problem(), an extcap being asked for its arguments); empty if it can.
     QString problem() const;
 
@@ -236,8 +241,10 @@ private:
     static QString currentId( const QComboBox* box );
     /// Show the start of @p box's entry where the field cuts it off.
     static void showStart( QComboBox* box );
-    /// Show the source's state: unavailable, listing, a listing's error.
-    void showStatus( const QString& text );
+    /// Show the source's state as a note: unavailable, listing, a listing's
+    /// error; with a warning's icon if @p warning, else an information's.
+    /// Empty text hides the note.
+    void showStatus( const QString& text, bool warning = false );
     /// Show the capture filter's problem below it.
     void checkFilter();
     /// Keep the options widget's options for its source, and remove it.
@@ -254,7 +261,14 @@ private:
     std::shared_ptr<const LiveSourceRegistry> sources_;
     LiveChoice wanted_; ///< The choice setChoice() was given.
     QComboBox* source_ = nullptr;
+    /// The source's state: a tinted panel, its icon, and the text.
+    QWidget* note_ = nullptr;
+    QLabel* noteIcon_ = nullptr;
     QLabel* status_ = nullptr;
+    /// Why the source cannot capture, as its last listing said
+    /// (LiveListing::cannotCapture): problem() until a listing says otherwise
+    /// or another source is chosen.
+    QString cannotCapture_;
     QLabel* deviceLabel_ = nullptr;
     QComboBox* device_ = nullptr;
     QComboBox* interface_ = nullptr;

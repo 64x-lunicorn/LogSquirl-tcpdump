@@ -44,8 +44,10 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFontInfo>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSpinBox>
@@ -55,6 +57,7 @@
 #include <QTextLayout>
 #include <QTimer>
 
+#include <cstdlib>
 #include <memory>
 
 extern "C" int logsquirl_plugin_init( const LogSquirlHostApi* api, void* handle );
@@ -1017,6 +1020,164 @@ SCENARIO( "A URL a program wrote is text in the dialog's status and the section'
             REQUIRE_FALSE( error->text().contains( "href=\"" + phishing ) );
             REQUIRE( error->text().contains( "<a href=\"https://npcap.com/#download\">" ) );
             REQUIRE( error->openExternalLinks() );
+        }
+    }
+}
+
+SCENARIO( "A source's status is a note that stands out from the form, in light and dark mode",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->unavailableReason = "fakecap cannot capture: run `fakecap --allow`.";
+    LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    auto* note = dialog.findChild<QWidget*>( "liveSourceNote" );
+    auto* icon = dialog.findChild<QLabel*>( "liveSourceNoteIcon" );
+    REQUIRE( note );
+    REQUIRE( icon );
+
+    THEN( "the status is in the note, beside an icon, and wraps, links and selects as before" )
+    {
+        REQUIRE_FALSE( note->isHidden() );
+        REQUIRE( note->isAncestorOf( fields.status ) );
+        REQUIRE_FALSE( icon->pixmap().isNull() );
+        REQUIRE( fields.status->wordWrap() );
+        REQUIRE( fields.status->openExternalLinks() );
+        REQUIRE( fields.status->textInteractionFlags().testFlag( Qt::TextSelectableByMouse ) );
+        REQUIRE( fields.status->text()
+                 == "fakecap cannot capture: run" + commandHtml( "fakecap --allow" ) );
+    }
+
+    THEN( "its panel is tinted from the palette: apart from the window, its text still legible" )
+    {
+        struct Mode {
+            const char* name;
+            QColor window;
+            QColor text;
+        };
+        for ( const auto& mode :
+              { Mode{ "light", QColor( 0xf0, 0xf0, 0xf0 ), Qt::black },
+                Mode{ "dark", QColor( 0x2b, 0x2b, 0x2b ), QColor( 0xe0, 0xe0, 0xe0 ) } } ) {
+            CAPTURE( mode.name );
+            QPalette palette;
+            palette.setColor( QPalette::Window, mode.window );
+            palette.setColor( QPalette::WindowText, mode.text );
+            palette.setColor( QPalette::Highlight, QColor( 0x38, 0x74, 0xd8 ) );
+            dialog.setPalette( palette );
+            dialog.show();
+            QApplication::processEvents();
+            const auto image = note->grab().toImage();
+            const auto background = image.pixelColor( 3, image.height() / 2 );
+            REQUIRE( background != mode.window );
+            REQUIRE( std::abs( background.lightness() - mode.window.lightness() ) < 64 );
+            REQUIRE( std::abs( background.lightness() - mode.text.lightness() ) > 128 );
+        }
+    }
+
+    WHEN( "the source has nothing to say" )
+    {
+        fake->unavailableReason.clear();
+        dialog.form()->refresh();
+        REQUIRE( listed( dialog.form(), fields ) );
+
+        THEN( "the note is hidden" )
+        {
+            REQUIRE( note->isHidden() );
+            REQUIRE( fields.status->isHidden() );
+        }
+    }
+}
+
+SCENARIO( "Start waits for a source whose listing says it cannot capture, until one says it can",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->cannotCapture = "/dev/bpf0 cannot be read, so fakecap cannot capture.";
+    auto other = std::make_shared<FakeSourceKind>( "other", "Other" );
+    auto registry = registryOf( fake );
+    registry->add( other );
+    LiveCaptureDialog dialog( registry, LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    REQUIRE( listed( dialog.form(), fields ) );
+
+    THEN( "the interfaces are listed, the note says why and what to do, and Start is disabled "
+          "with the reason" )
+    {
+        REQUIRE( dialog.choice().networkInterface == "fake0" );
+        REQUIRE_FALSE( fields.status->isHidden() );
+        REQUIRE( fields.status->text().contains( "/dev/bpf0 cannot be read" ) );
+        REQUIRE( fields.status->text().contains( commandHtml( "fakeperm grant" ) ) );
+        REQUIRE_FALSE( fields.start->isEnabled() );
+        REQUIRE( fields.start->toolTip() == fake->cannotCapture );
+    }
+
+    WHEN( "an interface is typed by hand" )
+    {
+        fields.networkInterface->setEditText( "any" );
+
+        THEN( "Start stays disabled" )
+        {
+            REQUIRE( dialog.choice().networkInterface == "any" );
+            REQUIRE_FALSE( fields.start->isEnabled() );
+        }
+    }
+
+    WHEN( "access is granted and Refresh is pressed" )
+    {
+        fake->cannotCapture.clear();
+        fields.refresh->click();
+
+        THEN( "Start waits for the listing, and is enabled once it says the source can capture" )
+        {
+            REQUIRE( dialog.form()->isListing() );
+            REQUIRE_FALSE( fields.start->isEnabled() );
+            REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+            REQUIRE( fields.start->isEnabled() );
+            REQUIRE( fields.start->toolTip() == "Start capturing" );
+            REQUIRE( fields.status->isHidden() );
+        }
+    }
+
+    WHEN( "another source is chosen" )
+    {
+        fields.source->setCurrentIndex( 1 );
+        emit fields.source->activated( 1 );
+        REQUIRE( listed( dialog.form(), fields ) );
+
+        THEN( "Start is enabled for it" )
+        {
+            REQUIRE( dialog.choice().source == "other" );
+            REQUIRE( fields.start->isEnabled() );
+        }
+    }
+}
+
+SCENARIO( "A listing that only lists nothing leaves Start to an interface typed by hand",
+          "[live_ui]" )
+{
+    FakeHost host;
+    auto fake = std::make_shared<FakeSourceKind>();
+    fake->listingError = "fakecap -D listed no interfaces: it may lack the permission to capture.";
+    LiveCaptureDialog dialog( registryOf( fake ), LiveChoice{ "fake", "", "", "", 100 } );
+    const Fields fields( &dialog );
+    REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+
+    THEN( "the note says so, and Start asks for an interface" )
+    {
+        REQUIRE( fields.status->text().contains( "listed no interfaces" ) );
+        REQUIRE_FALSE( fields.start->isEnabled() );
+        REQUIRE( fields.start->toolTip() == "Choose an interface." );
+    }
+
+    WHEN( "an interface is typed by hand" )
+    {
+        fields.networkInterface->setEditText( "any" );
+
+        THEN( "Start is enabled" )
+        {
+            REQUIRE( fields.start->isEnabled() );
         }
     }
 }

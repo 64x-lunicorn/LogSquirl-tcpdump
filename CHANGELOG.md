@@ -533,6 +533,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   menu shows or hides each column, the choice kept in `settings.ini`
   (`[conversations] hiddenColumns`). The table's tooltip says how to
   filter (#209).
+- **Start live capture waits for a source that can capture.** In the
+  Start live capture dialog, what the source says (why it cannot be used,
+  what listing its interfaces found, what to install or run) is a note: a
+  panel tinted from the palette, with an information or warning icon, in
+  light and dark mode, its commands and links as before. When listing the
+  interfaces finds that capturing is impossible (on macOS `/dev/bpf0`
+  cannot be read; dumpcap or tcpdump is denied the permission), Start stays
+  disabled with that reason as its tooltip until Refresh, or another source
+  or device, lists anew and finds it can, rather than starting a capture
+  that fails with the same message. A listing that merely finds no
+  interfaces, or an interface typed by hand, leaves Start enabled as
+  before (#210).
 - **The hex dump fits a narrow sidebar.** While the Packet panel's dump is
   too narrow for a line of 16 bytes, it shows 8 bytes a line (the offset,
   8 hex pairs, 8 ASCII characters), and 16 again once it is wide enough,

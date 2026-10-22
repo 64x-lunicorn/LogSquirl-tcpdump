@@ -33,10 +33,12 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSpinBox>
 #include <QStandardItemModel>
+#include <QStyle>
 #include <QTextDocument>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
@@ -78,6 +80,48 @@ QString fixedFontFamily()
     font.setStyleHint( QFont::TypeWriter );
     return QFontInfo( font ).family();
 }
+
+/// How much of the palette's highlight a note's panel mixes into the window
+/// colour: enough to stand out from the form, in light and dark mode alike,
+/// little enough that its text, in the window's text colour, stays legible.
+constexpr qreal kNoteTint = 0.15;
+/// How much of the highlight the panel's border mixes in.
+constexpr qreal kNoteBorderTint = 0.5;
+/// The radius of the panel's corners, in pixels.
+constexpr qreal kNoteCornerRadius = 4;
+/// The room between the panel's edge and its icon and text, in pixels.
+constexpr int kNoteMargin = 6;
+
+/// @p base with the share @p tint of @p tinge mixed in.
+QColor mixed( const QColor& base, const QColor& tinge, qreal tint )
+{
+    const auto mix = [ tint ]( float from, float to ) {
+        return static_cast<float>( from + ( to - from ) * tint );
+    };
+    return QColor::fromRgbF( mix( base.redF(), tinge.redF() ), mix( base.greenF(), tinge.greenF() ),
+                             mix( base.blueF(), tinge.blueF() ) );
+}
+
+/// The panel of the form's note: painted from the palette it inherits each
+/// time, so it follows a switch between light and dark mode.
+class NotePanel : public QWidget {
+public:
+    using QWidget::QWidget;
+
+protected:
+    void paintEvent( QPaintEvent* event ) override
+    {
+        (void)event;
+        QPainter painter( this );
+        painter.setRenderHint( QPainter::Antialiasing );
+        const auto window = palette().color( QPalette::Window );
+        const auto highlight = palette().color( QPalette::Highlight );
+        painter.setPen( mixed( window, highlight, kNoteBorderTint ) );
+        painter.setBrush( mixed( window, highlight, kNoteTint ) );
+        painter.drawRoundedRect( QRectF( rect() ).adjusted( 0.5, 0.5, -0.5, -0.5 ),
+                                 kNoteCornerRadius, kNoteCornerRadius );
+    }
+};
 
 } // namespace
 
@@ -193,8 +237,18 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     narrow( source_ );
     layout->addRow( "Source:", source_ );
 
+    note_ = new NotePanel;
+    note_->setObjectName( "liveSourceNote" );
+    note_->setHidden( true );
+    auto* noteRow = new QHBoxLayout( note_ );
+    noteRow->setContentsMargins( kNoteMargin, kNoteMargin, kNoteMargin, kNoteMargin );
+    noteRow->setSpacing( kNoteMargin );
+    noteIcon_ = new QLabel;
+    noteIcon_->setObjectName( "liveSourceNoteIcon" );
+    noteRow->addWidget( noteIcon_, 0, Qt::AlignTop );
     status_ = new GuidanceLabel( "liveSourceStatus" );
-    layout->addRow( status_ );
+    noteRow->addWidget( status_, 1 );
+    layout->addRow( note_ );
 
     deviceLabel_ = new QLabel( "Device:" );
     device_ = new QComboBox;
@@ -409,6 +463,9 @@ std::shared_ptr<const LiveSourceKind> LiveCaptureForm::currentKind() const
 
 QString LiveCaptureForm::problem() const
 {
+    if ( !cannotCapture_.isEmpty() ) {
+        return cannotCapture_;
+    }
     if ( auto invalid = liveChoiceProblem( sources_.get(), choice() ); !invalid.isEmpty() ) {
         return invalid;
     }
@@ -438,6 +495,7 @@ void LiveCaptureForm::refresh()
 void LiveCaptureForm::sourceChanged()
 {
     ++generation_;
+    cannotCapture_.clear(); // until this source's listing says so
     dropOptionsWidget();
     showOptionsWidget();
     device_->clear();
@@ -469,7 +527,7 @@ void LiveCaptureForm::sourceChanged()
         showStatus( QStringLiteral( "No live capture source is available." ) );
     }
     else if ( !usable ) {
-        showStatus( availability.reason );
+        showStatus( availability.reason, true );
     }
     else {
         showStatus( {} );
@@ -502,12 +560,12 @@ void LiveCaptureForm::listDevices()
                     else {
                         fill( device_, listing, wanted );
                     }
-                    if ( !listing.error.isEmpty() ) {
-                        showStatus( listing.error );
-                        return;
-                    }
-                    if ( currentId( device_ ).isEmpty() ) {
-                        showStatus( kind->noDevicesText() );
+                    if ( !listing.error.isEmpty() || currentId( device_ ).isEmpty() ) {
+                        // No interfaces are listed after it: it says.
+                        cannotCapture_ = listing.cannotCapture;
+                        showStatus( listing.error.isEmpty() ? kind->noDevicesText() : listing.error,
+                                    !listing.error.isEmpty() );
+                        emit changed();
                         return;
                     }
                     listInterfaces();
@@ -539,8 +597,9 @@ void LiveCaptureForm::listInterfaces()
             else if ( listing.targets.empty() && !typed.isEmpty() ) {
                 interface_->setEditText( typed );
             }
+            cannotCapture_ = listing.cannotCapture;
             if ( !listing.error.isEmpty() ) {
-                showStatus( listing.error );
+                showStatus( listing.error, true );
             }
             else if ( listing.targets.empty() ) {
                 showStatus( QStringLiteral( "No interfaces found." ) );
@@ -642,10 +701,17 @@ QString LiveCaptureForm::currentId( const QComboBox* box )
     return box->isEditable() ? box->currentText().trimmed() : QString();
 }
 
-void LiveCaptureForm::showStatus( const QString& text )
+void LiveCaptureForm::showStatus( const QString& text, bool warning )
 {
     status_->setText( guidanceHtml( text ) );
     status_->setHidden( text.isEmpty() );
+    note_->setHidden( text.isEmpty() );
+    const int size = style()->pixelMetric( QStyle::PM_SmallIconSize, nullptr, this );
+    noteIcon_->setPixmap( style()
+                              ->standardIcon( warning ? QStyle::SP_MessageBoxWarning
+                                                      : QStyle::SP_MessageBoxInformation,
+                                              nullptr, this )
+                              .pixmap( size, size ) );
 }
 
 void LiveCaptureForm::dropOptionsWidget()
@@ -674,9 +740,9 @@ void LiveCaptureForm::showOptionsWidget()
     }
     auto* layout = static_cast<QFormLayout*>( this->layout() );
     if ( options_->comesFirst() ) {
-        int statusRow = 0;
-        layout->getWidgetPosition( status_, &statusRow, nullptr );
-        layout->insertRow( statusRow + 1, options_ );
+        int noteRow = 0;
+        layout->getWidgetPosition( note_, &noteRow, nullptr );
+        layout->insertRow( noteRow + 1, options_ );
     }
     else {
         layout->addRow( options_ );

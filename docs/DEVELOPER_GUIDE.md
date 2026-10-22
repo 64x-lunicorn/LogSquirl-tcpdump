@@ -2254,7 +2254,7 @@ knows none of them. A kind answers:
 | `id()`, `displayName()` | UI | Its name in `settings.ini` (never changes) and in the source picker |
 | `availability()` | UI | `LiveAvailability{ available, reason }`: why it cannot be used here ("adb not found: …"). May look for a program, must not run one |
 | `devices()`, `deviceLabel()` | UI | `None`, `Listed` (phones) or `Typed` (`user@host`, listed ones as suggestions); what a device is called |
-| `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error` |
+| `listDevices( timeout )`, `listInterfaces( device, timeout )` | worker | A `LiveListing`: `LiveTarget{ id, description, problem }` (a target with a problem, e.g. an unauthorized phone, is listed but cannot be chosen) or `error`, and `cannotCapture`: why the kind cannot capture at all, as the listing found out (no permission), which keeps the form's Start disabled until a listing finds no such reason; empty for a listing that merely finds nothing |
 | `listInterfacesWith( device, options, timeout )` | worker | What the form calls: the interfaces as the kind's own options list them (ssh's sudo); by default `listInterfaces( device, timeout )`. An options widget emits `listingChanged()` when an option changes the listing |
 | `makeOptionsWidget()` | UI | A new `LiveOptionsWidget` (`live_capture_form.h`: `setOptions()`, `options()`, `changed()`) for the kind's own `LiveChoice::options`, shown below the form's fields while the kind is chosen; null (the default) for none. The form tells it the device and interface chosen (`setTarget()`, for options that depend on them) and asks its `problem()` whether it can tell yet (an extcap's widget asking for the arguments); whether the options can be captured with is `validate()`'s |
 | `validate( choice )` | UI | Kind-specific problems of a `LiveChoice` (its options too), the last part of `liveChoiceProblem()`; by default an interface is needed |
@@ -2308,6 +2308,16 @@ a permission error on stderr (`isCapturePermissionError()`), an empty
 list, or an unreadable BPF device on macOS add
 `capturePermissionGuidance( os, program )` to its error, which the form
 shows as its status, as `explainFailure()` adds it to a failed capture's.
+The permission error of a `-D` that fails, and the unreadable BPF device,
+also set the listing's `cannotCapture` (the error without the guidance):
+the form's `problem()` returns it first, whatever the interface, so the
+dialog's Start stays disabled with it as the tooltip until Refresh, or
+another source or device, lists anew (an empty list may still allow an
+interface typed by hand, so it does not). The form shows its status as a
+note: a `NotePanel` that paints a rounded panel of the palette's window
+colour with `kNoteTint` of its highlight mixed in, and a border, from the
+palette it inherits each time (light and dark mode alike), with the
+style's information or warning icon beside the `GuidanceLabel`.
 The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
 downloads; no code path runs them, sudo, or anything that prompts. The
 form's status and the sidebar's live error show it with `guidanceHtml()`

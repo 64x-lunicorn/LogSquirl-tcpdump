@@ -38,6 +38,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QPushButton>
 #include <QTemporaryDir>
 
 #include <memory>
@@ -327,13 +328,32 @@ SCENARIO( "The Local source prefers dumpcap on the PATH and falls back to tcpdum
         fakeCaptureProgram( dir, "tcpdump", "", pcap );
         const LocalSourceKind kind( onTestPath( dir, CaptureOs::Linux ) );
 
-        THEN( "it says the program may not capture, and what to do" )
+        THEN( "it says the program may not capture, and what to do, but not that it cannot" )
         {
             const auto listing = kind.listInterfaces( {}, LiveSourceKind::kListTimeout );
             REQUIRE( listing.targets.empty() );
             REQUIRE( listing.error.contains( "no interfaces" ) );
             REQUIRE( listing.error.contains( "setcap cap_net_raw,cap_net_admin=eip "
                                              + dir.filePath( "tcpdump" ) ) );
+            REQUIRE( listing.cannotCapture.isEmpty() );
+        }
+    }
+
+    GIVEN( "Linux, and a dumpcap -D that is denied the permission to capture" )
+    {
+        scriptProgram( dir, "dumpcap",
+                       "echo 'dumpcap: You don'\\''t have permission to capture on that device "
+                       "(socket: Operation not permitted)' >&2; exit 1" );
+        const LocalSourceKind kind( onTestPath( dir, CaptureOs::Linux ) );
+
+        THEN( "the listing says the source cannot capture, why, and what to do" )
+        {
+            const auto listing = kind.listInterfaces( {}, LiveSourceKind::kListTimeout );
+            REQUIRE( listing.cannotCapture
+                     == "dumpcap -D exited with code 1:\ndumpcap: You don't have permission to "
+                        "capture on that device (socket: Operation not permitted)" );
+            REQUIRE( listing.error.startsWith( listing.cannotCapture ) );
+            REQUIRE( listing.error.contains( "usermod -aG wireshark" ) );
         }
     }
 
@@ -350,6 +370,8 @@ SCENARIO( "The Local source prefers dumpcap on the PATH and falls back to tcpdum
             const auto listing = kind.listInterfaces( {}, LiveSourceKind::kListTimeout );
             REQUIRE( listing.error.contains( "no interfaces on which a capture can be done" ) );
             REQUIRE( listing.error.contains( "Npcap" ) );
+            REQUIRE( listing.cannotCapture.contains( "no interfaces on which a capture can be "
+                                                     "done" ) );
         }
     }
 
@@ -358,12 +380,13 @@ SCENARIO( "The Local source prefers dumpcap on the PATH and falls back to tcpdum
         scriptProgram( dir, "tcpdump", "echo 'tcpdump: something broke' >&2; exit 2" );
         const LocalSourceKind kind( onTestPath( dir ) );
 
-        THEN( "its error is shown without guidance" )
+        THEN( "its error is shown without guidance, and does not say the source cannot capture" )
         {
             const auto listing = kind.listInterfaces( {}, LiveSourceKind::kListTimeout );
             REQUIRE( listing.error.contains( "tcpdump: something broke" ) );
             REQUIRE( listing.error.contains( "code 2" ) );
             REQUIRE_FALSE( listing.error.contains( "setcap" ) );
+            REQUIRE( listing.cannotCapture.isEmpty() );
         }
     }
 
@@ -382,6 +405,8 @@ SCENARIO( "The Local source prefers dumpcap on the PATH and falls back to tcpdum
             REQUIRE( listing.targets.size() == 1 );
             if ( !QFileInfo( where.bpfDevice ).isReadable() ) { // not as root
                 REQUIRE( listing.error.contains( "ChmodBPF" ) );
+                REQUIRE( listing.cannotCapture
+                         == where.bpfDevice + " cannot be read, so tcpdump cannot capture." );
             }
         }
 
@@ -392,8 +417,50 @@ SCENARIO( "The Local source prefers dumpcap on the PATH and falls back to tcpdum
 
             THEN( "there is nothing to say" )
             {
-                REQUIRE( kind.listInterfaces( {}, LiveSourceKind::kListTimeout ).error.isEmpty() );
+                const auto listing = kind.listInterfaces( {}, LiveSourceKind::kListTimeout );
+                REQUIRE( listing.error.isEmpty() );
+                REQUIRE( listing.cannotCapture.isEmpty() );
             }
+        }
+    }
+}
+
+SCENARIO( "Start waits for BPF access on macOS, and is enabled after Refresh once it is given",
+          "[local_source]" )
+{
+    FakeHost host;
+    QTemporaryDir dir;
+    fakeCaptureProgram( dir, "tcpdump", "1.en0 [Up, Running]\\n", writeCapture( dir ) );
+    auto where = onTestPath( dir, CaptureOs::MacOS );
+    where.bpfDevice = dir.filePath( "bpf0" );
+    writeFile( where.bpfDevice, {} );
+    REQUIRE( QFile::setPermissions( where.bpfDevice, QFileDevice::WriteOwner ) );
+    if ( QFileInfo( where.bpfDevice ).isReadable() ) {
+        return; // as root, which reads any file
+    }
+    LiveCaptureDialog dialog( registryOf( std::make_shared<LocalSourceKind>( where ) ),
+                              LiveChoice{ "local", "", "", "", kDefaultSnaplen, {} } );
+    auto* interfaces = dialog.findChild<QComboBox*>( "liveInterface" );
+    auto* start = dialog.findChild<QPushButton*>( "liveStartButton" );
+    REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing() && interfaces->count() == 1; } ) );
+
+    THEN( "Start is disabled, its tooltip the reason" )
+    {
+        REQUIRE_FALSE( start->isEnabled() );
+        REQUIRE( start->toolTip()
+                 == where.bpfDevice + " cannot be read, so tcpdump cannot capture." );
+    }
+
+    WHEN( "access is granted and Refresh is pressed" )
+    {
+        REQUIRE( QFile::setPermissions( where.bpfDevice,
+                                        QFileDevice::ReadOwner | QFileDevice::WriteOwner ) );
+        dialog.findChild<QPushButton*>( "liveRefresh" )->click();
+        REQUIRE( waitFor( [ & ] { return !dialog.form()->isListing(); } ) );
+
+        THEN( "Start is enabled" )
+        {
+            REQUIRE( start->isEnabled() );
         }
     }
 }

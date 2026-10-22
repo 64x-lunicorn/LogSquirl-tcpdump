@@ -244,7 +244,9 @@ these fields:
 
 - **Source**: where to capture. Each source the plugin offers is listed;
   one that cannot be used on this computer shows why, e.g. that a program
-  it needs is not installed
+  it needs is not installed. What the source says (why it cannot be used,
+  what listing its interfaces found, what to install or run) is a note
+  below it, a tinted panel with an icon
 - **Device**, for a source that has devices (a phone, a host), and
   **Interface**: listed by the source in the background, with a
   description where the source has one; **Refresh** lists them anew. An
@@ -267,7 +269,12 @@ these fields:
   files of the size or duration given, and only the newest N are kept;
   see *Ring buffer* below. *Off* by default
 - **Start**, disabled with the reason as its tooltip while a field is
-  wrong. While the capture runs, the sidebar's Live capture section shows
+  wrong, and while the source cannot capture: Start waits for a source
+  that can. When listing the interfaces finds that capturing is impossible
+  (on macOS `/dev/bpf0` cannot be read; dumpcap or tcpdump is denied the
+  permission), Start stays disabled until **Refresh**, or another source or
+  device, lists anew and finds it can. A listing that merely finds no
+  interfaces leaves Start to an interface typed by hand. While the capture runs, the sidebar's Live capture section shows
   its counters and **Stop** (also **Plugins → tcpdump → Stop live
   capture**). **Start live capture…** is disabled while a capture file is
   read; one live capture runs at a time, and the menu entry offers to stop
@@ -300,7 +307,9 @@ The plugin **never runs sudo and never asks for a password**: the capture
 program must be allowed to capture as you. When it is not (it says
 "permission denied" or "You don't have permission", lists no interfaces,
 or, on macOS, `/dev/bpf0` cannot be read), the section says what to do on
-your OS; run the command yourself, once:
+your OS, and when listing the interfaces already finds it so, the dialog
+says it and keeps Start disabled; run the command yourself, once, then
+press **Refresh**:
 
 - **macOS**: capturing needs read access to `/dev/bpf*`. Install
   **ChmodBPF** from the [Wireshark](https://www.wireshark.org/download.html)
