@@ -523,6 +523,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each case.
 
 ### Changed
+- **The hex dump fits a narrow sidebar.** While the Packet panel's dump is
+  too narrow for a line of 16 bytes, it shows 8 bytes a line (the offset,
+  8 hex pairs, 8 ASCII characters), and 16 again once it is wide enough,
+  so it needs no horizontal scrolling and a field's highlighted bytes are
+  not out of view to the right. Selecting a layer or field highlights its
+  bytes in either layout, also across a switch (#208).
 - A segment that ends inside a TLS record, an HTTP header section or a
   DNS-over-TCP message no longer names the message as far as it goes
   (`Client Hello` without its server name, `Standard query response … (2

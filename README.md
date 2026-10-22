@@ -151,8 +151,9 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    the **Packet** panel below the sidebar summary shows its layers as a
    tree (Frame, Ethernet, IP, TCP/UDP/ICMP, tunnels, the application
    protocol the payload was recognised as) with every field named, and its
-   bytes as a hex and ASCII dump; selecting a layer or field highlights its
-   bytes. The ACK that completes a TCP handshake has the handshake's
+   bytes as a hex and ASCII dump, 16 bytes a line, or 8 while the sidebar
+   is too narrow for 16, so the dump needs no scrolling sideways; selecting a
+   layer or field highlights its bytes, in either layout. The ACK that completes a TCP handshake has the handshake's
    `iRTT` in its TCP layer. The panel follows the selection while the tcpdump tab is in view
    (it asks LogSquirl at most every 250 ms, and not at all while hidden),
    and **Plugins → tcpdump → Packet details** shows the selected line's

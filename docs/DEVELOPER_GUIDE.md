@@ -2985,7 +2985,14 @@ export, conversation statistics):
   keeping at least `kConversationsMinLines` (5) lines. The tree items keep their layer's or field's
   offset and length; selecting one highlights them in the dump through
   `hexDumpRanges()`, which finds a byte range in `hexDump()`'s text, in hex
-  and ASCII on each line. The packet is read off the UI thread, up to
+  and ASCII on each line. The dump is `kDumpBytesPerLine` (16) bytes a
+  line, or `kNarrowDumpBytesPerLine` (8) while its viewport is too narrow
+  for a 16-byte line (`hexDumpLineChars()` in the dump's font, its document
+  margins and cursor): an event filter on the viewport lays the dump out
+  again when a resize crosses that width, keeping the packet's bytes
+  (`bytes_`) for it, and highlights the selected item again. Switching to
+  8 adds lines and switching to 16 removes them, so a vertical scroll bar
+  that comes or goes only confirms the choice. The packet is read off the UI thread, up to
   `kCheckpointInterval` records: `showPacket()` says "Reading packet N…"
   and hands the read (and `dissectLayers()`) to `pool_`, one thread, so
   the reads take turns with the panel's `CaptureCursor`; the result comes
