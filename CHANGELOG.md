@@ -728,6 +728,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text is broken into lines of at most 4,096 characters, and bidi
   overrides and other invisible format characters are shown escaped, so
   they cannot reorder what the Stream tab shows (#192).
+- **A failed live capture's commands are no longer cut off, and its error
+  is shown once.** The command in a source's guidance (the macOS
+  `sudo dseditgroup …`, the Linux `setcap`) did not wrap: in a sidebar of
+  ordinary width it ran past the edge, cutting off the link after it, and
+  in the Start live capture dialog it widened the dialog. Commands now
+  wrap at the width they get, still in a fixed-width font and selectable
+  to copy. The summary no longer repeats the error the Live capture
+  section shows: it says the capture failed before anything was captured
+  (#205).
 
 ## [0.3.0] — 2026-10-09
 

@@ -65,6 +65,7 @@
 #include "conversation_table.h"
 #include "display_filter_dialog.h"
 #include "follow_stream.h"
+#include "live_capture_form.h"
 #include "packet_panel.h"
 #include "plugin.h"
 #include "regex_lab.h"
@@ -284,13 +285,7 @@ SidebarWidget::SidebarWidget( CaptureSessions& sessions, QWidget* parent )
         forward( "Stopping a live capture", &CaptureSessions::stopLiveCapture );
     } );
 
-    liveError_ = new QLabel;
-    liveError_->setObjectName( "liveError" );
-    liveError_->setWordWrap( true );
-    liveError_->setTextFormat( Qt::RichText );
-    liveError_->setTextInteractionFlags( Qt::TextBrowserInteraction );
-    liveError_->setOpenExternalLinks( true );
-    liveError_->setHidden( true );
+    liveError_ = new GuidanceLabel( "liveError" );
     liveLayout->addWidget( liveError_ );
 
     // The capture program's stderr, the latest lines; also in the host's log.

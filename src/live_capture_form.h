@@ -59,6 +59,7 @@
 #include "live_source.h"
 
 #include <QDialog>
+#include <QLabel>
 #include <QThreadPool>
 #include <QWidget>
 
@@ -68,7 +69,6 @@
 
 class QComboBox;
 class QFormLayout;
-class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
@@ -77,14 +77,31 @@ namespace tcpdump {
 
 /**
  * A source's text (a reason, a listing's error, a failure's Guidance) as
- * rich text for a label: each `command` in backticks on a line of its own,
- * in a fixed-width font, to be selected and copied whole; each http(s) URL
+ * rich text for a GuidanceLabel: each `command` in backticks on a line of its
+ * own, in a fixed-width font, wrapped at the width it gets rather than cut
+ * off, to be selected and copied whole; each http(s) URL
  * of the plugin's own pages (isGuidanceLink()) a link, any other text to be
  * read but not clicked, as it may be what a program or host wrote; each
  * line break kept.  The rest is escaped.  Backticks that do
  * not pair are shown as they are.
  */
 QString guidanceHtml( const QString& text );
+
+/**
+ * A label for rich text made by guidanceHtml(), in the sidebar and the Start
+ * live capture… dialog alike: it wraps its lines, a command's too, at the
+ * width its layout gives it, and asks for no more than the widest word, so
+ * that a long command neither widens a dialog nor runs past the edge of a
+ * narrow sidebar.  Its text can be selected and copied; its links open.
+ * Hidden until shown.
+ */
+class GuidanceLabel : public QLabel {
+public:
+    explicit GuidanceLabel( const QString& objectName, QWidget* parent = nullptr );
+
+    /// As wide as its widest word, rather than as a line of text would like.
+    QSize sizeHint() const override;
+};
 
 /// The characters shown of a text a program or host wrote, in a list's
 /// entry or a tooltip; the rest is cut off (a description of a megabyte).

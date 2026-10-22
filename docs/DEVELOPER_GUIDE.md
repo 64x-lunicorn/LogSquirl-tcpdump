@@ -2310,8 +2310,11 @@ list, or an unreadable BPF device on macOS add
 shows as its status, as `explainFailure()` adds it to a failed capture's.
 The guidance names commands (`setcap`, `usermod`, `dseditgroup`) and
 downloads; no code path runs them, sudo, or anything that prompts. The
-form's status and the sidebar's live error show it with `guidanceHtml()`,
-which links only the pages the kinds' own text names (`isGuidanceLink()`,
+form's status and the sidebar's live error show it with `guidanceHtml()`
+in a `GuidanceLabel` (`live_capture_form.h`), which wraps each command in
+the system's fixed-width font at the width the label gets and asks for no
+more than its widest word, so a command neither widens the dialog nor runs
+past a narrow sidebar's edge. `guidanceHtml()` links only the pages the kinds' own text names (`isGuidanceLink()`,
 the `k…Url` constants of `live_source.h`): a URL in what a program or host
 wrote, which an error carries, is text to be read, never a link. Tests use
 `tests/fake_live_source.h`'s `FakeSourceKind` (two interfaces, a scripted
@@ -2721,7 +2724,9 @@ stops, and the check of a choice before it starts (`liveStateText()`);
 **Stop**, which stops the session (`CaptureSessions::stopLiveCapture()`); the capture program's stderr lines in a
 small read-only view (they go to the host's log too); and a failure's
 error, with its Guidance (`liveErrorHtml()`, `explainFailure()`), a label
-below Stop, cleared when the next capture starts. The summary in front is
+below Stop, cleared when the next capture starts; the summary label does
+not repeat that error, it says only that the capture failed before anything
+was captured (`summaryLabelText()`). The summary in front is
 redrawn when the catalog announces a snapshot or the outcome of the tab in
 front, so the Packet Panel shows the packets captured so far; on
 `fileOpened` the label says the capture goes on, unless the host brought

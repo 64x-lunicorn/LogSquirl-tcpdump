@@ -26,6 +26,8 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
@@ -68,6 +70,15 @@ QString targetText( const LiveTarget& target )
     return more.isEmpty() ? target.id : target.id + QString::fromUtf8( " \xe2\x80\x94 " ) + more;
 }
 
+/// The family of the fixed-width font a command is shown in: the system's,
+/// as it is found, since a name such as "monospace" is no font on macOS.
+QString fixedFontFamily()
+{
+    auto font = QFontDatabase::systemFont( QFontDatabase::FixedFont );
+    font.setStyleHint( QFont::TypeWriter );
+    return QFontInfo( font ).family();
+}
+
 } // namespace
 
 QString plainToolTip( const QString& text )
@@ -102,11 +113,15 @@ QString guidanceHtml( const QString& text )
     if ( parts.size() % 2 == 0 ) {
         return prose( text );
     }
+    const auto fixedFamily = fixedFontFamily().remove( QLatin1Char( '\'' ) ).toHtmlEscaped();
     QString html;
     for ( qsizetype i = 0; i < parts.size(); ++i ) {
         if ( i % 2 == 1 ) {
-            html += QStringLiteral( "<pre>" ) + parts[ i ].toHtmlEscaped()
-                    + QStringLiteral( "</pre>" );
+            // Not a <pre>, which does not wrap and is cut off at the edge
+            // of a narrow sidebar: its blanks are kept, but it wraps.
+            html += QStringLiteral( "<p style=\"white-space:pre-wrap\"><code "
+                                    "style=\"font-family:'%1'\">%2</code></p>" )
+                        .arg( fixedFamily, parts[ i ].toHtmlEscaped() );
             continue;
         }
         auto part = parts[ i ];
@@ -128,6 +143,25 @@ QString guidanceHtml( const QString& text )
         html += prose( part );
     }
     return html;
+}
+
+GuidanceLabel::GuidanceLabel( const QString& objectName, QWidget* parent )
+    : QLabel( parent )
+{
+    setObjectName( objectName );
+    setWordWrap( true );
+    setTextFormat( Qt::RichText );
+    setTextInteractionFlags( Qt::TextBrowserInteraction );
+    setOpenExternalLinks( true );
+    setHidden( true );
+}
+
+QSize GuidanceLabel::sizeHint() const
+{
+    // A word-wrapped label would like the width of 80 characters, and of
+    // its longest command: its layout gives it what the rest takes, and as
+    // many lines as it needs at that width (heightForWidth()).
+    return { minimumSizeHint().width(), QLabel::sizeHint().height() };
 }
 
 LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
@@ -159,13 +193,7 @@ LiveCaptureForm::LiveCaptureForm( QThreadPool* pool, QWidget* parent )
     narrow( source_ );
     layout->addRow( "Source:", source_ );
 
-    status_ = new QLabel;
-    status_->setObjectName( "liveSourceStatus" );
-    status_->setWordWrap( true );
-    status_->setTextFormat( Qt::RichText );
-    status_->setTextInteractionFlags( Qt::TextBrowserInteraction );
-    status_->setOpenExternalLinks( true );
-    status_->setHidden( true );
+    status_ = new GuidanceLabel( "liveSourceStatus" );
     layout->addRow( status_ );
 
     deviceLabel_ = new QLabel( "Device:" );
