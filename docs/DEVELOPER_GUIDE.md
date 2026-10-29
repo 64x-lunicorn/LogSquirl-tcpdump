@@ -3415,11 +3415,14 @@ scripts/format.sh --check            # the CI's Format job, locally
 `dev-asan` (on macOS `dev-asan-homebrew`) builds the tests in Debug with
 AddressSanitizer and UndefinedBehaviorSanitizer into `build-asan/`; its test
 preset runs them offscreen, with leak detection off, and an undefined
-behaviour report ends its test as an ASan report does. The CI runs it on Linux
-(`.github/workflows/ci-sanitizers.yml`, this plugin's own workflow beside the
-shared ones). Its test preset runs 4 tests at a time, not the `dev` preset's
-unbounded `jobs: 0`: every sanitized test started at once exhausts a CI
-runner. The build is slow; on a small machine, limit its jobs:
+behaviour report ends its test as an ASan report does. The CI builds the same
+on Linux in the shared CI Build's job ASan and UBSan (Linux x64), which
+`"sanitizers": true` in `.github/plugin-ci.json` switches on; keep the
+preset's flags and options in step with LogSquirl-Plugin-CI's
+`plugin-build.yml`. Its test preset runs 4 tests at a time, as the CI does,
+not the `dev` preset's unbounded `jobs: 0`: every sanitized test started at
+once exhausts a CI runner. The build is slow; on a small machine, limit its
+jobs:
 
 ```bash
 cmake --preset dev-asan-homebrew     # or: dev-asan
