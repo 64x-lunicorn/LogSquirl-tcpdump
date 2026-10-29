@@ -9,7 +9,7 @@ This file is shared by every LogSquirl plugin and managed by LogSquirl-Plugin-CI
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body-file <file> --milestone <release>`.
-- **Read an issue**: `gh issue view <number> --comments`.
+- **Read an issue**: `gh issue view <number> --json title,body,comments` (`--comments` alone prints only the comments, not the body).
 - **List issues**: `gh issue list --state open --milestone <release>`.
 - **Comment, label, close**: `gh issue comment`, `gh issue edit --add-label` / `--remove-label`,
   `gh issue close <number> --comment "..."`.

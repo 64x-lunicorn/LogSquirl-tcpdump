@@ -6,5 +6,6 @@
     "formats/tcpdump_log.json",
     "presets/tcpdump_highlighter.conf",
     "presets/tcpdump_filter.conf"
-  ]
+  ],
+  "sanitizers": true
 }
