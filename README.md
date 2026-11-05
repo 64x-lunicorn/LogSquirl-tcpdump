@@ -76,9 +76,10 @@ and unpack it into LogSquirl's plugin directory:
 The archive also holds, next to the library, `tcpdump_log.json`, the
 [Log Format](#log-format) for the converted packet list, and
 `tcpdump_highlighter.conf` and `tcpdump_filter.conf`, the [highlighter set
-and filter group](#highlighters-and-filters). LogSquirl loads none of them
-from there: copy the Log Format into its formats directory and import the
-other two, as described below.
+and filter group](#highlighters-and-filters). LogSquirl 26.12 and later
+read all three from there while the plugin is enabled: nothing to copy or
+import. On an older LogSquirl, copy the Log Format into its formats
+directory and import the other two, as described below.
 
 ### From source
 
@@ -88,10 +89,12 @@ See [Build](#build), then:
 DEST="$HOME/Library/Application Support/logsquirl/plugins/io.github.logsquirl.tcpdump"
 mkdir -p "$DEST"
 cp build/liblogsquirl_tcpdump.dylib "$DEST/"
-cp plugin.json icon.png "$DEST/"
+cp plugin.json icon.png formats/tcpdump_log.json \
+   presets/tcpdump_highlighter.conf presets/tcpdump_filter.conf "$DEST/"
 ```
 
-and copy the [Log Format](#log-format) into LogSquirl's formats directory.
+On a LogSquirl older than 26.12, also copy the [Log Format](#log-format)
+into LogSquirl's formats directory.
 
 After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins…*.
 
@@ -747,7 +750,12 @@ plugin: nothing more to install.
 
 LogSquirl recognises the packet list as a log with fields once it has the
 plugin's Log Format definition, [`formats/tcpdump_log.json`](formats/tcpdump_log.json)
-(lnav-compatible, like LogSquirl's built-in formats). It is a one-time copy:
+(lnav-compatible, like LogSquirl's built-in formats). LogSquirl 26.12 and
+later read it from the plugin's directory while the plugin is enabled; the
+Options dialog's **Log Formats** page lists it with the plugin as its
+Source. A file of the same name in your formats folder takes precedence.
+
+On an older LogSquirl it is a one-time copy:
 
 1. Take `tcpdump_log.json` from the release archive (it lies next to the
    library), or from the [`formats`](formats/) folder of this repository
@@ -786,9 +794,15 @@ tell whether the format is installed.
 ### Highlighters and filters
 
 Two files in the [`presets`](presets/) folder colour and filter the packet
-list much as Wireshark's default colouring rules and display filters do. Get
-them from the release archive, where they lie next to the library, or from
-this repository, and import each once:
+list much as Wireshark's default colouring rules and display filters do.
+LogSquirl 26.12 and later read both from the plugin's directory while the
+plugin is enabled: the filter group shows as *tcpdump (tcpdump / pcap
+Viewer)* in the Filters Panel, and the highlighter set in the
+**Highlighters** menu, where you switch it on. They are read-only; *Copy to
+my groups* makes a copy you can change.
+
+On an older LogSquirl, get them from the release archive, where they lie
+next to the library, or from this repository, and import each once:
 
 - **Highlighter set** [`tcpdump_highlighter.conf`](presets/tcpdump_highlighter.conf):
   **Highlighters → Configure highlighters…**, *Import*, **OK**, then switch
