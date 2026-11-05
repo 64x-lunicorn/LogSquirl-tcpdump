@@ -21,7 +21,7 @@
  * @file plugin.cpp
  * @brief C ABI entry points for the LogSquirl tcpdump plugin.
  *
- * Implements the five exported symbols:
+ * Implements the exported symbols:
  *
  *   - logsquirl_plugin_get_info()   → static metadata
  *   - logsquirl_plugin_init_ex()    → store host API and what it offers,
@@ -29,6 +29,9 @@
  *   - logsquirl_plugin_init()       → init_ex() with the base table size
  *   - logsquirl_plugin_shutdown()   → tear down widget and sessions, clear state
  *   - logsquirl_plugin_configure()  → the configuration dialog
+ *   - logsquirl_converter_get_extensions(), _convert_ex(), _convert() and
+ *     _claims() → convert the captures LogSquirl 26.12 opens itself
+ *                                     (host_converter.h)
  *
  * PLUGIN LIFECYCLE
  * ────────────────
@@ -50,6 +53,9 @@
  *   3. User clicks "Open pcap…" in the sidebar or the menu, selects a
  *      .pcap file, plugin parses it and opens the formatted text in
  *      LogSquirl.
+ *   A capture opened in LogSquirl 26.12 itself (File > Open, drag and
+ *   drop, …) is converted on a host thread by convert_ex(), into the file
+ *   LogSquirl then opens; its summary goes to the catalog on the UI thread.
  *   Plugins > Plugin Management > Configure… calls configure(), which
  *   shows the options and saves them in the plugin's configuration
  *   directory; the next conversion reads them.
@@ -62,6 +68,7 @@
 #include "capture_sessions.h"
 #include "configdialog.h"
 #include "display_filter_dialog.h"
+#include "host_converter.h"
 #include "process_source.h"
 #include "settings.h"
 #include "sidebarwidget.h"
@@ -69,8 +76,11 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QMetaObject>
 
+#include <atomic>
 #include <exception>
+#include <mutex>
 
 // ── Global state ─────────────────────────────────────────────────────────
 
@@ -110,6 +120,30 @@ void hostNotify( const QString& message )
     }
 }
 } // namespace tcpdump
+
+// ── The host's converter ─────────────────────────────────────────────────
+
+namespace {
+
+/// What the converter entry points, which the host calls on threads of its
+/// own, read of the plugin: set on the UI thread by init and shutdown, and
+/// by configure().
+struct HostConverterState {
+    /// Guards configDir and sessions.
+    std::mutex mutex;
+    /// The plugin's configuration directory, whose options a conversion reads.
+    QString configDir;
+    /// Where a converted capture is kept, on the UI thread; null while the
+    /// plugin is not initialised.
+    tcpdump::CaptureSessions* sessions = nullptr;
+    /// Whether the plugin takes the captures opened in LogSquirl
+    /// (ConversionOptions::convertOpenedCaptures).
+    std::atomic_bool convertOpenedCaptures{ false };
+};
+
+HostConverterState g_converter;
+
+} // namespace
 
 // ── Plugin metadata ──────────────────────────────────────────────────────
 
@@ -236,6 +270,29 @@ static void exportPacketsFromMenu( void* /* user_data */ )
     } );
 }
 
+/// Keep a capture converted for the host in the catalog, on the UI thread:
+/// the tab LogSquirl opens for it then shows its summary and packets.  An
+/// event posted to the sessions goes with them, should the plugin be shut
+/// down first.
+static void keepConvertedCapture( const QString& logPath, const QString& capturePath,
+                                  const tcpdump::CaptureSummary& summary,
+                                  std::shared_ptr<const tcpdump::CaptureIndex> index )
+{
+    const std::lock_guard<std::mutex> lock( g_converter.mutex );
+    auto* sessions = g_converter.sessions;
+    if ( !sessions ) {
+        return;
+    }
+    QMetaObject::invokeMethod(
+        sessions,
+        [ sessions, logPath, capturePath, summary, index ] {
+            guarded( "keeping a capture LogSquirl opened", [ & ] {
+                sessions->catalog().keepConverted( logPath, capturePath, summary, index );
+            } );
+        },
+        Qt::QueuedConnection );
+}
+
 /// The host brought another tab to the front: the catalog notes it, and the
 /// sidebar shows its capture's summary.
 static void onActiveFileChanged( void* /* user_data */, const char* filePath )
@@ -285,6 +342,15 @@ LOGSQUIRL_PLUGIN_EXPORT int logsquirl_plugin_init_ex( const LogSquirlHostApi* ap
         // The sessions, which the menu and the sidebar start, and a sidebar
         // tab that shows them
         tcpdump::g_state.sessions = new tcpdump::CaptureSessions();
+        {
+            // From now on the host may hand the plugin a capture it opened.
+            const auto configDir = tcpdump::hostConfigDir();
+            const std::lock_guard<std::mutex> lock( g_converter.mutex );
+            g_converter.configDir = configDir;
+            g_converter.sessions = tcpdump::g_state.sessions;
+            g_converter.convertOpenedCaptures
+                = tcpdump::loadConversionOptions( configDir ).convertOpenedCaptures;
+        }
         tcpdump::g_state.sidebarWidget = new tcpdump::SidebarWidget( *tcpdump::g_state.sessions );
         api->register_sidebar_tab( handle, "tcpdump",
                                    static_cast<void*>( tcpdump::g_state.sidebarWidget ) );
@@ -379,6 +445,14 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_shutdown( void )
         guarded( "shutdown", [] { delete tcpdump::g_state.sidebarWidget; } );
         st.sidebarWidget = nullptr;
     }
+    {
+        // The host converts nothing after shutdown; a capture it converted
+        // before is no longer kept.
+        const std::lock_guard<std::mutex> lock( g_converter.mutex );
+        g_converter.sessions = nullptr;
+        g_converter.configDir.clear();
+        g_converter.convertOpenedCaptures = false;
+    }
     if ( st.sessions ) {
         // Deleting them stops a running conversion and export and waits for
         // them, and stops a live capture.
@@ -424,7 +498,14 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
         if ( dialog.exec() != QDialog::Accepted ) {
             return;
         }
-        if ( !tcpdump::saveConversionOptions( configDir, dialog.options() ) ) {
+        const auto options = dialog.options();
+        if ( tcpdump::saveConversionOptions( configDir, options ) ) {
+            // The next capture LogSquirl opens is offered as the option says.
+            if ( tcpdump::g_state.initialised ) {
+                g_converter.convertOpenedCaptures = options.convertOpenedCaptures;
+            }
+        }
+        else {
             const auto message
                 = QStringLiteral( "The tcpdump options could not be saved in %1" )
                       .arg( QDir::toNativeSeparators( tcpdump::settingsFilePath( configDir ) ) );
@@ -432,6 +513,60 @@ LOGSQUIRL_PLUGIN_EXPORT void logsquirl_plugin_configure( void* parent_widget )
             tcpdump::hostNotify( message );
         }
     } );
+}
+
+/// The extensions of the captures the plugin converts when LogSquirl opens
+/// one; none while the option is off.  The host asks on every file it opens.
+LOGSQUIRL_PLUGIN_EXPORT const char* logsquirl_converter_get_extensions( void )
+{
+    return tcpdump::hostConverterExtensions( g_converter.convertOpenedCaptures.load() );
+}
+
+/// Convert a capture LogSquirl opened into @p output_path, with progress and
+/// Cancel through @p control; on a host thread (host_converter.h).
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_converter_convert_ex( const char* input_path,
+                                                            const char* output_path,
+                                                            const LogSquirlConvertControl* control )
+{
+    int code = tcpdump::kHostConvertFailed;
+    guarded( "converting a capture LogSquirl opened", [ & ] {
+        if ( !input_path || !output_path ) {
+            return;
+        }
+        QString configDir;
+        {
+            const std::lock_guard<std::mutex> lock( g_converter.mutex );
+            configDir = g_converter.configDir;
+        }
+        code = tcpdump::convertForHost(
+            QString::fromUtf8( input_path ), QString::fromUtf8( output_path ), tcpdump::tempRoot(),
+            tcpdump::loadConversionOptions( configDir ), tcpdump::HostConvertControl::of( control ),
+            &keepConvertedCapture );
+    } );
+    return code;
+}
+
+/// convert_ex() without progress or Cancel, as the API asks a converter to
+/// export for a host that does not know convert_ex().
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_converter_convert( const char* input_path,
+                                                         const char* output_path )
+{
+    return logsquirl_converter_convert_ex( input_path, output_path, nullptr );
+}
+
+/// Whether a file LogSquirl opens that no converter lists the extension of
+/// is a capture by its first bytes @p head; never while the option is off.
+LOGSQUIRL_PLUGIN_EXPORT int logsquirl_converter_claims( const char* /* file_path */,
+                                                        const unsigned char* head,
+                                                        size_t head_length )
+{
+    if ( !g_converter.convertOpenedCaptures.load() ) {
+        return 0;
+    }
+    bool claimed = false;
+    guarded( "checking a file LogSquirl opened",
+             [ & ] { claimed = tcpdump::isCaptureHead( head, head_length ); } );
+    return claimed ? 1 : 0;
 }
 
 } // extern "C"

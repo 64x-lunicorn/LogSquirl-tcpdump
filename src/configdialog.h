@@ -65,6 +65,7 @@ private:
     QCheckBox* preview_ = nullptr;
     QSpinBox* previewChars_ = nullptr;
     QCheckBox* tcpTimestamps_ = nullptr;
+    QCheckBox* convertOpenedCaptures_ = nullptr;
     QSpinBox* maxStreams_ = nullptr;
     QSpinBox* maxEndpoints_ = nullptr;
     QSpinBox* reassemblyMegabytes_ = nullptr;

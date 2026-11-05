@@ -94,6 +94,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
         options.maxEndpoints = 567;
         options.reassemblyMegabytes = 8;
         options.tcpTimestamps = true;
+        options.convertOpenedCaptures = false;
         options.someIpPorts = { 30501, 30502 };
         options.someIpNamesFile = QStringLiteral( "/data/someip-names.txt" );
         options.keyLogPath = "/home/user/sslkeys.log";
@@ -112,6 +113,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             REQUIRE( child<QSpinBox>( dialog, "maxEndpoints" )->value() == 567 );
             REQUIRE( child<QSpinBox>( dialog, "reassemblyMegabytes" )->value() == 8 );
             REQUIRE( child<QCheckBox>( dialog, "tcpTimestamps" )->isChecked() );
+            REQUIRE_FALSE( child<QCheckBox>( dialog, "convertOpenedCaptures" )->isChecked() );
             REQUIRE( child<QLineEdit>( dialog, "someIpPorts" )->text() == "30501, 30502" );
             REQUIRE( child<QLineEdit>( dialog, "someIpNamesFile" )->text()
                      == "/data/someip-names.txt" );
@@ -138,6 +140,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
             child<QSpinBox>( dialog, "maxEndpoints" )->setValue( 3000 );
             child<QSpinBox>( dialog, "reassemblyMegabytes" )->setValue( 128 );
             child<QCheckBox>( dialog, "tcpTimestamps" )->setChecked( false );
+            child<QCheckBox>( dialog, "convertOpenedCaptures" )->setChecked( true );
             child<QLineEdit>( dialog, "someIpPorts" )->setText( "40000 40001, nope" );
             child<QLineEdit>( dialog, "someIpNamesFile" )->setText( " /data/other.txt " );
             child<QLineEdit>( dialog, "keyLogPath" )->setText( " /tmp/other.keys " );
@@ -155,6 +158,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( edited.maxEndpoints == 3000 );
                 REQUIRE( edited.reassemblyMegabytes == 128 );
                 REQUIRE_FALSE( edited.tcpTimestamps );
+                REQUIRE( edited.convertOpenedCaptures );
                 REQUIRE( edited.someIpPorts == std::vector<uint16_t>{ 40000, 40001 } );
                 REQUIRE( edited.someIpNamesFile == "/data/other.txt" );
                 REQUIRE( edited.keyLogPath == "/tmp/other.keys" );
@@ -182,6 +186,7 @@ SCENARIO( "The configuration dialog shows and edits the conversion options", "[c
                 REQUIRE( restored.maxEndpoints == defaults.maxEndpoints );
                 REQUIRE( restored.reassemblyMegabytes == defaults.reassemblyMegabytes );
                 REQUIRE( restored.tcpTimestamps == defaults.tcpTimestamps );
+                REQUIRE( restored.convertOpenedCaptures );
                 REQUIRE( restored.someIpPorts.empty() );
                 REQUIRE( restored.someIpNamesFile.isEmpty() );
                 REQUIRE( restored.keyLogPath.isEmpty() );
@@ -238,8 +243,8 @@ SCENARIO( "The configuration dialog puts its options on three tabs", "[configdia
                                        "someIpNote", "keyLogPath", "keyLogBrowse", "tlsNote" } ) {
                 onTab( name, "protocolsTab" );
             }
-            for ( const auto* name :
-                  { "maxStreams", "maxEndpoints", "reassemblyMegabytes", "capsNote" } ) {
+            for ( const auto* name : { "convertOpenedCaptures", "openingNote", "maxStreams",
+                                       "maxEndpoints", "reassemblyMegabytes", "capsNote" } ) {
                 onTab( name, "advancedTab" );
             }
         }

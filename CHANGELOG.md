@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Open a capture the way any file opens.** On LogSquirl 26.12 and later,
+  a capture opened through **File → Open…**, dropped on the window, from
+  the recent files or the command line is converted by the plugin: a
+  `.pcap` or `.pcapng` file, and one with another name or none (`.cap`,
+  `.dmp`, a decompressed `.pcap.gz`) whose first bytes are a capture. It
+  converts with the same options as **Open pcap…**, in LogSquirl's progress
+  dialog with Cancel, and its tab shows its summary, packets and
+  conversations in the sidebar. The new option *Convert .pcap and .pcapng
+  files opened in LogSquirl with this plugin* (Advanced, on by default)
+  turns it off (#53).
 - **Log Format, highlighter set and filter group without copying.** On
   LogSquirl 26.12 and later, the plugin's `plugin.json` names
   `tcpdump_log.json`, `tcpdump_highlighter.conf` and `tcpdump_filter.conf`,

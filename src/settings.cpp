@@ -49,6 +49,7 @@ constexpr const char* kTcpTimestampsKey = "conversion/tcpTimestamps";
 constexpr const char* kSomeIpPortsKey = "conversion/someIpPorts";
 constexpr const char* kSomeIpNamesFileKey = "conversion/someIpNamesFile";
 constexpr const char* kKeyLogPathKey = "conversion/tlsKeyLogFile";
+constexpr const char* kConvertOpenedCapturesKey = "conversion/convertOpenedCaptures";
 
 /// The Conversations table's hidden columns, in the [conversations] group.
 constexpr const char* kHiddenConversationColumnsKey = "conversations/hiddenColumns";
@@ -143,6 +144,8 @@ ConversionOptions loadConversionOptions( const QString& configDir )
     options.layout.hostNames = readFlag( file, kHostNamesKey, options.layout.hostNames );
     options.preview = readFlag( file, kPreviewKey, options.preview );
     options.tcpTimestamps = readFlag( file, kTcpTimestampsKey, options.tcpTimestamps );
+    options.convertOpenedCaptures
+        = readFlag( file, kConvertOpenedCapturesKey, options.convertOpenedCaptures );
     options.previewChars
         = readCount( file, kPreviewCharsKey, options.previewChars, 1, kMaxPreviewChars );
     options.maxStreams
@@ -175,6 +178,7 @@ bool saveConversionOptions( const QString& configDir, const ConversionOptions& o
     file.setValue( kHostNamesKey, options.layout.hostNames );
     file.setValue( kPreviewKey, options.preview );
     file.setValue( kTcpTimestampsKey, options.tcpTimestamps );
+    file.setValue( kConvertOpenedCapturesKey, options.convertOpenedCaptures );
     file.setValue( kPreviewCharsKey, static_cast<qulonglong>( options.previewChars ) );
     file.setValue( kMaxStreamsKey, static_cast<qulonglong>( options.maxStreams ) );
     file.setValue( kMaxEndpointsKey, static_cast<qulonglong>( options.maxEndpoints ) );

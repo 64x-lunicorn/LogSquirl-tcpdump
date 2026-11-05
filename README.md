@@ -115,7 +115,18 @@ After installing, restart LogSquirl or re-scan via *Plugins → Manage Plugins�
    decompress such a file first. The
    same dialog opens from **Plugins → tcpdump → Open pcap…**, and so from
    the Command Palette (`Ctrl+Shift+P`, `Cmd+Shift+P` on macOS); while a
-   capture is being read, it only says so
+   capture is being read, it only says so.
+
+   On LogSquirl 26.12 and later a capture also opens the way any file does:
+   **File → Open…**, dropped on the window, from the recent files or the
+   command line. LogSquirl hands the plugin `.pcap` and `.pcapng` files, and
+   a file with another name or none (`.cap`, `.dmp`, a gzip-compressed
+   capture once LogSquirl has decompressed it) whose first bytes are a
+   capture. It converts with the same options, in LogSquirl's progress
+   dialog with **Cancel**, and the tab then shows its summary in the
+   sidebar as one opened here does. To have LogSquirl open captures as any
+   other file again, turn off *Convert .pcap and .pcapng files opened in
+   LogSquirl with this plugin* in the [options](#options)
 4. The parsed packets will open as a text log in LogSquirl's viewer. A
    progress bar shows how far a large capture is read; **Cancel** stops it
 5. The text is written to a new file in a private temporary directory,
@@ -617,6 +628,7 @@ opens its options, on three tabs: *Columns and Info*, *Protocols* and
 | Protocols | SOME/IP also on ports | none | ports, `30501, 30502`, on which SOME/IP is read whatever its header says (besides 30490, and any port where its header fits) |
 | Protocols | SOME/IP name table | none | a text file naming services, methods and eventgroups, one per line: `service 0x1234 Navigation`, `method 0x1234 0x0001 GetRoute`, `event 0x1234 0x8001 RouteChanged`, `eventgroup 0x1234 0x0010 Route`; `#` begins a comment |
 | Protocols | TLS decryption: key log file | none | an `SSLKEYLOGFILE` to decrypt TLS sessions with, see [TLS decryption](#tls-decryption) |
+| Advanced | Convert .pcap and .pcapng files opened in LogSquirl with this plugin | on | off: LogSquirl opens a capture through File → Open, drag and drop, the recent files or the command line as any other file; only **Open pcap…** converts it. Needs LogSquirl 26.12 or later; applies to the next capture opened |
 | Advanced | Streams numbered at most | 1,000,000 | 1 to 10,000,000; later streams show `?` |
 | Advanced | Endpoints counted at most | 100,000 | 1 to 1,000,000; the rest count as other endpoints |
 | Advanced | TCP reassembly memory at most | 64 MB | 1 to 1,024 MB, all streams together, at most 64 KB a stream direction; a message that does not fit keeps its per-segment description, followed by `[reassembly limit]`, and the segments after it up to its announced end are labelled `[continuation of a message past the reassembly limit]` |
