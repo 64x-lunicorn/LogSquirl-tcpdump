@@ -8,5 +8,8 @@
     "description": "Parse and display tcpdump/pcap capture files in a human-readable format",
     "author": "LogSquirl Contributors",
     "license": "GPL-3.0-or-later",
-    "icon": "icon.png"
+    "icon": "icon.png",
+    "formats": [ "tcpdump_log.json" ],
+    "predefined_filters": [ "tcpdump_filter.conf" ],
+    "highlighter_sets": [ "tcpdump_highlighter.conf" ]
 }

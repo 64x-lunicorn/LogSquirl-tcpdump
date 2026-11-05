@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Log Format, highlighter set and filter group without copying.** On
+  LogSquirl 26.12 and later, the plugin's `plugin.json` names
+  `tcpdump_log.json`, `tcpdump_highlighter.conf` and `tcpdump_filter.conf`,
+  and LogSquirl reads them from the plugin's directory while the plugin is
+  enabled: Table View, Δt and Go to timestamp work on a converted capture,
+  and the *tcpdump* highlighter set and filter group are listed, without
+  copying or importing a file. On older LogSquirl versions, copy and import
+  them as before (#50).
 - **Names from DNS answers.** The new option *Show names from the
   capture's DNS answers with the addresses* (off by default; the default
   output is unchanged) shows an address that a DNS or mDNS answer earlier

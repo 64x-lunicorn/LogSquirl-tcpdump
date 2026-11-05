@@ -246,10 +246,12 @@ install(FILES   plugin.json               DESTINATION "${PLUGIN_INSTALL_DIR}")
 # The licence and where the source of what is linked in is (NOTICE), as the
 # release packages carry them (.github/plugin-ci.json).
 install(FILES   LICENSE NOTICE            DESTINATION "${PLUGIN_INSTALL_DIR}")
-# The Log Format of the converted text, next to the library; LogSquirl reads
-# it only from its formats directory, where the user copies it (README).
+# The Log Format of the converted text, next to the library: plugin.json names
+# it, and LogSquirl 26.12 reads it from there; older hosts only from their
+# formats directory, where the user copies it (README).
 install(FILES   formats/tcpdump_log.json  DESTINATION "${PLUGIN_INSTALL_DIR}")
-# The highlighter set and filter group, for LogSquirl's Import (README).
+# The highlighter set and filter group, named in plugin.json as well (on older
+# hosts, for LogSquirl's Import, README).
 install(FILES   presets/tcpdump_highlighter.conf presets/tcpdump_filter.conf
         DESTINATION "${PLUGIN_INSTALL_DIR}")
 
