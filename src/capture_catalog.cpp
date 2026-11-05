@@ -41,17 +41,38 @@ QString fileKey( const QString& filePath )
     return canonical.isEmpty() ? info.absoluteFilePath() : canonical;
 }
 
-void CaptureCatalog::openConverted( const QString& logPath, const QString& capturePath,
-                                    CaptureSummary summary,
-                                    std::shared_ptr<const CaptureIndex> index )
+namespace {
+
+/// The entry of the capture file @p capturePath converted, with its
+/// @p summary and @p index.
+CaptureCatalog::Entry convertedEntry( const QString& capturePath, CaptureSummary summary,
+                                      std::shared_ptr<const CaptureIndex> index )
 {
-    Entry entry;
+    CaptureCatalog::Entry entry;
     entry.fileName = QFileInfo( capturePath ).fileName();
     entry.fileSize = QFileInfo( capturePath ).size();
     entry.summary = std::move( summary );
     entry.index = std::move( index );
+    return entry;
+}
+
+} // namespace
+
+void CaptureCatalog::openConverted( const QString& logPath, const QString& capturePath,
+                                    CaptureSummary summary,
+                                    std::shared_ptr<const CaptureIndex> index )
+{
     // Written in full already: the tab need not follow it.
-    keepAndOpen( fileKey( logPath ), logPath, std::move( entry ), false );
+    keepAndOpen( fileKey( logPath ), logPath,
+                 convertedEntry( capturePath, std::move( summary ), std::move( index ) ), false );
+}
+
+void CaptureCatalog::keepConverted( const QString& logPath, const QString& capturePath,
+                                    CaptureSummary summary,
+                                    std::shared_ptr<const CaptureIndex> index )
+{
+    keep( fileKey( logPath ),
+          convertedEntry( capturePath, std::move( summary ), std::move( index ) ) );
 }
 
 void CaptureCatalog::startLive()
@@ -195,16 +216,22 @@ QString CaptureCatalog::saveName() const
 void CaptureCatalog::keepAndOpen( const QString& key, const QString& logPath, Entry entry,
                                   bool follow )
 {
+    // Kept before the tab is opened: the host may report it in front at once.
+    keep( key, std::move( entry ) );
+    tabs_.openTab( logPath, follow );
+}
+
+void CaptureCatalog::keep( const QString& key, Entry entry )
+{
     // Whether LogSquirl has the Log Format installed is not known to the
     // plugin, so the hint is shown regardless, but only with the first
     // capture of a load, converted or live.
     entry.withFormatHint = !formatHintShown_;
     formatHintShown_ = true;
-    // Kept before the tab is opened: the host may report it in front at once.
-    // A tab in front already, of a file captured again, shows it now.
+    // A tab in front already, of a file captured again or of one LogSquirl
+    // opened before its entry came, shows it now.
     entries_.insert_or_assign( key, std::move( entry ) );
     announceIfFront( key );
-    tabs_.openTab( logPath, follow );
 }
 
 CaptureCatalog::Entry* CaptureCatalog::entryOf( const QString& key )

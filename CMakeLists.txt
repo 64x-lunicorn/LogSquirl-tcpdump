@@ -180,6 +180,7 @@ add_library(logsquirl_tcpdump SHARED
     src/activity.cpp
     src/live_capture_session.cpp
     src/file_conversion_session.cpp
+    src/host_converter.cpp
     src/export_session.cpp
     src/capture_sessions.cpp
     src/live_source.cpp

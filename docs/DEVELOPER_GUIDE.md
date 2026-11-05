@@ -2120,6 +2120,70 @@ through it. What the sidebar says of it is tested in
 `sidebar_text_test.cpp`, that its Open and Cancel reach it and it shows it
 in `sidebarwidget_test.cpp`.
 
+#### Captures LogSquirl opens (`host_converter.h/cpp`)
+LogSquirl 26.12 hands a file it opens itself (File > Open, drag and drop,
+the recent files, the command line, `open_file`) to any plugin that exports
+the converter entry points, whatever its manifest type (LogSquirl #795):
+the plugin stays a `ui` plugin with its sidebar, and also converts. Older
+hosts route files to `converter` plugins only and never call these, so
+nothing changes there. `plugin.cpp` exports them:
+
+- `logsquirl_converter_get_extensions()`: `kHostConverterExtensions`,
+  `.pcap;.pcapng`, or an empty list while the option *Convert .pcap and
+  .pcapng files opened in LogSquirl with this plugin*
+  (`ConversionOptions::convertOpenedCaptures`, on by default) is off. The
+  host asks on every file it opens, so a change applies at once. `.cap` and
+  `.dmp` are not listed: other formats use them too (a `.dmp` is also a
+  Windows crash dump); such a file is claimed by its bytes instead.
+- `logsquirl_converter_claims()`: a file no converter lists the extension
+  of is taken when its first bytes are a pcap or pcapng capture, also
+  behind tcpdump's stderr (`isCaptureHead()`, which is `findCaptureStart()`);
+  never while the option is off. A gzip-compressed capture is not claimed:
+  the host decompresses it and offers the result again, by its extension.
+- `logsquirl_converter_convert_ex()`, on a host thread, and
+  `logsquirl_converter_convert()`, the same without a control, as the API
+  asks a converter to export too. Both call `convertForHost()` with the
+  options saved in settings.ini and the plugin's temporary root.
+
+`convertForHost( inputPath, outputPath, outputRoot, options, control,
+sink )` converts as **Open pcap…** does, with `convertPcap()` into a private
+directory, then copies the text into the host's file, `outputPath`, which
+the host created and keeps open, and removes the directory. The host
+removes its own file on a failure or a cancel, never a directory of the
+plugin's, which `removeOutput()` would remove with a text written in place.
+The conversion runs on a thread of its own (`std::async`); the host's
+thread polls the host's Cancel every `kHostConvertPoll` (20 ms), carries
+it over to the conversion's cancel flag, and reports the per mille done,
+as `LogSquirlConvertControl` allows its functions on the converting thread
+only (`HostConvertControl` wraps it, null for none). It never waits for the
+UI thread: the host waits for a conversion under way on the UI thread when
+it unloads the plugin. A cancel wins over a conversion done when it came;
+the copy also stops at one. It returns `kHostConverted`,
+`kHostConvertFailed` (logged *tcpdump plugin: cannot convert …*; the host
+tells the user) or `kHostConvertCancelled`, and leaves nothing of the
+plugin's behind in any case.
+
+Converted, the capture goes to the sink: `plugin.cpp` posts it to the
+Capture Sessions, on the UI thread, where the catalog keeps it for the
+host's file (`keepConverted()`), so that the tab LogSquirl opens shows its
+summary, packets and conversations as one opened through the sidebar does.
+The post goes to the sessions object, so it goes with them if the plugin is
+shut down first; the pointer it is posted to is set and cleared under a
+mutex in `init()` and `shutdown()`. The sidebar's own conversion and one of
+the host's may run at the same time: they share nothing but the catalog,
+which only the UI thread touches.
+
+`tests/host_converter_test.cpp` tests `convertForHost()` with a fake control
+that records its calls' threads: a capture converted into the host's file
+over what it held, its summary and index sunk, the private directory gone,
+the whole progress told, all on the calling thread; a conversion that runs
+until the host's Cancel, carried over; a cancel that wins over a finished
+conversion; a file that is no capture. It checks which first bytes are
+claimed (pcap, pcapng, behind adb's stderr; not text, empty or gzip), and,
+through the entry points with a `FakeHost`, that a converted capture is in
+front for the host's file, that plain `convert()` converts, and that the
+plugin lists and claims nothing once shut down or with the option off.
+
 #### The Export session (`export_session.h/cpp`)
 Exporting the selected packets (see *Export packets* under *Packet
 Panel*) is decided in one place too, an `ExportSession` (a `QObject` on
@@ -2581,14 +2645,16 @@ default, the reassembly memory 1 to `kMaxReassemblyMegabytes` (1,024 MiB); the
 SOME/IP ports are a list (`someIpPorts`, read by `parseSomeIpPorts()`: 1 to
 65535, at most `kMaxSomeIpPorts`, anything else skipped), the name table a
 path (`someIpNamesFile`). The host names are a flag (`hostNames`, off
-unless the file says `true`). The key log's path (`tlsKeyLogFile`) is kept as it
+unless the file says `true`), and so is `convertOpenedCaptures` (on unless
+the file says `false`; see *Captures LogSquirl opens*). The key log's path (`tlsKeyLogFile`) is kept as it
 is, its file is not touched until a conversion reads it. `ConfigDialog` shows and edits the options and says that an open
 capture keeps those it was converted with; it does not save them itself.
 It puts them on three tabs, so that it is at most about 600 pixels high at
 the default font and fits a 13-inch laptop's screen: *Columns and Info*
 (time and MAC columns, host names, payload preview, TCP timestamps),
-*Protocols* (SOME/IP ports and name table, TLS key log) and *Advanced* (the
-caps); the note on the next capture and the buttons stay below the tabs,
+*Protocols* (SOME/IP ports and name table, TLS key log) and *Advanced*
+(*Opening captures*, whether captures opened in LogSquirl are converted by
+the plugin, and the caps); the note on the next capture and the buttons stay below the tabs,
 and Restore Defaults resets the controls of every tab.
 The sidebar loads the file when a conversion starts, on the GUI thread, and
 hands the options to the worker, so a change applies to the next capture
@@ -2894,13 +2960,18 @@ The catalog opens each capture's tab, through the `CaptureTabHost` it is
 constructed with (`openTab( logPath, follow )`): the Capture Sessions, which call
 the host's `open_file()` on the UI thread (LogSquirl#796); a recording fake
 in tests. It keeps the entry first, as the host may report the tab in front
-at once. Both kinds of capture come in this way, so the Log Format hint is
-decided in one place: the first entry of a load, converted or live, gets
-it, and no other.
+at once. Both kinds of capture come in this way, and a capture LogSquirl
+converted through the plugin is kept the same way without opening a tab,
+so the Log Format hint is decided in one place: the first entry of a load,
+converted, live or LogSquirl's, gets it, and no other.
 
 - `openConverted( logPath, capturePath, summary, index )` keeps a capture
   file converted and opens its tab, not following the file, which is
   written in full.
+- `keepConverted( logPath, capturePath, summary, index )` keeps one that
+  LogSquirl had the plugin convert, for LogSquirl's file, and opens no tab:
+  LogSquirl does (*Captures LogSquirl opens*). Its tab may have come to the
+  front first; it is announced once the entry is kept.
 - `startLive()`, `openLiveFile( logPath, rawPath, name )` (keeps the file,
   live, and opens its tab following it), `updateFile()` (a null index keeps
   the one the entry has), `setFileError()` and `endLive()` are what the
@@ -2911,7 +2982,7 @@ it, and no other.
 - `observeFront( observer )`: the observer is called, after the change,
   whenever what the tab in front shows changes: another tab comes to the
   front, an entry is kept for the tab in front (`openConverted()`,
-  `openLiveFile()`), its `updateFile()`, `updateSummary()` or
+  `keepConverted()`, `openLiveFile()`), its `updateFile()`, `updateSummary()` or
   `setFileError()`, or `endLive()` while it was capturing. A change behind
   the tab in front, or the same tab reported again in any spelling, is not
   announced. It returns the observer's id, which `stopObserving( id )`
@@ -3235,7 +3306,11 @@ still running (`terminateCaptureProcesses()`, *The Process Source*). `logsquirl_
 which LogSquirl calls for **Configure…** in Plugin Management with its main
 window as the parent, runs the `ConfigDialog` modally and saves the options
 when it is accepted; `hostConfigDir()` is the directory, empty without a
-host, where saving fails with a notification.
+host, where saving fails with a notification. The converter entry points
+(`logsquirl_converter_*`, *Captures LogSquirl opens*) are called on host
+threads: what they read of the plugin, the configuration directory, the
+sessions and the option, is set in `init()`, `shutdown()` and
+`configure()` under a mutex or as an atomic, not read from `g_state`.
 
 #### Host capabilities
 The host API grows by appending functions to `LogSquirlHostApi` (the SDK

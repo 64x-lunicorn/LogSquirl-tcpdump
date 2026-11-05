@@ -76,6 +76,23 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
 {
     setWindowTitle( QStringLiteral( "tcpdump / pcap Viewer Options" ) );
 
+    // Opening captures
+    convertOpenedCaptures_ = new QCheckBox(
+        QStringLiteral( "Convert .pcap and .pcapng files opened in LogSquirl with this plugin" ) );
+    convertOpenedCaptures_->setObjectName( "convertOpenedCaptures" );
+    convertOpenedCaptures_->setToolTip( QStringLiteral(
+        "A capture opened through File > Open, drag and drop, the recent files or the command "
+        "line is converted as Open pcap… converts it, also one with another or no extension "
+        "that is a pcap or pcapng capture. Off: LogSquirl opens it as any other file." ) );
+    auto* opening = new QGroupBox( QStringLiteral( "Opening captures" ) );
+    auto* openingLayout = new QFormLayout( opening );
+    openingLayout->addRow( convertOpenedCaptures_ );
+    auto* openingNote = new QLabel( QStringLiteral(
+        "<small>Needs LogSquirl 26.12 or later; applies to the next capture you open.</small>" ) );
+    openingNote->setObjectName( "openingNote" );
+    openingNote->setWordWrap( true );
+    openingLayout->addRow( openingNote );
+
     // Columns
     timeColumns_ = new QComboBox;
     timeColumns_->setObjectName( "timeColumns" );
@@ -224,7 +241,7 @@ ConfigDialog::ConfigDialog( const ConversionOptions& options, QWidget* parent )
     tabs->addTab( tab( "columnsTab", { columns, previewBox } ),
                   QStringLiteral( "Columns and Info" ) );
     tabs->addTab( tab( "protocolsTab", { someIp, tls } ), QStringLiteral( "Protocols" ) );
-    tabs->addTab( tab( "advancedTab", { caps } ), QStringLiteral( "Advanced" ) );
+    tabs->addTab( tab( "advancedTab", { opening, caps } ), QStringLiteral( "Advanced" ) );
 
     auto* layout = new QVBoxLayout( this );
     layout->addWidget( tabs );
@@ -247,6 +264,7 @@ void ConfigDialog::showOptions( const ConversionOptions& options )
     previewChars_->setEnabled( options.preview );
     previewChars_->setValue( static_cast<int>( options.previewChars ) );
     tcpTimestamps_->setChecked( options.tcpTimestamps );
+    convertOpenedCaptures_->setChecked( options.convertOpenedCaptures );
     maxStreams_->setValue( static_cast<int>( options.maxStreams ) );
     maxEndpoints_->setValue( static_cast<int>( options.maxEndpoints ) );
     reassemblyMegabytes_->setValue( static_cast<int>( options.reassemblyMegabytes ) );
@@ -264,6 +282,7 @@ ConversionOptions ConfigDialog::options() const
     options.preview = preview_->isChecked();
     options.previewChars = static_cast<size_t>( previewChars_->value() );
     options.tcpTimestamps = tcpTimestamps_->isChecked();
+    options.convertOpenedCaptures = convertOpenedCaptures_->isChecked();
     options.maxStreams = static_cast<size_t>( maxStreams_->value() );
     options.maxEndpoints = static_cast<size_t>( maxEndpoints_->value() );
     options.reassemblyMegabytes = static_cast<size_t>( reassemblyMegabytes_->value() );

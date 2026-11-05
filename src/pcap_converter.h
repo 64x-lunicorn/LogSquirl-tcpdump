@@ -162,6 +162,11 @@ struct ConversionOptions {
     /// The number of the last packet converted (kMaxPacketNumber, which
     /// only a test lowers).
     uint32_t lastPacketNumber = kMaxPacketNumber;
+    /// Whether the plugin converts the captures opened in LogSquirl itself
+    /// (File > Open, drag and drop, …) on LogSquirl 26.12 and later
+    /// (host_converter.h); off: LogSquirl opens them as any other file.  Not
+    /// read by a conversion.
+    bool convertOpenedCaptures = true;
 };
 
 /**

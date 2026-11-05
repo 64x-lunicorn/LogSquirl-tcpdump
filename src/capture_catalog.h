@@ -27,14 +27,18 @@
  * the plugin wrote:
  *
  *   - a capture file converted (openConverted()): its summary and index;
+ *   - a capture file LogSquirl opened and had the plugin convert
+ *     (keepConverted(), host_converter.h): the same, for the text file
+ *     LogSquirl reads, whose tab LogSquirl opens itself;
  *   - each text file of a live capture (a ring buffer's, one per raw
  *     file, openLiveFile()), whose summary, index and size its Live Capture
  *     Session replaces as the snapshots and the outcome come, and the error
  *     of a capture that failed.
  *
- * Either way the catalog keeps the entry first and then opens the file's
- * tab through its CaptureTabHost, as the host may report that tab in front
- * at once.  The first entry of a load, of either kind, links to the Log
+ * For the first two the catalog keeps the entry first and then opens the
+ * file's tab through its CaptureTabHost, as the host may report that tab in
+ * front at once; a tab of the third that came to the front before its entry
+ * shows it once it is kept.  The first entry of a load, of either kind, links to the Log
  * Format section (Entry::withFormatHint); no other does.
  *
  * It knows the tab in front (setFront(), on every tab switch), which text
@@ -123,6 +127,11 @@ public:
     /// @p logPath, with its @p summary and @p index, and open its tab.
     void openConverted( const QString& logPath, const QString& capturePath, CaptureSummary summary,
                         std::shared_ptr<const CaptureIndex> index );
+    /// Keep the capture file @p capturePath converted into the text file
+    /// @p logPath, with its @p summary and @p index, without opening a tab:
+    /// LogSquirl opens it, having asked the plugin to convert the capture.
+    void keepConverted( const QString& logPath, const QString& capturePath, CaptureSummary summary,
+                        std::shared_ptr<const CaptureIndex> index );
 
     /// A live capture starts: the text files of the one before are no
     /// longer live.
@@ -203,6 +212,9 @@ private:
     /// Keep @p entry for the text file of @p key, with the Log Format hint
     /// if it is the first of the load, then open the tab of @p logPath.
     void keepAndOpen( const QString& key, const QString& logPath, Entry entry, bool follow );
+    /// Keep @p entry for the text file of @p key, with the Log Format hint
+    /// if it is the first of the load, and show it if its tab is in front.
+    void keep( const QString& key, Entry entry );
     /// The entry of @p key; null for one not kept.
     Entry* entryOf( const QString& key );
     /// Tell the observers that what the tab in front shows changed, if
