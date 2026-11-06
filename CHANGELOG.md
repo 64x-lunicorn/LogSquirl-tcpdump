@@ -541,6 +541,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each case.
 
 ### Changed
+- **The plugin icon matches the other LogSquirl plugins.** Its circles are
+  drawn as thin as theirs and the motif sits in the same space, so it no
+  longer looks heavier in the plugin list (#218).
 - **A click on the Conversations table selects; a double click filters.**
   A single click on a conversation only selects it, so reading its numbers
   or sorting no longer opens the Regex Lab every time; a double click,

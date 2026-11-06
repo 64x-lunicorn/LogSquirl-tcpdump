@@ -6,12 +6,12 @@
   </defs>
   <rect x="2" y="2" width="124" height="124" rx="27" fill="url(#bg)"/>
   <rect x="2.75" y="2.75" width="122.5" height="122.5" rx="26.25" fill="none" stroke="#4a3527" stroke-width="1.5"/>
-  <line x1="30" y1="64" x2="98" y2="64" stroke="#78543c" stroke-width="6" stroke-linecap="round"/>
-  <g fill="none" stroke="#f97316" stroke-width="7">
-    <circle cx="30" cy="64" r="12"/><circle cx="98" cy="64" r="12"/>
+  <line x1="47" y1="64" x2="81" y2="64" stroke="#78543c" stroke-width="6"/>
+  <g fill="none" stroke="#f97316" stroke-width="6">
+    <circle cx="37" cy="64" r="10"/><circle cx="91" cy="64" r="10"/>
   </g>
   <g fill="#fbbf24">
-    <rect x="47" y="54" width="15" height="20" rx="4"/>
-    <rect x="66" y="54" width="15" height="20" rx="4"/>
+    <rect x="51" y="50" width="11" height="28" rx="4"/>
+    <rect x="66" y="50" width="11" height="28" rx="4"/>
   </g>
 </svg>
