@@ -802,6 +802,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to copy. The summary no longer repeats the error the Live capture
   section shows: it says the capture failed before anything was captured
   (#205).
+- **Packet details reports on the packet it read, or not at all.** When
+  the packet read for **Plugins → tcpdump → Packet details** was cut off,
+  by another log coming to the front or by a newer selection, or showing it
+  failed, its notification waited and came with the next, unrelated
+  refresh of the Packet panel, describing whatever was shown by then. A
+  cut-off read now reports nothing; one that fails to show says why
+  (#232).
 
 ## [0.3.0] — 2026-10-09
 

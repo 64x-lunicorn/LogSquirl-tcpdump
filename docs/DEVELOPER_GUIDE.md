@@ -3114,7 +3114,11 @@ export, conversation statistics):
   one the selection moved on from is dropped when it ends, and not begun
   when it has not (`latest_`). `refresh( then )` runs `then` once the
   packet is shown, or why not, which Packet details uses for its
-  notification; the destructor waits for the read that runs.
+  notification. `then` belongs to the read that `refresh()` started: a
+  read cut off, by a reason shown (another tab in front) or by the next
+  read, drops it, so it never runs for another refresh; a read whose
+  showing throws shows the error as the reason and runs it. The
+  destructor waits for the read that runs.
 
 - **Follow stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a
