@@ -695,27 +695,38 @@ SCENARIO( "A live capture through a program reads while it waits", "[process_sou
     {
         const auto capture = pcapOf( packets );
         writeFile( dir.filePath( "fake.pcap" ), capture );
-        // It says it has written by a file of its own, after the capture is
-        // in the pipe; only then is the second over, on a clock the test
-        // moves on: a program can take seconds to start on a loaded machine.
-        const auto written = dir.filePath( "written" );
-        const auto program = fakeProgram( dir, "quiet", "cat \"$1\"\ntouch \"$2\"\nexec sleep 30" );
+        // The second is over, on a clock the test moves on, only once every
+        // packet is in the text: a program can take seconds to start on a
+        // loaded machine, and a packet read after the duration is not kept.
+        const auto program = fakeProgram( dir, "quiet", "cat \"$1\"\nexec sleep 30" );
         std::atomic<int64_t> clockMs{ 0 };
         LiveLimits limits;
         limits.duration = std::chrono::seconds( 1 );
+        std::mutex mutex;
+        QString logPath;
+        LiveObserver observer;
+        observer.firstPacket = [ & ]( const QString& path, const QString& ) {
+            const std::lock_guard<std::mutex> lock( mutex );
+            logPath = path;
+        };
         QTemporaryDir out;
         auto running = std::async( std::launch::async, [ & ] {
             // The program is run, and read, on the thread that converts.
-            ProcessSource source( { program, { dir.filePath( "fake.pcap" ), written } }, nullptr );
-            return convertStream( source, "live", out.path(), nullptr, {}, {}, limits, [ & ] {
+            ProcessSource source( { program, { dir.filePath( "fake.pcap" ) } }, nullptr );
+            return convertStream( source, "live", out.path(), nullptr, {}, observer, limits, [ & ] {
                 return Clock::time_point( milliseconds( clockMs.load() ) );
             } );
         } );
+        const auto expected = linesFromFile( capture );
+        auto readAll = [ & ] {
+            const std::lock_guard<std::mutex> lock( mutex );
+            return !logPath.isEmpty() && readLines( logPath ) == expected;
+        };
         const auto until = Clock::now() + std::chrono::seconds( 20 );
-        while ( !QFile::exists( written ) && Clock::now() < until ) {
+        while ( !readAll() && Clock::now() < until ) {
             std::this_thread::sleep_for( milliseconds( 10 ) );
         }
-        const bool wrote = QFile::exists( written );
+        const bool wrote = readAll();
         clockMs = 1000; // the conversion ends whatever happens
         REQUIRE( wrote );
         REQUIRE( running.wait_for( std::chrono::seconds( 10 ) ) == std::future_status::ready );
