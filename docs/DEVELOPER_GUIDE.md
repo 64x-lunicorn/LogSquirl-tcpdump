@@ -32,7 +32,9 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
 - Dissects link-layer (Ethernet, Raw IP, Linux SLL, Linux SLL2, BSD
   loopback DLT_NULL/DLT_LOOP, family read in the capture's byte order), and
   hands 802.11, Radiotap, PPP, Cisco HDLC and PPPoE to `link_layers.h/cpp`
-  (see below)
+  (see below); a frame shorter than its link-layer header is
+  `Truncated <name> header` (`holdsLinkHeader()`, `parseEthernet()`), only a
+  link-layer type none of them reads is `Unsupported link-layer type N`
 - Strips stacked 802.1Q / 802.1ad (QinQ) VLAN tags, then unwraps PPPoE
   (EtherTypes 0x8863 and 0x8864) with `dissectPppoe()`
 - Dissects network layer (IPv4, IPv6 with hop-by-hop, routing, fragment,

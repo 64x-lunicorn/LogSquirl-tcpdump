@@ -724,6 +724,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of these are words of text or of SIP, they count only in a request
   line, a target and `HTTP/` behind them: `COPY this file` is no
   request (#229)
+- **A frame too short for its link-layer header is shown as truncated.**
+  A runt frame, a snaplen below the link-layer header or an empty record
+  in an Ethernet, Linux cooked capture v1 or v2, BSD loopback or Raw IP
+  capture said *Unsupported link-layer type 1* (or 113, 276, 0, 108, 101).
+  It now says *Truncated Ethernet header*, *Truncated Linux cooked capture
+  v1 header* and so on; a capture of a link-layer type the plugin does not
+  read still says so (#227)
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
   0. The conversion now stops with packet 4,294,967,295, and the summary
