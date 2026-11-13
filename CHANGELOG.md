@@ -746,6 +746,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot, so a busy interface piled up "packets dropped by kernel". It
   now reads what the program writes as it comes. Wireshark extcap captures
   were not affected (#224)
+- **A live capture that fails after its tab opened keeps what it
+  captured.** When writing failed, a full disk above all, or another error
+  came after the first packet had opened the tab, the capture's text and
+  raw capture were deleted under the tab. They now stay, as for a capture
+  whose program broke off: the tab shows the packets captured so far and
+  the error. A capture that fails before its first packet still leaves
+  nothing behind (#231)
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
   0. The conversion now stops with packet 4,294,967,295, and the summary

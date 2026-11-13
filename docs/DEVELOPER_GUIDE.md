@@ -1705,7 +1705,9 @@ a packet of it (so a pcap with no packets still names its one): Converted (with 
 capture header came (`StreamSource::stopped()`), so nothing was captured and
 nothing is left, which is not a failure. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
-failure or any other exception ends as Failed, and nothing is left behind.
+failure or any other exception ends as Failed, and nothing is left behind,
+except for a live capture that fails after its first packet (see
+*Live conversion*).
 `applyCancelRequest()` decides, for the Converter when its loop ends,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed (`removeOutput()`).
@@ -1860,7 +1862,13 @@ stopping (Stop) ends Converted with the final summary, which equals that of
 converting the raw file (tested); Cancel removes both files. A stream that
 breaks off with an error after its first packet ends Failed with the
 message *and* `outputPath`, `rawPath` and the summary of what was captured;
-before a packet, it leaves nothing behind, as before.
+before a packet, it leaves nothing behind, as before. So does a capture
+that fails otherwise once its first text could be opened (`firstPacket`):
+a write that fails (a full disk) or an exception, which the packet loop
+catches itself (`failedOnException()`) instead of unwinding the output
+directory. The files are closed first, both even if the text cannot be
+written (`DiskLiveFiles::close()`), so that the final index measures them
+as they stay.
 
 #### The Live Output (`live_output.h/cpp`)
 When a live capture flushes, opens a text, sends a snapshot, starts a ring

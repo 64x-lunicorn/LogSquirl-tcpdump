@@ -31,6 +31,7 @@
 #include "packet_recorder.h"
 #include "pcap_converter.h"
 #include "pcapbuilder.h"
+#include "stream_capture.h"
 #include "tls_key_log.h"
 
 #include <QDir>
@@ -64,17 +65,6 @@ QString writeFile( const QTemporaryDir& dir, const QString& name, const Bytes& c
 bool nothingBelow( const QTemporaryDir& root )
 {
     return QDir( root.path() ).isEmpty();
-}
-
-QStringList readLines( const QString& path )
-{
-    QFile file( path );
-    REQUIRE( file.open( QIODevice::ReadOnly | QIODevice::Text ) );
-    auto lines = QString::fromUtf8( file.readAll() ).split( '\n' );
-    if ( !lines.isEmpty() && lines.last().isEmpty() ) {
-        lines.removeLast();
-    }
-    return lines;
 }
 
 } // namespace
@@ -844,37 +834,7 @@ SCENARIO( "The summary names the capture's link-layer type", "[converter]" )
 }
 
 #ifdef Q_OS_UNIX
-#include <csignal>
-#include <sys/resource.h>
 #include <sys/stat.h>
-
-namespace {
-
-/// Caps the size of any file this process writes while it lives, so that a
-/// write past the cap fails with EFBIG instead of filling the disk.
-class FileSizeLimit {
-public:
-    explicit FileSizeLimit( rlim_t bytes )
-    {
-        ::getrlimit( RLIMIT_FSIZE, &saved_ );
-        previousHandler_ = std::signal( SIGXFSZ, SIG_IGN ); // get EFBIG, not killed
-        rlimit limit = saved_;
-        limit.rlim_cur = bytes;
-        ::setrlimit( RLIMIT_FSIZE, &limit );
-    }
-
-    ~FileSizeLimit()
-    {
-        ::setrlimit( RLIMIT_FSIZE, &saved_ );
-        std::signal( SIGXFSZ, previousHandler_ );
-    }
-
-private:
-    rlimit saved_{};
-    void ( *previousHandler_ )( int ) = nullptr;
-};
-
-} // namespace
 
 SCENARIO( "A capture without packets still names its link-layer type", "[converter]" )
 {

@@ -42,6 +42,8 @@
 #include <vector>
 
 #ifdef Q_OS_UNIX
+#include <csignal>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -180,6 +182,33 @@ public:
 
 private:
     int fds_[ 2 ] = { -1, -1 };
+};
+
+/// Caps the size of any file this process writes while it lives, so that a
+/// write past the cap fails with EFBIG instead of filling the disk.
+class FileSizeLimit {
+public:
+    explicit FileSizeLimit( rlim_t bytes )
+    {
+        ::getrlimit( RLIMIT_FSIZE, &saved_ );
+        previousHandler_ = std::signal( SIGXFSZ, SIG_IGN ); // get EFBIG, not killed
+        rlimit limit = saved_;
+        limit.rlim_cur = bytes;
+        ::setrlimit( RLIMIT_FSIZE, &limit );
+    }
+
+    ~FileSizeLimit()
+    {
+        ::setrlimit( RLIMIT_FSIZE, &saved_ );
+        std::signal( SIGXFSZ, previousHandler_ );
+    }
+
+    FileSizeLimit( const FileSizeLimit& ) = delete;
+    FileSizeLimit& operator=( const FileSizeLimit& ) = delete;
+
+private:
+    rlimit saved_{};
+    void ( *previousHandler_ )( int ) = nullptr;
 };
 #endif
 

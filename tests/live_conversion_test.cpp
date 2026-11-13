@@ -42,9 +42,12 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -118,6 +121,38 @@ bool within( milliseconds limit, const std::function<bool()>& condition )
     }
     return true;
 }
+
+/// A StreamSource that hands out its bytes, then throws @p what, as a
+/// conversion step that runs out of memory would.
+class ThrowingSource : public StreamSource {
+public:
+    ThrowingSource( Bytes bytes, std::string what )
+        : bytes_( std::move( bytes ) )
+        , what_( std::move( what ) )
+    {
+    }
+
+protected:
+    std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds ) override
+    {
+        if ( at_ == bytes_.size() ) {
+            throw std::runtime_error( what_ );
+        }
+        n = std::min( n, bytes_.size() - at_ );
+        std::copy_n( bytes_.begin() + static_cast<std::ptrdiff_t>( at_ ), n, dst );
+        at_ += n;
+        return static_cast<std::ptrdiff_t>( n );
+    }
+    bool available() override
+    {
+        return true;
+    }
+
+private:
+    Bytes bytes_;
+    std::string what_;
+    size_t at_ = 0;
+};
 
 #ifdef Q_OS_UNIX
 
@@ -572,6 +607,117 @@ SCENARIO( "A live capture whose source fails keeps what was captured", "[live]" 
         THEN( "it ends Cancelled, and neither the text nor the raw file stays" )
         {
             REQUIRE( result.status == ConversionResult::Status::Cancelled );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+}
+
+SCENARIO( "A live capture that fails after its tab opened keeps what it captured", "[live]" )
+{
+#ifdef Q_OS_UNIX
+    GIVEN( "a capture of 200 packets whose disk fills once the first packet's tab opened" )
+    {
+        const auto capture = pcapOf( datagrams( 200 ) );
+        BreakingSource source( capture, "" ); // the stream ends without an error
+        QTemporaryDir out;
+        std::optional<FileSizeLimit> diskFull;
+        int opened = 0;
+        LiveObserver observer;
+        observer.firstPacket = [ & ]( const QString&, const QString& ) {
+            ++opened;
+            diskFull.emplace( 4096 );
+        };
+        const auto result
+            = convertStream( source, QStringLiteral( "eth0" ), out.path(), nullptr, {}, observer );
+        diskFull.reset();
+
+        THEN( "it ends Failed with the write error, and the text and raw capture stay" )
+        {
+            REQUIRE( opened == 1 );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.startsWith( "Cannot write" ) );
+            REQUIRE( QFileInfo::exists( result.outputPath ) );
+            REQUIRE( lineCount( result.outputPath ) >= 2 );
+            REQUIRE( QFileInfo::exists( result.rawPath ) );
+            const auto raw = fileBytes( result.rawPath );
+            REQUIRE( raw.size() > 24 );
+            REQUIRE( std::equal( raw.begin(), raw.end(), capture.begin() ) );
+        }
+
+        THEN( "the summary and index hold the packets captured so far" )
+        {
+            REQUIRE( result.summary.packets >= 1 );
+            REQUIRE( result.index );
+            REQUIRE( result.index->packets() >= 1 );
+            CaptureCursor cursor( result.index );
+            CapturedPacket packet;
+            const bool read = cursor.read( 1, packet );
+            INFO( cursor.error().toStdString() );
+            REQUIRE( read );
+            REQUIRE( packet.record.srcPort == 40000 );
+        }
+    }
+
+    GIVEN( "a capture whose disk is full before its first packet" )
+    {
+        BreakingSource source( pcapOf( datagrams( 3 ) ), "" );
+        QTemporaryDir out;
+        int opened = 0;
+        LiveObserver observer;
+        observer.firstPacket = [ & ]( const QString&, const QString& ) { ++opened; };
+        ConversionResult result;
+        {
+            const FileSizeLimit diskFull( 16 );
+            result = convertStream( source, QStringLiteral( "eth0" ), out.path(), nullptr, {},
+                                    observer );
+        }
+
+        THEN( "it ends Failed, no tab opened, and nothing is left behind" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error.startsWith( "Cannot write" ) );
+            REQUIRE( opened == 0 );
+            REQUIRE( result.outputPath.isEmpty() );
+            REQUIRE( QDir( out.path() ).isEmpty() );
+        }
+    }
+#endif
+
+    GIVEN( "a capture whose conversion throws after three packets" )
+    {
+        const auto capture = pcapOf( datagrams( 3 ) );
+        ThrowingSource source( capture, "out of luck" );
+        QTemporaryDir out;
+        int opened = 0;
+        LiveObserver observer;
+        observer.firstPacket = [ & ]( const QString&, const QString& ) { ++opened; };
+        const auto result
+            = convertStream( source, QStringLiteral( "eth0" ), out.path(), nullptr, {}, observer );
+
+        THEN( "it ends Failed with the message, and the text, raw capture and summary stay" )
+        {
+            REQUIRE( opened == 1 );
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error == "out of luck" );
+            REQUIRE( result.summary.packets == 3 );
+            REQUIRE( lineCount( result.outputPath ) == 4 );
+            REQUIRE( fileBytes( result.rawPath ) == capture );
+            REQUIRE( result.index );
+            REQUIRE( result.index->packets() == 3 );
+        }
+    }
+
+    GIVEN( "a capture whose conversion throws before its first packet" )
+    {
+        ThrowingSource source( pcapOf( {} ), "out of luck" );
+        QTemporaryDir out;
+        const auto result = convertStream( source, QStringLiteral( "eth0" ), out.path() );
+
+        THEN( "it ends Failed and leaves nothing behind" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Failed );
+            REQUIRE( result.error == "out of luck" );
+            REQUIRE( result.outputPath.isEmpty() );
             REQUIRE( QDir( out.path() ).isEmpty() );
         }
     }

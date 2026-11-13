@@ -572,8 +572,9 @@ is converted while it runs:
   `<name>.pcap` or `<name>.pcapng`. Both live in the private temporary
   directory, removed when LogSquirl quits: **Save capture…** in the sidebar
   copies the raw capture elsewhere, to convert again or open in Wireshark
-- If the source fails, e.g. the capture program exits with an error, the
-  sidebar and a notification say why, and what was captured so far stays
+- If the capture fails, e.g. the capture program exits with an error or
+  the disk is full, the sidebar and a notification say why, and what was
+  captured so far stays
 - With stop conditions, the sidebar also shows how far the capture is to
   each (`Stops after 10:00 (35%), or at 1,000 packets (12%)`); one that
   stops it says so in a notification

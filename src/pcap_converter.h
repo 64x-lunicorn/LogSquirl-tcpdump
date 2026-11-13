@@ -61,7 +61,7 @@ struct ConversionResult {
     enum class Status {
         Converted, ///< outputPath holds the capture's text.
         /// See error.  Nothing is left behind, except for a live capture
-        /// that broke off after its first packet: outputPath, rawPath and
+        /// that failed after its first packet: outputPath, rawPath and
         /// summary then hold what was captured (convertStream()).
         Failed,
         Cancelled, ///< Nothing is left behind.
@@ -206,7 +206,10 @@ ConversionResult convertPcap( const QString& inputPath, const QString& outputRoo
  *
  * A stream that breaks off with a read error (a capture program that
  * failed) ends Failed; once a packet was converted, what was captured is
- * kept: the text file, the raw capture and the summary of them.  A stream
+ * kept: the text file, the raw capture and the summary of them.  So it is
+ * for a capture that fails otherwise, a write (a full disk) or an
+ * exception, once its first text could be opened (LiveObserver::firstPacket).
+ * A stream
  * stopped before its header had come (StreamSource::stopped()) ends
  * Stopped, not Failed: nothing went wrong, nothing was captured.
  *
