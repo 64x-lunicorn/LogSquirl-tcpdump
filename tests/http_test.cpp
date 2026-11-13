@@ -329,6 +329,37 @@ SCENARIO( "Text that begins with a method's word but is no request line is not H
                      != "HTTP" );
         }
     }
+
+    GIVEN( "a SIP NOTIFY whose URI runs on past 64 bytes, and a long word with no version" )
+    {
+        const std::vector<std::string> notRequests = {
+            "NOTIFY sip:presence-agent-for-bob@registrar.example.com:5061;transport=tcp;lr;ob "
+            "SIP/2.0\r\nCSeq: 1 NOTIFY\r\n\r\n",
+            "COPY " + std::string( 100, 'x' ) + "\r\nnothing more\r\n\r\n",
+        };
+
+        THEN( "neither is taken for HTTP on another port" )
+        {
+            for ( const auto& t : notRequests ) {
+                INFO( t );
+                REQUIRE( toPort( text( t ), kOtherPort ).label != "HTTP" );
+            }
+        }
+    }
+
+    GIVEN( "a PROPFIND of a path longer than 64 bytes" )
+    {
+        const auto path = "/remote.php/dav/files/someone/" + std::string( 200, 'd' ) + "/";
+
+        THEN( "it is HTTP on another port, the path in its description" )
+        {
+            const auto described = toPort(
+                text( "PROPFIND " + path + " HTTP/1.1\r\nHost: cloud.example.com\r\n\r\n" ),
+                kOtherPort );
+            REQUIRE( described.label == "HTTP" );
+            REQUIRE( described.description.find( "PROPFIND" ) == 0 );
+        }
+    }
 }
 
 SCENARIO( "A status line adds the Content-Type and Content-Length", "[http]" )

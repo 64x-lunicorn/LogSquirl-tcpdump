@@ -163,8 +163,10 @@ std::string httpResponse( const uint8_t* payload, size_t len )
 }
 
 /// The first bytes of a payload the request line of one of kFurtherMethods
-/// is checked in; a target longer than that is taken as it comes.
-constexpr size_t kRequestLineLook = 64;
+/// is checked in; a target longer than that is taken as it comes.  Long
+/// enough for a WebDAV path or a SIP URI with its parameters, whose
+/// version, not HTTP's, tells it apart.
+constexpr size_t kRequestLineLook = 2048;
 
 /// The methods a payload is an HTTP request by as soon as one and a space
 /// begin it (RFC 9110, 9.3).

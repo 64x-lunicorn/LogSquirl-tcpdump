@@ -538,8 +538,9 @@ the declarations of the detectors and in-stream passes the tables use.
   further one (TRACE, SSDP's M-SEARCH and NOTIFY, GENA's SUBSCRIBE and
   UNSUBSCRIBE, the WebDAV methods and their extensions', `kFurtherMethods`)
   whose request line goes on as a target, a space and `HTTP/`, as far as
-  the first 64 bytes (`kRequestLineLook`) go: these are words of text and of
-  SIP too. The framer of the TCP Reassembly checks the same.
+  the first 2048 bytes (`kRequestLineLook`) go: these are words of text and of
+  SIP too, whose long URIs end in `SIP/2.0`. The framer of the TCP
+  Reassembly checks the same.
   A request is described as its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
   path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
