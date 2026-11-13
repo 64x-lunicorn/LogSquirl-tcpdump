@@ -92,10 +92,10 @@ uint64_t powerOfTen( uint8_t exponent )
 uint64_t read64( const uint8_t* p, bool swap )
 {
     uint64_t v;
-    std::memcpy( &v, p, 8 );
+    std::memcpy( &v, p, sizeof( v ) );
     if ( swap ) {
         uint64_t reversed = 0;
-        for ( int i = 0; i < 8; ++i ) {
+        for ( size_t i = 0; i < sizeof( v ); ++i ) {
             reversed = ( reversed << 8 ) | ( ( v >> ( 8 * i ) ) & 0xFF );
         }
         v = reversed;

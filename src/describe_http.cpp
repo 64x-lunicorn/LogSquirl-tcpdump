@@ -260,11 +260,18 @@ bool beginsHttpRequest( const uint8_t* payload, size_t len )
     return false;
 }
 
+/// The payload begins with an HTTP/1.x response's version, "HTTP/".
+bool beginsHttpResponse( const uint8_t* payload, size_t len )
+{
+    static constexpr char kResponseVersion[] = "HTTP/";
+    constexpr size_t kLength = sizeof( kResponseVersion ) - 1;
+    return len >= kLength && std::memcmp( payload, kResponseVersion, kLength ) == 0;
+}
+
 /// The payload begins with an HTTP/1.x request or response.
 bool beginsHttpMessage( const uint8_t* payload, size_t len )
 {
-    return beginsHttpRequest( payload, len )
-           || ( len >= 5 && std::memcmp( payload, "HTTP/", 5 ) == 0 );
+    return beginsHttpRequest( payload, len ) || beginsHttpResponse( payload, len );
 }
 
 } // namespace
@@ -275,7 +282,7 @@ std::string detectHttp( const uint8_t* payload, size_t len )
     if ( beginsHttpRequest( payload, len ) ) {
         return httpRequest( payload, len );
     }
-    if ( len >= 5 && std::memcmp( payload, "HTTP/", 5 ) == 0 ) {
+    if ( beginsHttpResponse( payload, len ) ) {
         return httpResponse( payload, len );
     }
     return {};
