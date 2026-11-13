@@ -41,6 +41,17 @@ namespace {
 
 constexpr uint16_t kClientPort = 50080;
 constexpr uint16_t kServerPort = 80;
+/// A port no protocol is known on.
+constexpr uint16_t kOtherPort = 47000;
+constexpr uint16_t kSsdpPort = 1900;
+constexpr uint16_t kSsdpClientPort = 50190;
+
+const std::string kMSearch = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+                             "MAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n";
+const std::string kNotify
+    = "NOTIFY * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"
+      "CACHE-CONTROL: max-age=1800\r\nLOCATION: http://192.0.2.7:49152/d.xml\r\n"
+      "NT: upnp:rootdevice\r\nNTS: ssdp:alive\r\n\r\n";
 
 const std::string kPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -55,6 +66,11 @@ PayloadDescription toServer( const Bytes& payload )
 {
     return describePayload( Transport::Tcp, payload.data(), payload.size(), kClientPort,
                             kServerPort );
+}
+
+PayloadDescription toPort( const Bytes& payload, uint16_t port )
+{
+    return describePayload( Transport::Tcp, payload.data(), payload.size(), kClientPort, port );
 }
 
 PayloadDescription fromServer( const Bytes& payload )
@@ -207,6 +223,110 @@ SCENARIO( "A request line names the host from the Host header", "[http]" )
             REQUIRE(
                 toServer( text( "GET /a HTTP/1.1\r\nHost: " + longHost + "\r\n\r\n" ) ).description
                 == "GET " + longHost.substr( 0, 120 ) + "\xe2\x80\xa6/a HTTP/1.1" );
+        }
+    }
+}
+
+SCENARIO( "SSDP requests on UDP port 1900 are described", "[http]" )
+{
+    GIVEN( "an M-SEARCH and a NOTIFY to the SSDP multicast group" )
+    {
+        const auto searchBytes = text( kMSearch );
+        const auto notifyBytes = text( kNotify );
+        const auto search = describePayload( Transport::Udp, searchBytes.data(), searchBytes.size(),
+                                             kSsdpClientPort, kSsdpPort );
+        const auto notify = describePayload( Transport::Udp, notifyBytes.data(), notifyBytes.size(),
+                                             kSsdpPort, kSsdpPort );
+
+        THEN( "each is SSDP, recognised, with its request line" )
+        {
+            REQUIRE( search.label == "SSDP" );
+            REQUIRE_FALSE( search.guessed );
+            REQUIRE( search.description == "M-SEARCH * HTTP/1.1" );
+            REQUIRE( notify.label == "SSDP" );
+            REQUIRE_FALSE( notify.guessed );
+            REQUIRE( notify.description == "NOTIFY * HTTP/1.1" );
+        }
+    }
+}
+
+SCENARIO( "TRACE and the WebDAV methods are HTTP on any port", "[http]" )
+{
+    GIVEN( "requests of the methods beyond the common eight, on port 80 and on another" )
+    {
+        THEN( "each is HTTP, recognised, with the host before its path" )
+        {
+            for ( const uint16_t port : { kServerPort, kOtherPort } ) {
+                for ( const char* method :
+                      { "TRACE", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK",
+                        "REPORT", "SEARCH", "MKCALENDAR", "ACL", "VERSION-CONTROL" } ) {
+                    INFO( method << " on port " << port );
+                    const auto described
+                        = toPort( text( std::string( method )
+                                        + " /dav/a.txt HTTP/1.1\r\nHost: example.com\r\n\r\n" ),
+                                  port );
+                    REQUIRE( described.label == "HTTP" );
+                    REQUIRE_FALSE( described.guessed );
+                    REQUIRE( described.description
+                             == std::string( method ) + " example.com/dav/a.txt HTTP/1.1" );
+                }
+            }
+        }
+    }
+
+    GIVEN( "such a request cut by the capture inside its request line" )
+    {
+        THEN( "it is HTTP as far as its bytes go" )
+        {
+            REQUIRE( toPort( text( "PROPFIND /dav/some/long/pa" ), kOtherPort ).label == "HTTP" );
+            REQUIRE( toPort( text( "PROPFIND /dav/ HT" ), kOtherPort ).label == "HTTP" );
+        }
+    }
+}
+
+SCENARIO( "Text that begins with a method's word but is no request line is not HTTP", "[http]" )
+{
+    GIVEN( "text and request lines without one space, a target, one space and the HTTP "
+           "version" )
+    {
+        const std::vector<std::string> notRequests{
+            "COPY this file to the share\r\n",
+            "MOVE  /a HTTP/1.1\r\n\r\n",
+            "LOCK /a\r\n\r\n",
+            "REPORT /a FTP/1.0\r\n\r\n",
+            "TRACE /a  HTTP/1.1\r\n\r\n",
+            "M-SEARCH everything now\r\n",
+            "NOTIFY me when it is done\r\n",
+        };
+
+        THEN( "it is not taken for HTTP on another port" )
+        {
+            for ( const auto& t : notRequests ) {
+                INFO( t );
+                REQUIRE( toPort( text( t ), kOtherPort ).label != "HTTP" );
+            }
+        }
+        THEN( "on UDP port 1900 it is only what the port suggests" )
+        {
+            for ( const auto& t : notRequests ) {
+                INFO( t );
+                const auto payload = text( t );
+                const auto described = describePayload(
+                    Transport::Udp, payload.data(), payload.size(), kSsdpClientPort, kSsdpPort );
+                REQUIRE( described.label == "SSDP" );
+                REQUIRE( described.guessed );
+            }
+        }
+    }
+
+    GIVEN( "a SIP NOTIFY on another port" )
+    {
+        THEN( "it is not taken for HTTP" )
+        {
+            REQUIRE( toPort( text( "NOTIFY sip:bob@example.com SIP/2.0\r\nCSeq: 1 NOTIFY\r\n\r\n" ),
+                             kOtherPort )
+                         .label
+                     != "HTTP" );
         }
     }
 }

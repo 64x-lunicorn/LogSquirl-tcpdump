@@ -605,6 +605,29 @@ SCENARIO( "A message split over segments is described once, where it completes",
         }
     }
 
+    GIVEN( "TRACE and PROPFIND requests split in their headers, on port 80 and on another" )
+    {
+        THEN( "each is described with its Host on the second" )
+        {
+            for ( const uint16_t port : { 80, 47000 } ) {
+                for ( const std::string method : { "TRACE", "PROPFIND" } ) {
+                    INFO( method << " on port " << port );
+                    const auto request = text( method
+                                               + " /dav/a.txt HTTP/1.1\r\nHost: example.com\r\n"
+                                                 "Depth: 1\r\n\r\n" );
+                    const auto lines = converted( handshake( port )
+                                                  + cut( request, { 30 }, kClientIsn + 1, port ) );
+                    REQUIRE( lines[ 3 ].protocol == "HTTP" );
+                    REQUIRE( lines[ 3 ].description == kSegmentOfMessage );
+                    REQUIRE( lines[ 4 ].protocol == "HTTP" );
+                    REQUIRE( lines[ 4 ].description
+                             == method + " example.com/dav/a.txt HTTP/1.1" + reassembledFrom( 2 ) );
+                    REQUIRE( lines[ 4 ].completed == request );
+                }
+            }
+        }
+    }
+
     GIVEN( "a DNS-over-TCP answer split across 2 segments" )
     {
         const auto answer = dnsAnswer();

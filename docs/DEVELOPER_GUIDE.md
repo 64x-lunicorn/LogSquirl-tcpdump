@@ -527,7 +527,14 @@ the declarations of the detectors and in-stream passes the tables use.
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
-- HTTP: a request is its request line with the Host header's value put
+- HTTP: a request begins with one of the common eight methods (GET, POST,
+  PUT, DELETE, HEAD, PATCH, OPTIONS, CONNECT) and a space, or with a
+  further one (TRACE, SSDP's M-SEARCH and NOTIFY, GENA's SUBSCRIBE and
+  UNSUBSCRIBE, the WebDAV methods and their extensions', `kFurtherMethods`)
+  whose request line goes on as a target, a space and `HTTP/`, as far as
+  the first 64 bytes (`kRequestLineLook`) go: these are words of text and of
+  SIP too. The framer of the TCP Reassembly checks the same.
+  A request is described as its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
   path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
   its status line, then `, Content-Type: …` and `, Content-Length: …` when

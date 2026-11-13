@@ -162,30 +162,122 @@ std::string httpResponse( const uint8_t* payload, size_t len )
     return line;
 }
 
+/// The first bytes of a payload the request line of one of kFurtherMethods
+/// is checked in; a target longer than that is taken as it comes.
+constexpr size_t kRequestLineLook = 64;
+
+/// The methods a payload is an HTTP request by as soon as one and a space
+/// begin it (RFC 9110, 9.3).
+constexpr const char* kCommonMethods[]
+    = { "GET", "POST", "PUT", "DELETE", "HEAD", "PATCH", "OPTIONS", "CONNECT" };
+
+/// TRACE, SSDP's and GENA's (UPnP Device Architecture 2.0), WebDAV's and its
+/// extensions' (RFC 4918, 3253, 3648, 3744, 4791, 5323, 5842) and LINK,
+/// UNLINK and QUERY: many of them words of text and of other protocols
+/// (SIP's NOTIFY and SUBSCRIBE), so only a request line makes them HTTP.
+constexpr const char* kFurtherMethods[] = {
+    "TRACE",
+    "M-SEARCH",
+    "NOTIFY",
+    "SUBSCRIBE",
+    "UNSUBSCRIBE",
+    "PROPFIND",
+    "PROPPATCH",
+    "MKCOL",
+    "COPY",
+    "MOVE",
+    "LOCK",
+    "UNLOCK",
+    "REPORT",
+    "SEARCH",
+    "MKCALENDAR",
+    "MKACTIVITY",
+    "MKWORKSPACE",
+    "CHECKIN",
+    "CHECKOUT",
+    "UNCHECKOUT",
+    "MERGE",
+    "UPDATE",
+    "LABEL",
+    "VERSION-CONTROL",
+    "BASELINE-CONTROL",
+    "ORDERPATCH",
+    "ACL",
+    "BIND",
+    "UNBIND",
+    "REBIND",
+    "LINK",
+    "UNLINK",
+    "QUERY",
+};
+
+/// The @p len bytes at @p payload begin with @p method and a space.
+bool beginsWithMethod( const uint8_t* payload, size_t len, const char* method )
+{
+    const auto n = std::strlen( method );
+    return len > n && std::memcmp( payload, method, n ) == 0 && payload[ n ] == ' ';
+}
+
+/// The bytes after a method's space go on as a request line, a target, a
+/// space and the HTTP version ("/a HTTP/1.1"), as far as they go and up to
+/// kRequestLineLook: a capture or a segment may cut the line anywhere.
+bool goesOnAsRequestLine( const uint8_t* payload, size_t len, size_t at )
+{
+    static constexpr char kVersion[] = " HTTP/";
+    const auto end = std::min( len, kRequestLineLook );
+    size_t i = at;
+    while ( i < end && payload[ i ] != ' ' && payload[ i ] != '\r' && payload[ i ] != '\n' ) {
+        ++i;
+    }
+    if ( i == end ) {
+        return true; // the target runs on beyond the bytes looked at
+    }
+    if ( i == at ) {
+        return false; // no target
+    }
+    for ( size_t v = 0; v + 1 < sizeof( kVersion ) && i < end; ++v, ++i ) {
+        if ( payload[ i ] != static_cast<uint8_t>( kVersion[ v ] ) ) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The payload begins with an HTTP request: a common method and a space,
+/// or a further one and what goes on as a request line.
+bool beginsHttpRequest( const uint8_t* payload, size_t len )
+{
+    for ( const char* method : kCommonMethods ) {
+        if ( beginsWithMethod( payload, len, method ) ) {
+            return true;
+        }
+    }
+    for ( const char* method : kFurtherMethods ) {
+        if ( beginsWithMethod( payload, len, method ) ) {
+            return goesOnAsRequestLine( payload, len, std::strlen( method ) + 1 );
+        }
+    }
+    return false;
+}
+
+/// The payload begins with an HTTP/1.x request or response.
+bool beginsHttpMessage( const uint8_t* payload, size_t len )
+{
+    return beginsHttpRequest( payload, len )
+           || ( len >= 5 && std::memcmp( payload, "HTTP/", 5 ) == 0 );
+}
+
 } // namespace
 
 /// Detect HTTP request or response from payload start.
 std::string detectHttp( const uint8_t* payload, size_t len )
 {
-    if ( len < 4 )
-        return {};
-
-    // HTTP methods
-    auto startsWith = [ & ]( const char* prefix ) {
-        auto pLen = std::strlen( prefix );
-        return len >= pLen && std::memcmp( payload, prefix, pLen ) == 0;
-    };
-
-    if ( startsWith( "GET " ) || startsWith( "POST " ) || startsWith( "PUT " )
-         || startsWith( "DELETE " ) || startsWith( "HEAD " ) || startsWith( "PATCH " )
-         || startsWith( "OPTIONS " ) || startsWith( "CONNECT " ) ) {
+    if ( beginsHttpRequest( payload, len ) ) {
         return httpRequest( payload, len );
     }
-
-    if ( startsWith( "HTTP/" ) ) {
+    if ( len >= 5 && std::memcmp( payload, "HTTP/", 5 ) == 0 ) {
         return httpResponse( payload, len );
     }
-
     return {};
 }
 
@@ -206,7 +298,10 @@ bool isWebSocketUpgrade( const uint8_t* payload, size_t len )
 /// byte more than there is.
 std::optional<size_t> frameHttpHeader( const uint8_t* payload, size_t len, FramerLook* look )
 {
-    if ( detectHttp( payload, std::min<size_t>( len, 8 ) ).empty() ) {
+    // A call that searched beyond kRequestLineLook saw all of the start
+    // that tells an HTTP message.
+    const bool startSeen = look && look->searched >= kRequestLineLook;
+    if ( !startSeen && !beginsHttpMessage( payload, len ) ) {
         return std::nullopt;
     }
     // The empty line begins nowhere before where the last call stopped.

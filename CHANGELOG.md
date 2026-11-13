@@ -713,6 +713,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every packet of such an interface was shown that far off, often near
   1970. It is now added to the interface's enhanced and simple packet
   blocks, with each interface's own unit and offset (#228)
+- **SSDP requests and further HTTP methods are recognised.** `M-SEARCH *
+  HTTP/1.1` and `NOTIFY * HTTP/1.1` on UDP 1900, most SSDP traffic, were
+  labelled SSDP by their port alone, without a description: only GET,
+  POST, PUT, DELETE, HEAD, PATCH, OPTIONS and CONNECT were taken for
+  requests. They are now described by their request line, and TRACE,
+  GENA's SUBSCRIBE and UNSUBSCRIBE and the WebDAV methods (PROPFIND,
+  PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK, REPORT, SEARCH, …) are HTTP
+  on any port, their header sections reassembled over segments. As many
+  of these are words of text or of SIP, they count only in a request
+  line, a target and `HTTP/` behind them: `COPY this file` is no
+  request (#229)
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
   0. The conversion now stops with packet 4,294,967,295, and the summary
