@@ -407,6 +407,10 @@ struct TlsDecryption::Direction {
     bool encrypted = false;   ///< Its records are protected.
     bool application = false; ///< TLS 1.3: by the application traffic keys.
     uint8_t failures = 0;     ///< Records in a row that did not decrypt.
+    /// TLS 1.3: the key log's bytes read when it had no application traffic
+    /// secret for the direction after its Finished; -1 if not looked for in
+    /// vain.
+    int64_t missedAt = -1;
     /// Records the last one decrypted came after, lost or not decrypted.
     uint64_t skipped = 0;
     /// Application data went missing since the last that was described:
@@ -660,6 +664,34 @@ bool TlsDecryption::ensureKeys( Session& session )
     return true;
 }
 
+bool TlsDecryption::ensureApplicationKeys( Session& session, unsigned d )
+{
+    auto& direction = session.dir[ d ];
+    if ( !session.suite->tls13 || !direction.application || direction.cipher ) {
+        return true;
+    }
+    if ( !lookup_
+         || ( keyLogBytes_ && direction.missedAt >= 0 && keyLogBytes_() == direction.missedAt ) ) {
+        return false; // nothing was added to the key log since
+    }
+    const auto* secrets = lookup_( session.clientRandom.data() );
+    const auto* traffic = secrets == nullptr    ? nullptr
+                          : d == session.client ? &secrets->clientTraffic
+                                                : &secrets->serverTraffic;
+    // The records that passed without keys took their sequence numbers.
+    const auto seq = direction.seq;
+    if ( traffic == nullptr || traffic->empty()
+         || !setTrafficSecret( session, direction, *traffic ) ) {
+        direction.secret.clear();
+        direction.seq = seq;
+        direction.missedAt = keyLogBytes_ ? keyLogBytes_() : -1;
+        return false;
+    }
+    direction.seq = seq;
+    direction.missedAt = -1;
+    return true;
+}
+
 bool TlsDecryption::decrypt( Session& session, Direction& direction, uint8_t type, uint16_t version,
                              ByteView fragment, tls::PlainBytes& plain, uint8_t& inner )
 {
@@ -870,8 +902,12 @@ void TlsDecryption::afterHandshake( Session& session, unsigned d, ByteView messa
             }
         }
         if ( direction.nextSecret.empty() ) {
+            // The key log has no application traffic secret yet: the
+            // direction waits for it (ensureApplicationKeys()).
             direction.cipher.reset();
             direction.secret.clear();
+            direction.seq = 0;
+            direction.missedAt = keyLogBytes_ ? keyLogBytes_() : -1;
         }
         else {
             setTrafficSecret( session, direction, std::move( direction.nextSecret ) );
@@ -987,9 +1023,14 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
 
         auto& direction = session->dir[ d ];
         uint8_t inner = 0;
+        bool waiting = false;
         if ( direction.failures >= kMaxFailures || !ensureKeys( *session )
+             || ( waiting = !ensureApplicationKeys( *session, d ) )
              || !decrypt( *session, direction, type, version, fragment, plain, inner ) ) {
-            if ( session->keyed && direction.failures < kMaxFailures ) {
+            if ( waiting ) {
+                ++direction.seq; // the record took its sequence number
+            }
+            else if ( session->keyed && direction.failures < kMaxFailures ) {
                 ++direction.failures;
             }
             lost( *session, direction, type );

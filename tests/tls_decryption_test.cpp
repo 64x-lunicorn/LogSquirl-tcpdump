@@ -177,6 +177,12 @@ public:
         };
     }
 
+    /// All the session's secrets, as a complete key log holds them.
+    const tls::SessionSecrets& secrets() const
+    {
+        return secrets_;
+    }
+
     /// The ClientHello and the ServerHello, plaintext records.
     Bytes clientHello() const
     {
@@ -861,6 +867,62 @@ SCENARIO( "A session the key log has no secrets for is looked for once it grew",
             THEN( "it is looked for again, once" )
             {
                 REQUIRE( asked == 2 );
+            }
+        }
+    }
+}
+
+SCENARIO( "TLS 1.3 traffic secrets that reach the key log after the Finished", "[tls_decryption]" )
+{
+    Tls13Session session;
+    const auto all = session.lookup();
+    tls::SessionSecrets inLog;
+    int64_t keyLogBytes = 100;
+    TlsDecryption decryption(
+        [ &all, &inLog ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+            return all( random ) ? &inLog : nullptr;
+        },
+        [ &keyLogBytes ] { return keyLogBytes; } );
+    const std::string ok = "HTTP/1.1 200 OK\r\n\r\n";
+    auto respond = [ & ] {
+        return session.feed( decryption, 1,
+                             session.seal( 1, 0x17, Bytes( ok.begin(), ok.end() ) ) );
+    };
+
+    GIVEN( "a key log with only the handshake secrets when the server's Finished comes" )
+    {
+        inLog.clientHandshakeTraffic = session.secrets().clientHandshakeTraffic;
+        inLog.serverHandshakeTraffic = session.secrets().serverHandshakeTraffic;
+        session.feed( decryption, 0, session.clientHello() );
+        const auto finished = session.feed(
+            decryption, 1,
+            session.serverHello()
+                + session.seal( 1, 0x16,
+                                Tls13Session::handshakeMessage( 8, Bytes{ 0x00, 0x00 } )
+                                    + Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF1 ) ) ) );
+        REQUIRE( contains( finished, "TLS (decrypted) | Server Hello" ) );
+        REQUIRE( contains( finished, "Encrypted Extensions, Finished" ) );
+        session.finished( 1 );
+
+        // More records than a direction may fail to decrypt in a row.
+        std::vector<std::string> before;
+        for ( unsigned i = 0; i <= TlsDecryption::kMaxFailures; ++i ) {
+            before.push_back( respond() );
+        }
+
+        WHEN( "the traffic secrets reach the key log" )
+        {
+            inLog.clientTraffic = session.secrets().clientTraffic;
+            inLog.serverTraffic = session.secrets().serverTraffic;
+            keyLogBytes = 200;
+            const auto after = respond();
+
+            THEN( "the application data before them stays encrypted, that after them decrypts" )
+            {
+                for ( const auto& info : before ) {
+                    REQUIRE_FALSE( contains( info, kDecryptedMarker ) );
+                }
+                REQUIRE( contains( after, "TLS (decrypted) | HTTP/1.1 200 OK" ) );
             }
         }
     }

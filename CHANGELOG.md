@@ -820,6 +820,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refresh of the Packet panel, describing whatever was shown by then. A
   cut-off read now reports nothing; one that fails to show says why
   (#232).
+- **TLS 1.3 decrypts once the traffic secrets reach the key log.** In a
+  live capture whose key log held a session's handshake secrets but not
+  yet its `CLIENT_TRAFFIC_SECRET_0` and `SERVER_TRAFFIC_SECRET_0` when its
+  Finished was decrypted, the application data stayed encrypted for good.
+  The session is now looked for again once the key log grew, and the
+  application data after the traffic secrets arrive is decrypted (#226).
 
 ## [0.3.0] — 2026-10-09
 

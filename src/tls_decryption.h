@@ -148,6 +148,10 @@ private:
     void handshake( const Stream& stream, ByteView fragment );
     /// Set up a session's keys from the key log, unless they are.
     bool ensureKeys( Session& session );
+    /// TLS 1.3: set up direction @p d's application keys from the key log
+    /// if it had no traffic secret for them at the direction's Finished,
+    /// once the key log grew; false while they are still missing.
+    bool ensureApplicationKeys( Session& session, unsigned d );
     /// TLS 1.3: protect @p direction with the keys of traffic @p secret.
     bool setTrafficSecret( Session& session, Direction& direction, tls::SecretBytes secret );
     /// Decrypt a protected record into @p plain and its content type.

@@ -1336,6 +1336,12 @@ it runs, and the text is the same as before.
   KeyUpdate derives the next ones ("traffic upd"). If the handshake keys
   do not open a record, the application keys are tried from sequence
   number 0: the handshake ended unseen, as when the secrets came late.
+  If the key log has no application traffic secret for a direction when
+  its Finished is decrypted (a live capture's key log read between the
+  handshake and the traffic secrets), the direction waits for it
+  (`ensureApplicationKeys()`): it is looked for again, once the key log
+  grew, at each later record, and the records that passed meanwhile count
+  towards the sequence number but not towards `kMaxFailures`.
 - **Records** (`decrypt()`): AEAD with the nonce and additional data of
   each version (RFC 5288, 7905, 8446), or AES-CBC with its MAC (RFC 5246,
   RFC 7366), each tried with the next `kSequenceLookahead` (8) sequence
