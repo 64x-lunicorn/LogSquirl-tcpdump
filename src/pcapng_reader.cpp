@@ -52,7 +52,9 @@ constexpr uint32_t kMinSimplePacket = kBlockFrame + 4;
 constexpr uint32_t kMinEnhancedPacket = kBlockFrame + 20;
 
 constexpr uint16_t kOptionEnd = 0;
-constexpr uint16_t kOptionTsresol = 9; ///< if_tsresol
+constexpr uint16_t kOptionTsresol = 9;   ///< if_tsresol
+constexpr uint16_t kOptionTsoffset = 14; ///< if_tsoffset
+constexpr uint32_t kTsoffsetLength = 8;  ///< if_tsoffset's int64 of seconds
 
 /// The smallest length a block of @p type can have.
 uint32_t minimumLength( uint32_t type )
@@ -83,6 +85,22 @@ uint64_t powerOfTen( uint8_t exponent )
         result *= 10;
     }
     return result;
+}
+
+/// Read a 64-bit value of a capture file; @p swap: it was written in the
+/// other byte order than this host's.
+uint64_t read64( const uint8_t* p, bool swap )
+{
+    uint64_t v;
+    std::memcpy( &v, p, 8 );
+    if ( swap ) {
+        uint64_t reversed = 0;
+        for ( int i = 0; i < 8; ++i ) {
+            reversed = ( reversed << 8 ) | ( ( v >> ( 8 * i ) ) & 0xFF );
+        }
+        v = reversed;
+    }
+    return v;
 }
 
 } // namespace
@@ -219,6 +237,15 @@ bool PcapngReader::readInterface( BlockHeader& block )
             block.consumed += 1;
             length -= 1;
         }
+        else if ( code == kOptionTsoffset && length >= kTsoffsetLength ) {
+            uint8_t value[ kTsoffsetLength ];
+            if ( read( value, kTsoffsetLength ) < kTsoffsetLength ) {
+                return fail( "cut off inside an interface description" );
+            }
+            iface.offset = static_cast<int64_t>( read64( value, swap_ ) );
+            block.consumed += kTsoffsetLength;
+            length -= kTsoffsetLength;
+        }
         if ( !skip( length ) ) {
             return fail( "cut off inside an interface description" );
         }
@@ -347,10 +374,22 @@ bool PcapngReader::readPacket( BlockHeader& block, PacketRecord& pkt )
     else {
         fractionNs = ( ( fraction >> ( unit.exponent - 34 ) ) * 1000000000 ) >> 34;
     }
-    // Only a unit of whole seconds counts past what int64_t seconds hold,
-    // some 292 billion years on: such a time is kept at the last one it holds.
-    pkt.timestampSec = static_cast<int64_t>( std::min<uint64_t>(
-        timestamp / perSecond, static_cast<uint64_t>( std::numeric_limits<int64_t>::max() ) ) );
+    // Only a unit of whole seconds, or an if_tsoffset, counts past what
+    // int64_t seconds hold, some 292 billion years on: such a time is kept
+    // at the last one it holds.  An offset that puts it before 1970 keeps it
+    // at 1970, as a pcap's unsigned seconds cannot go earlier either.
+    constexpr auto kLatest = std::numeric_limits<int64_t>::max();
+    const auto seconds = static_cast<int64_t>(
+        std::min<uint64_t>( timestamp / perSecond, static_cast<uint64_t>( kLatest ) ) );
+    if ( iface->offset > 0 && seconds > kLatest - iface->offset ) {
+        pkt.timestampSec = kLatest;
+    }
+    else if ( seconds + iface->offset < 0 ) {
+        fractionNs = 0;
+    }
+    else {
+        pkt.timestampSec = seconds + iface->offset;
+    }
     pkt.timestampNsec = static_cast<uint32_t>( fractionNs );
     pkt.capturedLen = capturedLen;
     pkt.originalLen = originalLen;

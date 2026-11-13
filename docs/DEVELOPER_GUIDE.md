@@ -57,19 +57,19 @@ to the same dissection (`dissectPacket()`):
 - Section header blocks in either byte order; a file may hold several
   sections, each with its own byte order and interfaces (major version 1)
 - Interface description blocks: link-layer type, snaplen and `if_tsresol`,
-  in its power-of-ten and power-of-two forms (microseconds by default); at
-  most 65,536 interfaces per section; a section header or interface block
+  in its power-of-ten and power-of-two forms (microseconds by default), and
+  `if_tsoffset`, signed seconds added to each of the interface's packet
+  times (0 by default; a time it puts before 1970 is kept at 1970); at most 65,536 interfaces per section; a section header or interface block
   longer than 256 KiB (`kMaxHeaderBlock`) ends the capture as unreadable
 - Enhanced packet blocks, and simple packet blocks, which belong to the
   section's first interface, are cut to its snaplen and have no timestamp
-  (time 0)
+  (time 0 plus the interface's `if_tsoffset`)
 - Every other block (name resolution, interface statistics, decryption
   secrets, custom, the obsolete packet block) is skipped by its length
 - Every block's length is checked against its fields, its trailing copy and
   the end of the file before anything is read past it; a block that fails
   ends the capture as one cut off inside a record (`truncated()`), and only
   the first 256 KiB of a packet are dissected
-- `if_tsoffset` is not applied: times are relative to the first packet
 
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
 

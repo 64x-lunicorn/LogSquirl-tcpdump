@@ -707,6 +707,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#173).
 
 ### Fixed
+- **pcapng times with an interface's offset.** A pcapng interface that
+  declares `if_tsoffset`, as libpcap 1.10 and later and Wireshark can,
+  counts its timestamps from that many seconds; the offset was ignored, so
+  every packet of such an interface was shown that far off, often near
+  1970. It is now added to the interface's enhanced and simple packet
+  blocks, with each interface's own unit and offset (#228)
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
   0. The conversion now stops with packet 4,294,967,295, and the summary

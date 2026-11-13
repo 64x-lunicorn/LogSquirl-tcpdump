@@ -129,6 +129,7 @@ private:
         uint32_t linkType = 0;
         uint32_t snaplen = 0; ///< 0: no limit
         TimeUnit unit;
+        int64_t offset = 0; ///< if_tsoffset: seconds added to each timestamp
         TimePrecision precision = TimePrecision::Microseconds;
         RecordSpan block; ///< Its interface description block.
     };

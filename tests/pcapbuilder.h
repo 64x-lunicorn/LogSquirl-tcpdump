@@ -31,6 +31,7 @@
 #include "capture_reader.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -375,8 +376,10 @@ struct Pcapng {
     }
 
     /// An Interface Description Block; @p tsresol is if_tsresol's byte,
-    /// -1 for none (microseconds).  An if_name option comes first.
-    Bytes idb( uint32_t linkType, int tsresol = -1, uint32_t snaplen = 262144 ) const
+    /// -1 for none (microseconds); @p tsoffset is if_tsoffset's seconds,
+    /// none if not given.  An if_name option comes first.
+    Bytes idb( uint32_t linkType, int tsresol = -1, uint32_t snaplen = 262144,
+               std::optional<int64_t> tsoffset = std::nullopt ) const
     {
         Bytes body;
         put16( body, static_cast<uint16_t>( linkType ) );
@@ -385,6 +388,19 @@ struct Pcapng {
         body = body + option( 2, text( "eth0" ) );
         if ( tsresol >= 0 ) {
             body = body + option( 9, { static_cast<uint8_t>( tsresol ) } );
+        }
+        if ( tsoffset ) {
+            const auto bits = static_cast<uint64_t>( *tsoffset );
+            Bytes value;
+            if ( bigEndian ) {
+                put32( value, static_cast<uint32_t>( bits >> 32 ) );
+                put32( value, static_cast<uint32_t>( bits & 0xFFFFFFFF ) );
+            }
+            else {
+                put32( value, static_cast<uint32_t>( bits & 0xFFFFFFFF ) );
+                put32( value, static_cast<uint32_t>( bits >> 32 ) );
+            }
+            body = body + option( 14, value );
         }
         return block( kIdb, body + option( 0, {} ) );
     }
