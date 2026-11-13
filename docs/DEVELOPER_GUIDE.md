@@ -432,7 +432,11 @@ read through a `DeviceSource`:
   instead of reading the source (`PipeSource`).
 - **Thread.** The source starts the program when it is constructed and
   owns it on that thread, which needs no event loop: build it on the
-  worker thread that converts the stream.
+  worker thread that converts the stream. Without one, `QProcess` takes in
+  stdout and the program's end only in a `waitFor…` call, so `available()`
+  looks with `waitForReadyRead( 0 )` before it answers: the waits of a
+  live conversion that only ask `ready()` (the duration's, the
+  snapshot's) see what the program wrote.
 - **The end.** The stream ends when the program has exited (stdout closing
   alone does not end it while the program runs) or on the stop flag. A
   program that could not be started, exited with a code other than 0 or

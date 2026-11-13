@@ -739,6 +739,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before it, and the first, when it comes, is described as the whole
   message (`Client Hello, SNI=example.com, TLS 1.3 [reassembled from 2 segments]`);
   retransmissions are still left as they are (#225).
+- **A live capture through a program reads while it waits.** A Local, SSH,
+  Android or custom command capture with *Stop after N s* recorded nothing
+  and stopped with "stopped before anything was captured"; without one, it
+  read about one pipe buffer per second while it waited for the next
+  snapshot, so a busy interface piled up "packets dropped by kernel". It
+  now reads what the program writes as it comes. Wireshark extcap captures
+  were not affected (#224)
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
   0. The conversion now stops with packet 4,294,967,295, and the summary

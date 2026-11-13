@@ -189,6 +189,9 @@ public:
 
 protected:
     std::ptrdiff_t readFor( uint8_t* dst, size_t n, std::chrono::milliseconds timeout ) override;
+    /// Takes in, without waiting, what the program wrote and whether it
+    /// ended, so that a wait that only asks ready() (a duration's, a
+    /// snapshot's) sees the stream without an event loop.
     bool available() override;
 
 private:

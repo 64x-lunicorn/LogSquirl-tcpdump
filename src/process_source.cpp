@@ -603,6 +603,12 @@ std::ptrdiff_t ProcessSource::readFor( uint8_t* dst, size_t n, std::chrono::mill
 
 bool ProcessSource::available()
 {
+    if ( process_->bytesAvailable() <= 0 && process_->state() != QProcess::NotRunning ) {
+        // The capture's thread has no event loop: QProcess takes in stdout,
+        // and the program's end, only while it is waited on.  Look once.
+        process_->waitForReadyRead( 0 );
+        drainStderr();
+    }
     return process_->bytesAvailable() > 0 || process_->state() == QProcess::NotRunning;
 }
 
