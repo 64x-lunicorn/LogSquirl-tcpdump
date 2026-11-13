@@ -243,7 +243,8 @@ set(PLUGIN_INSTALL_DIR
 )
 
 install(TARGETS logsquirl_tcpdump LIBRARY DESTINATION "${PLUGIN_INSTALL_DIR}")
-install(FILES   plugin.json               DESTINATION "${PLUGIN_INSTALL_DIR}")
+# The icon plugin.json names, as the release packages carry it.
+install(FILES   plugin.json icon.png      DESTINATION "${PLUGIN_INSTALL_DIR}")
 # The licence and where the source of what is linked in is (NOTICE), as the
 # release packages carry them (.github/plugin-ci.json).
 install(FILES   LICENSE NOTICE            DESTINATION "${PLUGIN_INSTALL_DIR}")
