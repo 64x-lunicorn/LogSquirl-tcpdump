@@ -847,9 +847,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a large HTTPS download, whose 16 KiB records rarely begin a segment, no
   record after the gap was described or decrypted again, and the
   decryption gave the direction up. The direction now goes on at the end of
-  the message the gap was in, as its header told, and the records after it
-  are described and decrypted; memory held stays within the direction's
-  limit, and a direction with wrong keys is still given up (#230).
+  the message the gap was in, as its header told; when the gap took that
+  end and the next record's header too, or nothing was held, it looks for
+  where a record begins in the bytes after the gap, a header followed by
+  the next one. The records after it are described and decrypted; memory
+  held stays within the direction's limit, and a direction with wrong keys
+  is still given up (#230).
 - **A live capture that fails after its tab opened keeps what it
   captured.** When writing failed, a full disk above all, or another error
   came after the first packet had opened the tab, the capture's text and

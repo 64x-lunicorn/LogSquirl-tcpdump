@@ -1062,6 +1062,71 @@ SCENARIO( "Segments are taken in sequence order", "[tcp_reassembly]" )
     }
 }
 
+SCENARIO( "The next TLS record is found again after bytes lost with a record's header",
+          "[tcp_reassembly]" )
+{
+    constexpr size_t kSegmentBytes = 1448;
+    const auto record = tlsRecord( 0x17, Bytes( 3995, 0xCC ) );
+
+    GIVEN( "records of 4,000 bytes, the segment with the second's header lost, and bytes "
+           "inside the second that look like a header" )
+    {
+        auto second = record;
+        // Its fragment's bytes 1000 on look like a header, of a record whose
+        // end holds no other.
+        const Bytes header{ 0x17, 0x03, 0x03, 0x01, 0x00 };
+        std::copy( header.begin(), header.end(), second.begin() + 1005 );
+        const auto download = record + second + record + record + record;
+        const auto all = fromServer( cut( download, cutsEvery( download.size(), kSegmentBytes ) ),
+                                     kServerIsn + 1 );
+        // Bytes 2,896 to 4,344, the first's end and the second's header, are
+        // lost; the client acknowledges them with the segment after.
+        Segment ack;
+        ack.seq = kClientIsn + 1;
+        ack.ack = all[ 3 ].seq + static_cast<uint32_t>( all[ 3 ].payload.size() );
+        ack.flags = kAck;
+        const auto lines
+            = converted( handshake() + std::vector<Segment>{ all[ 0 ], all[ 1 ], all[ 3 ], ack }
+                         + std::vector<Segment>( all.begin() + 4, all.end() ) );
+
+        THEN( "the records from the third on are put together, and nothing from the second" )
+        {
+            Bytes completed;
+            for ( size_t i = 3 + 2; i < lines.size(); ++i ) {
+                completed = completed + lines[ i ].completed;
+            }
+            REQUIRE( completed.size() == 3 * record.size() );
+            REQUIRE( ( completed == record + record + record ) );
+        }
+    }
+
+    GIVEN( "an HTTP response whose body holds TLS records, a segment of it lost" )
+    {
+        const auto response = text( "HTTP/1.1 200 OK\r\nContent-Length: 6000\r\n\r\n" );
+        Bytes body( 6000, 0xCC );
+        const auto records = tlsRecord( 0x17, Bytes( 100, 0xCC ) );
+        const auto inside = records + records;
+        std::copy( inside.begin(), inside.end(), body.begin() + 2 * kSegmentBytes + 500 );
+        auto segments = fromServer( cut( response + body, { response.size() } ), kServerIsn + 1 );
+        const auto bodySegments
+            = fromServer( cut( body, cutsEvery( body.size(), kSegmentBytes ) ), segments[ 1 ].seq );
+        std::vector<Segment> kept{ segments[ 0 ] };
+        for ( size_t i = 0; i < bodySegments.size(); ++i ) {
+            if ( i != 1 ) {
+                kept.push_back( bodySegments[ i ] );
+            }
+        }
+        const auto lines = converted( handshake() + kept );
+
+        THEN( "no record is looked for in it: the stream carries no TLS" )
+        {
+            for ( size_t i = 4; i < lines.size(); ++i ) {
+                REQUIRE( lines[ i ].completed.empty() );
+            }
+        }
+    }
+}
+
 SCENARIO( "A message whose first segment comes after the second is reassembled",
           "[tcp_reassembly]" )
 {
@@ -1492,6 +1557,10 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
 
     GIVEN( "a download of 16 KiB TLS records over segments of 1448 bytes, one in 60 lost" )
     {
+        // Segment 3 lies inside the first record; segment 11 holds the end
+        // of the first and the header of the second, segment 33 the end of
+        // the third and the header of the fourth.
+        const size_t phase = GENERATE( 3, 11, 33 );
         constexpr size_t kRecords = 40;
         const auto record = tlsRecord( 0x17, Bytes( 16401, 0xCC ) );
         Bytes download;
@@ -1502,7 +1571,7 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
             = fromServer( cut( download, cutsEvery( download.size(), 1448 ) ), kServerIsn + 1 );
         std::vector<Segment> kept;
         for ( size_t i = 0; i < all.size(); ++i ) {
-            if ( i % 60 != 3 ) {
+            if ( i % 60 != phase ) {
                 kept.push_back( all[ i ] );
             }
         }

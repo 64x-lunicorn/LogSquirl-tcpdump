@@ -152,6 +152,32 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
                                 uint8_t framer = 0, const Stream* stream = nullptr,
                                 FramerLook* look = nullptr );
 
+/// Where a message begins in bytes after a gap (findTcpMessageStart()).
+struct MessageStart {
+    /// The protocol of the message found (MessageExtent::framer); 0 if none
+    /// was.
+    uint8_t framer = 0;
+    /// The bytes before the message found; if none was, those that begin
+    /// none, after which the search goes on once more bytes come.
+    size_t offset = 0;
+};
+
+/**
+ * Where a message of protocol @p framer, or with @p framer 0 of any that
+ * can be found, begins in the @p len bytes at @p data, which follow bytes
+ * of the stream the capture lost and so may begin inside one.  Only a
+ * protocol whose header tells it apart from the bytes inside a message is
+ * looked for (tcpMessageStartFindable()): TLS, a record header (content
+ * type 20 to 23, version 3.1 to 3.4, a fragment of 1 to 2^14 + 256 bytes)
+ * where the next one follows at its end or the bytes end, so that
+ * ciphertext rarely passes for one.  A header whose next one is not there
+ * yet stops the search, at its offset.  The work is linear in @p len.
+ */
+MessageStart findTcpMessageStart( const uint8_t* data, size_t len, uint8_t framer = 0 );
+
+/// Whether findTcpMessageStart() looks for messages of protocol @p framer.
+bool tcpMessageStartFindable( uint8_t framer );
+
 /// Bytes the framers that read a header section (HTTP's, SIP's) looked at
 /// on this thread so far: a measure of their work, for tests to bound.
 uint64_t headerBytesLooked();

@@ -125,7 +125,8 @@ struct StreamState {
     /// TCP only: what the TCP Reassembly knows of each direction d, whose
     /// bytes it keeps apart (tcp_reassembly.h): bit 1 << d, it holds some;
     /// bit 4 << d, it let them go for lack of memory, which the direction's
-    /// next segment says.
+    /// next segment says; bit 16 << d, the direction carries messages that
+    /// can be found again after a gap (TLS records).
     uint8_t reassembly = 0;
 
     /// protocols: the stream began with the HTTP/2 connection preface.

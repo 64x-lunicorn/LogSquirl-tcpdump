@@ -126,6 +126,13 @@ public:
         return sessionsDecrypted_;
     }
 
+    /// Directions given up so far, after kMaxFailures records in a row
+    /// that would not decrypt.
+    size_t directionsGivenUp() const
+    {
+        return directionsGivenUp_;
+    }
+
     /// Sessions followed now.
     size_t sessions() const
     {
@@ -181,6 +188,7 @@ private:
     /// first.
     std::list<int> recent_;
     size_t sessionsDecrypted_ = 0;
+    size_t directionsGivenUp_ = 0;
     size_t http2Memory_ = 0;
 };
 

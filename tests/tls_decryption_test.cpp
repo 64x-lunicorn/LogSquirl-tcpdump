@@ -872,20 +872,40 @@ enum class Loss {
     Cut,          ///< it was cut at the snaplen
 };
 
+/// The bytes of a bulk download's segments.
+constexpr size_t kSegmentBytes = 1448;
+/// The bytes of a bulk download's records: 16 KiB of plaintext, its content
+/// type and tag, behind its header.
+constexpr size_t kBulkRecordBytes = 5 + 16384 + 1 + 16;
+/// The bytes a record sealed by Tls13Session adds to its plaintext.
+constexpr size_t kSealOverhead = 5 + 1 + 16;
+
+/// Which segments of a bulk download the capture lost.
+struct Lost {
+    /// Bytes of a short record before the 16 KiB ones (a response header's),
+    /// which moves where those begin against the segments; 0: none.
+    size_t lead = 0;
+    size_t first = 3; ///< The first segment lost, counted from 0.
+    size_t count = 1; ///< Segments lost from it on.
+};
+
 /// A TLS 1.3 download of @p count records of 16 KiB, over segments of
-/// 1448 bytes, its fourth segment lost as @p loss, the server's records
-/// sealed under @p keys: each packet's line, and which of them are the
-/// download's segments after the lost one.
+/// kSegmentBytes, the segments @p lost lost as @p loss, the server's records
+/// sealed under @p keys: each packet's line, which of them are the
+/// download's segments after the lost ones, how many records begin after
+/// the bytes lost, and the packet after which the TLS Decryption first gave
+/// a direction up.
 struct BulkDownload {
     std::vector<std::string> lines;
     std::vector<size_t> afterLoss;
+    size_t firstSegment = 0; ///< The line of the download's first segment.
+    size_t recordsAfterLoss = 0;
+    std::optional<size_t> givenUpAt;
 };
 
 BulkDownload bulkDownload( Loss loss, size_t count, TlsDecryption::Lookup keys,
-                           Tls13Session& session )
+                           Tls13Session& session, const Lost& lost = {} )
 {
-    constexpr size_t kSegmentBytes = 1448;
-    constexpr size_t kLost = 3;
     const auto hello = session.clientHello();
     const auto ee = Tls13Session::handshakeMessage( 8, Bytes{ 0x00, 0x00 } );
     const auto server
@@ -898,9 +918,15 @@ BulkDownload bulkDownload( Loss loss, size_t count, TlsDecryption::Lookup keys,
     session.finished( 0 );
     const auto request = client + session.seal( 0, 0x17, Bytes( get.begin(), get.end() ) );
     Bytes download;
+    if ( lost.lead > 0 ) {
+        download = session.seal( 1, 0x17, Bytes( lost.lead - kSealOverhead, 0x48 ) );
+    }
+    std::vector<size_t> starts;
     for ( size_t i = 0; i < count; ++i ) {
+        starts.push_back( download.size() );
         download = download + session.seal( 1, 0x17, Bytes( 16384, 0x5A ) );
     }
+    const auto lostEnd = ( lost.first + lost.count ) * kSegmentBytes;
 
     constexpr uint32_t kClient = 1000;
     constexpr uint32_t kServer = 5000;
@@ -924,23 +950,26 @@ BulkDownload bulkDownload( Loss loss, size_t count, TlsDecryption::Lookup keys,
         { true, 0x18, helloEnd, serverEnd, request },
     };
     BulkDownload out;
+    out.firstSegment = sent.size();
+    out.recordsAfterLoss = static_cast<size_t>( std::count_if(
+        starts.begin(), starts.end(), [ lostEnd ]( size_t start ) { return start >= lostEnd; } ) );
     for ( size_t at = 0, i = 0; at < download.size(); at += kSegmentBytes, ++i ) {
         const auto seq = serverEnd + static_cast<uint32_t>( at );
         const auto to = std::min( download.size(), at + kSegmentBytes );
         Sent segment{ false, 0x18, seq, requestEnd,
                       Bytes( download.begin() + static_cast<std::ptrdiff_t>( at ),
                              download.begin() + static_cast<std::ptrdiff_t>( to ) ) };
-        if ( i == kLost ) {
+        if ( i >= lost.first && i < lost.first + lost.count ) {
             if ( loss != Loss::Cut ) {
                 continue;
             }
             segment.captured = 100;
         }
-        if ( i > kLost ) {
+        if ( i >= lost.first + lost.count ) {
             out.afterLoss.push_back( sent.size() );
         }
         sent.push_back( segment );
-        if ( i == kLost + 1 && loss == Loss::Acknowledged ) {
+        if ( i == lost.first + lost.count && loss == Loss::Acknowledged ) {
             sent.push_back(
                 { true, 0x10, requestEnd, seq + static_cast<uint32_t>( to - at ), {} } );
         }
@@ -969,7 +998,22 @@ BulkDownload bulkDownload( Loss loss, size_t count, TlsDecryption::Lookup keys,
     PipelineOptions options;
     options.tlsKeys = std::move( keys );
     PacketPipeline pipeline( options );
-    out.lines = lines( tcpdump_test::pcapFile( records ), pipeline );
+    const auto capture = tcpdump_test::pcapFile( records );
+    MemorySource memory( capture.data(), capture.size() );
+    HeadSource head( memory );
+    const auto reader = makeCaptureReader( head );
+    REQUIRE( reader->open() );
+    PacketRecorder recorder( *reader, pipeline, {} );
+    PacketRecord pkt;
+    while ( reader->next( pkt ) ) {
+        const auto payload = reader->payloadOf( pkt );
+        const auto outcome = pipeline.run( pkt, payload );
+        recorder.record( pkt, payload, outcome );
+        out.lines.push_back( pkt.protocol + "  " + pkt.info );
+        if ( !out.givenUpAt && pipeline.tlsDecryption()->directionsGivenUp() > 0 ) {
+            out.givenUpAt = out.lines.size() - 1;
+        }
+    }
     return out;
 }
 
@@ -980,22 +1024,40 @@ SCENARIO( "A bulk TLS download goes on decrypting after a segment the capture lo
 {
     constexpr size_t kRecords = 12;
     const auto loss = GENERATE( Loss::Dropped, Loss::Acknowledged, Loss::Cut );
+    // The 16 KiB records end at byte 478 of segment 11 and 956 of segment
+    // 22; after a lead record of 968 bytes, the first ends at byte 1446 of
+    // segment 11, the next one's header cut over segments 11 and 12.
+    const auto lost = GENERATE( Lost{ 0, 0, 1 },    // the first, while nothing is held
+                                Lost{ 0, 3, 1 },    // inside a record
+                                Lost{ 0, 11, 1 },   // a record's end and the next one's header
+                                Lost{ 0, 22, 2 },   // two, a record's end in the first
+                                Lost{ 968, 11, 1 }, // a record's end and two bytes of a header
+                                Lost{ 968, 12, 1 }  // the rest of a header whose start came
+    );
 
-    GIVEN( "a download of 16 KiB records whose fourth segment the capture lost" )
+    GIVEN( "a download of 16 KiB records, segments " + std::to_string( lost.first ) + " to "
+           + std::to_string( lost.first + lost.count - 1 ) + " lost, a lead record of "
+           + std::to_string( lost.lead ) + " bytes" )
     {
         Tls13Session session;
-        const auto download = bulkDownload( loss, kRecords, session.lookup(), session );
+        const auto download = bulkDownload( loss, kRecords, session.lookup(), session, lost );
 
-        THEN( "the records after the one it was in are described and decrypted" )
+        THEN( "every record that begins after the bytes lost is described and decrypted" )
         {
             size_t decrypted = 0;
             for ( const auto i : download.afterLoss ) {
                 decrypted += contains( download.lines[ i ], kDecryptedMarker ) ? 1 : 0;
             }
-            // The first record is lost; the next ones may complete on one segment.
-            REQUIRE( decrypted >= kRecords - 3 );
+            // A record completes on a segment of its own, a line each; but
+            // the segments held early after a drop, kMaxEarlySegments of
+            // them, under three records, are taken at once, their records
+            // described on one line.
+            const size_t together = loss == Loss::Dropped ? 2 : 0;
+            REQUIRE( download.recordsAfterLoss >= kRecords - 3 );
+            REQUIRE( decrypted + together >= download.recordsAfterLoss );
             REQUIRE( contains( download.lines[ download.afterLoss.back() ],
                                "TLS (decrypted) | Application Data" ) );
+            REQUIRE_FALSE( download.givenUpAt );
         }
     }
 
@@ -1011,7 +1073,7 @@ SCENARIO( "A bulk TLS download goes on decrypting after a segment the capture lo
             [ &right, &wrong ]( const uint8_t* random ) -> const tls::SessionSecrets* {
                 return right( random ) ? &wrong : nullptr;
             },
-            session );
+            session, lost );
 
         THEN( "none of the server's records is decrypted, the client's request is" )
         {
@@ -1019,6 +1081,18 @@ SCENARIO( "A bulk TLS download goes on decrypting after a segment the capture lo
                 REQUIRE_FALSE( contains( download.lines[ i ], kDecryptedMarker ) );
             }
             REQUIRE( contains( download.lines[ 5 ], "GET www.example.com/big.bin" ) );
+        }
+
+        THEN( "the server's direction is given up once kMaxFailures records failed, the "
+              "records lost and found again counted" )
+        {
+            REQUIRE( download.givenUpAt );
+            // kMaxFailures records that fail, those lost, the one the
+            // search went past: each over kBulkRecordBytes / kSegmentBytes
+            // segments and one more.
+            const size_t records = TlsDecryption::kMaxFailures + lost.count + 2;
+            const size_t segments = records * ( kBulkRecordBytes / kSegmentBytes + 1 );
+            REQUIRE( *download.givenUpAt - download.firstSegment <= segments );
         }
     }
 }

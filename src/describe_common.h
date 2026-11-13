@@ -420,6 +420,9 @@ std::string describeRtcp( const uint8_t* payload, size_t len, size_t wireLen );
 
 /// A TLS record (describe_tls.cpp).
 std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len );
+/// Where a TLS record begins in bytes after a gap, as findTcpMessageStart()
+/// says, framer 1 if one was found (describe_tls.cpp).
+MessageStart findTlsRecordStart( const uint8_t* payload, size_t len );
 /// A DNS message behind its 2-byte length (describe_dns.cpp).
 std::optional<size_t> frameDnsOverTcp( const uint8_t* payload, size_t len );
 /// An HTTP/1.x header section (describe_http.cpp); with @p look, read on

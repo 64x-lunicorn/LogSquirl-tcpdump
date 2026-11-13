@@ -1259,17 +1259,37 @@ ends in whole messages or none it is taken alone. Another segment early,
 an acknowledgement past the bytes waited for, a cut segment, a FIN, a
 SYN or an RST end the wait. A gap ends the message, its bytes dropped: the other direction
 acknowledges bytes past the held ones (the capture lost them), a segment
-was cut at the snaplen, or more segments came early than are held. When
-the held message's header told its length, the direction goes on at its
-end (`goOnAfterGap()`): the orderer skips to that sequence number, the
-segments that came early from there on are taken, and the next segment
-completes or adds to the messages that begin there, so that a bulk
-download of 16 KiB TLS records over 1448-byte segments picks up again at
-the next record, its records decrypted, however rarely segment and record
-boundaries meet. Segments before that end keep their own description;
-whole messages after the held one among the held bytes are dropped with it.
-When the length was not told (an HTTP header section, or the gap took the
-header), reassembly starts again at the next segment that begins a message.
+was cut at the snaplen, or more segments came early than are held; the
+gap reaches at least to the acknowledgement, the cut segment's end or the
+first segment held early (`lostTo`); a cut segment of bytes taken already
+is none. When the held message's header told its length and the bytes
+there were not lost, the direction goes on at its end (`goOnAfterGap()`):
+the orderer skips to that sequence number, the segments that came early
+from there on are taken, and the next segment completes or adds to the
+messages that begin there, so that a bulk download of 16 KiB TLS records
+over 1448-byte segments picks up again at the next record, its records
+decrypted, however rarely segment and record boundaries meet. Segments
+before that end keep their own description; whole messages after the held
+one among the held bytes are dropped with it. When the length was not
+told (the gap took part of the header), the gap took the end and the next
+message's header with it (a lost segment that holds a record boundary:
+about one in eleven of a bulk download's), nothing was held (a cut
+segment, or one waited for, `wait()`, that never came), the direction
+searches (`search()`, `Entry::searching`) if its messages can be found
+again: a TLS record, by `findTcpMessageStart()` in the describer, a
+plausible header (content type 20 to 23, version 3.1 to 3.4, a fragment of
+at most 2^14 + 256 bytes) where the next one follows at its end or the
+bytes end. Bit `16 << d` of `StreamState::reassembly` says direction d
+framed a TLS record, so that it searches with nothing held too. The search
+starts at the first byte captured after the gap and looks at each byte
+once; the bytes before the start, or those that begin none, are dropped as
+it goes, so it holds at most a record that waits for the next header and
+a segment. The segments it takes keep their own description; once found,
+the record is held as any, and described and decrypted on the segment
+that completes it. Random ciphertext passes for a header with a following
+one about once in 10^13 bytes. A protocol whose headers do not stand out
+(an HTTP body, DNS's length) is not searched: reassembly starts again at
+the next segment that begins a message.
 
 The memory budget: a direction holds at most `kStreamLimit` (64 KiB),
 counting its buffer's capacity and the segments that came early; all
@@ -1374,7 +1394,7 @@ it runs, and the text is the same as before.
   RFC 7366), each tried with the next `kSequenceLookahead` (8) sequence
   numbers, so that a record the capture lost is passed over. After
   `kMaxFailures` (8) records in a row that would not decrypt, a direction
-  is given up. `tls_crypto.h` is the only file that includes Mbed TLS
+  is given up (`directionsGivenUp()` counts them, for the tests). `tls_crypto.h` is the only file that includes Mbed TLS
   (`RecordCipher`: GCM, ChaChaPoly, AES-CBC; HMAC; HKDF).
 - **Description**: a segment with a record decrypted is described anew
   (`redescribe()`): `TLS (decrypted) | ` (`kDecryptedMarker`, then the

@@ -741,7 +741,9 @@ sessions decrypted, or says why the key log could not be read.
 - **Records**, put together across segments by the TCP reassembly; a record
   the capture lost is passed over, and the next ones are still decrypted,
   in a large download too: after a segment the capture lost or cut at the
-  snaplen, the reassembly goes on at the end of the record it was in
+  snaplen, the reassembly goes on at the end of the record it was in, or,
+  if the next record's header was lost with it, at the next record header
+  it finds
 - **During a live capture** the key log is read again as the browser adds
   to it (at most twice a second); a last line is read once its line feed
   is written

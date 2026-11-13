@@ -1032,6 +1032,9 @@ void TlsDecryption::records( PacketRecord& pkt, const Stream& stream,
             }
             else if ( session->keyed && direction.failures < kMaxFailures ) {
                 ++direction.failures;
+                if ( direction.failures == kMaxFailures ) {
+                    ++directionsGivenUp_;
+                }
             }
             lost( *session, direction, type );
             parts.emplace_back( protectedName( type ) );
