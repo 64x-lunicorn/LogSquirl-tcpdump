@@ -25,6 +25,7 @@
 
 #include <catch2/catch.hpp>
 
+#include "capture_sessions.h"
 #include "fakehost.h"
 #include "follow_stream.h"
 #include "packet_line.h"
@@ -47,6 +48,8 @@
 #include <QTemporaryDir>
 #include <QTreeWidget>
 #include <QtMath>
+
+#include <stdexcept>
 
 extern "C" int logsquirl_plugin_init_ex( const LogSquirlHostApi* api, void* handle,
                                          size_t api_size );
@@ -600,6 +603,102 @@ SCENARIO( "The Packet Panel reads a packet off the UI thread", "[packet_panel]" 
                 REQUIRE( waitFor( [ panel ] { return panel->shownPacket() == 5; } ) );
                 runFor( 200 );
                 REQUIRE( panel->shownPacket() == 5 );
+            }
+        }
+    }
+}
+
+namespace {
+
+/// A Packet Panel whose showing of a packet read throws, as it might were
+/// memory to run out while it fills the layer tree.
+class ThrowingPanel : public PacketPanel {
+protected:
+    void showRead( const PacketRead& ) override
+    {
+        throw std::runtime_error( "out of memory" );
+    }
+};
+
+} // namespace
+
+SCENARIO( "A refresh reports back for the packet it read or not at all", "[packet_panel]" )
+{
+    GIVEN( "a converted capture in the tab in front, the sidebar not in view" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        auto* panel = loaded.panel;
+
+        WHEN( "a refresh's read is cut off by another log coming to the front" )
+        {
+            host.selectedLines = { loaded.lines[ 3 ] };
+            int reports = 0;
+            panel->refresh( [ &reports ] { ++reports; } );
+            REQUIRE( panel->statusText() == QString::fromUtf8( "Reading packet 3\xe2\x80\xa6" ) );
+            host.activateFile( QString() );
+            REQUIRE( panel->statusText() == "No capture in this tab." );
+
+            AND_WHEN( "the capture comes back and another refresh finds nothing selected" )
+            {
+                runFor( 200 );
+                host.activateFile( loaded.text );
+                host.selectedLines.clear();
+                int laterReports = 0;
+                panel->refresh( [ &laterReports ] { ++laterReports; } );
+
+                THEN( "only that refresh reports back, not the one cut off" )
+                {
+                    REQUIRE( laterReports == 1 );
+                    runFor( 200 );
+                    REQUIRE( reports == 0 );
+                    REQUIRE( laterReports == 1 );
+                }
+            }
+        }
+
+        WHEN( "a refresh's read is cut off by the next refresh" )
+        {
+            host.selectedLines = { loaded.lines[ 2 ] };
+            QList<uint32_t> reported;
+            panel->refresh( [ &reported, panel ] { reported << panel->shownPacket(); } );
+            host.selectedLines = { loaded.lines[ 5 ] };
+            panel->refresh( [ &reported, panel ] { reported << panel->shownPacket() + 100; } );
+
+            THEN( "only the last one reports, for the packet it read" )
+            {
+                REQUIRE( waitFor( [ &reported ] { return !reported.isEmpty(); } ) );
+                runFor( 200 );
+                REQUIRE( reported == QList<uint32_t>{ 105 } );
+            }
+        }
+    }
+
+    GIVEN( "a Packet Panel whose showing of a read throws" )
+    {
+        LoadedCapture loaded( kMixed );
+        auto& host = loaded.host;
+        ThrowingPanel panel;
+        panel.setCapture( tcpdump::g_state.sessions->catalog().front()->index );
+
+        WHEN( "a refresh reads a packet" )
+        {
+            host.selectedLines = { loaded.lines[ 3 ] };
+            int reports = 0;
+            panel.refresh( [ &reports ] { ++reports; } );
+
+            THEN( "it reports back once, the panel saying what failed" )
+            {
+                REQUIRE( waitFor( [ &reports ] { return reports > 0; } ) );
+                REQUIRE( panel.statusText() == "Packet 3: out of memory" );
+                REQUIRE( panel.shownPacket() == 0 );
+
+                AND_THEN( "not again for a later refresh" )
+                {
+                    host.selectedLines.clear();
+                    panel.refresh();
+                    REQUIRE( reports == 1 );
+                }
             }
         }
     }

@@ -322,12 +322,17 @@ void PacketPanel::setCapture( std::shared_ptr<const CaptureIndex> index )
 
 void PacketPanel::refresh( std::function<void()> then )
 {
-    if ( then ) {
+    // A read this starts cuts off the one before, and drops what waited for
+    // it: @p then waits for this read alone.
+    poll( true );
+    if ( !then ) {
+        return;
+    }
+    if ( reading_ ) {
         whenSettled_.push_back( std::move( then ) );
     }
-    poll( true );
-    if ( !reading_ ) {
-        settled();
+    else {
+        then();
     }
 }
 
@@ -458,7 +463,7 @@ void PacketPanel::showPacket( uint32_t number )
     // The watcher lives on this thread, so its signals are delivered here.
     auto* watcher = new QFutureWatcher<std::shared_ptr<PacketRead>>( this );
     connect( watcher, &QFutureWatcher<std::shared_ptr<PacketRead>>::finished, this,
-             [ this, watcher, generation ] {
+             [ this, watcher, generation, number ] {
                  watcher->deleteLater();
                  if ( generation != generation_ ) {
                      return; // the selection moved on
@@ -467,19 +472,31 @@ void PacketPanel::showPacket( uint32_t number )
                  const auto read
                      = watcher->future().resultCount() > 0 ? watcher->result() : nullptr;
                  try {
-                     if ( read && read->ok ) {
-                         showRead( *read );
-                     }
-                     else {
+                     try {
+                         if ( read && read->ok ) {
+                             showRead( *read );
+                         }
+                         else {
+                             showReason( QStringLiteral( "Packet %1: %2" )
+                                             .arg( number )
+                                             .arg( read ? read->error
+                                                        : QStringLiteral( "The read ended "
+                                                                          "without a result." ) ) );
+                         }
+                     } catch ( const std::exception& e ) {
+                         // What waits for the read is told why it is not shown.
+                         hostLog( LOGSQUIRL_LOG_ERROR, QStringLiteral( "Packet %1 not shown: %2" )
+                                                           .arg( number )
+                                                           .arg( QString::fromUtf8( e.what() ) ) );
                          showReason( QStringLiteral( "Packet %1: %2" )
-                                         .arg( selectedPacket_ )
-                                         .arg( read ? read->error
-                                                    : QStringLiteral( "The read ended without "
-                                                                      "a result." ) ) );
+                                         .arg( number )
+                                         .arg( QString::fromUtf8( e.what() ) ) );
                      }
                      settled();
                  } catch ( const std::exception& e ) {
-                     // An exception must not escape into Qt or the host.
+                     // An exception must not escape into Qt or the host, and
+                     // what waited must not run for a later refresh.
+                     whenSettled_.clear();
                      hostLog( LOGSQUIRL_LOG_ERROR,
                               "The Packet Panel stopped: " + QString::fromUtf8( e.what() ) );
                  }
@@ -557,13 +574,15 @@ void PacketPanel::showRead( const PacketRead& read )
 
 void PacketPanel::showReason( const QString& reason )
 {
-    // A read still running is of a selection no longer shown.
+    // A read still running is of a selection no longer shown: what waited
+    // for it would tell of another, so it does not run.
     if ( reading_ ) {
         ++generation_;
         if ( latest_ ) {
             latest_->store( generation_ );
         }
         reading_ = false;
+        whenSettled_.clear();
     }
     selectedPacket_ = 0;
     shownPacket_ = 0;

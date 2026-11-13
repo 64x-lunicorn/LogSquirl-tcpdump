@@ -265,6 +265,60 @@ SCENARIO( "BSD loopback captures are read in the capture's byte order", "[pcap_p
     }
 }
 
+SCENARIO( "A frame too short for its link-layer header is named as truncated", "[pcap_parser]" )
+{
+    struct ShortFrame {
+        uint32_t linkType;
+        size_t headerLen;
+        const char* info;
+    };
+    const ShortFrame kShortFrames[] = {
+        { DltEthernet, 14, "Truncated Ethernet header" },
+        { DltLinuxSll, 16, "Truncated Linux cooked capture v1 header" },
+        { DltLinuxSll2, 20, "Truncated Linux cooked capture v2 header" },
+        { DltNull, 4, "Truncated Null/Loopback header" },
+        { DltLoop, 4, "Truncated Null/Loopback header" },
+        { DltRaw, 1, "Truncated Raw IP header" },
+    };
+
+    for ( const auto& frame : kShortFrames ) {
+        GIVEN( "a capture of link-layer type " + std::to_string( frame.linkType )
+               + " with a record one byte short of its header and an empty record" )
+        {
+            FileOptions o;
+            o.linkType = frame.linkType;
+            auto result
+                = parse( pcapFile( { { Bytes( frame.headerLen - 1, 0xAB ) }, { Bytes{} } }, o ) );
+
+            THEN( "both are shown as truncated, not as an unsupported link-layer type" )
+            {
+                REQUIRE( result.packets.size() == 2 );
+                for ( const auto& pkt : result.packets ) {
+                    REQUIRE( pkt.info == frame.info );
+                    REQUIRE( pkt.protocol != "Unknown" );
+                }
+            }
+        }
+    }
+
+    GIVEN( "a capture of a link-layer type the parser does not read" )
+    {
+        constexpr uint32_t kUnsupported = 147; // DLT_USER0
+        FileOptions o;
+        o.linkType = kUnsupported;
+        auto result = parse( pcapFile( { { Bytes( 20, 0 ) }, { Bytes{} } }, o ) );
+
+        THEN( "its records still say so, whatever their length" )
+        {
+            REQUIRE( result.packets.size() == 2 );
+            for ( const auto& pkt : result.packets ) {
+                REQUIRE( pkt.protocol == "Unknown" );
+                REQUIRE( pkt.info == "Unsupported link-layer type 147" );
+            }
+        }
+    }
+}
+
 SCENARIO( "IPv6 extension headers are walked to the transport layer", "[pcap_parser]" )
 {
     auto parseOne = []( const Bytes& ipPacket ) {

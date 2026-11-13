@@ -32,7 +32,9 @@ and skipping, with the byte count for progress, in the `CaptureReader` base.
 - Dissects link-layer (Ethernet, Raw IP, Linux SLL, Linux SLL2, BSD
   loopback DLT_NULL/DLT_LOOP, family read in the capture's byte order), and
   hands 802.11, Radiotap, PPP, Cisco HDLC and PPPoE to `link_layers.h/cpp`
-  (see below)
+  (see below); a frame shorter than its link-layer header is
+  `Truncated <name> header` (`holdsLinkHeader()`, `parseEthernet()`), only a
+  link-layer type none of them reads is `Unsupported link-layer type N`
 - Strips stacked 802.1Q / 802.1ad (QinQ) VLAN tags, then unwraps PPPoE
   (EtherTypes 0x8863 and 0x8864) with `dissectPppoe()`
 - Dissects network layer (IPv4, IPv6 with hop-by-hop, routing, fragment,
@@ -57,19 +59,19 @@ to the same dissection (`dissectPacket()`):
 - Section header blocks in either byte order; a file may hold several
   sections, each with its own byte order and interfaces (major version 1)
 - Interface description blocks: link-layer type, snaplen and `if_tsresol`,
-  in its power-of-ten and power-of-two forms (microseconds by default); at
-  most 65,536 interfaces per section; a section header or interface block
+  in its power-of-ten and power-of-two forms (microseconds by default), and
+  `if_tsoffset`, signed seconds added to each of the interface's packet
+  times (0 by default; a time it puts before 1970 is kept at 1970); at most 65,536 interfaces per section; a section header or interface block
   longer than 256 KiB (`kMaxHeaderBlock`) ends the capture as unreadable
 - Enhanced packet blocks, and simple packet blocks, which belong to the
   section's first interface, are cut to its snaplen and have no timestamp
-  (time 0)
+  (time 0 plus the interface's `if_tsoffset`)
 - Every other block (name resolution, interface statistics, decryption
   secrets, custom, the obsolete packet block) is skipped by its length
 - Every block's length is checked against its fields, its trailing copy and
   the end of the file before anything is read past it; a block that fails
   ends the capture as one cut off inside a record (`truncated()`), and only
   the first 256 KiB of a packet are dissected
-- `if_tsoffset` is not applied: times are relative to the first packet
 
 `parsePcap()` parses a whole buffer in memory, pcap or pcapng, for tests.
 
@@ -430,7 +432,11 @@ read through a `DeviceSource`:
   instead of reading the source (`PipeSource`).
 - **Thread.** The source starts the program when it is constructed and
   owns it on that thread, which needs no event loop: build it on the
-  worker thread that converts the stream.
+  worker thread that converts the stream. Without one, `QProcess` takes in
+  stdout and the program's end only in a `waitFor…` call, so `available()`
+  looks with `waitForReadyRead( 0 )` before it answers: the waits of a
+  live conversion that only ask `ready()` (the duration's, the
+  snapshot's) see what the program wrote.
 - **The end.** The stream ends when the program has exited (stdout closing
   alone does not end it while the program runs) or on the stop flag. A
   program that could not be started, exited with a code other than 0 or
@@ -527,7 +533,15 @@ the declarations of the detectors and in-stream passes the tables use.
   `OPTIONS` it shares), HTTP, the HTTP/2 preface, MQTT (on port 1883, or
   behind a CONNECT), SOME/IP by its header, NMEA 0183, SOCKS4/5 (only messages of the exact shape, in the right
   direction, on proxy ports), then the port hint
-- HTTP: a request is its request line with the Host header's value put
+- HTTP: a request begins with one of the common eight methods (GET, POST,
+  PUT, DELETE, HEAD, PATCH, OPTIONS, CONNECT) and a space, or with a
+  further one (TRACE, SSDP's M-SEARCH and NOTIFY, GENA's SUBSCRIBE and
+  UNSUBSCRIBE, the WebDAV methods and their extensions', `kFurtherMethods`)
+  whose request line goes on as a target, a space and `HTTP/`, as far as
+  the first 2048 bytes (`kRequestLineLook`) go: these are words of text and of
+  SIP too, whose long URIs end in `SIP/2.0`. The framer of the TCP
+  Reassembly checks the same.
+  A request is described as its request line with the Host header's value put
   before a path, `GET example.com/index.html HTTP/1.1`; a target that is no
   path (a URL, CONNECT's `host:port`, `*`) stays as it is. A response is
   its status line, then `, Content-Type: …` and `, Content-Length: …` when
@@ -1232,10 +1246,50 @@ all taken (a retransmission) is left as it is, and the part of one that
 overlaps them is dropped. A segment that begins a message is only taken
 for one if no later bytes of its direction have been seen
 (`TcpDirection::nextSeq`), so a retransmission after the message ended
-starts nothing. A gap ends the message, its bytes dropped, and reassembly
-starts again at the next segment that begins one: the other direction
+starts nothing. A segment after bytes not captured yet
+(`TcpAnalysis::missingFrom`, the direction's next sequence number before
+a `[TCP Previous segment not captured]`) while nothing is held, and that
+begins no message, may be the second of a message whose first was
+captured after it: its direction waits for those bytes, holding the
+segment early, which keeps its own description. If the next segment
+brings them and ends in an incomplete message, the two are taken
+together from its start and described on it, `[reassembled from 2
+segments]`, and their messages returned for the TLS Decryption; if it
+ends in whole messages or none it is taken alone. Another segment early,
+an acknowledgement past the bytes waited for, a cut segment, a FIN, a
+SYN or an RST end the wait. A gap ends the message, its bytes dropped: the other direction
 acknowledges bytes past the held ones (the capture lost them), a segment
-was cut at the snaplen, or more segments came early than are held.
+was cut at the snaplen, or more segments came early than are held; the
+gap reaches at least to the acknowledgement, the cut segment's end or the
+first segment held early (`lostTo`); a cut segment of bytes taken already
+is none. When the held message's header told its length and the bytes
+there were not lost, the direction goes on at its end (`goOnAfterGap()`):
+the orderer skips to that sequence number, the segments that came early
+from there on are taken, and the next segment completes or adds to the
+messages that begin there, so that a bulk download of 16 KiB TLS records
+over 1448-byte segments picks up again at the next record, its records
+decrypted, however rarely segment and record boundaries meet. Segments
+before that end keep their own description; whole messages after the held
+one among the held bytes are dropped with it. When the length was not
+told (the gap took part of the header), the gap took the end and the next
+message's header with it (a lost segment that holds a record boundary:
+about one in eleven of a bulk download's), nothing was held (a cut
+segment, or one waited for, `wait()`, that never came), the direction
+searches (`search()`, `Entry::searching`) if its messages can be found
+again: a TLS record, by `findTcpMessageStart()` in the describer, a
+plausible header (content type 20 to 23, version 3.1 to 3.4, a fragment of
+at most 2^14 + 256 bytes) where the next one follows at its end or the
+bytes end. Bit `16 << d` of `StreamState::reassembly` says direction d
+framed a TLS record, so that it searches with nothing held too. The search
+starts at the first byte captured after the gap and looks at each byte
+once; the bytes before the start, or those that begin none, are dropped as
+it goes, so it holds at most a record that waits for the next header and
+a segment. The segments it takes keep their own description; once found,
+the record is held as any, and described and decrypted on the segment
+that completes it. Random ciphertext passes for a header with a following
+one about once in 10^13 bytes. A protocol whose headers do not stand out
+(an HTTP body, DNS's length) is not searched: reassembly starts again at
+the next segment that begins a message.
 
 The memory budget: a direction holds at most `kStreamLimit` (64 KiB),
 counting its buffer's capacity and the segments that came early; all
@@ -1329,12 +1383,18 @@ it runs, and the text is the same as before.
   KeyUpdate derives the next ones ("traffic upd"). If the handshake keys
   do not open a record, the application keys are tried from sequence
   number 0: the handshake ended unseen, as when the secrets came late.
+  If the key log has no application traffic secret for a direction when
+  its Finished is decrypted (a live capture's key log read between the
+  handshake and the traffic secrets), the direction waits for it
+  (`ensureApplicationKeys()`): it is looked for again, once the key log
+  grew, at each later record, and the records that passed meanwhile count
+  towards the sequence number but not towards `kMaxFailures`.
 - **Records** (`decrypt()`): AEAD with the nonce and additional data of
   each version (RFC 5288, 7905, 8446), or AES-CBC with its MAC (RFC 5246,
   RFC 7366), each tried with the next `kSequenceLookahead` (8) sequence
   numbers, so that a record the capture lost is passed over. After
   `kMaxFailures` (8) records in a row that would not decrypt, a direction
-  is given up. `tls_crypto.h` is the only file that includes Mbed TLS
+  is given up (`directionsGivenUp()` counts them, for the tests). `tls_crypto.h` is the only file that includes Mbed TLS
   (`RecordCipher`: GCM, ChaChaPoly, AES-CBC; HMAC; HKDF).
 - **Description**: a segment with a record decrypted is described anew
   (`redescribe()`): `TLS (decrypted) | ` (`kDecryptedMarker`, then the
@@ -1675,7 +1735,9 @@ a packet of it (so a pcap with no packets still names its one): Converted (with 
 capture header came (`StreamSource::stopped()`), so nothing was captured and
 nothing is left, which is not a failure. Failed is the only error mode: an unreadable
 input, an output that cannot be created or written, a memory allocation
-failure or any other exception ends as Failed, and nothing is left behind.
+failure or any other exception ends as Failed, and nothing is left behind,
+except for a live capture that fails after its first packet (see
+*Live conversion*).
 `applyCancelRequest()` decides, for the Converter when its loop ends,
 that a cancel request wins even over a conversion that had just finished:
 the result becomes Cancelled and the output is removed (`removeOutput()`).
@@ -1830,7 +1892,13 @@ stopping (Stop) ends Converted with the final summary, which equals that of
 converting the raw file (tested); Cancel removes both files. A stream that
 breaks off with an error after its first packet ends Failed with the
 message *and* `outputPath`, `rawPath` and the summary of what was captured;
-before a packet, it leaves nothing behind, as before.
+before a packet, it leaves nothing behind, as before. So does a capture
+that fails otherwise once its first text could be opened (`firstPacket`):
+a write that fails (a full disk) or an exception, which the packet loop
+catches itself (`failedOnException()`) instead of unwinding the output
+directory. The files are closed first, both even if the text cannot be
+written (`DiskLiveFiles::close()`), so that the final index measures them
+as they stay.
 
 #### The Live Output (`live_output.h/cpp`)
 When a live capture flushes, opens a text, sends a snapshot, starts a ring
@@ -3114,7 +3182,11 @@ export, conversation statistics):
   one the selection moved on from is dropped when it ends, and not begun
   when it has not (`latest_`). `refresh( then )` runs `then` once the
   packet is shown, or why not, which Packet details uses for its
-  notification; the destructor waits for the read that runs.
+  notification. `then` belongs to the read that `refresh()` started: a
+  read cut off, by a reason shown (another tab in front) or by the next
+  read, drops it, so it never runs for another refresh; a read whose
+  showing throws shows the error as the reason and runs it. The
+  destructor waits for the read that runs.
 
 - **Follow stream content** (`stream_content.h/cpp`,
   `stream_content_view.h/cpp`). The panel's Stream tab, a

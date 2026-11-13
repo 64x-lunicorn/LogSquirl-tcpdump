@@ -205,10 +205,26 @@ std::optional<ConversionResult> stoppedBeforeHeader( const ByteSource& input )
     return result;
 }
 
+/// @p convert's result, or Failed for whatever it throws.
+template <typename Convert>
+ConversionResult failedOnException( Convert&& convert )
+{
+    try {
+        return convert();
+    } catch ( const std::bad_alloc& ) {
+        return failed( QStringLiteral( "Not enough memory to read the capture" ) );
+    } catch ( const std::exception& e ) {
+        return failed( QString::fromUtf8( e.what() ) );
+    } catch ( ... ) {
+        return failed( QStringLiteral( "Unknown error" ) );
+    }
+}
+
 /**
  * The conversion of the capture in @p input, named @p name; whatever it
- * throws, the caller turns into Failed.  @p file is the capture file
- * @p input reads, which the CaptureIndex points into and whose size and
+ * throws before its packets are read, the caller turns into Failed, and
+ * what it throws while reading them, it does itself.  @p file is the
+ * capture file @p input reads, which the CaptureIndex points into and whose size and
  * consumed bytes give the progress; null for a stream, whose size is
  * unknown and which reports none.  With @p live, the input is a stream
  * converted live (convertStream()), and the index points into its raw
@@ -293,7 +309,8 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     }
 
     // The directory is removed with this object unless the conversion ends
-    // Converted: on every other return, and when an exception unwinds.
+    // Converted, or a live one keeps what was captured: on every other
+    // return, and when an exception unwinds.
     outputDir.emplace( tempDirTemplate( outputRoot ) );
     if ( !outputDir->isValid() ) {
         return failed( QStringLiteral( "Cannot create a temporary directory: %1" )
@@ -370,6 +387,9 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
     // Live: what was written is made readable, a text opened and snapshots
     // sent when the Live Output says so (act()).
     bool flushFailed = false;
+    // Whether a text was flushed with its first packet line and handed out
+    // to be opened (LiveObserver::firstPacket): a tab may show it.
+    bool textOpened = false;
     auto sendSnapshot = [ & ] {
         // The index follows the raw files: not the checkpoints of the files
         // a ring buffer deleted, so that a capture that runs for days keeps
@@ -393,9 +413,12 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         if ( step.flush && !files->flush() ) {
             flushFailed = true;
         }
-        if ( step.firstOfText && !flushFailed && live->firstPacket ) {
-            live->firstPacket( QFileInfo( files->textPath() ).absoluteFilePath(),
-                               QFileInfo( files->rawPath() ).absoluteFilePath() );
+        if ( step.firstOfText && !flushFailed ) {
+            textOpened = true;
+            if ( live->firstPacket ) {
+                live->firstPacket( QFileInfo( files->textPath() ).absoluteFilePath(),
+                                   QFileInfo( files->rawPath() ).absoluteFilePath() );
+            }
         }
         if ( step.snapshot ) {
             sendSnapshot();
@@ -417,147 +440,153 @@ ConversionResult convertOrThrow( ByteSource& input, CaptureFile* file, const QSt
         };
     }
 
-    int lastPermille = -1;
-    auto reportProgress = [ & ] {
-        if ( !progress || !file ) {
-            return;
-        }
-        // A gzip-compressed file's progress is in compressed bytes.
-        const auto size = std::max<uint64_t>( file->size(), 1 );
-        const auto permille
-            = static_cast<int>( std::min<uint64_t>( file->consumed() * 1000 / size, 1000 ) );
-        if ( permille != lastPermille ) {
-            lastPermille = permille;
-            progress( permille );
-        }
-    };
-    bool numbersUsedUp = false;
-    PacketRecord pkt;
-    while ( reader.next( pkt ) ) {
-        if ( cancel && cancel->load() ) {
-            ConversionResult result;
-            result.status = ConversionResult::Status::Cancelled;
-            return result;
-        }
-        if ( live ) {
-            // A ring buffer's file that is full or old ends before this
-            // packet, which then opens the next text.
-            const auto started = liveOutput->beforePacket();
-            if ( !started ) {
-                return liveFailed();
+    // From here on, an exception is a failure like any other, so that one
+    // after the first text was opened keeps what was captured too.
+    auto ended = failedOnException( [ & ] {
+        int lastPermille = -1;
+        auto reportProgress = [ & ] {
+            if ( !progress || !file ) {
+                return;
             }
-            act( *started );
-            if ( flushFailed ) {
-                return liveFailed();
+            // A gzip-compressed file's progress is in compressed bytes.
+            const auto size = std::max<uint64_t>( file->size(), 1 );
+            const auto permille
+                = static_cast<int>( std::min<uint64_t>( file->consumed() * 1000 / size, 1000 ) );
+            if ( permille != lastPermille ) {
+                lastPermille = permille;
+                progress( permille );
             }
-        }
-        const auto payload = reader.payloadOf( pkt );
-        const auto outcome = pipeline.run( pkt, payload );
-        if ( !writeLine( recorder.record( pkt, payload, outcome ) ) ) {
-            return writeFailed();
-        }
-        if ( live ) {
-            const auto step = liveOutput->packet( recorder.packets(), liveInput->bytesRead() );
-            act( step );
-            if ( flushFailed || liveInput->failed() ) {
-                return liveFailed();
+        };
+        bool numbersUsedUp = false;
+        PacketRecord pkt;
+        while ( reader.next( pkt ) ) {
+            if ( cancel && cancel->load() ) {
+                ConversionResult result;
+                result.status = ConversionResult::Status::Cancelled;
+                return result;
             }
+            if ( live ) {
+                // A ring buffer's file that is full or old ends before this
+                // packet, which then opens the next text.
+                const auto started = liveOutput->beforePacket();
+                if ( !started ) {
+                    return liveFailed();
+                }
+                act( *started );
+                if ( flushFailed ) {
+                    return liveFailed();
+                }
+            }
+            const auto payload = reader.payloadOf( pkt );
+            const auto outcome = pipeline.run( pkt, payload );
+            if ( !writeLine( recorder.record( pkt, payload, outcome ) ) ) {
+                return writeFailed();
+            }
+            if ( live ) {
+                const auto step = liveOutput->packet( recorder.packets(), liveInput->bytesRead() );
+                act( step );
+                if ( flushFailed || liveInput->failed() ) {
+                    return liveFailed();
+                }
 
-            // The first stop condition reached ends the capture with this
-            // packet, as does the last packet number.
-            if ( step.stop != StopCondition::None ) {
-                stoppedBy = step.stop;
-                numbersUsedUp = step.stop == StopCondition::PacketNumbers;
+                // The first stop condition reached ends the capture with this
+                // packet, as does the last packet number.
+                if ( step.stop != StopCondition::None ) {
+                    stoppedBy = step.stop;
+                    numbersUsedUp = step.stop == StopCondition::PacketNumbers;
+                    break;
+                }
+            }
+            reportProgress();
+
+            // No packet is numbered past the last number, where a 32-bit count
+            // would wrap: a file is converted that far, its summary saying it
+            // had more (a live capture's Live Output stops it there).
+            if ( !live && reader.packetsRead() >= options.lastPacketNumber ) {
+                PacketRecord rest;
+                numbersUsedUp = reader.next( rest );
                 break;
             }
         }
-        reportProgress();
-
-        // No packet is numbered past the last number, where a 32-bit count
-        // would wrap: a file is converted that far, its summary saying it
-        // had more (a live capture's Live Output stops it there).
-        if ( !live && reader.packetsRead() >= options.lastPacketNumber ) {
-            PacketRecord rest;
-            numbersUsedUp = reader.next( rest );
-            break;
+        beforeWait = nullptr;
+        reportProgress(); // a gzip stream's end lies behind its last packet
+        if ( liveInput && liveInput->timedOut() ) {
+            stoppedBy = StopCondition::Duration;
         }
-    }
-    beforeWait = nullptr;
-    reportProgress(); // a gzip stream's end lies behind its last packet
-    if ( liveInput && liveInput->timedOut() ) {
-        stoppedBy = StopCondition::Duration;
-    }
 
-    if ( gzip && gzip->overLimit() ) {
-        // A gzip bomb is no capture cut off: nothing of it is kept.
-        return applyCancelRequest(
-            failed( QStringLiteral( "Cannot read the gzip-compressed capture: %1" )
-                        .arg( QString::fromStdString( gzip->error() ) ) ),
-            cancel );
-    }
-    auto broken = streamFailure( input );
-    // A live capture that broke off keeps what was captured, once there is
-    // a packet to show.
-    if ( broken && ( !live || recorder.packets() == 0 ) ) {
-        return std::move( *broken );
-    }
-    if ( live ) {
-        if ( liveInput->failed() || !files->close() ) {
-            return liveFailed();
+        if ( gzip && gzip->overLimit() ) {
+            // A gzip bomb is no capture cut off: nothing of it is kept.
+            return applyCancelRequest(
+                failed( QStringLiteral( "Cannot read the gzip-compressed capture: %1" )
+                            .arg( QString::fromStdString( gzip->error() ) ) ),
+                cancel );
         }
-    }
-    else {
-        if ( !output.flush() ) {
-            return writeFailed();
+        auto broken = streamFailure( input );
+        // A live capture that broke off keeps what was captured, once there is
+        // a packet to show.
+        if ( broken && ( !live || recorder.packets() == 0 ) ) {
+            return std::move( *broken );
         }
-        output.close();
-    }
+        if ( live ) {
+            if ( liveInput->failed() || !files->close() ) {
+                return liveFailed();
+            }
+        }
+        else {
+            if ( !output.flush() ) {
+                return writeFailed();
+            }
+            output.close();
+        }
 
-    ConversionResult result;
-    if ( broken ) {
-        result = std::move( *broken );
+        ConversionResult result;
+        if ( broken ) {
+            result = std::move( *broken );
+        }
+        else {
+            result.status = ConversionResult::Status::Converted;
+        }
+        result.outputPath
+            = QFileInfo( live ? files->textPath() : output.fileName() ).absoluteFilePath();
+        result.summary = recorder.finalSummary();
+        result.summary.packetNumbersUsedUp = numbersUsedUp;
+        if ( gzip && gzip->cutOff() ) {
+            // The capture ends where its gzip stream does: as one cut off.
+            result.summary.endsInsideRecord = true;
+            result.summary.compressionProblem = gzip->error();
+        }
+        if ( live ) {
+            result.rawPath = QFileInfo( files->rawPath() ).absoluteFilePath();
+            result.stoppedBy = stoppedBy;
+            index->setCaptureParts( files->parts() );
+        }
+        else {
+            index->setCaptureFile( inputPath );
+        }
+        if ( gzip ) {
+            index->setGzipAccessPoints( gzip->accessPoints() );
+        }
+        result.index = index;
+        outputDir->setAutoRemove( false );
+        return applyCancelRequest( std::move( result ), cancel );
+    } );
+
+    // A live capture whose first text was opened (its tab is open) and that
+    // failed since, writing or by an exception, keeps what was captured, as
+    // one whose stream broke off does: the tab shows it with the error.
+    if ( ended.status != ConversionResult::Status::Failed || !ended.outputPath.isEmpty() || !live
+         || !textOpened ) {
+        return ended;
     }
-    else {
-        result.status = ConversionResult::Status::Converted;
-    }
-    result.outputPath
-        = QFileInfo( live ? files->textPath() : output.fileName() ).absoluteFilePath();
-    result.summary = recorder.finalSummary();
-    result.summary.packetNumbersUsedUp = numbersUsedUp;
-    if ( gzip && gzip->cutOff() ) {
-        // The capture ends where its gzip stream does: as one cut off.
-        result.summary.endsInsideRecord = true;
-        result.summary.compressionProblem = gzip->error();
-    }
-    if ( live ) {
-        result.rawPath = QFileInfo( files->rawPath() ).absoluteFilePath();
-        result.stoppedBy = stoppedBy;
-        index->setCaptureParts( files->parts() );
-    }
-    else {
-        index->setCaptureFile( inputPath );
-    }
-    if ( gzip ) {
-        index->setGzipAccessPoints( gzip->accessPoints() );
-    }
-    result.index = index;
+    files->close(); // what still fits is written; the first error is the one told
+    ended.outputPath = QFileInfo( files->textPath() ).absoluteFilePath();
+    ended.rawPath = QFileInfo( files->rawPath() ).absoluteFilePath();
+    ended.summary = recorder.finalSummary();
+    ended.stoppedBy = stoppedBy;
+    index->setCaptureParts( files->parts() );
+    ended.index = index;
     outputDir->setAutoRemove( false );
-    return applyCancelRequest( std::move( result ), cancel );
-}
-
-/// @p convert's result, or Failed for whatever it throws.
-template <typename Convert>
-ConversionResult failedOnException( Convert&& convert )
-{
-    try {
-        return convert();
-    } catch ( const std::bad_alloc& ) {
-        return failed( QStringLiteral( "Not enough memory to read the capture" ) );
-    } catch ( const std::exception& e ) {
-        return failed( QString::fromUtf8( e.what() ) );
-    } catch ( ... ) {
-        return failed( QStringLiteral( "Unknown error" ) );
-    }
+    return applyCancelRequest( std::move( ended ), cancel );
 }
 
 } // namespace

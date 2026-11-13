@@ -339,6 +339,9 @@ struct Framer {
     /// Tells a message after which the stream carries WebSocket frames
     /// (MessageExtent::upgradesTo); none if no message does.
     bool ( *upgrades )( const uint8_t*, size_t ) = nullptr;
+    /// Finds where a message begins in bytes after a gap, framer 1 if one
+    /// does (findTcpMessageStart()); none is looked for if null.
+    MessageStart ( *findStart )( const uint8_t*, size_t ) = nullptr;
 };
 
 /// WebSocket frames on a stream an HTTP 101 response upgraded, or after
@@ -465,7 +468,7 @@ constexpr Framer kTcpFramers[] = {
     { "DoIP", doipFrame },
     { "SMB2", smbFrame },
     { "SSHv2", sshFrame, sshToldByStream, sshInStream },
-    { "TLS", tlsFrame },
+    { "TLS", tlsFrame, nullptr, nullptr, nullptr, findTlsRecordStart },
     { "SIP", sipFrame },
     { "HTTP", httpFrame, nullptr, nullptr, isWebSocketUpgrade },
     { "MQTT", mqttFrame },
@@ -613,6 +616,32 @@ MessageExtent tcpMessageExtent( const uint8_t* data, size_t len, uint16_t srcPor
         }
     }
     return {};
+}
+
+MessageStart findTcpMessageStart( const uint8_t* data, size_t len, uint8_t framer )
+{
+    MessageStart start{ 0, len };
+    for ( size_t i = 0; i < std::size( kTcpFramers ); ++i ) {
+        const auto number = static_cast<uint8_t>( i + 1 );
+        if ( ( framer != 0 && framer != number ) || !kTcpFramers[ i ].findStart ) {
+            continue;
+        }
+        auto found = kTcpFramers[ i ].findStart( data, len );
+        found.framer = found.framer != 0 ? number : 0;
+        // The first message found; else the search goes on from the first
+        // offset any protocol is not sure of yet.
+        if ( found.offset < start.offset
+             || ( found.framer != 0 && found.offset == start.offset ) ) {
+            start = found;
+        }
+    }
+    return start;
+}
+
+bool tcpMessageStartFindable( uint8_t framer )
+{
+    return framer != 0 && framer <= std::size( kTcpFramers )
+           && kTcpFramers[ framer - 1 ].findStart != nullptr;
 }
 
 namespace {

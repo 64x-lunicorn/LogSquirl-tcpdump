@@ -33,6 +33,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+#include <limits>
+
 using namespace tcpdump;
 using namespace tcpdump_test;
 
@@ -208,6 +210,134 @@ SCENARIO( "A pcapng time past 2106 keeps its date", "[pcapng]" )
             REQUIRE( result.summary.firstTimeUtc == "1970-01-01 00:16:40.000000Z" );
             REQUIRE( result.summary.lastTimeUtc == "2286-11-20 17:46:40.000000Z" );
             REQUIRE( result.summary.durationSeconds == Approx( 9999999000.0 ) );
+        }
+    }
+}
+
+SCENARIO( "if_tsoffset is added to an interface's timestamps", "[pcapng]" )
+{
+    const int64_t offset = 1700000000; // 2023-11-14 22:13:20Z
+
+    for ( const auto& order : { le, be } ) {
+        GIVEN( std::string( order.bigEndian ? "a big" : "a little" )
+               + "-endian interface with if_tsoffset and an Enhanced Packet Block" )
+        {
+            const auto file = order.shb() + order.idb( DltEthernet, -1, 262144, offset )
+                              + order.epb( 0, 5 * 1000000ULL + 250, udpFrame( 1 ) );
+
+            THEN( "the packet's time is the offset plus its timestamp" )
+            {
+                const auto result = parse( file );
+                REQUIRE( result.packets.size() == 1 );
+                REQUIRE( result.packets[ 0 ].timestampSec == offset + 5 );
+                REQUIRE( result.packets[ 0 ].timestampNsec == 250000 );
+            }
+        }
+    }
+
+    GIVEN( "an interface with if_tsoffset and a Simple Packet Block" )
+    {
+        const auto frame = udpFrame( 9 );
+        const auto file = le.shb() + le.idb( DltEthernet, -1, 262144, offset )
+                          + le.spb( frame, static_cast<uint32_t>( frame.size() ) );
+
+        THEN( "the packet, which has no timestamp, is at the offset" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].timestampSec == offset );
+            REQUIRE( result.packets[ 0 ].timestampNsec == 0 );
+        }
+    }
+
+    GIVEN( "a nanosecond interface with if_tsoffset" )
+    {
+        const auto file = le.shb() + le.idb( DltEthernet, 9, 262144, offset )
+                          + le.epb( 0, 3 * 1000000000ULL + 123456789, udpFrame( 1 ) );
+
+        THEN( "the offset is added to the seconds of if_tsresol's unit" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].timestampSec == offset + 3 );
+            REQUIRE( result.packets[ 0 ].timestampNsec == 123456789 );
+            REQUIRE( result.packets[ 0 ].precision == TimePrecision::Nanoseconds );
+        }
+    }
+
+    GIVEN( "a negative if_tsoffset" )
+    {
+        const auto file = le.shb() + le.idb( DltEthernet, 0, 262144, -1000 )
+                          + le.epb( 0, 1700001000, udpFrame( 1 ) );
+
+        THEN( "it is taken off the timestamp" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].timestampSec == offset );
+        }
+    }
+
+    GIVEN( "an if_tsoffset that puts a packet before 1970" )
+    {
+        const auto file = le.shb() + le.idb( DltEthernet, -1, 262144, -10 )
+                          + le.epb( 0, 5 * 1000000ULL + 250, udpFrame( 1 ) );
+
+        THEN( "the packet is kept at 1970, the earliest time a capture shows" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].timestampSec == 0 );
+            REQUIRE( result.packets[ 0 ].timestampNsec == 0 );
+        }
+    }
+
+    GIVEN( "an if_tsoffset that puts a packet past the last second int64_t holds" )
+    {
+        const auto file = le.shb()
+                          + le.idb( DltEthernet, 0, 262144, std::numeric_limits<int64_t>::max() )
+                          + le.epb( 0, 5, udpFrame( 1 ) );
+
+        THEN( "the packet is kept at the last one" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 1 );
+            REQUIRE( result.packets[ 0 ].timestampSec == std::numeric_limits<int64_t>::max() );
+        }
+    }
+
+    GIVEN( "three interfaces, two with offsets of their own and units of their own, one without" )
+    {
+        const auto file = le.shb() + le.idb( DltEthernet, -1, 262144, offset )
+                          + le.idb( DltEthernet, 9, 262144, offset + 3600 )
+                          + le.idb( DltEthernet, 0 ) + le.epb( 0, 1000000ULL + 500, udpFrame( 1 ) )
+                          + le.epb( 1, 2000000000ULL + 7, udpFrame( 2 ) )
+                          + le.epb( 2, offset + 3, udpFrame( 3 ) );
+
+        THEN( "each packet has its own interface's offset" )
+        {
+            const auto result = parse( file );
+            REQUIRE( result.packets.size() == 3 );
+            REQUIRE( result.packets[ 0 ].timestampSec == offset + 1 );
+            REQUIRE( result.packets[ 0 ].timestampNsec == 500000 );
+            REQUIRE( result.packets[ 1 ].timestampSec == offset + 3600 + 2 );
+            REQUIRE( result.packets[ 1 ].timestampNsec == 7 );
+            REQUIRE( result.packets[ 2 ].timestampSec == offset + 3 );
+        }
+
+        THEN( "the converted text shows the real dates and times relative to the first packet" )
+        {
+            QTemporaryDir dir;
+            REQUIRE( dir.isValid() );
+            const auto result = convertPcap( writeFile( dir, "offset.pcapng", file ), dir.path() );
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            const auto lines = readLines( result.outputPath );
+            REQUIRE( lines.size() == 4 );
+            REQUIRE( lines[ 1 ].contains( "2023-11-14 22:13:21.000500000Z" ) );
+            REQUIRE( lines[ 2 ].contains( "2023-11-14 23:13:22.000000007Z" ) );
+            REQUIRE( timeOf( lines[ 2 ] ) == "3600.999500007" );
+            REQUIRE( timeOf( lines[ 3 ] ) == "1.999500000" );
+            REQUIRE( result.summary.firstTimeUtc == "2023-11-14 22:13:21.000500000Z" );
         }
     }
 }

@@ -50,7 +50,7 @@ PacketOutcome PacketPipeline::run( PacketRecord& pkt, ByteView payload )
     const auto& stream = outcome.stream;
     outcome.analysis = analyseTcp( pkt, stream );
     InStreamPass::describeInStream( pkt, stream );
-    outcome.messages = reassembly_.apply( pkt, stream, payload );
+    outcome.messages = reassembly_.apply( pkt, stream, payload, outcome.analysis.missingFrom );
     InStreamPass::rememberInStream( pkt, stream ); // after the reassembly, which completes NEWKEYS
     if ( decryption_ ) {
         decryption_->apply( pkt, stream, outcome.messages );

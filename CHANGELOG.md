@@ -796,6 +796,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to copy. The summary no longer repeats the error the Live capture
   section shows: it says the capture failed before anything was captured
   (#205).
+- **A live capture through a program reads while it waits.** A Local, SSH,
+  Android or custom command capture with *Stop after N s* recorded nothing
+  and stopped with "stopped before anything was captured"; without one, it
+  read about one pipe buffer per second while it waited for the next
+  snapshot, so a busy interface piled up "packets dropped by kernel". It
+  now reads what the program writes as it comes. Wireshark extcap captures
+  were not affected (#224).
+- **A message whose first segment is captured after its second is
+  reassembled.** A TLS ClientHello, an HTTP request or a SIP message over
+  two segments, captured the second first, was lost: the first was dropped
+  as a retransmission, so the message was never described, and a TLS
+  session never decrypted. The second segment now waits for the bytes
+  before it, and the first, when it comes, is described as the whole
+  message (`Client Hello, SNI=example.com, TLS 1.3 [reassembled from 2 segments]`);
+  retransmissions are still left as they are (#225).
+- **TLS 1.3 decrypts once the traffic secrets reach the key log.** In a
+  live capture whose key log held a session's handshake secrets but not
+  yet its `CLIENT_TRAFFIC_SECRET_0` and `SERVER_TRAFFIC_SECRET_0` when its
+  Finished was decrypted, the application data stayed encrypted for good.
+  The session is now looked for again once the key log grew, and the
+  application data after the traffic secrets arrive is decrypted (#226).
+- **A frame too short for its link-layer header is shown as truncated.**
+  A runt frame, a snaplen below the link-layer header or an empty record
+  in an Ethernet, Linux cooked capture v1 or v2, BSD loopback or Raw IP
+  capture said *Unsupported link-layer type 1* (or 113, 276, 0, 108, 101).
+  It now says *Truncated Ethernet header*, *Truncated Linux cooked capture
+  v1 header* and so on; a capture of a link-layer type the plugin does not
+  read still says so (#227).
+- **pcapng times with an interface's offset.** A pcapng interface that
+  declares `if_tsoffset`, as libpcap 1.10 and later and Wireshark can,
+  counts its timestamps from that many seconds; the offset was ignored, so
+  every packet of such an interface was shown that far off, often near
+  1970. It is now added to the interface's enhanced and simple packet
+  blocks, with each interface's own unit and offset (#228).
+- **SSDP requests and further HTTP methods are recognised.** `M-SEARCH *
+  HTTP/1.1` and `NOTIFY * HTTP/1.1` on UDP 1900, most SSDP traffic, were
+  labelled SSDP by their port alone, without a description: only GET,
+  POST, PUT, DELETE, HEAD, PATCH, OPTIONS and CONNECT were taken for
+  requests. They are now described by their request line, and TRACE,
+  GENA's SUBSCRIBE and UNSUBSCRIBE and the WebDAV methods (PROPFIND,
+  PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK, REPORT, SEARCH, …) are HTTP
+  on any port, their header sections reassembled over segments. As many
+  of these are words of text or of SIP, they count only in a request
+  line, a target and `HTTP/` behind them: `COPY this file` is no
+  request (#229).
+- **Reassembly and TLS decryption pick up again after a lost segment.**
+  After bytes missing from the capture (a dropped packet, a segment cut at
+  the snaplen), a segment that began inside a message started none, so in
+  a large HTTPS download, whose 16 KiB records rarely begin a segment, no
+  record after the gap was described or decrypted again, and the
+  decryption gave the direction up. The direction now goes on at the end of
+  the message the gap was in, as its header told; when the gap took that
+  end and the next record's header too, or nothing was held, it looks for
+  where a record begins in the bytes after the gap, a header followed by
+  the next one. The records after it are described and decrypted; memory
+  held stays within the direction's limit, and a direction with wrong keys
+  is still given up (#230).
+- **A live capture that fails after its tab opened keeps what it
+  captured.** When writing failed, a full disk above all, or another error
+  came after the first packet had opened the tab, the capture's text and
+  raw capture were deleted under the tab. They now stay, as for a capture
+  whose program broke off: the tab shows the packets captured so far and
+  the error. A capture that fails before its first packet still leaves
+  nothing behind (#231).
+- **Packet details reports on the packet it read, or not at all.** When
+  the packet read for **Plugins → tcpdump → Packet details** was cut off,
+  by another log coming to the front or by a newer selection, or showing it
+  failed, its notification waited and came with the next, unrelated
+  refresh of the Packet panel, describing whatever was shown by then. A
+  cut-off read now reports nothing; one that fails to show says why
+  (#232).
 
 ## [0.3.0] — 2026-10-09
 

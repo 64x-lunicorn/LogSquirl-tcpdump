@@ -127,6 +127,42 @@ void dataLayer( PacketRecord& pkt, const uint8_t* data, size_t len, const char* 
     }
 }
 
+/// The header of a link layer that dissectPacket() reads itself, Ethernet
+/// aside, which parseEthernet() bounds for VXLAN's inner frames too.
+struct LinkHeader {
+    uint32_t linkType;
+    size_t len;
+    const char* protocol; ///< The label of a frame cut inside it.
+    const char* name;
+};
+
+constexpr LinkHeader kLinkHeaders[] = {
+    { DltRaw, 1, "Raw IP", "Raw IP" }, // the version nibble
+    { DltLinuxSll, 16, "SLL", "Linux cooked capture v1" },
+    { DltLinuxSll2, 20, "SLL2", "Linux cooked capture v2" },
+    { DltNull, 4, "Loopback", "Null/Loopback" },
+    { DltLoop, 4, "Loopback", "Null/Loopback" },
+};
+
+/// Whether the @p len bytes at @p data hold the whole link-layer header of
+/// @p linkType, when kLinkHeaders names it.  If not, @p pkt is described as
+/// a frame cut inside it, so that a runt frame, a snaplen below the header
+/// or an empty record is not taken for an unsupported link-layer type.
+bool holdsLinkHeader( PacketRecord& pkt, uint32_t linkType, const uint8_t* data, size_t len )
+{
+    for ( const auto& header : kLinkHeaders ) {
+        if ( header.linkType != linkType || len >= header.len ) {
+            continue;
+        }
+        const std::string name = header.name;
+        pkt.protocol = header.protocol;
+        pkt.info = "Truncated " + name + " header";
+        dataLayer( pkt, data, len, ( name + " (truncated)" ).c_str() );
+        return false;
+    }
+    return true;
+}
+
 // ── Tunnels (defined below the network layer they unwrap to) ─────────────
 
 void parseIpInIp( PacketRecord& pkt, const char* network, const uint8_t* data, size_t remaining );
@@ -802,10 +838,13 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
     const uint8_t* networkData = nullptr;
     size_t networkRemaining = 0;
 
-    if ( linkType == DltEthernet && pktRemaining >= 14 ) {
+    if ( !holdsLinkHeader( pkt, linkType, pktData, pktRemaining ) ) {
+        return;
+    }
+    if ( linkType == DltEthernet ) {
         parseEthernet( pkt, pktData, pktRemaining );
     }
-    else if ( linkType == DltRaw && pktRemaining >= 1 ) {
+    else if ( linkType == DltRaw ) {
         // Raw IP — determine version from first nibble
         auto version = static_cast<uint8_t>( pktData[ 0 ] >> 4 );
         etherType = ( version == 6 ) ? EthertypeIpv6 : EthertypeIpv4;
@@ -813,7 +852,7 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         networkData = pktData;
         networkRemaining = pktRemaining;
     }
-    else if ( linkType == DltLinuxSll && pktRemaining >= 16 ) {
+    else if ( linkType == DltLinuxSll ) {
         // Linux cooked capture v1: 16-byte header, ethertype at offset 14
         etherType = readBE16( pktData + 14 );
         pkt.etherType = etherType;
@@ -833,7 +872,7 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
         networkData = pktData + 16;
         networkRemaining = pktRemaining - 16;
     }
-    else if ( linkType == DltLinuxSll2 && pktRemaining >= 20 ) {
+    else if ( linkType == DltLinuxSll2 ) {
         // Linux cooked capture v2: 20-byte header, ethertype at offset 0
         etherType = readBE16( pktData );
         pkt.etherType = etherType;
@@ -854,7 +893,7 @@ void dissectPacket( PacketRecord& pkt, uint32_t linkType, bool swap, const uint8
             }
         }
     }
-    else if ( ( linkType == DltNull || linkType == DltLoop ) && pktRemaining >= 4 ) {
+    else if ( linkType == DltNull || linkType == DltLoop ) {
         // BSD loopback: a 4-byte address family, in the byte order of the
         // capturing host (DLT_NULL), which the file was written in, or in
         // network byte order (DLT_LOOP).  Families are small numbers, so one

@@ -145,6 +145,7 @@ SCENARIO( "A batch file's arguments that cmd.exe would read are refused", "[proc
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <future>
 #include <mutex>
 #include <thread>
 
@@ -681,6 +682,118 @@ SCENARIO( "A capture program that has ended is signalled no more", "[process_sou
             {
                 REQUIRE( processGroupSignalsSent() == sent );
             }
+        }
+    }
+}
+
+SCENARIO( "A live capture through a program reads while it waits", "[process_source]" )
+{
+    QTemporaryDir dir;
+    const auto packets = somePackets();
+
+    GIVEN( "a program that writes its capture at once and then waits, stopped after a second" )
+    {
+        const auto capture = pcapOf( packets );
+        writeFile( dir.filePath( "fake.pcap" ), capture );
+        // The second is over, on a clock the test moves on, only once every
+        // packet is in the text: a program can take seconds to start on a
+        // loaded machine, and a packet read after the duration is not kept.
+        const auto program = fakeProgram( dir, "quiet", "cat \"$1\"\nexec sleep 30" );
+        std::atomic<int64_t> clockMs{ 0 };
+        LiveLimits limits;
+        limits.duration = std::chrono::seconds( 1 );
+        std::mutex mutex;
+        QString logPath;
+        LiveObserver observer;
+        observer.firstPacket = [ & ]( const QString& path, const QString& ) {
+            const std::lock_guard<std::mutex> lock( mutex );
+            logPath = path;
+        };
+        QTemporaryDir out;
+        auto running = std::async( std::launch::async, [ & ] {
+            // The program is run, and read, on the thread that converts.
+            ProcessSource source( { program, { dir.filePath( "fake.pcap" ) } }, nullptr );
+            return convertStream( source, "live", out.path(), nullptr, {}, observer, limits, [ & ] {
+                return Clock::time_point( milliseconds( clockMs.load() ) );
+            } );
+        } );
+        const auto expected = linesFromFile( capture );
+        auto readAll = [ & ] {
+            const std::lock_guard<std::mutex> lock( mutex );
+            return !logPath.isEmpty() && readLines( logPath ) == expected;
+        };
+        const auto until = Clock::now() + std::chrono::seconds( 20 );
+        while ( !readAll() && Clock::now() < until ) {
+            std::this_thread::sleep_for( milliseconds( 10 ) );
+        }
+        const bool wrote = readAll();
+        clockMs = 1000; // the conversion ends whatever happens
+        REQUIRE( wrote );
+        REQUIRE( running.wait_for( std::chrono::seconds( 10 ) ) == std::future_status::ready );
+        const auto result = running.get();
+
+        THEN( "the duration ends a capture that recorded every packet" )
+        {
+            REQUIRE( result.status == ConversionResult::Status::Converted );
+            REQUIRE( result.stoppedBy == StopCondition::Duration );
+            REQUIRE( result.summary.packets == packets.size() );
+            REQUIRE( readLines( result.outputPath ) == linesFromFile( capture ) );
+        }
+    }
+
+    GIVEN( "a program that writes a packet, then another, then the rest, while no snapshot is "
+           "due" )
+    {
+        // Packet 2 leaves a snapshot pending; on a clock that stands still,
+        // its turn never comes, so the rest is read only if the wait for it
+        // sees the pipe.
+        const auto capture = pcapOf( packets );
+        constexpr std::ptrdiff_t kHeaderBytes = 24;
+        constexpr std::ptrdiff_t kRecordHeaderBytes = 16;
+        const auto firstEnd = capture.begin() + kHeaderBytes + kRecordHeaderBytes
+                              + static_cast<std::ptrdiff_t>( packets[ 0 ].size() );
+        const auto secondEnd
+            = firstEnd + kRecordHeaderBytes + static_cast<std::ptrdiff_t>( packets[ 1 ].size() );
+        writeFile( dir.filePath( "first.pcap" ), Bytes( capture.begin(), firstEnd ) );
+        writeFile( dir.filePath( "second.rec" ), Bytes( firstEnd, secondEnd ) );
+        writeFile( dir.filePath( "rest.rec" ), Bytes( secondEnd, capture.end() ) );
+        const auto program = fakeProgram( dir, "bursts",
+                                          "cat \"$1/first.pcap\"; sleep 0.2\n"
+                                          "cat \"$1/second.rec\"; sleep 0.2\n"
+                                          "cat \"$1/rest.rec\"\n"
+                                          "exec sleep 30" );
+        std::atomic_bool stop{ false };
+        std::mutex mutex;
+        QString logPath;
+        LiveObserver observer;
+        observer.firstPacket = [ & ]( const QString& path, const QString& ) {
+            const std::lock_guard<std::mutex> lock( mutex );
+            logPath = path;
+        };
+        observer.snapshot = []( LiveSnapshot&& ) {};
+        QTemporaryDir out;
+        auto running = std::async( std::launch::async, [ & ] {
+            // The program is run, and read, on the thread that converts.
+            ProcessSource source( { program, { dir.path() } }, &stop );
+            return convertStream( source, "live", out.path(), nullptr, {}, observer, {},
+                                  [] { return Clock::time_point(); } );
+        } );
+        const auto expected = linesFromFile( capture );
+        auto readAll = [ & ] {
+            const std::lock_guard<std::mutex> lock( mutex );
+            return !logPath.isEmpty() && readLines( logPath ) == expected;
+        };
+        const auto until = Clock::now() + std::chrono::seconds( 20 );
+        while ( !readAll() && Clock::now() < until ) {
+            std::this_thread::sleep_for( milliseconds( 10 ) );
+        }
+        const bool allRead = readAll();
+        stop = true;
+        running.wait();
+
+        THEN( "every packet in the pipe is read and written while the snapshot waits" )
+        {
+            REQUIRE( allRead );
         }
     }
 }

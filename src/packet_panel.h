@@ -151,6 +151,8 @@ public:
 
     /// Read the selection now and show its packet, even if it did not
     /// change; @p then runs once it is shown, or why not (on this thread).
+    /// A read cut off before it is shown, by a reason or the next read,
+    /// drops @p then: it never runs for another refresh.
     void refresh( std::function<void()> then = {} );
 
     /// Whether the selection is being asked for: only while the panel is visible.
@@ -242,6 +244,11 @@ protected:
     /// Lays the dump out again when its viewport is resized.
     bool eventFilter( QObject* watched, QEvent* event ) override;
 
+    /// What a read on the worker found.
+    struct PacketRead;
+    /// Show the packet @p read found; virtual so that a test can make it throw.
+    virtual void showRead( const PacketRead& read );
+
 private:
     /// Ask for the selection; show its packet if it changed (or @p force).
     void poll( bool force = false );
@@ -249,9 +256,6 @@ private:
     void showSelection( const SelectedPacketLine& selected );
     /// Read packet @p number on the worker, then show it.
     void showPacket( uint32_t number );
-    /// What a read on the worker found.
-    struct PacketRead;
-    void showRead( const PacketRead& read );
     /// The packet shown, or why none is: run what waited for it.
     void settled();
     /// Show no packet, only @p reason.

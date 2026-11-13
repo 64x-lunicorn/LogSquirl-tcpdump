@@ -151,7 +151,8 @@ public:
     virtual bool startNext( uint64_t cut, uint32_t packetsBefore, const CaptureHeaders& headers )
         = 0;
 
-    /// Flush and close the text and the raw file.
+    /// Flush and close the text and the raw file, both even if one cannot
+    /// be written.
     virtual bool close() = 0;
 
     /// The raw files kept, oldest first; the last is the one written.

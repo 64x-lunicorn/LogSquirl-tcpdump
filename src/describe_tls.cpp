@@ -447,4 +447,47 @@ std::optional<size_t> frameTlsRecord( const uint8_t* payload, size_t len )
     return kHeaderBytes + length;
 }
 
+namespace {
+
+/// The bytes of a TLS record header.
+constexpr size_t kTlsHeaderBytes = 5;
+/// The longest fragment of a record found again after a gap: TLS 1.3's
+/// ciphertext limit (RFC 8446, 5.2), stricter than the framer's, so that
+/// fewer of the bytes inside a record pass for a header.
+constexpr uint16_t kMaxFoundFragment = 16384 + 256;
+
+/// The fragment length the record header at @p p tells, if it is one to
+/// find again after a gap: content type 20 to 23, version 3.1 to 3.4, a
+/// length of 1 to kMaxFoundFragment.
+std::optional<size_t> foundTlsHeader( const uint8_t* p )
+{
+    const uint16_t length = readBE16( p + 3 );
+    if ( p[ 0 ] < 0x14 || p[ 0 ] > 0x17 || p[ 1 ] != 0x03 || p[ 2 ] < 0x01 || p[ 2 ] > 0x04
+         || length == 0 || length > kMaxFoundFragment ) {
+        return std::nullopt;
+    }
+    return length;
+}
+
+} // namespace
+
+MessageStart findTlsRecordStart( const uint8_t* payload, size_t len )
+{
+    for ( size_t at = 0; at + kTlsHeaderBytes <= len; ++at ) {
+        const auto length = foundTlsHeader( payload + at );
+        if ( !length ) {
+            continue;
+        }
+        const size_t end = at + kTlsHeaderBytes + *length;
+        if ( end == len || ( end + kTlsHeaderBytes <= len && foundTlsHeader( payload + end ) ) ) {
+            return { 1, at };
+        }
+        if ( end + kTlsHeaderBytes > len ) {
+            return { 0, at }; // the next header is not there yet
+        }
+    }
+    // The last bytes may begin a header that the next ones end.
+    return { 0, len < kTlsHeaderBytes ? 0 : len - ( kTlsHeaderBytes - 1 ) };
+}
+
 } // namespace tcpdump::describer

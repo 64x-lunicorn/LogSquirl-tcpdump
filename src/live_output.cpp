@@ -92,11 +92,16 @@ bool DiskLiveFiles::startNext( uint64_t cut, uint32_t packetsBefore, const Captu
 
 bool DiskLiveFiles::close()
 {
-    if ( !text_.flush() ) {
-        return textFailed();
-    }
+    // Both are closed even if the text cannot be written, so that nothing
+    // of the raw file is written after the index of a capture kept on a
+    // failure took its size; the text's error is the one told.
+    const bool textFlushed = text_.flush() || textFailed();
     text_.close();
-    return raw_.close() || rawFailed();
+    const bool rawClosed = raw_.close();
+    if ( !rawClosed && textFlushed ) {
+        rawFailed();
+    }
+    return textFlushed && rawClosed;
 }
 
 bool DiskLiveFiles::textFailed()
