@@ -89,8 +89,10 @@ struct ReassembledMessages {
  * segment comes early instead, the direction stops waiting.  A gap, bytes
  * the capture
  * lacks (the other side acknowledges them, a segment was cut at the snaplen,
- * or too many came after it), ends the message: its bytes are dropped, and
- * reassembly starts again at the next segment that begins a message.
+ * or too many came after it), ends the message: its bytes are dropped.  If
+ * its header told its length, the direction goes on at its end, with the
+ * segments that came early from there; otherwise reassembly starts again
+ * at the next segment that begins a message.
  *
  * Memory is bounded.  A direction holds at most streamLimit bytes, its
  * buffer's capacity and the segments that came early together; all
@@ -217,6 +219,12 @@ private:
     /// Wait from @p missingFrom on for the bytes before a segment that
     /// begins no message, holding it; false if it cannot be held.
     bool wait( const Stream& stream, uint32_t missingFrom, uint32_t seq, ByteView payload );
+    /// Bytes of the message @p entry holds, of @p stream's direction, sent
+    /// from @p srcPort to @p dstPort, were lost to a gap at its nextSeq():
+    /// if its header told where it ends, drop it and go on there, taking
+    /// the segments that came early from there on; false if it did not,
+    /// or they could not be taken, and the entry is to be let go.
+    bool goOnAfterGap( uint16_t srcPort, uint16_t dstPort, const Stream& stream, Entry& entry );
     /// Take a segment of a direction that waits: nullopt when it does not
     /// bring the bytes waited for, and is to be taken as any.
     std::optional<ReassembledMessages> waitingSegment( PacketRecord& pkt, const Stream& stream,

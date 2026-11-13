@@ -119,6 +119,39 @@ std::vector<Line> converted( const std::vector<Segment>& segments )
     return converted( segments, pipeline );
 }
 
+/// What a run of segments through a Packet Pipeline completed, and the most
+/// memory its reassembly held after any one of them.
+struct Watched {
+    size_t completedBytes = 0;
+    size_t peakMemory = 0;
+    size_t peakDirections = 0;
+};
+
+/// Run @p segments, whole, through @p pipeline, watching its reassembly
+/// after each.
+Watched watched( const std::vector<Segment>& segments, PacketPipeline& pipeline )
+{
+    std::vector<Record> records;
+    uint32_t sec = 1000;
+    for ( const auto& s : segments ) {
+        records.push_back( { frameOf( s ), sec++, 0, -1, -1 } );
+    }
+    const auto capture = pcapFile( records );
+    MemorySource memory( capture.data(), capture.size() );
+    HeadSource head( memory );
+    const auto reader = makeCaptureReader( head );
+    REQUIRE( reader->open() );
+    Watched out;
+    PacketRecord pkt;
+    while ( reader->next( pkt ) ) {
+        const auto outcome = pipeline.run( pkt, reader->payloadOf( pkt ) );
+        out.completedBytes += outcome.messages.bytes.size;
+        out.peakMemory = std::max( out.peakMemory, pipeline.reassembly().memoryUsed() );
+        out.peakDirections = std::max( out.peakDirections, pipeline.reassembly().directionsHeld() );
+    }
+    return out;
+}
+
 /// The options of a Packet Pipeline whose reassembly holds @p memory bytes
 /// at most, and @p streamLimit of one direction.
 PipelineOptions reassemblyLimits( size_t memory, size_t streamLimit = TcpReassembly::kStreamLimit )
@@ -1454,6 +1487,36 @@ SCENARIO( "Reassembly holds bounded memory", "[tcp_reassembly]" )
             REQUIRE( pipeline.reassembly().memoryUsed()
                      <= streamLimit + TcpReassembly::kEntryOverhead
                             + TcpReassembly::kEarlySegmentOverhead );
+        }
+    }
+
+    GIVEN( "a download of 16 KiB TLS records over segments of 1448 bytes, one in 60 lost" )
+    {
+        constexpr size_t kRecords = 40;
+        const auto record = tlsRecord( 0x17, Bytes( 16401, 0xCC ) );
+        Bytes download;
+        for ( size_t i = 0; i < kRecords; ++i ) {
+            download = download + record;
+        }
+        const auto all
+            = fromServer( cut( download, cutsEvery( download.size(), 1448 ) ), kServerIsn + 1 );
+        std::vector<Segment> kept;
+        for ( size_t i = 0; i < all.size(); ++i ) {
+            if ( i % 60 != 3 ) {
+                kept.push_back( all[ i ] );
+            }
+        }
+        PacketPipeline pipeline;
+        const auto run = watched( handshake() + kept, pipeline );
+
+        THEN( "the records after each loss are put together again, within the limit" )
+        {
+            REQUIRE( run.completedBytes >= kRecords / 2 * record.size() );
+            REQUIRE( run.completedBytes % record.size() == 0 );
+            REQUIRE( run.peakDirections == 1 );
+            REQUIRE( run.peakMemory <= TcpReassembly::kStreamLimit + TcpReassembly::kEntryOverhead
+                                           + TcpReassembly::kMaxEarlySegments
+                                                 * TcpReassembly::kEarlySegmentOverhead );
         }
     }
 

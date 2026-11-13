@@ -739,6 +739,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before it, and the first, when it comes, is described as the whole
   message (`Client Hello, SNI=example.com, TLS 1.3 [reassembled from 2 segments]`);
   retransmissions are still left as they are (#225).
+- **Reassembly and TLS decryption pick up again after a lost segment.**
+  After bytes missing from the capture (a dropped packet, a segment cut at
+  the snaplen), a segment that began inside a message started none, so in
+  a large HTTPS download, whose 16 KiB records rarely begin a segment, no
+  record after the gap was described or decrypted again, and the
+  decryption gave the direction up. The direction now goes on at the end of
+  the message the gap was in, as its header told, and the records after it
+  are described and decrypted; memory held stays within the direction's
+  limit, and a direction with wrong keys is still given up (#230).
 - **A live capture through a program reads while it waits.** A Local, SSH,
   Android or custom command capture with *Stop after N s* recorded nothing
   and stopped with "stopped before anything was captured"; without one, it

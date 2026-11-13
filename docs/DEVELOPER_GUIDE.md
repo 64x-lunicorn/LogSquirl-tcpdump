@@ -1256,10 +1256,19 @@ together from its start and described on it, `[reassembled from 2
 segments]`, and their messages returned for the TLS Decryption; if it
 ends in whole messages or none it is taken alone. Another segment early,
 an acknowledgement past the bytes waited for, a cut segment, a FIN, a
-SYN or an RST end the wait. A gap ends the message, its bytes dropped, and reassembly
-starts again at the next segment that begins one: the other direction
+SYN or an RST end the wait. A gap ends the message, its bytes dropped: the other direction
 acknowledges bytes past the held ones (the capture lost them), a segment
-was cut at the snaplen, or more segments came early than are held.
+was cut at the snaplen, or more segments came early than are held. When
+the held message's header told its length, the direction goes on at its
+end (`goOnAfterGap()`): the orderer skips to that sequence number, the
+segments that came early from there on are taken, and the next segment
+completes or adds to the messages that begin there, so that a bulk
+download of 16 KiB TLS records over 1448-byte segments picks up again at
+the next record, its records decrypted, however rarely segment and record
+boundaries meet. Segments before that end keep their own description;
+whole messages after the held one among the held bytes are dropped with it.
+When the length was not told (an HTTP header section, or the gap took the
+header), reassembly starts again at the next segment that begins a message.
 
 The memory budget: a direction holds at most `kStreamLimit` (64 KiB),
 counting its buffer's capacity and the segments that came early; all

@@ -863,6 +863,166 @@ SCENARIO( "A session whose ClientHello's first segment comes after its second is
     }
 }
 
+namespace {
+
+/// How a bulk download loses one of its segments.
+enum class Loss {
+    Dropped,      ///< the capture lacks it, and the client does not acknowledge it
+    Acknowledged, ///< the capture lacks it, and the client acknowledges it
+    Cut,          ///< it was cut at the snaplen
+};
+
+/// A TLS 1.3 download of @p count records of 16 KiB, over segments of
+/// 1448 bytes, its fourth segment lost as @p loss, the server's records
+/// sealed under @p keys: each packet's line, and which of them are the
+/// download's segments after the lost one.
+struct BulkDownload {
+    std::vector<std::string> lines;
+    std::vector<size_t> afterLoss;
+};
+
+BulkDownload bulkDownload( Loss loss, size_t count, TlsDecryption::Lookup keys,
+                           Tls13Session& session )
+{
+    constexpr size_t kSegmentBytes = 1448;
+    constexpr size_t kLost = 3;
+    const auto hello = session.clientHello();
+    const auto ee = Tls13Session::handshakeMessage( 8, Bytes{ 0x00, 0x00 } );
+    const auto server
+        = session.serverHello()
+          + session.seal( 1, 0x16, ee + Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF1 ) ) );
+    session.finished( 1 );
+    const std::string get = "GET /big.bin HTTP/1.1\r\nHost: www.example.com\r\n\r\n";
+    const auto client
+        = session.seal( 0, 0x16, Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF2 ) ) );
+    session.finished( 0 );
+    const auto request = client + session.seal( 0, 0x17, Bytes( get.begin(), get.end() ) );
+    Bytes download;
+    for ( size_t i = 0; i < count; ++i ) {
+        download = download + session.seal( 1, 0x17, Bytes( 16384, 0x5A ) );
+    }
+
+    constexpr uint32_t kClient = 1000;
+    constexpr uint32_t kServer = 5000;
+    const auto helloEnd = kClient + 1 + static_cast<uint32_t>( hello.size() );
+    const auto requestEnd = helloEnd + static_cast<uint32_t>( request.size() );
+    const auto serverEnd = kServer + 1 + static_cast<uint32_t>( server.size() );
+    struct Sent {
+        bool fromClient;
+        uint8_t flags;
+        uint32_t seq;
+        uint32_t ack;
+        Bytes payload;
+        int64_t captured = -1; ///< -1: all of the payload; otherwise cut at the snaplen
+    };
+    std::vector<Sent> sent{
+        { true, 0x02, kClient, 0, {} },
+        { false, 0x12, kServer, kClient + 1, {} },
+        { true, 0x10, kClient + 1, kServer + 1, {} },
+        { true, 0x18, kClient + 1, kServer + 1, hello },
+        { false, 0x18, kServer + 1, helloEnd, server },
+        { true, 0x18, helloEnd, serverEnd, request },
+    };
+    BulkDownload out;
+    for ( size_t at = 0, i = 0; at < download.size(); at += kSegmentBytes, ++i ) {
+        const auto seq = serverEnd + static_cast<uint32_t>( at );
+        const auto to = std::min( download.size(), at + kSegmentBytes );
+        Sent segment{ false, 0x18, seq, requestEnd,
+                      Bytes( download.begin() + static_cast<std::ptrdiff_t>( at ),
+                             download.begin() + static_cast<std::ptrdiff_t>( to ) ) };
+        if ( i == kLost ) {
+            if ( loss != Loss::Cut ) {
+                continue;
+            }
+            segment.captured = 100;
+        }
+        if ( i > kLost ) {
+            out.afterLoss.push_back( sent.size() );
+        }
+        sent.push_back( segment );
+        if ( i == kLost + 1 && loss == Loss::Acknowledged ) {
+            sent.push_back(
+                { true, 0x10, requestEnd, seq + static_cast<uint32_t>( to - at ), {} } );
+        }
+    }
+
+    std::vector<tcpdump_test::Record> records;
+    uint32_t sec = 1000;
+    for ( const auto& s : sent ) {
+        tcpdump_test::Ipv4Options o;
+        if ( !s.fromClient ) {
+            std::swap( o.src, o.dst );
+        }
+        const auto segment
+            = s.fromClient ? tcpdump_test::tcp( 50000, 443, s.payload, 5, s.flags, s.seq, s.ack )
+                           : tcpdump_test::tcp( 443, 50000, s.payload, 5, s.flags, s.seq, s.ack );
+        tcpdump_test::Record r{ tcpdump_test::eth( EthertypeIpv4,
+                                                   tcpdump_test::ipv4( IpProtoTcp, segment, o ) ),
+                                sec++, 0, -1, -1 };
+        if ( s.captured >= 0 ) {
+            r.inclLen = static_cast<int64_t>( r.data.size() - s.payload.size() ) + s.captured;
+            r.origLen = static_cast<int64_t>( r.data.size() );
+            r.data.resize( static_cast<size_t>( r.inclLen ) );
+        }
+        records.push_back( r );
+    }
+    PipelineOptions options;
+    options.tlsKeys = std::move( keys );
+    PacketPipeline pipeline( options );
+    out.lines = lines( tcpdump_test::pcapFile( records ), pipeline );
+    return out;
+}
+
+} // namespace
+
+SCENARIO( "A bulk TLS download goes on decrypting after a segment the capture lost",
+          "[tls_decryption]" )
+{
+    constexpr size_t kRecords = 12;
+    const auto loss = GENERATE( Loss::Dropped, Loss::Acknowledged, Loss::Cut );
+
+    GIVEN( "a download of 16 KiB records whose fourth segment the capture lost" )
+    {
+        Tls13Session session;
+        const auto download = bulkDownload( loss, kRecords, session.lookup(), session );
+
+        THEN( "the records after the one it was in are described and decrypted" )
+        {
+            size_t decrypted = 0;
+            for ( const auto i : download.afterLoss ) {
+                decrypted += contains( download.lines[ i ], kDecryptedMarker ) ? 1 : 0;
+            }
+            // The first record is lost; the next ones may complete on one segment.
+            REQUIRE( decrypted >= kRecords - 3 );
+            REQUIRE( contains( download.lines[ download.afterLoss.back() ],
+                               "TLS (decrypted) | Application Data" ) );
+        }
+    }
+
+    GIVEN( "the same download, the key log's secret for the server's records a wrong one" )
+    {
+        Tls13Session session;
+        tls::SessionSecrets wrong = session.secrets();
+        const Bytes other( 32, 0x77 );
+        wrong.serverTraffic = tls::SecretBytes( other.data(), other.size() );
+        const auto right = session.lookup();
+        const auto download = bulkDownload(
+            loss, kRecords,
+            [ &right, &wrong ]( const uint8_t* random ) -> const tls::SessionSecrets* {
+                return right( random ) ? &wrong : nullptr;
+            },
+            session );
+
+        THEN( "none of the server's records is decrypted, the client's request is" )
+        {
+            for ( const auto i : download.afterLoss ) {
+                REQUIRE_FALSE( contains( download.lines[ i ], kDecryptedMarker ) );
+            }
+            REQUIRE( contains( download.lines[ 5 ], "GET www.example.com/big.bin" ) );
+        }
+    }
+}
+
 SCENARIO( "TLS 1.3 handshake messages over more than one record", "[tls_decryption]" )
 {
     Tls13Session session;

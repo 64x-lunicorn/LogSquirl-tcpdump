@@ -739,7 +739,9 @@ sessions decrypted, or says why the key log could not be read.
   Not decrypted: TLS 1.0 and 1.1, TLS 1.3 early data (0-RTT), a TLS 1.2
   renegotiation's new keys, QUIC
 - **Records**, put together across segments by the TCP reassembly; a record
-  the capture lost is passed over, and the next ones are still decrypted
+  the capture lost is passed over, and the next ones are still decrypted,
+  in a large download too: after a segment the capture lost or cut at the
+  snaplen, the reassembly goes on at the end of the record it was in
 - **During a live capture** the key log is read again as the browser adds
   to it (at most twice a second); a last line is read once its line feed
   is written

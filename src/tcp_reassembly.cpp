@@ -65,17 +65,17 @@ struct Walk {
 };
 
 /// Walk the messages of protocol @p framer in the @p len bytes at @p data,
-/// one after the other from the first; after one that upgrades the stream,
-/// those of the protocol it upgrades to.  @p look is what the framer found
-/// in the first message before, and is left with what it found in the
-/// incomplete one.
-Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, const Stream& stream,
-                   uint8_t framer, FramerLook& look )
+/// sent from @p srcPort to @p dstPort, one after the other from the first;
+/// after one that upgrades the stream, those of the protocol it upgrades
+/// to.  @p look is what the framer found in the first message before, and
+/// is left with what it found in the incomplete one.
+Walk walkMessages( const uint8_t* data, size_t len, uint16_t srcPort, uint16_t dstPort,
+                   const Stream& stream, uint8_t framer, FramerLook& look )
 {
     Walk walk;
     while ( walk.end < len ) {
-        const auto extent = tcpMessageExtent( data + walk.end, len - walk.end, pkt.srcPort,
-                                              pkt.dstPort, framer, &stream, &look );
+        const auto extent = tcpMessageExtent( data + walk.end, len - walk.end, srcPort, dstPort,
+                                              framer, &stream, &look );
         if ( extent.framer == 0 ) {
             walk.end = len; // the rest is none of the protocol's: described as it is
             break;
@@ -92,6 +92,13 @@ Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, con
         }
     }
     return walk;
+}
+
+/// walkMessages() of bytes of @p pkt's direction.
+Walk walkMessages( const uint8_t* data, size_t len, const PacketRecord& pkt, const Stream& stream,
+                   uint8_t framer, FramerLook& look )
+{
+    return walkMessages( data, len, pkt.srcPort, pkt.dstPort, stream, framer, look );
 }
 
 /// Append @p marker to the end of @p pkt's Info.
@@ -477,6 +484,33 @@ bool TcpReassembly::wait( const Stream& stream, uint32_t missingFrom, uint32_t s
     return true;
 }
 
+bool TcpReassembly::goOnAfterGap( uint16_t srcPort, uint16_t dstPort, const Stream& stream,
+                                  Entry& entry )
+{
+    if ( entry.skipping || entry.waiting ) {
+        return false;
+    }
+    FramerLook look = entry.look;
+    const auto walk = walkMessages( entry.held.data(), entry.held.size(), srcPort, dstPort, stream,
+                                    entry.framer, look );
+    const auto rest = entry.held.size() - walk.end;
+    // A framer that cannot tell the length yet answers one more than given.
+    if ( walk.incomplete.framer == 0 || walk.incomplete.length <= rest + 1 ) {
+        return false; // where the message ends is not known
+    }
+    const uint32_t start = entry.order.nextSeq() - static_cast<uint32_t>( entry.held.size() );
+    const uint32_t end = start + static_cast<uint32_t>( walk.end + walk.incomplete.length );
+    entry.held = std::vector<uint8_t>();
+    entry.segments = 0;
+    entry.look = {};
+    entry.framer = walk.incomplete.framer;
+    entry.label = walk.incomplete.label;
+    entry.order.skipTo( end );
+    recharge( entry );
+    // The segments that came early from the end on begin the next messages.
+    return appendEarly( entry, keyOf( stream, stream.direction ) );
+}
+
 std::optional<ReassembledMessages> TcpReassembly::waitingSegment( PacketRecord& pkt,
                                                                   const Stream& stream,
                                                                   ByteView payload, Entry& entry )
@@ -537,7 +571,7 @@ ReassembledMessages TcpReassembly::segment( PacketRecord& pkt, const Stream& str
     }
     if ( payload.data == nullptr || payload.size != pkt.payloadLen ) {
         // Bytes the capture lacks, cut at the snaplen: a gap.
-        if ( entry ) {
+        if ( entry && !goOnAfterGap( pkt.srcPort, pkt.dstPort, stream, *entry ) ) {
             release( key );
         }
         return {};
@@ -551,16 +585,35 @@ ReassembledMessages TcpReassembly::segment( PacketRecord& pkt, const Stream& str
 
     if ( entry ) {
         lru_.splice( lru_.end(), lru_, entry->lru );
-        const auto place = entry->order.place( pkt.tcpSeq, payload.size );
+        auto place = entry->order.place( pkt.tcpSeq, payload.size );
+        bool gap = false;
         if ( place.fit == ByteStreamOrderer::Fit::Early ) {
             if ( holdEarly( *entry, key, pkt.tcpSeq, payload ) ) {
                 describeSegment( pkt, entry->label );
                 return {};
             }
-            release( key ); // too much came early: a gap, which this segment is after
+            // Too much came early: a gap, which this segment is after.  The
+            // direction goes on at the end of the message it held, if told.
+            gap = goOnAfterGap( pkt.srcPort, pkt.dstPort, stream, *entry );
+            if ( gap ) {
+                place = entry->order.place( pkt.tcpSeq, payload.size );
+            }
+        }
+        if ( gap && place.fit == ByteStreamOrderer::Fit::Early ) {
+            // Past another gap: the messages from the end on are described.
+            if ( holdEarly( *entry, key, pkt.tcpSeq, payload ) ) {
+                return continueMessage( pkt, stream, *entry );
+            }
+            gap = false;
+        }
+        if ( place.fit == ByteStreamOrderer::Fit::Early ) {
+            release( key ); // a gap, with no end known to go on at
         }
         else if ( place.fit == ByteStreamOrderer::Fit::Taken ) {
-            return {}; // bytes taken already: a retransmission
+            if ( gap && !entry->held.empty() ) {
+                return continueMessage( pkt, stream, *entry );
+            }
+            return {}; // bytes taken already: a retransmission, or of the message lost
         }
         else {
             if ( !append( *entry, key, payload.data + place.overlap, payload.size - place.overlap )
@@ -613,9 +666,12 @@ ReassembledMessages TcpReassembly::apply( PacketRecord& pkt, const Stream& strea
         release( stream, 1 );
     }
     if ( ( flags & kTcpAck ) && ( state.reassembly & heldBit( 1 - direction ) ) ) {
-        // The other side has bytes the capture lacks: a gap there.
-        const auto* other = find( stream, 1 - direction );
-        if ( other && !other->skipping && seqAfter( pkt.tcpAck, other->order.nextSeq() ) > 0 ) {
+        // The other side has bytes the capture lacks: a gap there, which it
+        // goes on after at the end of the message it held, if told.
+        auto* other = find( stream, 1 - direction );
+        const Stream otherStream{ stream.id, stream.state, 1 - direction };
+        if ( other && !other->skipping && seqAfter( pkt.tcpAck, other->order.nextSeq() ) > 0
+             && !goOnAfterGap( pkt.dstPort, pkt.srcPort, otherStream, *other ) ) {
             release( stream, 1 - direction );
         }
     }
