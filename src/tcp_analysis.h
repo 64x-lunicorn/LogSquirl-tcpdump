@@ -102,6 +102,11 @@ struct TcpAnalysis {
     /// other segment, and on all of a stream whose handshake was not
     /// captured whole.
     std::optional<uint64_t> initialRttNs;
+    /// With TcpMarker::PreviousSegmentNotCaptured, the absolute sequence
+    /// number the bytes before the segment that the capture has not shown
+    /// yet begin at: its direction's next one before it.  The TCP
+    /// Reassembly waits for them there, as they may only come late.
+    std::optional<uint32_t> missingFrom;
 };
 
 /**

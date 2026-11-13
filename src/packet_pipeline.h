@@ -91,7 +91,8 @@ struct PacketOutcome {
  *    connection, before any other step reads that state;
  * 5. InStreamPass::describeInStream(), the Payload Describer with what
  *    the stream has shown so far;
- * 6. the TCP Reassembly, which describes a message where it completes;
+ * 6. the TCP Reassembly, which describes a message where it completes,
+ *    with where the TCP Analysis found bytes not captured yet;
  * 7. InStreamPass::rememberInStream(), after the reassembly, which
  *    completes the messages it learns from (an SSH NEWKEYS, a WebSocket upgrade);
  * 8. with TLS keys, the TLS Decryption, of the records the reassembly

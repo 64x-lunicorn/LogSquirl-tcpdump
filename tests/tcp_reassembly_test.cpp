@@ -1029,6 +1029,126 @@ SCENARIO( "Segments are taken in sequence order", "[tcp_reassembly]" )
     }
 }
 
+SCENARIO( "A message whose first segment comes after the second is reassembled",
+          "[tcp_reassembly]" )
+{
+    GIVEN( "a TLS ClientHello over two segments, the second captured first" )
+    {
+        const auto hello = clientHello( "example.com" );
+        const auto parts = cut( hello, { 300 } );
+        PacketPipeline pipeline;
+        const auto lines
+            = converted( handshake() + std::vector<Segment>{ parts[ 1 ], parts[ 0 ] }, pipeline );
+
+        THEN( "the hello is described on the first, which completes it, and nothing is held" )
+        {
+            REQUIRE( lines[ 3 ].segments == 0 );
+            REQUIRE( lines[ 4 ].protocol == "TLS" );
+            REQUIRE( lines[ 4 ].description == describedWhole( hello ) + reassembledFrom( 2 ) );
+            REQUIRE( lines[ 4 ].description.find( "SNI=example.com" ) != std::string::npos );
+            REQUIRE( lines[ 4 ].completed == hello );
+            REQUIRE( lines[ 4 ].segments == 2 );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
+        }
+    }
+
+    GIVEN( "an HTTP request over two segments, the second captured first" )
+    {
+        const auto request
+            = text( "GET /index.html HTTP/1.1\r\nHost: example.com\r\nAccept: */*\r\n\r\n" );
+        const auto parts = cut( request, { 30 }, kClientIsn + 1, 80 );
+        const auto lines
+            = converted( handshake( 80 ) + std::vector<Segment>{ parts[ 1 ], parts[ 0 ] } );
+
+        THEN( "the request is described with its Host on the first" )
+        {
+            REQUIRE( lines[ 4 ].protocol == "HTTP" );
+            REQUIRE( lines[ 4 ].description
+                     == "GET example.com/index.html HTTP/1.1" + reassembledFrom( 2 ) );
+        }
+    }
+
+    GIVEN( "a ClientHello over two segments, the second captured first, then both again" )
+    {
+        const auto hello = clientHello( "example.com" );
+        const auto parts = cut( hello, { 300 } );
+        PacketPipeline pipeline;
+        const auto lines = converted(
+            handshake() + std::vector<Segment>{ parts[ 1 ], parts[ 0 ], parts[ 1 ], parts[ 0 ] },
+            pipeline );
+
+        THEN( "the hello is described once, the retransmissions are not" )
+        {
+            REQUIRE( lines[ 4 ].description == describedWhole( hello ) + reassembledFrom( 2 ) );
+            for ( size_t i : { 5, 6 } ) {
+                REQUIRE( lines[ i ].segments == 0 );
+                REQUIRE( lines[ i ].completed.empty() );
+                REQUIRE( lines[ i ].description.find( "[reassembled from" ) == std::string::npos );
+            }
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+        }
+    }
+
+    GIVEN( "a ClientHello over two segments in order, then both again" )
+    {
+        const auto hello = clientHello( "example.com" );
+        const auto parts = cut( hello, { 300 } );
+        const auto lines = converted(
+            handshake() + std::vector<Segment>{ parts[ 0 ], parts[ 1 ], parts[ 1 ], parts[ 0 ] } );
+
+        THEN( "the retransmissions are not described as the hello again" )
+        {
+            REQUIRE( lines[ 4 ].description == describedWhole( hello ) + reassembledFrom( 2 ) );
+            for ( size_t i : { 5, 6 } ) {
+                REQUIRE( lines[ i ].segments == 0 );
+                REQUIRE( lines[ i ].description.find( reassembledFrom( 2 ) ) == std::string::npos );
+            }
+        }
+    }
+
+    GIVEN( "the second segment of a hello whose first the capture lost, acknowledged by the "
+           "other side, then a record" )
+    {
+        const auto hello = clientHello( "example.com" );
+        const auto parts = cut( hello, { 300 } );
+        const auto record = tlsRecord( 0x17, Bytes( 100, 0xCC ) );
+        const auto next = cut( record, {}, kClientIsn + 1 + static_cast<uint32_t>( hello.size() ) );
+        Segment ack;
+        ack.fromClient = false;
+        ack.seq = kServerIsn + 1;
+        ack.ack = next[ 0 ].seq;
+        ack.flags = kAck;
+        PacketPipeline pipeline;
+        const auto lines
+            = converted( handshake() + std::vector<Segment>{ parts[ 1 ], ack } + next, pipeline );
+
+        THEN( "nothing is held for it, and the record is described as it is" )
+        {
+            REQUIRE( lines[ 5 ].description == "Application Data" );
+            REQUIRE( pipeline.reassembly().directionsHeld() == 0 );
+            REQUIRE( pipeline.reassembly().memoryUsed() == 0 );
+        }
+    }
+
+    GIVEN( "the second segment of a hello whose first the capture lost, then a record" )
+    {
+        const auto hello = clientHello( "example.com" );
+        const auto parts = cut( hello, { 300 } );
+        const auto record = tlsRecord( 0x17, Bytes( 100, 0xCC ) );
+        const auto next = cut( record, {}, kClientIsn + 1 + static_cast<uint32_t>( hello.size() ) );
+        PacketPipeline pipeline;
+        const auto lines
+            = converted( handshake() + std::vector<Segment>{ parts[ 1 ] } + next, pipeline );
+
+        THEN( "the record is described as it is" )
+        {
+            REQUIRE( lines[ 4 ].description == "Application Data" );
+            REQUIRE( lines[ 4 ].completed == record );
+        }
+    }
+}
+
 SCENARIO( "A message past the reassembly limit is skipped to its end", "[tcp_reassembly]" )
 {
     GIVEN( "a WebSocket frame of 200 KiB in segments of 1448 bytes, then a short text frame" )

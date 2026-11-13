@@ -1241,7 +1241,18 @@ all taken (a retransmission) is left as it is, and the part of one that
 overlaps them is dropped. A segment that begins a message is only taken
 for one if no later bytes of its direction have been seen
 (`TcpDirection::nextSeq`), so a retransmission after the message ended
-starts nothing. A gap ends the message, its bytes dropped, and reassembly
+starts nothing. A segment after bytes not captured yet
+(`TcpAnalysis::missingFrom`, the direction's next sequence number before
+a `[TCP Previous segment not captured]`) while nothing is held, and that
+begins no message, may be the second of a message whose first was
+captured after it: its direction waits for those bytes, holding the
+segment early, which keeps its own description. If the next segment
+brings them and ends in an incomplete message, the two are taken
+together from its start and described on it, `[reassembled from 2
+segments]`, and their messages returned for the TLS Decryption; if it
+ends in whole messages or none it is taken alone. Another segment early,
+an acknowledgement past the bytes waited for, a cut segment, a FIN, a
+SYN or an RST end the wait. A gap ends the message, its bytes dropped, and reassembly
 starts again at the next segment that begins one: the other direction
 acknowledges bytes past the held ones (the capture lost them), a segment
 was cut at the snaplen, or more segments came early than are held.

@@ -788,6 +788,81 @@ SCENARIO( "HTTP/2 over TLS after a record that was lost or would not decrypt",
     }
 }
 
+SCENARIO( "A session whose ClientHello's first segment comes after its second is decrypted",
+          "[tls_decryption]" )
+{
+    GIVEN( "a TLS 1.3 session from its TCP handshake, the ClientHello over two segments "
+           "captured the second first" )
+    {
+        Tls13Session session;
+        const auto hello = session.clientHello();
+        constexpr size_t kCut = 20;
+        const Bytes first( hello.begin(), hello.begin() + kCut );
+        const Bytes second( hello.begin() + kCut, hello.end() );
+        const auto ee = Tls13Session::handshakeMessage( 8, Bytes{ 0x00, 0x00 } );
+        const auto server
+            = session.serverHello()
+              + session.seal( 1, 0x16,
+                              ee + Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF1 ) ) );
+        session.finished( 1 );
+        const auto finished
+            = session.seal( 0, 0x16, Tls13Session::handshakeMessage( 20, Bytes( 32, 0xF2 ) ) );
+        session.finished( 0 );
+        const std::string get = "GET /index.html HTTP/1.1\r\nHost: www.example.com\r\n\r\n";
+        const auto request = session.seal( 0, 0x17, Bytes( get.begin(), get.end() ) );
+
+        constexpr uint32_t kClient = 1000;
+        constexpr uint32_t kServer = 5000;
+        const auto helloEnd = kClient + 1 + static_cast<uint32_t>( hello.size() );
+        const auto serverEnd = kServer + 1 + static_cast<uint32_t>( server.size() );
+        struct Sent {
+            bool fromClient;
+            uint8_t flags;
+            uint32_t seq;
+            uint32_t ack;
+            Bytes payload;
+        };
+        const std::vector<Sent> sent{
+            { true, 0x02, kClient, 0, {} },
+            { false, 0x12, kServer, kClient + 1, {} },
+            { true, 0x10, kClient + 1, kServer + 1, {} },
+            { true, 0x18, kClient + 1 + kCut, kServer + 1, second },
+            { true, 0x18, kClient + 1, kServer + 1, first },
+            { false, 0x18, kServer + 1, helloEnd, server },
+            { true, 0x18, helloEnd, serverEnd, finished },
+            { true, 0x18, helloEnd + static_cast<uint32_t>( finished.size() ), serverEnd, request },
+        };
+        std::vector<tcpdump_test::Record> records;
+        uint32_t sec = 1000;
+        for ( const auto& s : sent ) {
+            tcpdump_test::Ipv4Options o;
+            if ( !s.fromClient ) {
+                std::swap( o.src, o.dst );
+            }
+            const auto segment
+                = s.fromClient
+                      ? tcpdump_test::tcp( 50000, 443, s.payload, 5, s.flags, s.seq, s.ack )
+                      : tcpdump_test::tcp( 443, 50000, s.payload, 5, s.flags, s.seq, s.ack );
+            records.push_back(
+                { tcpdump_test::eth( EthertypeIpv4, tcpdump_test::ipv4( IpProtoTcp, segment, o ) ),
+                  sec++ } );
+        }
+        PipelineOptions options;
+        options.tlsKeys = session.lookup();
+        PacketPipeline pipeline( options );
+        const auto decrypted = lines( tcpdump_test::pcapFile( records ), pipeline );
+
+        THEN( "the handshake is described and the session decrypted" )
+        {
+            REQUIRE( contains( decrypted[ 4 ], "Client Hello" ) );
+            REQUIRE( contains( decrypted[ 4 ], "[reassembled from 2 segments]" ) );
+            REQUIRE( pipeline.tlsSessionsDecrypted() == 1u );
+            REQUIRE(
+                contains( decrypted[ 7 ], "TLS (decrypted) | GET www.example.com/index.html" ) );
+        }
+    }
+}
+
 SCENARIO( "TLS 1.3 handshake messages over more than one record", "[tls_decryption]" )
 {
     Tls13Session session;

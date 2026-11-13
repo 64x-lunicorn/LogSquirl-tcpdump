@@ -731,6 +731,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It now says *Truncated Ethernet header*, *Truncated Linux cooked capture
   v1 header* and so on; a capture of a link-layer type the plugin does not
   read still says so (#227)
+- **A message whose first segment is captured after its second is
+  reassembled.** A TLS ClientHello, an HTTP request or a SIP message over
+  two segments, captured the second first, was lost: the first was dropped
+  as a retransmission, so the message was never described, and a TLS
+  session never decrypted. The second segment now waits for the bytes
+  before it, and the first, when it comes, is described as the whole
+  message (`Client Hello, SNI=example.com, TLS 1.3 [reassembled from 2 segments]`);
+  retransmissions are still left as they are (#225).
 - **Packet numbers no longer wrap.** The No. column counted packets in 32
   bits: a capture file of more than 4,294,967,295 packets started again at
   0. The conversion now stops with packet 4,294,967,295, and the summary

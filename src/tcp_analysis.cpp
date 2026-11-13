@@ -405,6 +405,7 @@ TcpAnalysis analyseTcp( PacketRecord& pkt, const Stream& stream )
         return {};
     }
     uint32_t dupAckFrame = 0;
+    const auto nextBefore = fwd.nextSeq + fwd.baseSeq;
     const auto markers
         = classify( fwd, rev,
                     { pkt.number, timeNs( pkt ), seq, ack.value_or( 0 ), pkt.payloadLen,
@@ -414,7 +415,11 @@ TcpAnalysis analyseTcp( PacketRecord& pkt, const Stream& stream )
         pkt.info.insert( tcpFieldsEnd( pkt.info ), initialRttText( *initialRtt, pkt.precision ) );
     }
     pkt.info.insert( 0, markerText( markers, dupAckFrame, fwd.dupAcks ) );
-    return { markers, initialRtt };
+    TcpAnalysis analysis{ markers, initialRtt, std::nullopt };
+    if ( markers.test( TcpMarker::PreviousSegmentNotCaptured ) ) {
+        analysis.missingFrom = nextBefore;
+    }
+    return analysis;
 }
 
 } // namespace tcpdump

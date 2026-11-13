@@ -79,7 +79,15 @@ struct ReassembledMessages {
  * Segments are taken in sequence order (ByteStreamOrderer): one that comes
  * early is held until
  * the bytes before it come; a retransmission, and the part of a segment
- * that overlaps bytes already taken, is dropped.  A gap, bytes the capture
+ * that overlaps bytes already taken, is dropped.  A segment that comes
+ * after bytes the capture has not shown yet while nothing is held is held
+ * too, if it begins no message the describer frames (the second of a
+ * message, captured before the first): it keeps its own description, and
+ * the direction waits for those bytes.  When the next segment brings them
+ * and ends in an incomplete message, the two are taken together, from the
+ * start of that segment, and the message described on it; when another
+ * segment comes early instead, the direction stops waiting.  A gap, bytes
+ * the capture
  * lacks (the other side acknowledges them, a segment was cut at the snaplen,
  * or too many came after it), ends the message: its bytes are dropped, and
  * reassembly starts again at the next segment that begins a message.
@@ -128,9 +136,12 @@ public:
      * (CaptureReader::payloadOf()).  Rewrites the Info and protocol of a
      * segment as the class describes, and returns the messages it completed.
      * Packets of other transports, of no stream or one past the stream
-     * cap, and of an HTTP/2 stream are left as they are.
+     * cap, and of an HTTP/2 stream are left as they are.  @p missingFrom
+     * is TcpAnalysis::missingFrom: where bytes before the segment that the
+     * capture has not shown yet begin.
      */
-    ReassembledMessages apply( PacketRecord& pkt, const Stream& stream, ByteView payload );
+    ReassembledMessages apply( PacketRecord& pkt, const Stream& stream, ByteView payload,
+                               std::optional<uint32_t> missingFrom = std::nullopt );
 
     /// Bytes counted as held now, by the rules above.
     size_t memoryUsed() const
@@ -161,6 +172,10 @@ private:
         bool skipping = false;
         uint32_t skipFrom = 0;
         uint32_t skipEnd = 0;
+        /// It holds one segment that came early, beginning no message, and
+        /// waits for the bytes before it, from its nextSeq() on: no message
+        /// is known yet, nor its framer.
+        bool waiting = false;
         /// The protocol that frames the messages (MessageExtent::framer).
         uint8_t framer = 0;
         /// What the framer found in the held bytes so far, so that it
@@ -199,8 +214,16 @@ private:
     /// lies past the message, to be taken as any.
     std::optional<ReassembledMessages> skipSegment( PacketRecord& pkt, const Stream& stream,
                                                     ByteView payload, Entry& entry );
+    /// Wait from @p missingFrom on for the bytes before a segment that
+    /// begins no message, holding it; false if it cannot be held.
+    bool wait( const Stream& stream, uint32_t missingFrom, uint32_t seq, ByteView payload );
+    /// Take a segment of a direction that waits: nullopt when it does not
+    /// bring the bytes waited for, and is to be taken as any.
+    std::optional<ReassembledMessages> waitingSegment( PacketRecord& pkt, const Stream& stream,
+                                                       ByteView payload, Entry& entry );
     /// Take a segment's payload, in sequence order.
-    ReassembledMessages segment( PacketRecord& pkt, const Stream& stream, ByteView payload );
+    ReassembledMessages segment( PacketRecord& pkt, const Stream& stream, ByteView payload,
+                                 std::optional<uint32_t> missingFrom );
     /// Describe what the held bytes of @p entry hold now.
     ReassembledMessages continueMessage( PacketRecord& pkt, const Stream& stream, Entry& entry );
     /// Hold the message a segment ends in, if it does, when nothing is held.
@@ -209,6 +232,11 @@ private:
     /// alone.
     ReassembledMessages startMessage( PacketRecord& pkt, const Stream& stream, ByteView payload,
                                       const char* after = nullptr );
+    /// startMessage() of bytes that end at sequence number @p end, put
+    /// together from @p segments segments: with more than one, those of a
+    /// segment and of the ones that came before it, described on it.
+    ReassembledMessages startMessage( PacketRecord& pkt, const Stream& stream, ByteView payload,
+                                      uint32_t end, const char* after, uint32_t segments );
 
     size_t memoryLimit_;
     size_t streamLimit_;
